@@ -1,0 +1,272 @@
+openapi: 3.0.1
+info:
+  title: Diary API
+  version: 0.1.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/users:
+    post:
+      summary: 회원가입
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserCreateRequest'
+      responses:
+        '201':
+          description: Created
+  /api/users/{userId}:
+    get:
+      summary: 회원 단건 조회 (테스트/디버그용)
+      parameters:
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/users/login:
+    post:
+      summary: 로그인 (임시)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /api/diaries:
+    post:
+      summary: 일기 생성
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiaryCreateRequest'
+      responses:
+        '201':
+          description: Created
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      summary: 사용자별 일기 목록 조회
+      parameters:
+        - in: query
+          name: userId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DiaryResponse'
+  /api/diaries/{diaryId}:
+    get:
+      summary: 일기 단건 조회
+      parameters:
+        - in: path
+          name: diaryId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DiaryResponse'
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    put:
+      summary: 일기 수정
+      parameters:
+        - in: path
+          name: diaryId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DiaryUpdateRequest'
+      responses:
+        '200':
+          description: OK
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      summary: 일기 삭제 (soft delete)
+      parameters:
+        - in: path
+          name: diaryId
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '204':
+          description: No Content
+        '400':
+          description: Bad Request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+components:
+  schemas:
+    UserCreateRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          example: test@test.com
+        password:
+          type: string
+          example: '1234'
+        nickname:
+          type: string
+          example: tester
+      required: [email, password, nickname]
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required: [email, password]
+    UserResponse:
+      type: object
+      properties:
+        userId:
+          type: integer
+          format: int64
+        email:
+          type: string
+        nickname:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    DiaryCreateRequest:
+      type: object
+      properties:
+        writtenDate:
+          type: string
+          format: date
+        title:
+          type: string
+        content:
+          type: string
+        mood:
+          type: string
+        visibility:
+          type: string
+        weather:
+          type: string
+    DiaryUpdateRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        content:
+          type: string
+        mood:
+          type: string
+        visibility:
+          type: string
+        weather:
+          type: string
+    DiaryResponse:
+      type: object
+      properties:
+        diaryId:
+          type: integer
+          format: int64
+        writtenDate:
+          type: string
+          format: date
+        title:
+          type: string
+        content:
+          type: string
+        mood:
+          type: string
+        visibility:
+          type: string
+        favorite:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        status:
+          type: integer
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
