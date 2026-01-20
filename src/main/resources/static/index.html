@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>Diary API</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            padding: 40px;
+        }
+
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+
+        h1 {
+            margin-bottom: 10px;
+        }
+
+        p {
+            color: #555;
+        }
+
+        ul {
+            margin-top: 20px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+
+        code {
+            background: #eee;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Diary API Server</h1>
+    <p>Spring Boot + MyBatis 기반 일기 서비스 백엔드</p>
+
+    <ul>
+        <li>서버 상태: <strong>RUNNING</strong></li>
+        <li>Base URL: <code>http://localhost:8080</code></li>
+    </ul>
+
+    <h3>Available APIs</h3>
+    <ul>
+        <li><code>POST /users</code></li>
+        <li><code>GET /users/{id}</code></li>
+        <li><code>POST /diaries</code> (예정)</li>
+        <li><code>PUT /diaries/{id}</code> (예정)</li>
+    </ul>
+
+    <p style="margin-top:30px;font-size:12px;color:#999;">
+        © Diary API Project
+    </p>
+</div>
+</body>
+</html>
