@@ -1,2 +1,4 @@
-package com.jungwoo.project.memo.auth.dto;public class LoginResponse {
+package com.jungwoo.project.memo.auth.dto;
+
+public class LoginResponse {
 }

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.diary.DiaryRevisionMapper">
+
+    <resultMap id="RevisionResultMap" type="DiaryRevision">
+        <id property="revisionId" column="revision_id"/>
+        <result property="diaryId" column="diary_id"/>
+        <result property="title" column="title"/>
+        <result property="content" column="content"/>
+        <result property="mood" column="mood"/>
+        <result property="editedAt" column="edited_at"/>
+    </resultMap>
+
+    <!-- 수정 이력 목록 -->
+    <select id="findByDiaryId" resultMap="RevisionResultMap">
+        SELECT * FROM diary_revisions
+        WHERE diary_id = #{diaryId}
+        ORDER BY edited_at DESC
+    </select>
+
+    <!-- 수정 이력 저장 -->
+    <insert id="insertRevision" useGeneratedKeys="true" keyProperty="revisionId">
+        INSERT INTO diary_revisions (
+            diary_id, title, content, mood
+        ) VALUES (
+                     #{diaryId}, #{title}, #{content}, #{mood}
+                 )
+    </insert>
+
+</mapper>

@@ -1,2 +1,4 @@
-package com.jungwoo.project.memo.common.exception;public class BusinessException {
+package com.jungwoo.project.memo.common.exception;
+
+public class BusinessException {
 }

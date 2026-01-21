@@ -1,10 +1,79 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
+    <meta charset="UTF-8">
+    <title>Diary Demo</title>
 </head>
 <body>
-$END$
+<h1>Diary Demo</h1>
+
+<h3>일기 작성</h3>
+
+<input id="writtenDate" type="date"><br>
+<input id="title" placeholder="제목"><br>
+<textarea id="content" placeholder="내용"></textarea><br>
+
+<select id="mood">
+    <option value="">기분 선택</option>
+    <option value="GOOD">GOOD</option>
+    <option value="SOSO">SOSO</option>
+    <option value="BAD">BAD</option>
+</select><br>
+
+<select id="visibility">
+    <option value="PRIVATE">PRIVATE</option>
+    <option value="PUBLIC">PUBLIC</option>
+</select><br>
+
+<input id="weather" placeholder="날씨 (선택)"><br>
+
+<button onclick="createDiary()">작성</button>
+
+<hr>
+
+<h3>일기 목록</h3>
+<button onclick="loadDiaries()">불러오기</button>
+<ul id="list"></ul>
+
+<script>
+    const USER_ID = 1; // TODO 로그인 붙이면 제거
+
+    function createDiary() {
+        fetch('/api/diaries', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                writtenDate: document.getElementById('writtenDate').value,
+                title: document.getElementById('title').value,
+                content: document.getElementById('content').value,
+                mood: document.getElementById('mood').value,
+                visibility: document.getElementById('visibility').value,
+                weather: document.getElementById('weather').value
+            })
+        }).then(res => {
+            if (!res.ok) {
+                alert('작성 실패');
+                return;
+            }
+            alert('작성 완료');
+            loadDiaries();
+        });
+    }
+
+    function loadDiaries() {
+        fetch(`/api/diaries?userId=${USER_ID}`)
+            .then(res => res.json())
+            .then(data => {
+                const list = document.getElementById('list');
+                list.innerHTML = '';
+                data.forEach(d => {
+                    const li = document.createElement('li');
+                    li.innerText =
+                        `[${d.writtenDate}] ${d.title} (${d.mood ?? 'NO MOOD'})`;
+                    list.appendChild(li);
+                });
+            });
+    }
+</script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-package com.jungwoo.project.diary;
+package com.jungwoo.project.memo;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;

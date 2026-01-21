@@ -1,2 +1,4 @@
-package com.jungwoo.project.memo.auth.service;public class AuthService {
+package com.jungwoo.project.memo.auth.service;
+
+public class AuthService {
 }
