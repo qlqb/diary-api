@@ -5,7 +5,7 @@
 
 <mapper namespace="com.jungwoo.project.memo.diary.DiaryRevisionMapper">
 
-    <resultMap id="RevisionResultMap" type="DiaryRevision">
+    <resultMap id="RevisionResultMap" type="com.jungwoo.project.memo.diary.domain.DiaryRevision">
         <id property="revisionId" column="revision_id"/>
         <result property="diaryId" column="diary_id"/>
         <result property="title" column="title"/>

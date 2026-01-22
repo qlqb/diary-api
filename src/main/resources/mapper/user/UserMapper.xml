@@ -5,7 +5,7 @@
 
 <mapper namespace="com.jungwoo.project.memo.user.UserMapper">
 
-    <resultMap id="UserResultMap" type="User">
+    <resultMap id="UserResultMap" type="com.jungwoo.project.memo.user.domain.User">
         <id property="userId" column="user_id"/>
         <result property="email" column="email"/>
         <result property="passwordHash" column="password_hash"/>
