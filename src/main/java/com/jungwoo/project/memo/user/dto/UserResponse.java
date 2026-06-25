@@ -1,10 +1,13 @@
 package com.jungwoo.project.memo.user.dto;
 
+import com.jungwoo.project.memo.user.domain.User;
+import lombok.Builder;
 import lombok.Getter;
 
 import java.time.LocalDateTime;
 
 @Getter
+@Builder
 public class UserResponse {
 
     private Long userId;
@@ -15,19 +18,13 @@ public class UserResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
-    public UserResponse(Long userId,
-                        String email,
-                        String nickname,
-                        String role,
-                        String status,
-                        LocalDateTime createdAt,
-                        LocalDateTime updatedAt) {
-        this.userId = userId;
-        this.email = email;
-        this.nickname = nickname;
-        this.role = role;
-        this.status = status;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
+    public static UserResponse from(User user) {
+        return UserResponse.builder()
+                .userId(user.getUserId())
+                .email(user.getEmail())
+                .nickname(user.getNickname())
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
+                .build();
     }
 }

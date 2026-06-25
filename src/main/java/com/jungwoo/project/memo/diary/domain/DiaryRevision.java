@@ -1,30 +1,31 @@
 package com.jungwoo.project.memo.diary.domain;
 
-import lombok.Getter;
-import lombok.Setter;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
-@Setter
-@Getter
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
 public class DiaryRevision {
 
     private Long revisionId;
     private Long diaryId;
+
+    private LocalDate writtenDate;
+
     private String title;
     private String content;
     private String mood;
-    private LocalDateTime createdAt;
+    private String visibility;
+    private String weather;
 
-    public DiaryRevision() {
-    }
+    private Boolean isFavorite;
 
-    public DiaryRevision(Long revisionId, Long diaryId, String title, String content, LocalDateTime now) {
-        this.revisionId=revisionId;
-        this.diaryId=diaryId;
-        this.title=title;
-        this.content=content;
-        this.createdAt=now;
-    }
-
+    private LocalDateTime editedAt;
 }

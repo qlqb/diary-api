@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="UTF-8" ?>
-<!DOCTYPE mapper
-        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 
 <mapper namespace="com.jungwoo.project.memo.user.UserMapper">
 
-    <resultMap id="UserResultMap" type="com.jungwoo.project.memo.user.domain.User">
+    <!-- Result Map -->
+    <resultMap id="userResultMap" type="com.jungwoo.project.memo.user.domain.User">
         <id property="userId" column="user_id"/>
         <result property="email" column="email"/>
         <result property="passwordHash" column="password_hash"/>
@@ -17,30 +17,45 @@
         <result property="updatedAt" column="updated_at"/>
     </resultMap>
 
-    <!-- 회원 조회 -->
-    <select id="findById" resultMap="UserResultMap">
-        SELECT * FROM users
-        WHERE user_id = #{userId}
-    </select>
-
-    <select id="findByEmail" resultMap="UserResultMap">
-        SELECT * FROM users
-        WHERE email = #{email}
-    </select>
-
-    <!-- 회원 가입 -->
-    <insert id="insertUser" useGeneratedKeys="true" keyProperty="userId">
+    <!-- 사용자 등록 -->
+    <insert id="insert" useGeneratedKeys="true" keyProperty="userId">
         INSERT INTO users (
-            email, password_hash, nickname, role, status
+            email, password_hash, nickname, role, status,
+            last_login_at, created_at, updated_at
         ) VALUES (
-                     #{email}, #{passwordHash}, #{nickname}, #{role}, #{status}
+                     #{email}, #{passwordHash}, #{nickname}, #{role}, #{status},
+                     #{lastLoginAt}, #{createdAt}, #{updatedAt}
                  )
     </insert>
 
-    <!-- 마지막 로그인 갱신 -->
+    <!-- 이메일로 사용자 조회 -->
+    <select id="findByEmail" resultMap="userResultMap">
+        SELECT *
+        FROM users
+        WHERE email = #{email}
+          AND status = 'ACTIVE'
+    </select>
+
+    <!-- 사용자 ID로 조회 -->
+    <select id="findById" resultMap="userResultMap">
+        SELECT *
+        FROM users
+        WHERE user_id = #{userId}
+    </select>
+
+    <!-- 마지막 로그인 시간 업데이트 -->
     <update id="updateLastLogin">
         UPDATE users
-        SET last_login_at = CURRENT_TIMESTAMP
+        SET last_login_at = #{lastLoginAt},
+            updated_at = NOW()
+        WHERE user_id = #{userId}
+    </update>
+
+    <!-- 사용자 정보 수정 -->
+    <update id="update">
+        UPDATE users
+        SET nickname = #{nickname},
+            updated_at = #{updatedAt}
         WHERE user_id = #{userId}
     </update>
 

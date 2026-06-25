@@ -4,26 +4,39 @@ import com.jungwoo.project.memo.user.domain.User;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
+import java.time.LocalDateTime;
+
+/**
+ * User 테이블 MyBatis 매퍼
+ */
 @Mapper
 public interface UserMapper {
 
     /**
-     * 회원 등록
+     * 사용자 등록
      */
-    int insertUser(User user);
+    void insert(User user);
 
     /**
-     * 회원 단건 조회
-     */
-    User findById(@Param("userId") Long userId);
-
-    /**
-     * 이메일로 회원 조회 (로그인용)
+     * 이메일로 사용자 조회
      */
     User findByEmail(@Param("email") String email);
 
     /**
-     * 마지막 로그인 시각 업데이트
+     * 사용자 ID로 조회
      */
-    int updateLastLogin(@Param("userId") Long userId);
+    User findById(@Param("userId") Long userId);
+
+    /**
+     * 마지막 로그인 시간 업데이트
+     */
+    void updateLastLogin(
+            @Param("userId") Long userId,
+            @Param("lastLoginAt") LocalDateTime lastLoginAt
+    );
+
+    /**
+     * 사용자 정보 수정
+     */
+    void update(User user);
 }

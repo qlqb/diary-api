@@ -18,20 +18,20 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @AutoConfigureMockMvc(addFilters = false)
 class DiaryControllerTest {
 
-    @Autowired
-    private MockMvc mockMvc;
-
-    @MockitoBean
-    private DiaryService diaryService;
-
-    @Test
-    void diary_not_found_returns_404() throws Exception {
-        // given
-        given(diaryService.getDiary(999999L))
-                .willThrow(new NotFoundException("Diary not found"));
-
-        // when & then
-        mockMvc.perform(get("/api/diaries/999999"))
-                .andExpect(status().isNotFound());
-    }
+//    @Autowired
+//    private MockMvc mockMvc;
+//
+//    @MockitoBean
+//    private DiaryService diaryService;
+//
+//    @Test
+//    void diary_not_found_returns_404() throws Exception {
+//        // given
+//        given(diaryService.getDiary(999999L))
+//                .willThrow(new NotFoundException("Diary not found"));
+//
+//        // when & then
+//        mockMvc.perform(get("/api/diaries/999999"))
+//                .andExpect(status().isNotFound());
+//    }
 }

@@ -1,33 +1,82 @@
-<?xml version="1.0" encoding="UTF-8" ?>
-<!DOCTYPE mapper
-        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
         "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
 
 <mapper namespace="com.jungwoo.project.memo.diary.DiaryRevisionMapper">
 
-    <resultMap id="RevisionResultMap" type="com.jungwoo.project.memo.diary.domain.DiaryRevision">
+    <!-- Result Map -->
+    <resultMap id="revisionResultMap" type="com.jungwoo.project.memo.diary.domain.DiaryRevision">
         <id property="revisionId" column="revision_id"/>
         <result property="diaryId" column="diary_id"/>
+        <result property="writtenDate" column="written_date"/>
         <result property="title" column="title"/>
         <result property="content" column="content"/>
         <result property="mood" column="mood"/>
+        <result property="visibility" column="visibility"/>
+        <result property="weather" column="weather"/>
+        <result property="isFavorite" column="is_favorite"/>
         <result property="editedAt" column="edited_at"/>
     </resultMap>
 
-    <!-- 수정 이력 목록 -->
-    <select id="findByDiaryId" resultMap="RevisionResultMap">
-        SELECT * FROM diary_revisions
+    <!-- 수정 이력 저장 -->
+    <insert id="insert" parameterType="com.jungwoo.project.memo.diary.domain.DiaryRevision"
+            useGeneratedKeys="true" keyProperty="revisionId">
+        INSERT INTO diary_revisions (
+            diary_id,
+            written_date,
+            title,
+            content,
+            mood,
+            visibility,
+            weather,
+            is_favorite,
+            edited_at
+        ) VALUES (
+                     #{diaryId},
+                     #{writtenDate},
+                     #{title},
+                     #{content},
+                     #{mood},
+                     #{visibility},
+                     #{weather},
+                     #{isFavorite},
+                     #{editedAt}
+                 )
+    </insert>
+
+    <!-- 특정 일기의 수정 이력 목록 조회 (최신순) -->
+    <select id="findByDiaryId" resultMap="revisionResultMap">
+        SELECT
+            revision_id,
+            diary_id,
+            written_date,
+            title,
+            content,
+            mood,
+            visibility,
+            weather,
+            is_favorite,
+            edited_at
+        FROM diary_revisions
         WHERE diary_id = #{diaryId}
         ORDER BY edited_at DESC
     </select>
 
-    <!-- 수정 이력 저장 -->
-    <insert id="insertRevision" useGeneratedKeys="true" keyProperty="revisionId">
-        INSERT INTO diary_revisions (
-            diary_id, title, content, mood
-        ) VALUES (
-                     #{diaryId}, #{title}, #{content}, #{mood}
-                 )
-    </insert>
+    <!-- 수정 이력 ID로 조회 -->
+    <select id="findById" resultMap="revisionResultMap">
+        SELECT
+            revision_id,
+            diary_id,
+            written_date,
+            title,
+            content,
+            mood,
+            visibility,
+            weather,
+            is_favorite,
+            edited_at
+        FROM diary_revisions
+        WHERE revision_id = #{revisionId}
+    </select>
 
 </mapper>
