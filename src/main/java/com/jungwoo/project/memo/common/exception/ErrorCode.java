@@ -36,6 +36,7 @@ public enum ErrorCode {
     USER_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_002", "사용자를 찾을 수 없습니다"),
     DIARY_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_003", "일기를 찾을 수 없습니다"),
     DIARY_REVISION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_004", "일기 수정 이력을 찾을 수 없습니다"),
+    TODO_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_005", "할 일을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
