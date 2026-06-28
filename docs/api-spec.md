@@ -1,130 +1,173 @@
-# Diary API Specification (Template)
+# Diary API Specification
 
-> 기준 코드: `DiaryController`, `UserController`, `GlobalExceptionHandler`  
-> Base URL: `http://localhost:8080`  
-> Content-Type: `application/json`
+Base URL: `http://localhost:8080`
 
----
+Content-Type: `application/json`
 
-## 공통
+대부분의 API는 JWT 인증이 필요합니다. 회원가입과 로그인으로 받은 토큰을 다음 헤더에 넣어 호출합니다.
 
-### 성공 응답
-- JSON Body가 있는 경우: `application/json`
-- Body가 없는 경우: 상태코드만 내려줌
+```http
+Authorization: Bearer {token}
+```
 
-### 에러 응답 포맷
-서버에서 예외 발생 시 아래 포맷으로 응답합니다.
+인증 없이 호출 가능한 API는 `/api/auth/signup`, `/api/auth/login`입니다.
+
+## 공통 오류 응답
 
 ```json
 {
-  "status": 404,
-  "message": "Diary not found. diaryId=10",
-  "timestamp": "2026-01-22T12:34:56.789"
+  "code": "E400_001",
+  "message": "입력값이 올바르지 않습니다",
+  "errors": [],
+  "timestamp": "2026-06-28T12:34:56"
 }
 ```
 
-### 에러 상태코드 매핑 (현재 코드 기준)
-- `400 Bad Request`: `IllegalArgumentException`
-- `401 Unauthorized`: `SecurityException` *(현재 기능상 거의 미사용)*
-- `404 Not Found`: `NotFoundException`
-- `500 Internal Server Error`: 그 외 예외 *(message는 항상 `"Internal server error"`)*
+주요 상태 코드는 `400 Bad Request`, `401 Unauthorized`, `403 Forbidden`, `404 Not Found`, `409 Conflict`, `500 Internal Server Error`입니다.
 
-> 참고: Spring MVC 레벨에서 발생하는 일부 예외(필수 파라미터 누락 등)는 현재 `GlobalExceptionHandler`의 catch-all에 의해 `500`으로 포장될 수 있습니다.  
-> (원래는 `400`이 더 정상. 이건 나중에 예외 핸들링 보강하면 해결됨.)
-
----
-
-## Users
+## Auth
 
 ### 회원가입
-`POST /api/users`
 
-**Request Body**
+`POST /api/auth/signup`
+
+Request:
+
 ```json
 {
-  "email": "test@test.com",
-  "password": "1234",
+  "email": "test@example.com",
+  "password": "password123",
   "nickname": "tester"
 }
 ```
 
-**Responses**
-- `201 Created` (Body 없음)
+Response `201 Created`:
 
-**Error**
-- `400 Bad Request`: 잘못된 입력(향후 Validation 도입 시), 중복 처리 로직 추가 시
-- `500 Internal Server Error`: DB/서버 오류 등
+```json
+{
+  "token": "jwt-token",
+  "user": {
+    "userId": 1,
+    "email": "test@example.com",
+    "nickname": "tester",
+    "role": "USER"
+  }
+}
+```
 
----
+### 로그인
 
-### 회원 단건 조회 (테스트/디버그용)
-`GET /api/users/{userId}`
+`POST /api/auth/login`
 
-**Path Params**
-- `userId` (number)
+Request:
 
-**Response 200**
+```json
+{
+  "email": "test@example.com",
+  "password": "password123"
+}
+```
+
+Response `200 OK`: 회원가입 응답과 동일한 `AuthResponse`를 반환합니다.
+
+## Users
+
+### 현재 사용자 기본 정보
+
+`GET /api/users/me`
+
+Response `200 OK`:
+
 ```json
 {
   "userId": 1,
-  "email": "test@test.com",
+  "email": "test@example.com",
   "nickname": "tester",
-  "role": "USER",
-  "status": "ACTIVE",
-  "createdAt": "2026-01-01T12:00:00",
-  "updatedAt": "2026-01-01T12:00:00"
+  "role": "USER"
 }
 ```
 
-**Error**
-- `404 Not Found`: `User not found. userId={userId}`
-- `500 Internal Server Error`
+### 현재 사용자 상세 정보
 
----
+`GET /api/users/me/detail`
 
-### 로그인 (임시 버전)
-`POST /api/users/login`
+Response `200 OK`:
 
-> 주의: 현재 세션/JWT 없이 **email+password 검증 후 UserResponse 반환**만 합니다.
-
-**Request Body**
-```json
-{
-  "email": "test@test.com",
-  "password": "1234"
-}
-```
-
-**Response 200**
 ```json
 {
   "userId": 1,
-  "email": "test@test.com",
+  "email": "test@example.com",
   "nickname": "tester",
   "role": "USER",
   "status": "ACTIVE",
-  "createdAt": "2026-01-01T12:00:00",
-  "updatedAt": "2026-01-01T12:00:00"
+  "createdAt": "2026-06-28T10:00:00",
+  "updatedAt": "2026-06-28T10:00:00"
 }
 ```
-
-**Error (현재 코드 기준)**
-- `404 Not Found`: `User not found. userEmail={email}`
-- `400 Bad Request`: `Invalid email or password`
-
-> 추천(다음 스텝): 위 2개를 `401 Unauthorized` + 동일 메시지로 통일해서 이메일 존재 여부가 새지 않게 만드는 게 정석입니다.
-
----
 
 ## Diaries
 
-### 일기 생성
-`POST /api/diaries`
+### 일기 목록
 
-**Request Body**
+`GET /api/diaries?page=1&size=10&mood=HAPPY&favorite=true&keyword=검색어`
+
+Query:
+
+- `page`: 기본값 `1`
+- `size`: 기본값 `10`
+- `mood`: 선택
+- `favorite`: 선택
+- `keyword`: 선택
+
+Response `200 OK`:
+
 ```json
 {
-  "writtenDate": "2026-01-15",
+  "content": [
+    {
+      "diaryId": 10,
+      "userId": 1,
+      "writtenDate": "2026-06-28",
+      "title": "오늘",
+      "content": "내용",
+      "mood": "HAPPY",
+      "visibility": "PRIVATE",
+      "weather": "SUNNY",
+      "isFavorite": false,
+      "createdAt": "2026-06-28T10:00:00",
+      "updatedAt": "2026-06-28T10:00:00"
+    }
+  ],
+  "page": 1,
+  "size": 10,
+  "totalElements": 1,
+  "totalPages": 1,
+  "first": true,
+  "last": true
+}
+```
+
+### 일기 검색
+
+`GET /api/diaries/search?keyword=검색어&page=1&size=10`
+
+Response `200 OK`: 일기 목록과 같은 `PageResponse<DiaryResponse>`를 반환합니다.
+
+### 일기 상세
+
+`GET /api/diaries/{diaryId}`
+
+Response `200 OK`: `DiaryResponse`를 반환합니다.
+
+### 일기 작성
+
+`POST /api/diaries`
+
+Request:
+
+```json
+{
+  "writtenDate": "2026-06-28",
   "title": "오늘",
   "content": "내용",
   "mood": "HAPPY",
@@ -133,138 +176,202 @@
 }
 ```
 
-**Responses**
-- `201 Created` (Body 없음)
-
-**Notes**
-- 현재 구현은 `userId=1L`로 하드코딩되어 저장됩니다. (TODO: 로그인 연동)
-
-**Error**
-- `400 Bad Request`: 잘못된 입력(향후 Validation 도입 시)
-- `500 Internal Server Error`
-
----
-
-### 일기 단건 조회
-`GET /api/diaries/{diaryId}`
-
-**Path Params**
-- `diaryId` (number)
-
-**Response 200**
-```json
-{
-  "diaryId": 10,
-  "writtenDate": "2026-01-15",
-  "title": "오늘",
-  "content": "내용",
-  "mood": "HAPPY",
-  "visibility": "PRIVATE",
-  "favorite": false,
-  "createdAt": "2026-01-15T10:00:00",
-  "updatedAt": "2026-01-15T10:00:00"
-}
-```
-
-**Error**
-- `404 Not Found`: `Diary not found. diaryId={diaryId}` *(삭제된 일기 포함)*
-- `500 Internal Server Error`
-
----
-
-### 사용자별 일기 목록 조회
-`GET /api/diaries?userId={userId}`
-
-**Query Params**
-- `userId` (number, required)
-
-**Response 200**
-```json
-[
-  {
-    "diaryId": 10,
-    "writtenDate": "2026-01-15",
-    "title": "오늘",
-    "content": "내용",
-    "mood": "HAPPY",
-    "visibility": "PRIVATE",
-    "favorite": false,
-    "createdAt": "2026-01-15T10:00:00",
-    "updatedAt": "2026-01-15T10:00:00"
-  }
-]
-```
-
-**Notes**
-- 현재는 `userId`를 쿼리로 받습니다.
-- 향후 로그인(세션/JWT) 도입 시 `userId` 파라미터 제거 후 인증정보 기반 조회로 변경 권장.
-
-**Error**
-- `500 Internal Server Error` *(현재는 userId 누락 같은 케이스도 500으로 포장될 수 있음)*
-
----
+Response `201 Created`: 생성된 `DiaryResponse`를 반환합니다.
 
 ### 일기 수정
+
 `PUT /api/diaries/{diaryId}`
 
-**Path Params**
-- `diaryId` (number)
+Request:
 
-**Request Body**
 ```json
 {
+  "writtenDate": "2026-06-28",
   "title": "수정된 제목",
   "content": "수정된 내용",
   "mood": "NEUTRAL",
   "visibility": "PRIVATE",
-  "weather": "CLOUDY"
+  "weather": "CLOUDY",
+  "isFavorite": true
 }
 ```
 
-**Responses**
-- `200 OK` (Body 없음)
+Response `200 OK`: 수정된 `DiaryResponse`를 반환합니다.
 
-**Side Effect**
-- 수정 전 상태를 `diary_revisions`에 저장합니다. (title/content/mood)
+### 일기 삭제
 
-**Error**
-- `404 Not Found`: `Diary not found. diaryId={diaryId}` *(삭제된 일기 포함)*
-- `500 Internal Server Error`
-
----
-
-### 일기 삭제 (Soft Delete)
 `DELETE /api/diaries/{diaryId}`
 
-**Path Params**
-- `diaryId` (number)
+Response `204 No Content`
 
-**Responses**
-- `204 No Content`
+### 즐겨찾기 토글
 
-**Error**
-- `404 Not Found`: `Diary not found. diaryId={diaryId}` *(삭제된 일기 포함)*
-- `500 Internal Server Error`
+`PATCH /api/diaries/{diaryId}/favorite`
 
----
+Response `200 OK`: 변경된 `DiaryResponse`를 반환합니다.
 
-## (미노출) Revision API 후보
+### 수정 이력 조회
 
-> 현재 `DiaryRevisionMapper`는 존재하지만 Controller/API는 아직 없습니다.
-
-### 특정 일기의 수정 이력 조회 (추가 예정)
 `GET /api/diaries/{diaryId}/revisions`
 
-**Response 200 (예시)**
+Response `200 OK`:
+
 ```json
-[
-  {
-    "revisionId": 1,
+{
+  "current": {
     "diaryId": 10,
-    "title": "이전 제목",
-    "content": "이전 내용",
+    "userId": 1,
+    "writtenDate": "2026-06-28",
+    "title": "현재 제목",
+    "content": "현재 내용",
     "mood": "HAPPY",
-    "editedAt": "2026-01-15T11:00:00"
-  }
-]
+    "visibility": "PRIVATE",
+    "weather": "SUNNY",
+    "isFavorite": false,
+    "createdAt": "2026-06-28T10:00:00",
+    "updatedAt": "2026-06-28T11:00:00"
+  },
+  "revisions": [],
+  "totalRevisions": 0
+}
+```
+
+### 수정 이력 복원
+
+`POST /api/diaries/{diaryId}/revisions/{revisionId}/restore`
+
+Response `200 OK`: 복원된 `DiaryResponse`를 반환합니다.
+
+### 일기 통계
+
+- `GET /api/diaries/statistics/summary`
+- `GET /api/diaries/statistics/mood`
+- `GET /api/diaries/statistics/monthly?year=2026`
+- `GET /api/diaries/statistics/streak`
+
+Response examples:
+
+```json
+{
+  "totalCount": 12,
+  "thisMonthCount": 3,
+  "favoriteCount": 2
+}
+```
+
+```json
+{
+  "moodCounts": {
+    "HAPPY": 5,
+    "SAD": 2
+  },
+  "totalCount": 7
+}
+```
+
+```json
+{
+  "year": 2026,
+  "monthlyCounts": [0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0],
+  "totalCount": 3
+}
+```
+
+```json
+{
+  "currentStreak": 4,
+  "longestStreak": 12
+}
+```
+
+## Todos
+
+### Todo 생성
+
+`POST /api/todos`
+
+Request:
+
+```json
+{
+  "todoDate": "2026-06-28",
+  "title": "운동하기",
+  "content": "30분 걷기",
+  "priority": "MEDIUM"
+}
+```
+
+Response `201 Created`:
+
+```json
+{
+  "todoId": 1,
+  "userId": 1,
+  "todoDate": "2026-06-28",
+  "title": "운동하기",
+  "content": "30분 걷기",
+  "status": "TODO",
+  "priority": "MEDIUM",
+  "sourceType": "MANUAL",
+  "completedAt": null,
+  "createdAt": "2026-06-28T10:00:00",
+  "updatedAt": "2026-06-28T10:00:00"
+}
+```
+
+### 날짜별 Todo 목록
+
+`GET /api/todos?date=2026-06-28`
+
+Response `200 OK`: `TodoResponse` 배열을 반환합니다.
+
+### Todo 상세
+
+`GET /api/todos/{todoId}`
+
+Response `200 OK`: `TodoResponse`를 반환합니다.
+
+### Todo 수정
+
+`PUT /api/todos/{todoId}`
+
+Request:
+
+```json
+{
+  "todoDate": "2026-06-28",
+  "title": "수정된 제목",
+  "content": "수정된 메모",
+  "priority": "HIGH"
+}
+```
+
+Response `200 OK`: 수정된 `TodoResponse`를 반환합니다.
+
+### Todo 완료/미완료
+
+- `PATCH /api/todos/{todoId}/complete`
+- `PATCH /api/todos/{todoId}/uncomplete`
+
+Response `200 OK`: 변경된 `TodoResponse`를 반환합니다.
+
+### Todo 삭제
+
+`DELETE /api/todos/{todoId}`
+
+Response `204 No Content`
+
+### Todo 일별 통계
+
+`GET /api/todos/statistics/daily?date=2026-06-28`
+
+Response `200 OK`:
+
+```json
+{
+  "date": "2026-06-28",
+  "totalCount": 5,
+  "doneCount": 3,
+  "achievementRate": 60.0
+}
 ```
