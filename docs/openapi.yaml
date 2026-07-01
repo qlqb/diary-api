@@ -1,581 +1,552 @@
 openapi: 3.1.0
 info:
-  title: Diary API
-  version: 0.0.1
-  description: JWT 기반 개인 일기 및 Todo API
+  title: OpenAPI definition
+  version: v0
 servers:
-  - url: http://localhost:8080
-    description: Local server
-security:
-  - bearerAuth: []
+- url: http://localhost:8080
+  description: Generated server url
 paths:
-  /api/auth/signup:
-    post:
-      tags: [Auth]
-      summary: 회원가입
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SignupRequest'
-      responses:
-        '201':
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '409':
-          $ref: '#/components/responses/Conflict'
-  /api/auth/login:
-    post:
-      tags: [Auth]
-      summary: 로그인
-      security: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LoginRequest'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/AuthResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /api/users/me:
+  /api/todos/{todoId}:
     get:
-      tags: [Users]
-      summary: 현재 사용자 기본 정보 조회
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserInfo'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /api/users/me/detail:
-    get:
-      tags: [Users]
-      summary: 현재 사용자 상세 정보 조회
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /api/diaries:
-    get:
-      tags: [Diaries]
-      summary: 일기 목록 조회
+      tags:
+      - todo-controller
+      operationId: getTodo
       parameters:
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/Size'
-        - name: mood
-          in: query
-          schema:
-            type: string
-        - name: favorite
-          in: query
-          schema:
-            type: boolean
-        - name: keyword
-          in: query
-          schema:
-            type: string
+      - name: todoId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/DiaryPageResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-    post:
-      tags: [Diaries]
-      summary: 일기 작성
-      requestBody:
+                $ref: "#/components/schemas/TodoResponse"
+    put:
+      tags:
+      - todo-controller
+      operationId: updateTodo
+      parameters:
+      - name: todoId
+        in: path
         required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DiaryCreateRequest'
+              $ref: "#/components/schemas/TodoUpdateRequest"
+        required: true
       responses:
-        '201':
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /api/diaries/search:
-    get:
-      tags: [Diaries]
-      summary: 일기 검색
-      parameters:
-        - name: keyword
-          in: query
-          required: true
-          schema:
-            type: string
-        - $ref: '#/components/parameters/Page'
-        - $ref: '#/components/parameters/Size'
-      responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/DiaryPageResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+                $ref: "#/components/schemas/TodoResponse"
+    delete:
+      tags:
+      - todo-controller
+      operationId: deleteTodo
+      parameters:
+      - name: todoId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
   /api/diaries/{diaryId}:
     get:
-      tags: [Diaries]
-      summary: 일기 상세 조회
+      tags:
+      - diary-controller
+      operationId: getDiary
       parameters:
-        - $ref: '#/components/parameters/DiaryId'
+      - name: diaryId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/DiaryResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
+                $ref: "#/components/schemas/DiaryResponse"
     put:
-      tags: [Diaries]
-      summary: 일기 수정
+      tags:
+      - diary-controller
+      operationId: updateDiary
       parameters:
-        - $ref: '#/components/parameters/DiaryId'
-      requestBody:
+      - name: diaryId
+        in: path
         required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/DiaryUpdateRequest'
+              $ref: "#/components/schemas/DiaryUpdateRequest"
+        required: true
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/DiaryResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
+                $ref: "#/components/schemas/DiaryResponse"
     delete:
-      tags: [Diaries]
-      summary: 일기 삭제
+      tags:
+      - diary-controller
+      operationId: deleteDiary
       parameters:
-        - $ref: '#/components/parameters/DiaryId'
-      responses:
-        '204':
-          description: No Content
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /api/diaries/{diaryId}/favorite:
-    patch:
-      tags: [Diaries]
-      summary: 즐겨찾기 토글
-      parameters:
-        - $ref: '#/components/parameters/DiaryId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /api/diaries/{diaryId}/revisions:
-    get:
-      tags: [Diaries]
-      summary: 일기 수정 이력 조회
-      parameters:
-        - $ref: '#/components/parameters/DiaryId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryRevisionsResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /api/diaries/{diaryId}/revisions/{revisionId}/restore:
-    post:
-      tags: [Diaries]
-      summary: 일기 수정 이력 복원
-      parameters:
-        - $ref: '#/components/parameters/DiaryId'
-        - name: revisionId
-          in: path
-          required: true
-          schema:
-            type: integer
-            format: int64
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /api/diaries/statistics/summary:
-    get:
-      tags: [Diaries]
-      summary: 일기 요약 통계
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryStatisticsSummary'
-  /api/diaries/statistics/mood:
-    get:
-      tags: [Diaries]
-      summary: 기분별 일기 통계
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryMoodStatistics'
-  /api/diaries/statistics/monthly:
-    get:
-      tags: [Diaries]
-      summary: 월별 일기 통계
-      parameters:
-        - name: year
-          in: query
-          required: false
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryMonthlyStatistics'
-  /api/diaries/statistics/streak:
-    get:
-      tags: [Diaries]
-      summary: 연속 작성 통계
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/DiaryStreakStatistics'
-  /api/todos:
-    post:
-      tags: [Todos]
-      summary: Todo 생성
-      requestBody:
+      - name: diaryId
+        in: path
         required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/TodoCreateRequest'
+        schema:
+          type: integer
+          format: int64
       responses:
-        '201':
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TodoResponse'
-        '400':
-          $ref: '#/components/responses/BadRequest'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
+        "200":
+          description: OK
+  /api/todos:
     get:
-      tags: [Todos]
-      summary: 날짜별 Todo 목록 조회
+      tags:
+      - todo-controller
+      operationId: getTodosByDate
       parameters:
-        - name: date
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
+      - name: date
+        in: query
+        required: true
+        schema:
+          type: string
+          format: date
+      - name: status
+        in: query
+        required: false
+        schema:
+          type: string
+          enum:
+          - TODO
+          - DONE
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
                 type: array
                 items:
-                  $ref: '#/components/schemas/TodoResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-  /api/todos/{todoId}:
-    get:
-      tags: [Todos]
-      summary: Todo 상세 조회
-      parameters:
-        - $ref: '#/components/parameters/TodoId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TodoResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    put:
-      tags: [Todos]
-      summary: Todo 수정
-      parameters:
-        - $ref: '#/components/parameters/TodoId'
+                  $ref: "#/components/schemas/TodoResponse"
+    post:
+      tags:
+      - todo-controller
+      operationId: createTodo
       requestBody:
-        required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TodoUpdateRequest'
+              $ref: "#/components/schemas/TodoCreateRequest"
+        required: true
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/TodoResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-    delete:
-      tags: [Todos]
-      summary: Todo 삭제
-      parameters:
-        - $ref: '#/components/parameters/TodoId'
-      responses:
-        '204':
-          description: No Content
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/NotFound'
-  /api/todos/{todoId}/complete:
-    patch:
-      tags: [Todos]
-      summary: Todo 완료 처리
-      parameters:
-        - $ref: '#/components/parameters/TodoId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TodoResponse'
-  /api/todos/{todoId}/uncomplete:
-    patch:
-      tags: [Todos]
-      summary: Todo 미완료 처리
-      parameters:
-        - $ref: '#/components/parameters/TodoId'
-      responses:
-        '200':
-          description: OK
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/TodoResponse'
-  /api/todos/statistics/daily:
+                $ref: "#/components/schemas/TodoResponse"
+  /api/diaries:
     get:
-      tags: [Todos]
-      summary: Todo 일별 통계
+      tags:
+      - diary-controller
+      operationId: getDiaries
       parameters:
-        - name: date
-          in: query
-          required: true
-          schema:
-            type: string
-            format: date
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 1
+      - name: size
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 10
+      - name: filter
+        in: query
+        required: true
+        schema:
+          $ref: "#/components/schemas/DiaryFilterRequest"
       responses:
-        '200':
+        "200":
           description: OK
           content:
-            application/json:
+            '*/*':
               schema:
-                $ref: '#/components/schemas/TodoDailyStatisticsResponse'
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-  parameters:
-    Page:
-      name: page
-      in: query
-      required: false
-      schema:
-        type: integer
-        default: 1
-    Size:
-      name: size
-      in: query
-      required: false
-      schema:
-        type: integer
-        default: 10
-    DiaryId:
-      name: diaryId
-      in: path
-      required: true
-      schema:
-        type: integer
-        format: int64
-    TodoId:
-      name: todoId
-      in: path
-      required: true
-      schema:
-        type: integer
-        format: int64
-  responses:
-    BadRequest:
-      description: Bad Request
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-    Unauthorized:
-      description: Unauthorized
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-    NotFound:
-      description: Not Found
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-    Conflict:
-      description: Conflict
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-  schemas:
-    SignupRequest:
-      type: object
-      required: [email, password, nickname]
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-        nickname:
-          type: string
-    LoginRequest:
-      type: object
-      required: [email, password]
-      properties:
-        email:
-          type: string
-          format: email
-        password:
-          type: string
-    AuthResponse:
-      type: object
-      properties:
-        token:
-          type: string
-        user:
-          $ref: '#/components/schemas/UserInfo'
-    UserInfo:
-      type: object
-      properties:
-        userId:
+                $ref: "#/components/schemas/PageResponseDiaryResponse"
+    post:
+      tags:
+      - diary-controller
+      operationId: createDiary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiaryCreateRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryResponse"
+  /api/diaries/{diaryId}/revisions/{revisionId}/restore:
+    post:
+      tags:
+      - diary-controller
+      operationId: restoreRevision
+      parameters:
+      - name: diaryId
+        in: path
+        required: true
+        schema:
           type: integer
           format: int64
-        email:
+      - name: revisionId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryResponse"
+  /api/auth/signup:
+    post:
+      tags:
+      - auth-controller
+      operationId: signup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SignupRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+  /api/auth/login:
+    post:
+      tags:
+      - auth-controller
+      operationId: login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+  /api/todos/{todoId}/todo:
+    patch:
+      tags:
+      - todo-controller
+      operationId: markAsTodo
+      parameters:
+      - name: todoId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TodoResponse"
+  /api/todos/{todoId}/done:
+    patch:
+      tags:
+      - todo-controller
+      operationId: markAsDone
+      parameters:
+      - name: todoId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TodoResponse"
+  /api/diaries/{diaryId}/favorite:
+    patch:
+      tags:
+      - diary-controller
+      operationId: toggleFavorite
+      parameters:
+      - name: diaryId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryResponse"
+  /api/users/me:
+    get:
+      tags:
+      - user-controller
+      operationId: getCurrentUser
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/UserInfo"
+  /api/users/me/detail:
+    get:
+      tags:
+      - user-controller
+      operationId: getCurrentUserDetail
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/UserResponse"
+  /api/todos/statistics/daily:
+    get:
+      tags:
+      - todo-controller
+      operationId: getDailyStatistics
+      parameters:
+      - name: date
+        in: query
+        required: true
+        schema:
           type: string
-        nickname:
+          format: date
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TodoDailyStatisticsResponse"
+  /api/diaries/{diaryId}/revisions:
+    get:
+      tags:
+      - diary-controller
+      operationId: getRevisions
+      parameters:
+      - name: diaryId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryRevisionsResponse"
+  /api/diaries/statistics/summary:
+    get:
+      tags:
+      - diary-controller
+      operationId: getStatisticsSummary
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryStatisticsSummary"
+  /api/diaries/statistics/streak:
+    get:
+      tags:
+      - diary-controller
+      operationId: getStreakStatistics
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryStreakStatistics"
+  /api/diaries/statistics/mood:
+    get:
+      tags:
+      - diary-controller
+      operationId: getMoodStatistics
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryMoodStatistics"
+  /api/diaries/statistics/monthly:
+    get:
+      tags:
+      - diary-controller
+      operationId: getMonthlyStatistics
+      parameters:
+      - name: year
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/DiaryMonthlyStatistics"
+  /api/diaries/search:
+    get:
+      tags:
+      - diary-controller
+      operationId: searchDiaries
+      parameters:
+      - name: keyword
+        in: query
+        required: true
+        schema:
           type: string
-        role:
-          type: string
-    UserResponse:
-      allOf:
-        - $ref: '#/components/schemas/UserInfo'
-        - type: object
-          properties:
-            status:
-              type: string
-            createdAt:
-              type: string
-              format: date-time
-            updatedAt:
-              type: string
-              format: date-time
-    DiaryCreateRequest:
+      - name: page
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 1
+      - name: size
+        in: query
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 10
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/PageResponseDiaryResponse"
+components:
+  schemas:
+    TodoUpdateRequest:
       type: object
-      required: [writtenDate, title, content]
       properties:
-        writtenDate:
+        todoDate:
           type: string
           format: date
         title:
           type: string
         content:
           type: string
-        mood:
+        priority:
           type: string
-        visibility:
+          enum:
+          - HIGH
+          - MEDIUM
+          - LOW
+    TodoResponse:
+      type: object
+      properties:
+        todoId:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        todoDate:
           type: string
-          default: PRIVATE
-        weather:
+          format: date
+        title:
           type: string
+        content:
+          type: string
+        status:
+          type: string
+          enum:
+          - TODO
+          - DONE
+        priority:
+          type: string
+          enum:
+          - HIGH
+          - MEDIUM
+          - LOW
+        originType:
+          type: string
+          enum:
+          - MANUAL
+          - AI_SUGGESTED
+          - ROUTINE_GENERATED
+        modifiedAfterCreation:
+          type: boolean
+        routineId:
+          type: integer
+          format: int64
+        completedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     DiaryUpdateRequest:
       type: object
       properties:
@@ -624,21 +595,161 @@ components:
         updatedAt:
           type: string
           format: date-time
-    DiaryPageResponse:
+    TodoCreateRequest:
+      type: object
+      properties:
+        todoDate:
+          type: string
+          format: date
+        title:
+          type: string
+          minLength: 1
+        content:
+          type: string
+        priority:
+          type: string
+          enum:
+          - HIGH
+          - MEDIUM
+          - LOW
+      required:
+      - title
+      - todoDate
+    DiaryCreateRequest:
+      type: object
+      properties:
+        writtenDate:
+          type: string
+          format: date
+        title:
+          type: string
+          minLength: 1
+        content:
+          type: string
+          minLength: 1
+        mood:
+          type: string
+        visibility:
+          type: string
+        weather:
+          type: string
+      required:
+      - content
+      - title
+      - writtenDate
+    SignupRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          maxLength: 2147483647
+          minLength: 4
+        nickname:
+          type: string
+          minLength: 1
+      required:
+      - email
+      - nickname
+      - password
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserInfo"
+    UserInfo:
+      type: object
+      properties:
+        userId:
+          type: integer
+          format: int64
+        email:
+          type: string
+        nickname:
+          type: string
+        role:
+          type: string
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+      required:
+      - email
+      - password
+    UserResponse:
+      type: object
+      properties:
+        userId:
+          type: integer
+          format: int64
+        email:
+          type: string
+        nickname:
+          type: string
+        role:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    TodoDailyStatisticsResponse:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        totalCount:
+          type: integer
+          format: int32
+        doneCount:
+          type: integer
+          format: int32
+        achievementRate:
+          type: number
+          format: double
+    DiaryFilterRequest:
+      type: object
+      properties:
+        mood:
+          type: string
+        favorite:
+          type: boolean
+        keyword:
+          type: string
+    PageResponseDiaryResponse:
       type: object
       properties:
         content:
           type: array
           items:
-            $ref: '#/components/schemas/DiaryResponse'
+            $ref: "#/components/schemas/DiaryResponse"
         page:
           type: integer
+          format: int32
         size:
           type: integer
+          format: int32
         totalElements:
           type: integer
+          format: int32
         totalPages:
           type: integer
+          format: int32
         first:
           type: boolean
         last:
@@ -674,22 +785,35 @@ components:
       type: object
       properties:
         current:
-          $ref: '#/components/schemas/DiaryResponse'
+          $ref: "#/components/schemas/DiaryResponse"
         revisions:
           type: array
           items:
-            $ref: '#/components/schemas/DiaryRevisionResponse'
+            $ref: "#/components/schemas/DiaryRevisionResponse"
         totalRevisions:
           type: integer
+          format: int32
     DiaryStatisticsSummary:
       type: object
       properties:
         totalCount:
           type: integer
+          format: int32
         thisMonthCount:
           type: integer
+          format: int32
         favoriteCount:
           type: integer
+          format: int32
+    DiaryStreakStatistics:
+      type: object
+      properties:
+        currentStreak:
+          type: integer
+          format: int32
+        longestStreak:
+          type: integer
+          format: int32
     DiaryMoodStatistics:
       type: object
       properties:
@@ -697,115 +821,21 @@ components:
           type: object
           additionalProperties:
             type: integer
+            format: int32
         totalCount:
           type: integer
+          format: int32
     DiaryMonthlyStatistics:
       type: object
       properties:
         year:
           type: integer
+          format: int32
         monthlyCounts:
           type: array
           items:
             type: integer
+            format: int32
         totalCount:
           type: integer
-    DiaryStreakStatistics:
-      type: object
-      properties:
-        currentStreak:
-          type: integer
-        longestStreak:
-          type: integer
-    TodoCreateRequest:
-      type: object
-      required: [todoDate, title]
-      properties:
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-        content:
-          type: string
-        priority:
-          type: string
-          default: MEDIUM
-    TodoUpdateRequest:
-      type: object
-      properties:
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-        content:
-          type: string
-        priority:
-          type: string
-    TodoResponse:
-      type: object
-      properties:
-        todoId:
-          type: integer
-          format: int64
-        userId:
-          type: integer
-          format: int64
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-        content:
-          type: string
-        status:
-          type: string
-        priority:
-          type: string
-        sourceType:
-          type: string
-        completedAt:
-          type: string
-          format: date-time
-          nullable: true
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-    TodoDailyStatisticsResponse:
-      type: object
-      properties:
-        date:
-          type: string
-          format: date
-        totalCount:
-          type: integer
-        doneCount:
-          type: integer
-        achievementRate:
-          type: number
-          format: double
-    ErrorResponse:
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        code:
-          type: string
-        message:
-          type: string
-        errors:
-          type: array
-          items:
-            type: object
-            properties:
-              field:
-                type: string
-              value:
-                type: string
-              reason:
-                type: string
+          format: int32

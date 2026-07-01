@@ -54,6 +54,10 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // 인증 없이 접근 가능한 엔드포인트
                         .requestMatchers(
+                                "/v3/api-docs/**",
+                                "/v3/api-docs.yaml",
+                                "/swagger-ui/**",
+                                "/swagger-ui.html",
                                 "/api/auth/**",           // 회원가입, 로그인
                                 "/docs/**",               // API 문서
                                 "/**/*.html",             // 정적 HTML

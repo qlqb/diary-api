@@ -286,6 +286,14 @@ Response examples:
 
 ## Todos
 
+Todo API는 인증된 사용자의 Todo만 조회/수정/삭제합니다. 다른 사용자의 `todoId`로 접근하면 조회되지 않습니다.
+
+Enum 값:
+
+- `status`: `TODO`, `DONE`
+- `priority`: `HIGH`, `MEDIUM`, `LOW`
+- `originType`: `MANUAL`, `AI_SUGGESTED`, `ROUTINE_GENERATED`
+
 ### Todo 생성
 
 `POST /api/todos`
@@ -301,6 +309,13 @@ Request:
 }
 ```
 
+Request fields:
+
+- `todoDate`: 필수
+- `title`: 필수
+- `content`: 선택
+- `priority`: 선택, 생략 시 `MEDIUM`
+
 Response `201 Created`:
 
 ```json
@@ -312,7 +327,9 @@ Response `201 Created`:
   "content": "30분 걷기",
   "status": "TODO",
   "priority": "MEDIUM",
-  "sourceType": "MANUAL",
+  "originType": "MANUAL",
+  "modifiedAfterCreation": false,
+  "routineId": null,
   "completedAt": null,
   "createdAt": "2026-06-28T10:00:00",
   "updatedAt": "2026-06-28T10:00:00"
@@ -322,6 +339,15 @@ Response `201 Created`:
 ### 날짜별 Todo 목록
 
 `GET /api/todos?date=2026-06-28`
+
+`GET /api/todos?date=2026-06-28&status=TODO`
+
+`GET /api/todos?date=2026-06-28&status=DONE`
+
+Query:
+
+- `date`: 필수
+- `status`: 선택. 없으면 전체 조회, 있으면 해당 상태만 조회
 
 Response `200 OK`: `TodoResponse` 배열을 반환합니다.
 
@@ -350,8 +376,8 @@ Response `200 OK`: 수정된 `TodoResponse`를 반환합니다.
 
 ### Todo 완료/미완료
 
-- `PATCH /api/todos/{todoId}/complete`
-- `PATCH /api/todos/{todoId}/uncomplete`
+- `PATCH /api/todos/{todoId}/done`: 완료 처리, `TODO` → `DONE`
+- `PATCH /api/todos/{todoId}/todo`: 미완료 처리, `DONE` → `TODO`
 
 Response `200 OK`: 변경된 `TodoResponse`를 반환합니다.
 
