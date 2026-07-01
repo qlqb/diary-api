@@ -22,13 +22,24 @@ Spring Boot 기반 개인 메모/일기 API입니다. JWT 인증을 사용하며
 
 ## 실행 전 준비
 
-`src/main/resources/application.properties`의 기본 DB 설정은 다음과 같습니다.
+`src/main/resources/application.properties`는 DB 접속 정보와 JWT 시크릿을 환경변수로 읽습니다.
 
 ```properties
-spring.datasource.url=jdbc:mysql://localhost:3306/memo?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-spring.datasource.username=root
-spring.datasource.password=root1234
+jwt.secret=${JWT_SECRET}
+jwt.expiration=${JWT_EXPIRATION:3600000}
+spring.datasource.url=${DB_URL}
+spring.datasource.username=${DB_USERNAME}
+spring.datasource.password=${DB_PASSWORD}
 server.port=8080
+```
+
+실행 전에 다음 환경변수를 로컬 환경에 맞게 설정하세요.
+
+```powershell
+$env:JWT_SECRET="your-jwt-secret"
+$env:DB_URL="jdbc:mysql://localhost:3306/memo?serverTimezone=Asia/Seoul&characterEncoding=UTF-8"
+$env:DB_USERNAME="your-db-username"
+$env:DB_PASSWORD="your-db-password"
 ```
 
 로컬 MySQL에 `memo` 데이터베이스와 필요한 테이블을 준비한 뒤 실행하세요. 현재 저장소에는 별도 SQL 마이그레이션 파일이 없습니다.

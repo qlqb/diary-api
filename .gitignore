@@ -1,5 +1,5 @@
 HELP.md
-src/main/resources/application-example.properties
+src/main/resources/application-local.properties
 .gradle
 build/
 !gradle/wrapper/gradle-wrapper.jar
