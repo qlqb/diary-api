@@ -1,8 +1,6 @@
 package com.jungwoo.project.memo.todo.dto;
 
 import com.jungwoo.project.memo.todo.domain.TodoPriority;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -11,10 +9,10 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDate;
 
 /**
- * Todo 전체 수정 요청 DTO (PUT)
+ * Todo 부분 수정 요청 DTO (PATCH)
  *
- * PUT은 리소스 전체 교체. 모든 필드가 필수.
- * null로 보내면 해당 필드가 null로 덮어써진다.
+ * PATCH는 보낸 필드만 수정. null인 필드는 기존값 유지.
+ * 최소 하나의 필드만 보내도 된다.
  *
  * status 변경은 /done, /todo 전용 엔드포인트를 사용한다.
  * originType, routineId는 수정 불가.
@@ -23,23 +21,20 @@ import java.time.LocalDate;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class TodoUpdateRequest {
+public class TodoPatchRequest {
 
-    /** 날짜 (필수) */
-    @NotNull(message = "날짜는 필수입니다")
+    /** 변경할 날짜 (선택) */
     private LocalDate todoDate;
 
-    /** 제목 (필수) */
-    @NotBlank(message = "제목은 필수입니다")
+    /** 변경할 제목 (선택) */
     private String title;
 
-    /** 메모 (선택, null 허용) */
+    /** 변경할 메모 (선택) */
     private String content;
 
     /**
-     * 우선순위 (필수)
+     * 변경할 우선순위 (선택)
      * HIGH / MEDIUM / LOW
      */
-    @NotNull(message = "우선순위는 필수입니다")
     private TodoPriority priority;
 }

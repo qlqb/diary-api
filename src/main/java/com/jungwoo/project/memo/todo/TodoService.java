@@ -8,6 +8,7 @@ import com.jungwoo.project.memo.todo.domain.TodoPriority;
 import com.jungwoo.project.memo.todo.domain.TodoStatus;
 import com.jungwoo.project.memo.todo.dto.TodoCreateRequest;
 import com.jungwoo.project.memo.todo.dto.TodoDailyStatisticsResponse;
+import com.jungwoo.project.memo.todo.dto.TodoPatchRequest;
 import com.jungwoo.project.memo.todo.dto.TodoResponse;
 import com.jungwoo.project.memo.todo.dto.TodoUpdateRequest;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,8 @@ import java.util.List;
 public class TodoService {
 
     private final TodoMapper todoMapper;
+
+    // ===== 생성 =====
 
     @Transactional
     public TodoResponse createTodo(Long userId, TodoCreateRequest request) {
@@ -46,13 +49,14 @@ public class TodoService {
 
         todoMapper.insert(todo);
 
-        // INSERT 후 DB의 createdAt/updatedAt을 포함해서 반환하기 위해 재조회
         Todo saved = todoMapper.findByIdAndUserId(todo.getTodoId(), userId);
 
         log.info("Todo 생성 완료: todoId={}", todo.getTodoId());
 
         return TodoResponse.from(saved);
     }
+
+    // ===== 조회 =====
 
     @Transactional(readOnly = true)
     public List<TodoResponse> getTodosByDate(Long userId, LocalDate todoDate, TodoStatus status) {
@@ -71,12 +75,52 @@ public class TodoService {
         return TodoResponse.from(findTodoByIdAndUserId(todoId, userId));
     }
 
+    // ===== 전체 수정 (PUT) =====
+
+    /**
+     * Todo 전체 수정
+     * 모든 필드를 요청값으로 덮어씀. null 허용 필드(content)는 null로 덮어써진다.
+     * status, originType, routineId는 이 메서드에서 변경하지 않는다.
+     */
     @Transactional
-    public TodoResponse updateTodo(Long todoId, Long userId, TodoUpdateRequest request) {
-        log.info("Todo 수정 시작: todoId={}, userId={}", todoId, userId);
+    public TodoResponse replaceTodo(Long todoId, Long userId, TodoUpdateRequest request) {
+        log.info("Todo 전체 수정(PUT) 시작: todoId={}, userId={}", todoId, userId);
 
         Todo todo = findTodoByIdAndUserId(todoId, userId);
 
+        // 전체 교체 - 모든 필드를 요청값으로 덮어씀
+        todo.setTodoDate(request.getTodoDate());
+        todo.setTitle(request.getTitle());
+        todo.setContent(request.getContent());       // null이면 null로 덮어씀
+        todo.setPriority(request.getPriority());
+
+        // AI/루틴 Todo를 수정하면 modifiedAfterCreation = true
+        if (TodoOriginType.AI_SUGGESTED.equals(todo.getOriginType())
+                || TodoOriginType.ROUTINE_GENERATED.equals(todo.getOriginType())) {
+            todo.setModifiedAfterCreation(true);
+        }
+
+        todoMapper.update(todo);
+
+        log.info("Todo 전체 수정(PUT) 완료: todoId={}", todoId);
+
+        return TodoResponse.from(todoMapper.findByIdAndUserId(todoId, userId));
+    }
+
+    // ===== 부분 수정 (PATCH) =====
+
+    /**
+     * Todo 부분 수정
+     * null인 필드는 기존값 유지. 보낸 필드만 수정.
+     * status, originType, routineId는 이 메서드에서 변경하지 않는다.
+     */
+    @Transactional
+    public TodoResponse updateTodo(Long todoId, Long userId, TodoPatchRequest request) {
+        log.info("Todo 부분 수정(PATCH) 시작: todoId={}, userId={}", todoId, userId);
+
+        Todo todo = findTodoByIdAndUserId(todoId, userId);
+
+        // null이 아닌 필드만 수정
         if (request.getTodoDate() != null) todo.setTodoDate(request.getTodoDate());
         if (request.getTitle()    != null) todo.setTitle(request.getTitle());
         if (request.getContent()  != null) todo.setContent(request.getContent());
@@ -90,10 +134,12 @@ public class TodoService {
 
         todoMapper.update(todo);
 
-        log.info("Todo 수정 완료: todoId={}", todoId);
+        log.info("Todo 부분 수정(PATCH) 완료: todoId={}", todoId);
 
         return TodoResponse.from(todoMapper.findByIdAndUserId(todoId, userId));
     }
+
+    // ===== 완료 상태 변경 =====
 
     @Transactional
     public TodoResponse markAsDone(Long todoId, Long userId) {
@@ -131,6 +177,8 @@ public class TodoService {
         return TodoResponse.from(todoMapper.findByIdAndUserId(todoId, userId));
     }
 
+    // ===== 삭제 =====
+
     @Transactional
     public void deleteTodo(Long todoId, Long userId) {
         log.info("Todo 삭제 시작: todoId={}, userId={}", todoId, userId);
@@ -142,12 +190,16 @@ public class TodoService {
         log.info("Todo 삭제 완료: todoId={}", todoId);
     }
 
+    // ===== 통계 =====
+
     @Transactional(readOnly = true)
     public TodoDailyStatisticsResponse getDailyStatistics(Long userId, LocalDate date) {
         int totalCount = todoMapper.countByUserIdAndDate(userId, date);
         int doneCount  = todoMapper.countDoneByUserIdAndDate(userId, date);
         return TodoDailyStatisticsResponse.of(date, totalCount, doneCount);
     }
+
+    // ===== private 헬퍼 =====
 
     private Todo findTodoByIdAndUserId(Long todoId, Long userId) {
         Todo todo = todoMapper.findByIdAndUserId(todoId, userId);
