@@ -20,6 +20,8 @@ public enum ErrorCode {
     INVALID_INPUT_VALUE(HttpStatus.BAD_REQUEST, "E400_001", "입력값이 올바르지 않습니다"),
     INVALID_TYPE_VALUE(HttpStatus.BAD_REQUEST, "E400_002", "입력 타입이 올바르지 않습니다"),
     MISSING_INPUT_VALUE(HttpStatus.BAD_REQUEST, "E400_003", "필수 입력값이 누락되었습니다"),
+    INVALID_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_004", "종료 시각은 시작 시각보다 이후여야 합니다"),
+    BLOCK_DATE_MISMATCH(HttpStatus.BAD_REQUEST, "E400_005", "시작/종료 시각의 날짜가 블록 날짜와 일치하지 않습니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -37,6 +39,7 @@ public enum ErrorCode {
     DIARY_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_003", "일기를 찾을 수 없습니다"),
     DIARY_REVISION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_004", "일기 수정 이력을 찾을 수 없습니다"),
     TODO_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_005", "할 일을 찾을 수 없습니다"),
+    SCHEDULE_BLOCK_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_006", "시간 블록을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),

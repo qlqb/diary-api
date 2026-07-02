@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.schedule.ScheduleBlockMapper">
+
+    <resultMap id="scheduleBlockResultMap"
+               type="com.jungwoo.project.memo.schedule.domain.ScheduleBlock">
+        <id     property="scheduleBlockId"        column="schedule_block_id"/>
+        <result property="userId"                 column="user_id"/>
+        <result property="todoId"                 column="todo_id"/>
+        <result property="blockDate"              column="block_date"/>
+        <result property="title"                  column="title"/>
+        <result property="blockType"              column="block_type"/>
+        <result property="startTime"              column="start_time"/>
+        <result property="endTime"                column="end_time"/>
+        <result property="memo"                   column="memo"/>
+        <result property="originType"             column="origin_type"/>
+        <result property="modifiedAfterCreation"  column="modified_after_creation"/>
+        <result property="isDeleted"              column="is_deleted"/>
+        <result property="createdAt"              column="created_at"/>
+        <result property="updatedAt"              column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="scheduleBlockId">
+        INSERT INTO schedule_blocks (
+            user_id,
+            todo_id,
+            block_date,
+            title,
+            block_type,
+            start_time,
+            end_time,
+            memo,
+            origin_type,
+            modified_after_creation,
+            is_deleted
+        ) VALUES (
+            #{userId},
+            #{todoId},
+            #{blockDate},
+            #{title},
+            #{blockType},
+            #{startTime},
+            #{endTime},
+            #{memo},
+            #{originType},
+            #{modifiedAfterCreation},
+            #{isDeleted}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="scheduleBlockResultMap">
+        SELECT *
+        FROM schedule_blocks
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </select>
+
+    <select id="findByUserIdAndDate" resultMap="scheduleBlockResultMap">
+        SELECT *
+        FROM schedule_blocks
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND block_date = #{blockDate}
+        ORDER BY start_time ASC
+    </select>
+
+    <update id="update">
+        UPDATE schedule_blocks
+        SET todo_id                 = #{todoId},
+            block_date              = #{blockDate},
+            title                   = #{title},
+            block_type              = #{blockType},
+            start_time              = #{startTime},
+            end_time                = #{endTime},
+            memo                    = #{memo},
+            modified_after_creation = #{modifiedAfterCreation},
+            is_deleted              = #{isDeleted}
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </update>
+
+</mapper>
