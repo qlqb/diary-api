@@ -35,11 +35,6 @@ public interface DiaryMapper {
      */
     void update(Diary diary);
 
-    /**
-     * 일기 삭제 (물리 삭제는 사용하지 않음)
-     */
-    void delete(@Param("diaryId") Long diaryId);
-
     // ===== 조회 (페이징, 필터링) =====
 
     /**

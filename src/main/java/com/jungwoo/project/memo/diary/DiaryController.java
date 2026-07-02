@@ -11,7 +11,6 @@ import com.jungwoo.project.memo.diary.dto.DiaryStatisticsSummary;
 import com.jungwoo.project.memo.diary.dto.DiaryStreakStatistics;
 import com.jungwoo.project.memo.diary.dto.DiaryUpdateRequest;
 import com.jungwoo.project.memo.diary.dto.PageResponse;
-import io.jsonwebtoken.io.Encoders;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

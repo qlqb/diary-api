@@ -53,6 +53,7 @@
             is_deleted = #{isDeleted},
             updated_at = #{updatedAt}
         WHERE diary_id = #{diaryId}
+          AND user_id  = #{userId}
     </update>
 
     <!-- ===== 조회 (페이징, 필터링) ===== -->
@@ -106,7 +107,7 @@
         WHERE user_id = #{userId}
           AND is_deleted = false
           AND (
-                    title LIKE CONCAT('%', #{keyword}, '%')
+            title LIKE CONCAT('%', #{keyword}, '%')
                 OR content LIKE CONCAT('%', #{keyword}, '%')
             )
         ORDER BY written_date DESC, diary_id DESC
@@ -120,7 +121,7 @@
         WHERE user_id = #{userId}
           AND is_deleted = false
           AND (
-                    title LIKE CONCAT('%', #{keyword}, '%')
+            title LIKE CONCAT('%', #{keyword}, '%')
                 OR content LIKE CONCAT('%', #{keyword}, '%')
             )
     </select>
