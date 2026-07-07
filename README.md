@@ -78,6 +78,25 @@ Authorization: Bearer {token}
 - OpenAPI 파일: [docs/openapi.yaml](docs/openapi.yaml)
 - springdoc-openapi 의존성이 포함되어 있지만, 현재 Security 설정은 `/swagger-ui/**`와 `/v3/api-docs/**`를 공개 경로로 열어두지 않습니다.
 
+## 제품 문서
+
+| 문서 | 설명 |
+| --- | --- |
+| [01-product-plan.md](docs/product/01-product-plan.md) | 앱의 최종 방향, 1차 사용자, 성공 기준 |
+| [02-feature-structure.md](docs/product/02-feature-structure.md) | 기록 / 정리 / 실행 / 분석 계층 구조 |
+| [03-planning-system.md](docs/product/03-planning-system.md) | DailyPlan / ScheduleBlock / Todo 역할 분리 |
+| [04-requirements.md](docs/product/04-requirements.md) | 상세 기능별 구현 요구사항 |
+| [05-database.md](docs/product/05-database.md) | 테이블, enum, 인덱스 설계 메모 |
+| [06-mvp-roadmap.md](docs/product/06-mvp-roadmap.md) | 1차-A부터 1.5차까지 MVP 릴리스 단위 |
+| [07-ideas.md](docs/product/07-ideas.md) | 아이디어 주차장 / 미확정 아이디어 기록 |
+| [99-changelog.md](docs/product/99-changelog.md) | 확정 변경 이력 |
+
+문서 수정 기준:
+
+- 미확정 아이디어는 `docs/product/07-ideas.md`에 기록합니다.
+- 아이디어가 확정되면 해당 문서와 `docs/product/99-changelog.md`에 반영합니다.
+- `docs/product/99-changelog.md`는 확정 변경 이력의 기준 문서입니다.
+
 ## 기본 API 요약
 
 | 구분 | 메서드/경로 | 설명 |
