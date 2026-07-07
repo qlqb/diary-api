@@ -8,6 +8,7 @@
                type="com.jungwoo.project.memo.schedule.domain.ScheduleBlock">
         <id     property="scheduleBlockId"        column="schedule_block_id"/>
         <result property="userId"                 column="user_id"/>
+        <result property="dailyPlanId"            column="daily_plan_id"/>
         <result property="todoId"                 column="todo_id"/>
         <result property="blockDate"              column="block_date"/>
         <result property="title"                  column="title"/>
@@ -15,6 +16,7 @@
         <result property="startTime"              column="start_time"/>
         <result property="endTime"                column="end_time"/>
         <result property="memo"                   column="memo"/>
+        <result property="status"                 column="status"/>
         <result property="originType"             column="origin_type"/>
         <result property="modifiedAfterCreation"  column="modified_after_creation"/>
         <result property="isDeleted"              column="is_deleted"/>
@@ -82,5 +84,48 @@
           AND user_id           = #{userId}
           AND is_deleted        = 0
     </update>
+
+    <!-- ===== 1차-A 도메인 액션 지원 ===== -->
+
+    <!-- 이동: 날짜 + 소속 DailyPlan + 시각만 변경. status는 그대로(PLANNED 유지) -->
+    <update id="updateForMove">
+        UPDATE schedule_blocks
+        SET block_date    = #{blockDate},
+            daily_plan_id = #{dailyPlanId},
+            start_time    = #{startTime},
+            end_time      = #{endTime}
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </update>
+
+    <!-- 축소: 제목만 변경 -->
+    <update id="updateTitle">
+        UPDATE schedule_blocks
+        SET title = #{title}
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </update>
+
+    <!-- 상태 전이: hold, complete -->
+    <update id="updateStatus">
+        UPDATE schedule_blocks
+        SET status = #{status}
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </update>
+
+    <!-- 아직 못 한 것: 기준일 이전의 PLANNED 블록 -->
+    <select id="findPendingBefore" resultMap="scheduleBlockResultMap">
+        SELECT *
+        FROM schedule_blocks
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND status     = 'PLANNED'
+          AND block_date &lt; #{baseDate}
+        ORDER BY block_date ASC, start_time ASC, schedule_block_id ASC
+    </select>
 
 </mapper>

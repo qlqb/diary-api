@@ -22,6 +22,8 @@ public enum ErrorCode {
     MISSING_INPUT_VALUE(HttpStatus.BAD_REQUEST, "E400_003", "필수 입력값이 누락되었습니다"),
     INVALID_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_004", "종료 시각은 시작 시각보다 이후여야 합니다"),
     BLOCK_DATE_MISMATCH(HttpStatus.BAD_REQUEST, "E400_005", "시작/종료 시각의 날짜가 블록 날짜와 일치하지 않습니다"),
+    MOVE_TARGET_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_006", "이동 대상 날짜가 현재 날짜와 같습니다"),
+    REDUCE_TITLE_UNCHANGED(HttpStatus.BAD_REQUEST, "E400_007", "줄인 후 제목이 기존 제목과 같습니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -44,6 +46,7 @@ public enum ErrorCode {
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "E409_002", "이미 사용 중인 이메일입니다"),
+    INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT, "E409_003", "현재 상태에서는 수행할 수 없는 작업입니다"),
 
     // ===== 500 Internal Server Error =====
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "E500_001", "서버 내부 오류가 발생했습니다");

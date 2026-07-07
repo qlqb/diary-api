@@ -16,6 +16,7 @@ public class ScheduleBlock {
 
     private Long scheduleBlockId;
     private Long userId;
+    private Long dailyPlanId;   // 1차-A: nullable. move 액션이 채우고, 전체 백필은 1차-C
     private Long todoId;
     private LocalDate blockDate;
     private String title;
@@ -23,6 +24,7 @@ public class ScheduleBlock {
     private LocalDateTime startTime;
     private LocalDateTime endTime;
     private String memo;
+    private ScheduleStatus status;   // 현재 상태만. MOVED/REDUCED는 상태가 아니라 이벤트
     private ScheduleOriginType originType;
     private Boolean modifiedAfterCreation;
     private Boolean isDeleted;
