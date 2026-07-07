@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.planitem.PlanItemEventMapper">
+
+    <resultMap id="planItemEventResultMap"
+               type="com.jungwoo.project.memo.planitem.domain.PlanItemEvent">
+        <id     property="planItemEventId" column="plan_item_event_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="todoId"          column="todo_id"/>
+        <result property="scheduleBlockId" column="schedule_block_id"/>
+        <result property="eventType"       column="event_type"/>
+        <result property="eventDate"       column="event_date"/>
+        <result property="fromDate"        column="from_date"/>
+        <result property="toDate"          column="to_date"/>
+        <result property="beforeTitle"     column="before_title"/>
+        <result property="afterTitle"      column="after_title"/>
+        <result property="memo"            column="memo"/>
+        <result property="createdAt"       column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="planItemEventId">
+        INSERT INTO plan_item_events (
+            user_id,
+            todo_id,
+            schedule_block_id,
+            event_type,
+            event_date,
+            from_date,
+            to_date,
+            before_title,
+            after_title,
+            memo
+        ) VALUES (
+            #{userId},
+            #{todoId},
+            #{scheduleBlockId},
+            #{eventType},
+            #{eventDate},
+            #{fromDate},
+            #{toDate},
+            #{beforeTitle},
+            #{afterTitle},
+            #{memo}
+        )
+    </insert>
+
+    <!-- 기간별 이벤트 조회: 1차-B 주간 회고 집계의 기반 -->
+    <select id="findByUserIdAndPeriod" resultMap="planItemEventResultMap">
+        SELECT *
+        FROM plan_item_events
+        WHERE user_id    = #{userId}
+          AND event_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY event_date ASC, plan_item_event_id ASC
+    </select>
+
+</mapper>

@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.dailyplan.DailyPlanMapper">
+
+    <resultMap id="dailyPlanResultMap"
+               type="com.jungwoo.project.memo.dailyplan.domain.DailyPlan">
+        <id     property="dailyPlanId"    column="daily_plan_id"/>
+        <result property="userId"         column="user_id"/>
+        <result property="planDate"       column="plan_date"/>
+        <result property="viewMode"       column="view_mode"/>
+        <result property="viewModeSource" column="view_mode_source"/>
+        <result property="intensity"      column="intensity"/>
+        <result property="conditionNote"  column="condition_note"/>
+        <result property="mainGoal"       column="main_goal"/>
+        <result property="memo"           column="memo"/>
+        <result property="createdAt"      column="created_at"/>
+        <result property="updatedAt"      column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="dailyPlanId">
+        INSERT INTO daily_plans (
+            user_id,
+            plan_date,
+            view_mode,
+            view_mode_source,
+            intensity,
+            condition_note,
+            main_goal,
+            memo
+        ) VALUES (
+            #{userId},
+            #{planDate},
+            #{viewMode},
+            #{viewModeSource},
+            #{intensity},
+            #{conditionNote},
+            #{mainGoal},
+            #{memo}
+        )
+    </insert>
+
+    <select id="findByUserIdAndDate" resultMap="dailyPlanResultMap">
+        SELECT *
+        FROM daily_plans
+        WHERE user_id   = #{userId}
+          AND plan_date = #{planDate}
+    </select>
+
+</mapper>
