@@ -12,7 +12,13 @@ REQ-COMMON-002
 사용자가 선택하거나 적용한 항목만 최종 저장된다.
 
 REQ-COMMON-003
-AI가 생성한 항목을 사용자가 수정 후 적용하면 origin_type은 AI_GENERATED로 유지하고 modified_after_creation은 true로 저장한다.
+AI가 생성한 항목을 사용자가 수정 후 적용하면 origin_type은 AI_GENERATED 또는 AI_SUGGESTED 계열로 유지하고 modified_after_creation은 true로 저장한다.
+
+REQ-COMMON-004
+AI 분석은 사용자가 명시적으로 요청한 경우에만 실행한다.
+
+REQ-COMMON-005
+구현 기준은 Spring Boot + MyBatis + Mapper XML 패턴이다.
 ```
 
 ## 2. 회원 요구사항
@@ -47,20 +53,20 @@ REQ-DIARY-005
 사용자는 자신의 일기를 삭제할 수 있다.
 ```
 
-## 4. 문제함 / 정리함 요구사항
+## 4. 정리함 요구사항
 
 ```text
 REQ-PROBLEM-001
-사용자는 문제를 직접 등록할 수 있다.
+사용자는 정리할 문제나 주제를 직접 등록할 수 있다.
 
 REQ-PROBLEM-002
-사용자는 문제 목록을 조회할 수 있다.
+사용자는 정리함 목록을 조회할 수 있다.
 
 REQ-PROBLEM-003
-사용자는 문제를 수정할 수 있다.
+사용자는 정리함 항목을 수정할 수 있다.
 
 REQ-PROBLEM-004
-사용자는 문제를 삭제할 수 있다.
+사용자는 정리함 항목을 삭제할 수 있다.
 
 REQ-PROBLEM-005
 사용자는 일기 내용을 바탕으로 AI 문제 후보를 생성할 수 있다.
@@ -69,7 +75,7 @@ REQ-PROBLEM-006
 AI 문제 후보는 자동 저장되지 않고 후보로 표시된다.
 
 REQ-PROBLEM-007
-사용자가 선택한 문제 후보만 문제함에 저장된다.
+사용자가 선택한 문제 후보만 정리함에 저장된다.
 ```
 
 ## 5. Todo 요구사항
@@ -98,42 +104,137 @@ Todo는 origin_type을 가진다.
 
 REQ-TODO-008
 AI가 추천한 Todo를 사용자가 수정 후 저장하면 origin_type은 AI_SUGGESTED로 유지하고 modified_after_creation은 true로 저장한다.
+
+REQ-TODO-009
+Todo는 ScheduleBlock과 선택적으로 연결될 수 있다.
 ```
 
-## 6. 계획 요구사항
-
-계획 시스템의 개념 구조는 `03-planning-system.md`를 따른다.
+## 6. DailyPlan 요구사항
 
 ```text
-REQ-PLAN-001
-사용자는 하루 계획을 생성할 수 있다.
+REQ-DAILY-PLAN-001
+사용자는 날짜별 DailyPlan을 가질 수 있다.
 
-REQ-PLAN-002
-사용자는 하루 계획에 시간 블록을 추가할 수 있다.
+REQ-DAILY-PLAN-002
+DailyPlan은 user_id + date 기준으로 유일하다.
 
-REQ-PLAN-003
-사용자는 시간 블록에 Todo를 연결할 수 있다.
+REQ-DAILY-PLAN-003
+DailyPlan은 viewMode, intensity, conditionTags 또는 condition_note를 가진다.
 
-REQ-PLAN-004
-사용자는 시간 블록의 제목, 시작 시간, 종료 시간, 메모를 수정할 수 있다.
-
-REQ-PLAN-005
-사용자는 시간 블록을 삭제할 수 있다.
-
-REQ-PLAN-006
-사용자는 오늘 Todo와 사용 가능 시간을 바탕으로 AI 하루 계획 후보를 생성할 수 있다.
-
-REQ-PLAN-007
-AI가 생성한 하루 계획 후보는 자동 저장되지 않고 미리보기로 표시된다.
-
-REQ-PLAN-008
-사용자는 AI 하루 계획 후보를 수정한 뒤 적용할 수 있다.
-
-REQ-PLAN-009
-AI가 생성한 계획을 사용자가 수정 후 적용하면 origin_type은 AI_GENERATED로 저장하고 modified_after_creation은 true로 저장한다.
+REQ-DAILY-PLAN-004
+이동 액션 등에서 대상 날짜 DailyPlan이 없으면 기본값으로 생성될 수 있다.
 ```
 
-## 7. 지출 기록 요구사항
+## 7. ScheduleBlock 요구사항
+
+```text
+REQ-SCHEDULE-BLOCK-001
+ScheduleBlock은 하루 안에 배치되는 행동 단위다.
+
+REQ-SCHEDULE-BLOCK-002
+ScheduleBlock은 Todo와 선택적으로 연결될 수 있다.
+
+REQ-SCHEDULE-BLOCK-003
+ScheduleStatus는 PLANNED / DONE / HOLD / CANCELLED만 사용한다.
+
+REQ-SCHEDULE-BLOCK-004
+MOVED, REDUCED는 status가 아니라 event로 기록한다.
+
+REQ-SCHEDULE-BLOCK-005
+ScheduleBlock은 TIME_FIXED 또는 TASK block_type을 가진다.
+
+REQ-SCHEDULE-BLOCK-006
+ScheduleBlock은 MUST / SHOULD / OPTIONAL priority를 가진다.
+
+REQ-SCHEDULE-BLOCK-007
+CHECKLIST 표시 순서는 order_index로 관리한다.
+```
+
+## 8. plan_item_events 요구사항
+
+```text
+REQ-PLAN-EVENT-001
+사용자가 완료/이동/축소/보류/삭제 같은 조정 행위를 하면 이벤트를 저장한다.
+
+REQ-PLAN-EVENT-002
+eventType은 CREATED / DONE / MOVED / REDUCED / HOLD / RESUMED / DELETED를 사용한다.
+
+REQ-PLAN-EVENT-003
+todo_id 또는 schedule_block_id 중 하나는 반드시 존재해야 한다.
+
+REQ-PLAN-EVENT-004
+ScheduleBlock 이벤트의 todo_id는 클라이언트에게 받지 않고 서버가 ScheduleBlock.todo_id에서 복사한다.
+```
+
+## 9. 도메인 액션 API 요구사항
+
+move / reduce / hold / complete는 PATCH가 아니라 POST 하위 액션이다.
+
+```text
+REQ-SCHEDULE-ACTION-001
+POST /api/schedule-blocks/{id}/move
+
+REQ-SCHEDULE-ACTION-002
+POST /api/schedule-blocks/{id}/reduce
+
+REQ-SCHEDULE-ACTION-003
+POST /api/schedule-blocks/{id}/hold
+
+REQ-SCHEDULE-ACTION-004
+POST /api/schedule-blocks/{id}/complete
+```
+
+## 10. move 액션 요구사항
+
+```text
+REQ-MOVE-001
+move 액션은 기존 ScheduleBlock row를 복제하지 않는다.
+
+REQ-MOVE-002
+기존 row의 date와 daily_plan_id를 이동 대상 날짜로 갱신한다.
+
+REQ-MOVE-003
+대상 날짜 DailyPlan이 없으면 get-or-create 한다.
+
+REQ-MOVE-004
+ScheduleBlock 조회, DailyPlan get-or-create, block 갱신, MOVED 이벤트 저장은 하나의 트랜잭션이다.
+```
+
+## 11. quick_logs 요구사항
+
+quick_logs는 1차-B 범위다.
+
+```text
+REQ-QUICK-LOG-001
+SLEEP value_numeric은 1=6시간 미만, 2=6~7시간, 3=7시간 이상으로 저장한다.
+
+REQ-QUICK-LOG-002
+EMOTION value_numeric은 1=나쁨, 2=보통, 3=좋음으로 저장한다.
+
+REQ-QUICK-LOG-003
+value_numeric은 분석용 값이고 value_text는 표시용 값이다.
+```
+
+## 12. WeeklyReview / AI 요약 요구사항
+
+```text
+REQ-WEEKLY-REVIEW-001
+주간 회고 집계 화면은 1차-B 범위다.
+
+REQ-WEEKLY-REVIEW-002
+AI 주간 요약은 1.5차 범위다.
+
+REQ-WEEKLY-REVIEW-003
+AI 요약은 사용자가 명시적으로 요청한 경우에만 실행한다.
+
+REQ-WEEKLY-REVIEW-004
+일기 원문 전체를 기본 전송하지 않는다.
+
+REQ-WEEKLY-REVIEW-005
+AI 결과는 참고용 후보이며 자동 저장하지 않는다.
+```
+
+## 13. 지출 기록 요구사항
 
 ```text
 REQ-EXPENSE-001

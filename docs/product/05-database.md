@@ -1,148 +1,87 @@
 # 05. Database
 
-이 문서는 DB 설계 메모를 관리한다.
+이 문서는 v2.1 기준 DB 설계 메모를 관리한다.
 
-## 1. 핵심 테이블 후보
+구현 기준은 Spring Boot + MyBatis + Mapper XML이다.
+
+## 1. 핵심 테이블
 
 ```text
 users
 diaries
 problems
 todos
-goals
-plans
+daily_plans
+daily_plan_condition_tags
+user_plan_preferences
 schedule_blocks
+plan_item_events
+quick_logs
+weekly_reviews
+ai_suggestions
 expenses
 ```
 
-## 2. Todo 테이블 설계 메모
+MonthlyPlan, YearlyPlan, LifeGoal, BehaviorPattern은 MVP에서 테이블도 만들지 않는다. 장기 확장 방향으로만 남긴다.
 
-```sql
-CREATE TABLE todos (
-    todo_id      BIGINT       NOT NULL AUTO_INCREMENT,
-    user_id      BIGINT       NOT NULL,
-    todo_date    DATE         NOT NULL,
-
-    title        VARCHAR(255) NOT NULL,
-    content      TEXT         NULL,
-
-    status       VARCHAR(20)  NOT NULL DEFAULT 'TODO',
-    priority     VARCHAR(20)  NOT NULL DEFAULT 'MEDIUM',
-
-    origin_type  VARCHAR(30)  NOT NULL DEFAULT 'MANUAL',
-    modified_after_creation TINYINT(1) NOT NULL DEFAULT 0,
-
-    routine_id   BIGINT       NULL,
-    completed_at DATETIME     NULL,
-
-    is_deleted   TINYINT(1)   NOT NULL DEFAULT 0,
-
-    created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-
-    PRIMARY KEY (todo_id),
-
-    INDEX idx_todos_user_deleted_date   (user_id, is_deleted, todo_date),
-    INDEX idx_todos_user_deleted_status (user_id, is_deleted, status),
-    INDEX idx_todos_routine             (routine_id),
-
-    CONSTRAINT fk_todos_user
-        FOREIGN KEY (user_id) REFERENCES users(user_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-```
-
-## 3. Todo enum 후보
+## 2. daily_plans
 
 ```text
-TodoStatus
-- TODO
-- DONE
-
-TodoPriority
-- HIGH
-- MEDIUM
-- LOW
-
-TodoOriginType
-- MANUAL
-- AI_SUGGESTED
-- ROUTINE_GENERATED
-```
-
-## 4. Plan 테이블 후보
-
-월간 계획, 주간 계획, 하루 계획은 하나의 `plans` 테이블로 관리할 수 있다.
-
-```text
-plans
-
-plan_id
+daily_plan_id
 user_id
-plan_type
-title
-content
-start_date
-end_date
-origin_type
-modified_after_creation
-is_deleted
+date
+view_mode
+view_mode_source
+intensity
+condition_note
+main_goal
+memo
+created_at
+updated_at
+
+UNIQUE(user_id, date)
+```
+
+DailyPlan은 날짜별 하루 운영 상태다. 대상 날짜 DailyPlan이 없을 때 이동 액션 등에서 기본값으로 생성될 수 있다.
+
+## 3. daily_plan_condition_tags
+
+```text
+daily_plan_condition_tag_id
+daily_plan_id
+tag_text
+```
+
+conditionTags는 자유 태그다. enum으로 미리 고정하지 않는다.
+
+## 4. user_plan_preferences
+
+```text
+user_plan_preference_id
+user_id
+default_view_mode
+default_intensity
+plan_depth
 created_at
 updated_at
 ```
 
-`plan_type` 후보:
+## 5. schedule_blocks
 
 ```text
-MONTHLY
-WEEKLY
-DAILY
-```
-
-연간 목표는 계획이라기보다 목표에 가까우므로 `goals` 테이블로 분리하는 것을 우선 고려한다.
-
-## 5. Goal 테이블 후보
-
-```text
-goals
-
-goal_id
-user_id
-title
-description
-goal_type
-start_date
-end_date
-status
-origin_type
-modified_after_creation
-is_deleted
-created_at
-updated_at
-```
-
-`goal_type` 후보:
-
-```text
-YEARLY
-LONG_TERM
-SHORT_TERM
-```
-
-## 6. ScheduleBlock 테이블 후보
-
-하루 계획의 실제 시간 배치는 `schedule_blocks`에서 관리한다.
-
-```text
-schedule_blocks
-
 schedule_block_id
 user_id
-plan_id
+daily_plan_id
 todo_id nullable
+routine_id nullable
+date
 title
 block_type
-start_time
-end_time
+priority
+start_time nullable
+end_time nullable
+order_index
+status
 memo
 origin_type
 modified_after_creation
@@ -151,62 +90,204 @@ created_at
 updated_at
 ```
 
-역할 구분:
+ScheduleStatus는 다음 네 값만 사용한다.
 
 ```text
-Todo = 무엇을 할지
-ScheduleBlock = 언제 할지
+PLANNED
+DONE
+HOLD
+CANCELLED
 ```
 
-## 7. Origin 처리 원칙
+MOVED, REDUCED는 status가 아니라 plan_item_events의 event_type으로 기록한다.
 
-직접 만든 데이터:
+## 6. plan_item_events
 
 ```text
-origin_type = MANUAL
-modified_after_creation = false
+plan_item_event_id
+user_id
+todo_id nullable
+schedule_block_id nullable
+event_type
+event_date
+from_date nullable
+to_date nullable
+before_title nullable
+after_title nullable
+memo
+created_at
+
+CHECK(todo_id IS NOT NULL OR schedule_block_id IS NOT NULL)
+INDEX(user_id, event_date)
+INDEX(todo_id)
+INDEX(schedule_block_id)
 ```
 
-AI가 생성한 데이터를 그대로 적용:
+해석 정책은 다음과 같다.
 
 ```text
-origin_type = AI_GENERATED 또는 AI_SUGGESTED
-modified_after_creation = false
+todo_id만 있음 = 미배치 Todo 이벤트
+schedule_block_id만 있음 = 계획 항목 이벤트
+둘 다 있음 = ScheduleBlock 기준 우선 해석
 ```
 
-AI가 생성한 데이터를 사용자가 수정 후 적용:
+블록 이벤트의 todo_id는 클라이언트 입력을 받지 않는다. 서버가 ScheduleBlock.todo_id에서 복사해 무결성을 유지한다.
+
+## 7. quick_logs
 
 ```text
-origin_type = AI_GENERATED 또는 AI_SUGGESTED
-modified_after_creation = true
+quick_log_id
+user_id
+log_date
+log_type
+value_numeric
+value_text nullable
+created_at
+
+UNIQUE(user_id, log_date, log_type)
 ```
 
-## 8. 인덱스 설계 원칙
+값 정의:
 
-Todo의 주요 조회 패턴은 다음과 같다.
-
-```sql
-SELECT *
-FROM todos
-WHERE user_id = ?
-  AND is_deleted = 0
-  AND todo_date = ?;
+```text
+SLEEP: 1=6시간 미만, 2=6~7시간, 3=7시간 이상
+EMOTION: 1=나쁨, 2=보통, 3=좋음
 ```
 
-따라서 날짜별 조회용 인덱스를 둔다.
+## 8. weekly_reviews
 
-```sql
-INDEX idx_todos_user_deleted_date (user_id, is_deleted, todo_date)
+```text
+weekly_review_id
+user_id
+week_start_date
+done_summary
+moved_summary
+reduced_summary
+hold_summary
+next_week_note
+ai_summary nullable
+created_at
+updated_at
 ```
 
-상태별 조회와 대시보드 필터링을 위해 다음 인덱스를 둔다.
+주간 회고 집계 화면은 1차-B 범위다. AI 주간 요약은 1.5차 범위다.
 
-```sql
-INDEX idx_todos_user_deleted_status (user_id, is_deleted, status)
+## 9. ai_suggestions
+
+ai_suggestions는 2차 구현이다. v2.1에서는 피드백 루프를 위해 설계만 확정한다.
+
+```text
+ai_suggestion_id
+user_id
+suggestion_type
+content JSON
+status
+created_item_type nullable
+created_item_id nullable
+created_at
+responded_at nullable
+
+INDEX(user_id, status)
+INDEX(user_id, created_at)
 ```
 
-루틴에서 생성된 Todo 조회를 위해 다음 인덱스를 둔다.
+status는 다음 값을 사용한다.
 
-```sql
-INDEX idx_todos_routine (routine_id)
+```text
+PROPOSED
+APPLIED
+MODIFIED_APPLIED
+DISMISSED
+EXPIRED
+```
+
+## 10. Todo 설계 메모
+
+Todo는 기존 구현 흐름을 유지하되, ScheduleBlock과 선택적으로 연결될 수 있는 행동 단위로 본다.
+
+주요 조회 인덱스는 날짜별 조회와 상태별 조회를 우선한다.
+
+```text
+INDEX(user_id, is_deleted, todo_date)
+INDEX(user_id, is_deleted, status)
+INDEX(routine_id)
+```
+
+## 11. Enum
+
+```text
+DailyPlanViewMode
+- TIME_TABLE
+- CHECKLIST
+
+ViewModeSource
+- USER_DEFAULT
+- USER_SELECTED
+
+DailyPlanIntensity
+- LIGHT
+- NORMAL
+- FOCUSED
+
+ScheduleBlockType
+- TIME_FIXED
+- TASK
+
+SchedulePriority
+- MUST
+- SHOULD
+- OPTIONAL
+
+ScheduleStatus
+- PLANNED
+- DONE
+- HOLD
+- CANCELLED
+
+PlanItemEventType
+- CREATED
+- DONE
+- MOVED
+- REDUCED
+- HOLD
+- RESUMED
+- DELETED
+
+QuickLogType
+- EMOTION
+- SLEEP
+
+OriginType
+- MANUAL
+- AI_GENERATED
+- AI_SUGGESTED
+- ROUTINE_GENERATED
+
+SuggestionStatus
+- PROPOSED
+- APPLIED
+- MODIFIED_APPLIED
+- DISMISSED
+- EXPIRED
+
+PlanDepth
+- TODAY_ONLY
+- TODAY_AND_TOMORROW
+- WEEKLY
+- MONTHLY
+- YEARLY
+- LONG_TERM
+```
+
+## 12. 장기 확장 참고
+
+구버전의 goals/plans 중심 설계는 장기 확장 참고 수준으로만 둔다.
+
+MVP에서는 다음 테이블을 만들지 않는다.
+
+```text
+monthly_plans
+yearly_plans
+life_goals
+behavior_patterns
 ```
