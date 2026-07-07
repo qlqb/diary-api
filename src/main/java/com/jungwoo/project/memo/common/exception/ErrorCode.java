@@ -24,6 +24,8 @@ public enum ErrorCode {
     BLOCK_DATE_MISMATCH(HttpStatus.BAD_REQUEST, "E400_005", "시작/종료 시각의 날짜가 블록 날짜와 일치하지 않습니다"),
     MOVE_TARGET_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_006", "이동 대상 날짜가 현재 날짜와 같습니다"),
     REDUCE_TITLE_UNCHANGED(HttpStatus.BAD_REQUEST, "E400_007", "줄인 후 제목이 기존 제목과 같습니다"),
+    TIME_FIXED_REQUIRES_TIME(HttpStatus.BAD_REQUEST, "E400_008", "시간 고정 블록은 시작/종료 시각이 필요합니다"),
+    PARTIAL_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_009", "시작/종료 시각은 함께 입력해야 합니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),

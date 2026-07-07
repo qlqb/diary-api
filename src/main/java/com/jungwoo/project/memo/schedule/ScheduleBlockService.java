@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.schedule.domain.ScheduleBlock;
+import com.jungwoo.project.memo.schedule.domain.ScheduleBlockType;
 import com.jungwoo.project.memo.schedule.domain.ScheduleOriginType;
 import com.jungwoo.project.memo.schedule.dto.ScheduleBlockCreateRequest;
 import com.jungwoo.project.memo.schedule.dto.ScheduleBlockPatchRequest;
@@ -34,8 +35,12 @@ public class ScheduleBlockService {
     public ScheduleBlockResponse createScheduleBlock(Long userId, ScheduleBlockCreateRequest request) {
         log.info("시간 블록 생성 시작: userId={}, title={}", userId, request.getTitle());
 
-        validateTimeRange(request.getStartTime(), request.getEndTime());
-        validateBlockDateConsistency(request.getBlockDate(), request.getStartTime(), request.getEndTime());
+        validateBlockTime(
+                request.getBlockType(),
+                request.getBlockDate(),
+                request.getStartTime(),
+                request.getEndTime()
+        );
 
         if (request.getTodoId() != null) {
             validateTodoOwnership(request.getTodoId(), userId);
@@ -97,8 +102,12 @@ public class ScheduleBlockService {
 
         ScheduleBlock block = findBlockByIdAndUserId(scheduleBlockId, userId);
 
-        validateTimeRange(request.getStartTime(), request.getEndTime());
-        validateBlockDateConsistency(request.getBlockDate(), request.getStartTime(), request.getEndTime());
+        validateBlockTime(
+                request.getBlockType(),
+                request.getBlockDate(),
+                request.getStartTime(),
+                request.getEndTime()
+        );
 
         if (request.getTodoId() != null) {
             validateTodoOwnership(request.getTodoId(), userId);
@@ -140,11 +149,11 @@ public class ScheduleBlockService {
         // 요청값을 기존값에 병합한 최종값으로 검증
         // null인 필드는 기존값을 유지
         LocalDate     mergedDate  = request.getBlockDate() != null ? request.getBlockDate() : block.getBlockDate();
+        ScheduleBlockType mergedType = request.getBlockType() != null ? request.getBlockType() : block.getBlockType();
         LocalDateTime mergedStart = request.getStartTime() != null ? request.getStartTime() : block.getStartTime();
         LocalDateTime mergedEnd   = request.getEndTime()   != null ? request.getEndTime()   : block.getEndTime();
 
-        validateTimeRange(mergedStart, mergedEnd);
-        validateBlockDateConsistency(mergedDate, mergedStart, mergedEnd);
+        validateBlockTime(mergedType, mergedDate, mergedStart, mergedEnd);
 
         if (request.getTodoId() != null) {
             validateTodoOwnership(request.getTodoId(), userId);
@@ -194,6 +203,28 @@ public class ScheduleBlockService {
         }
 
         return block;
+    }
+
+    private void validateBlockTime(
+            ScheduleBlockType blockType,
+            LocalDate blockDate,
+            LocalDateTime startTime,
+            LocalDateTime endTime
+    ) {
+        if (ScheduleBlockType.TIME_FIXED.equals(blockType) && (startTime == null || endTime == null)) {
+            throw new BadRequestException(ErrorCode.TIME_FIXED_REQUIRES_TIME);
+        }
+
+        if ((startTime == null) != (endTime == null)) {
+            throw new BadRequestException(ErrorCode.PARTIAL_TIME_RANGE);
+        }
+
+        if (startTime == null) {
+            return;
+        }
+
+        validateTimeRange(startTime, endTime);
+        validateBlockDateConsistency(blockDate, startTime, endTime);
     }
 
     private void validateTimeRange(LocalDateTime startTime, LocalDateTime endTime) {

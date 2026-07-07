@@ -14,7 +14,8 @@ import java.time.LocalDateTime;
 /**
  * 시간 블록 전체 수정 요청 DTO (PUT)
  *
- * PUT은 리소스 전체 교체. 모든 필드가 필수.
+ * PUT은 리소스 전체 교체. 날짜/제목/블록 유형은 필수.
+ * 시간은 blockType에 따라 서비스에서 검증한다.
  * null 허용 필드(todoId, memo)는 null로 보내면 null로 덮어써진다.
  * originType은 수정 불가.
  */
@@ -39,12 +40,10 @@ public class ScheduleBlockUpdateRequest {
     @NotNull(message = "블록 유형은 필수입니다")
     private ScheduleBlockType blockType;
 
-    /** 시작 시각 (필수) */
-    @NotNull(message = "시작 시각은 필수입니다")
+    /** 시작 시각 (TIME_FIXED일 때 필수) */
     private LocalDateTime startTime;
 
-    /** 종료 시각 (필수) */
-    @NotNull(message = "종료 시각은 필수입니다")
+    /** 종료 시각 (TIME_FIXED일 때 필수) */
     private LocalDateTime endTime;
 
     /** 메모 (null 허용 — null이면 null로 덮어써진다) */

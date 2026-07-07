@@ -28,10 +28,8 @@ public class ScheduleBlockCreateRequest {
     @NotNull(message = "블록 유형은 필수입니다")
     private ScheduleBlockType blockType;
 
-    @NotNull(message = "시작 시각은 필수입니다")
     private LocalDateTime startTime;
 
-    @NotNull(message = "종료 시각은 필수입니다")
     private LocalDateTime endTime;
 
     private String memo;
