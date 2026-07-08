@@ -1,5 +1,11 @@
 # 99. Change Log
 
+## 2026-07-09 — ScheduleBlock 완료 액션 중복 호출 방어
+
+- 완료/완료취소 액션 중복 호출 방어 원칙을 추가했다.
+- 서버 idempotency를 우선 적용하고, 상태가 실제 변경된 경우에만 `plan_item_events`를 저장하도록 했다.
+- Redis/AOP 기반 장기 전략은 `07-ideas.md`로 보류했다.
+
 ## 2026-07-08 — Today 실행 루프와 Todo/ScheduleBlock 역할 재정리
 
 - Today 화면을 사용자 기본 입구로 확정했다.

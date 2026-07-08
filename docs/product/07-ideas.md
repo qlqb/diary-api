@@ -79,3 +79,11 @@
   - quietHours
 - 실제 PWA notification / push notification 구현은 MVP 제외이며, 1차-D 이후 또는 별도 릴리스에서 검토한다.
 - 상태: **1차-D 이후 검토**
+
+## 완료/완료취소 반복 호출 장기 보안 전략 (2026-07-09, 보류)
+
+- Redis 기반 rate limiting은 외부 사용자 공개 전 검토한다.
+- Bucket4j 또는 Filter/Interceptor 기반 사용자별 요청 제한은 1차 MVP 이후 검토한다.
+- AOP 커스텀 어노테이션 기반 초단기 중복 요청 차단은 필요성이 확인된 뒤 검토한다.
+- 프론트 debounce/pending은 UX용이며 보안 대책이 아니다.
+- 상태: **1차 MVP 이후 / 외부 사용자 공개 전 검토**

@@ -312,3 +312,22 @@ AI가 추출한 지출 후보는 자동 저장되지 않는다.
 REQ-EXPENSE-004
 사용자가 저장한 지출 후보만 지출 기록으로 저장된다.
 ```
+
+## 14. ScheduleBlock 액션 중복 요청 방어 요구사항
+
+```text
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-001
+완료 및 완료취소 액션 API는 idempotent하게 동작해야 한다.
+
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-002
+상태가 실제로 변경된 경우에만 plan_item_events를 저장한다.
+
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-003
+동일 상태에 대한 반복 요청은 이벤트를 중복 저장하지 않는다.
+
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-004
+상태 변경과 이벤트 저장은 하나의 트랜잭션으로 처리한다.
+
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-005
+프론트 pending 처리는 UX 보조 수단이며, 중복 요청에 대한 최종 방어는 서버에서 수행한다.
+```
