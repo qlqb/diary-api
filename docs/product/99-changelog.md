@@ -1,5 +1,11 @@
 # 99. Change Log
 
+## 2026-07-09 — ScheduleBlock 완료취소 액션 추가
+
+- `POST /api/schedule-blocks/{id}/uncomplete` 명시적 완료취소 액션을 추가했다.
+- 완료취소는 DONE에서 PLANNED로 되돌리고, 실제 변경된 경우에만 `REOPENED` 이벤트를 저장한다.
+- `RESUMED`는 HOLD 해제 의미로 남겨두고 완료취소와 분리했다.
+
 ## 2026-07-09 — ScheduleBlock 완료 액션 중복 호출 방어
 
 - 완료/완료취소 액션 중복 호출 방어 원칙을 추가했다.

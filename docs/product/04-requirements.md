@@ -220,7 +220,7 @@ REQ-PLAN-EVENT-001
 사용자가 완료/이동/축소/보류/삭제 같은 조정 행위를 하면 이벤트를 저장한다.
 
 REQ-PLAN-EVENT-002
-eventType은 CREATED / DONE / MOVED / REDUCED / HOLD / RESUMED / DELETED를 사용한다.
+eventType은 CREATED / DONE / MOVED / REDUCED / HOLD / REOPENED / RESUMED / DELETED를 사용한다.
 
 REQ-PLAN-EVENT-003
 todo_id 또는 schedule_block_id 중 하나는 반드시 존재해야 한다.
@@ -245,6 +245,9 @@ POST /api/schedule-blocks/{id}/hold
 
 REQ-SCHEDULE-ACTION-004
 POST /api/schedule-blocks/{id}/complete
+
+REQ-SCHEDULE-ACTION-005
+POST /api/schedule-blocks/{id}/uncomplete
 ```
 
 ## 10. move 액션 요구사항
@@ -330,4 +333,7 @@ REQ-SCHEDULE-ACTION-IDEMPOTENCY-004
 
 REQ-SCHEDULE-ACTION-IDEMPOTENCY-005
 프론트 pending 처리는 UX 보조 수단이며, 중복 요청에 대한 최종 방어는 서버에서 수행한다.
+
+REQ-SCHEDULE-ACTION-IDEMPOTENCY-006
+완료취소는 toggle이 아니라 POST /api/schedule-blocks/{id}/uncomplete 명시적 액션으로 처리한다.
 ```
