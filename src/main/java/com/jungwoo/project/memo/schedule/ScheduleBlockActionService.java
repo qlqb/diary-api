@@ -171,17 +171,24 @@ public class ScheduleBlockActionService {
         log.info("블록 완료 시작: scheduleBlockId={}, userId={}", scheduleBlockId, userId);
 
         ScheduleBlock block = findBlockOrThrow(scheduleBlockId, userId);
+        if (ScheduleStatus.DONE.equals(block.getStatus())) {
+            log.info("complete schedule block idempotent no-op: scheduleBlockId={}", scheduleBlockId);
+            return ScheduleBlockResponse.from(block);
+        }
+
         validateStatusIn(block, ScheduleStatus.PLANNED, ScheduleStatus.HOLD);
 
-        scheduleBlockMapper.updateStatus(scheduleBlockId, userId, ScheduleStatus.DONE);
+        int updatedRows = scheduleBlockMapper.completeIfNotDone(scheduleBlockId, userId);
 
-        planItemEventMapper.insert(PlanItemEvent.builder()
+        if (updatedRows == 1) {
+            planItemEventMapper.insert(PlanItemEvent.builder()
                 .userId(userId)
                 .todoId(block.getTodoId())
                 .scheduleBlockId(scheduleBlockId)
                 .eventType(PlanItemEventType.DONE)
                 .eventDate(LocalDate.now())
                 .build());
+        }
 
         log.info("블록 완료 처리: scheduleBlockId={}", scheduleBlockId);
 

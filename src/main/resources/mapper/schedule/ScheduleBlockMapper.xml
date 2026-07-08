@@ -118,6 +118,16 @@
     </update>
 
     <!-- pending: 기준 운영일 이전 block_date에 속한 PLANNED 블록 -->
+    <update id="completeIfNotDone">
+        UPDATE schedule_blocks
+        SET status = 'DONE'
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND status IN ('PLANNED', 'HOLD')
+          AND status &lt;&gt; 'DONE'
+    </update>
+
     <select id="findPendingBefore" resultMap="scheduleBlockResultMap">
         SELECT *
         FROM schedule_blocks
