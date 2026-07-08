@@ -13,6 +13,7 @@ public enum PlanItemEventType {
     MOVED,      // 다른 날짜로 이동 (from_date → to_date)
     REDUCED,    // 작게 줄임 (before_title → after_title)
     HOLD,       // 보류
+    REOPENED,   // 완료취소
     RESUMED,    // 보류 해제 (확장용, 1차-A API에는 없음)
     DELETED     // 삭제 (soft delete와 함께 기록, 확장용)
 }

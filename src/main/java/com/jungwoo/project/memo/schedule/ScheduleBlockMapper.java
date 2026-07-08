@@ -64,6 +64,11 @@ public interface ScheduleBlockMapper {
             @Param("userId") Long userId
     );
 
+    int uncompleteIfDone(
+            @Param("scheduleBlockId") Long scheduleBlockId,
+            @Param("userId") Long userId
+    );
+
     /**
      * 기준 운영일 이전 block_date에 속한 PLANNED 블록 조회.
      */

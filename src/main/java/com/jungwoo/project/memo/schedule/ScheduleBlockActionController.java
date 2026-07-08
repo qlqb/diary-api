@@ -102,6 +102,21 @@ public class ScheduleBlockActionController {
     }
 
     /**
+     * 완료취소
+     */
+    @PostMapping("/{scheduleBlockId}/uncomplete")
+    public ResponseEntity<ScheduleBlockResponse> uncomplete(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long scheduleBlockId
+    ) {
+        log.info("POST /api/schedule-blocks/{}/uncomplete - userId={}",
+                scheduleBlockId, principal.getUserId());
+
+        return ResponseEntity.ok(
+                actionService.uncomplete(scheduleBlockId, principal.getUserId()));
+    }
+
+    /**
      * pending 조회.
      * date는 pending 판단 기준 운영일(baseOperationalDate)이다. date 생략 시 현재는 오늘(LocalDate.now)을 사용한다.
      *

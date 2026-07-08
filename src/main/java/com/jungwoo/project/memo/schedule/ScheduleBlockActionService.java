@@ -43,6 +43,11 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ScheduleBlockActionService {
 
+    // 액션 규칙:
+    // - complete는 PLANNED/HOLD를 DONE으로 바꾸고, 이미 DONE이면 성공 no-op으로 처리한다.
+    // - uncomplete는 DONE을 PLANNED로 바꾸고, 이미 PLANNED이면 성공 no-op으로 처리한다.
+    // - toggle API는 반복 호출 시 상태가 뒤집힐 수 있으므로 사용하지 않는다.
+
     private final ScheduleBlockMapper scheduleBlockMapper;
     private final PlanItemEventMapper planItemEventMapper;
     private final DailyPlanService dailyPlanService;
@@ -172,7 +177,7 @@ public class ScheduleBlockActionService {
 
         ScheduleBlock block = findBlockOrThrow(scheduleBlockId, userId);
         if (ScheduleStatus.DONE.equals(block.getStatus())) {
-            log.info("complete schedule block idempotent no-op: scheduleBlockId={}", scheduleBlockId);
+            log.info("블록 완료 no-op 처리: scheduleBlockId={}", scheduleBlockId);
             return ScheduleBlockResponse.from(block);
         }
 
@@ -195,13 +200,41 @@ public class ScheduleBlockActionService {
         return ScheduleBlockResponse.from(scheduleBlockMapper.findByIdAndUserId(scheduleBlockId, userId));
     }
 
+    // ===== 완료취소 =====
+    @Transactional
+    public ScheduleBlockResponse uncomplete(Long scheduleBlockId, Long userId) {
+        log.info("블록 완료취소 시작: scheduleBlockId={}, userId={}", scheduleBlockId, userId);
+
+        ScheduleBlock block = findBlockOrThrow(scheduleBlockId, userId);
+        if (ScheduleStatus.PLANNED.equals(block.getStatus())) {
+            log.info("블록 완료취소 no-op 처리: scheduleBlockId={}", scheduleBlockId);
+            return ScheduleBlockResponse.from(block);
+        }
+
+        validateStatusIn(block, ScheduleStatus.DONE);
+
+        int updatedRows = scheduleBlockMapper.uncompleteIfDone(scheduleBlockId, userId);
+
+        if (updatedRows == 1) {
+            planItemEventMapper.insert(PlanItemEvent.builder()
+                .userId(userId)
+                .todoId(block.getTodoId())
+                .scheduleBlockId(scheduleBlockId)
+                .eventType(PlanItemEventType.REOPENED)
+                .eventDate(LocalDate.now())
+                .build());
+        }
+
+        log.info("블록 완료취소 처리: scheduleBlockId={}", scheduleBlockId);
+
+        return ScheduleBlockResponse.from(scheduleBlockMapper.findByIdAndUserId(scheduleBlockId, userId));
+    }
+
     // ===== pending 조회 =====
 
     /**
-     * 기준 운영일 이전 block_date에 속한 PLANNED 블록 조회.
+     * 기준 운영일 이전 block_date에 속한 PLANNED 블록을 조회한다.
      * pending은 실패가 아니라 아직 결론을 내리지 않은 이전 계획 항목이다.
-     *
-     * 1차-A 스코프: ScheduleBlock만 표시한다. (미배치 Todo는 1차-B에서 확장 — 의도된 범위)
      */
     @Transactional(readOnly = true)
     public List<ScheduleBlockResponse> getPendingBlocks(Long userId, LocalDate baseDate) {

@@ -125,7 +125,15 @@
           AND user_id           = #{userId}
           AND is_deleted        = 0
           AND status IN ('PLANNED', 'HOLD')
-          AND status &lt;&gt; 'DONE'
+    </update>
+
+    <update id="uncompleteIfDone">
+        UPDATE schedule_blocks
+        SET status = 'PLANNED'
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND status            = 'DONE'
     </update>
 
     <select id="findPendingBefore" resultMap="scheduleBlockResultMap">
