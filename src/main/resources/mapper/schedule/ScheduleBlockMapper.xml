@@ -117,7 +117,7 @@
           AND is_deleted        = 0
     </update>
 
-    <!-- 아직 못 한 것: 기준일 이전의 PLANNED 블록 -->
+    <!-- pending: 기준 운영일 이전 block_date에 속한 PLANNED 블록 -->
     <select id="findPendingBefore" resultMap="scheduleBlockResultMap">
         SELECT *
         FROM schedule_blocks

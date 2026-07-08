@@ -26,7 +26,7 @@ import java.util.List;
  * POST /api/schedule-blocks/{id}/reduce    body: { afterTitle, memo? }
  * POST /api/schedule-blocks/{id}/hold      body: { memo? } (생략 가능)
  * POST /api/schedule-blocks/{id}/complete  body 없음
- * GET  /api/schedule-blocks/pending?date=  아직 못 한 것 조회
+ * GET  /api/schedule-blocks/pending?date=  pending 조회
  */
 @Slf4j
 @RestController
@@ -102,8 +102,8 @@ public class ScheduleBlockActionController {
     }
 
     /**
-     * 아직 못 한 것 조회.
-     * 기준일(date) 이전 날짜의 PLANNED 블록 목록. date 생략 시 오늘.
+     * pending 조회.
+     * date는 pending 판단 기준 운영일(baseOperationalDate)이다. date 생략 시 현재는 오늘(LocalDate.now)을 사용한다.
      *
      * 1차-A 스코프: ScheduleBlock만 표시. (미배치 Todo는 1차-B 확장 — 의도된 범위)
      */

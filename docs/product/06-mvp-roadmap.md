@@ -44,7 +44,18 @@ POST /api/schedule-blocks/{id}/complete
 - 아직 못 한 것 카드에서 버튼이 동작한다.
 - 완료/이동/축소/보류 이벤트가 저장된다.
 - move 액션이 하나의 트랜잭션으로 검증된다.
-- move는 ScheduleBlock row를 복제하지 않고 기존 row의 date와 daily_plan_id를 갱신한다.
+- move는 ScheduleBlock row를 복제하지 않고 기존 row의 block_date와 daily_plan_id를 갱신한다.
+- ScheduleBlockType은 TIME_FIXED / TASK 기준으로 동작한다.
+- TIME_FIXED / TASK 시간 검증 정책이 문서와 서비스에서 일치해야 한다.
+- blockDate와 startTime/endTime의 날짜가 달라도 허용된다.
+- pending은 기준 운영일보다 이전 block_date의 PLANNED ScheduleBlock만 대상으로 한다.
+- 1차-A pending 대상은 ScheduleBlock만이다.
+- HOLD는 사용자가 보류로 결론 낸 상태이므로 pending이 아니며, pending 카드에 반복 노출하지 않는다.
+- 1차-A의 hold 범위는 상태를 HOLD로 바꾸고 HOLD 이벤트를 저장하는 것까지다.
+- 보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 1차-A에 포함하지 않는다.
+- HOLD를 다시 계획하는 흐름은 추후 RESUMED 이벤트 기반으로 확장할 수 있다.
+- 푸시 알림 구현은 1차-A에 포함하지 않는다.
+- pending 알림 기능은 07-ideas.md에 보류하며, 실제 구현은 1차-D 이후 또는 별도 릴리스에서 검토한다.
 
 1차-A의 아직 못 한 것 카드는 ScheduleBlock만 표시한다. 이는 의도된 범위이며 버그가 아니다.
 

@@ -1,5 +1,28 @@
 # 99. Change Log
 
+## 2026-07-08 — ScheduleBlock 시간 정책과 pending 정책 정리
+
+- `ScheduleBlockType`을 `TIME_FIXED / TASK` 기준으로 정리했다.
+- `TIME_FIXED`는 `start_time/end_time`을 반드시 가진다.
+- `TASK`는 `start_time/end_time`을 가지지 않는다.
+- `start_time/end_time` 중 하나만 있는 값은 허용하지 않는다.
+- `end_time`은 `start_time`보다 이후여야 한다.
+- `block_date`는 실제 날짜가 아니라 이 블록이 속한 하루를 의미한다.
+- `start_time/end_time`은 실제 시각이므로 `block_date`와 날짜가 달라도 허용한다.
+- 따라서 서비스와 DB에 `DATE(start_time)=block_date` 검증을 두지 않는다.
+- 새벽 4시 전 기록을 전날로 보는 operationalDate 정책은 이후 공통 유틸로 분리한다.
+- pending은 기준 운영일보다 이전 `block_date`에 속했지만 아직 결론을 내리지 않은 `PLANNED` ScheduleBlock으로 정의한다.
+- pending은 실패가 아니라 이전 운영일의 미정리 항목이다.
+- `HOLD`는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태이므로 pending이 아니다.
+- `HOLD/DONE/CANCELLED/DELETED` 항목은 pending에서 제외하고, HOLD 항목은 pending 카드에 반복 노출하지 않는다.
+- 1차-A의 hold 범위는 상태를 `HOLD`로 바꾸고 `HOLD` 이벤트를 저장하는 것까지다.
+- HOLD 항목은 추후 별도 보류함 또는 다시 계획하기 흐름에서 다루며, 다시 계획하기는 `RESUMED` 이벤트로 확장할 수 있다.
+- 보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 1차-A 범위에서 제외한다.
+- 1차-A pending 대상은 ScheduleBlock만이며, 미배치 Todo는 1차-B Todo 액션 확장에서 다룬다.
+- pending 판단과 알림 정책은 분리한다.
+- 기본 UX 방향은 다음 날 아침 pending 요약 정리다.
+- 실제 알림 기능과 설정은 `07-ideas.md`에 보류하고, 푸시 알림 구현은 MVP 제외로 유지한다.
+
 ## 2026-07-05 — 기획 v2.1 확정 (기획 마감, 구현 단계 전환)
 
 기존 워드 기획서를 v2 → v2.1로 개정하고 이 버전으로 기획을 마감했다.

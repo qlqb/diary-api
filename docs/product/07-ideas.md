@@ -60,3 +60,22 @@
 - 캡처는 초저마찰(폰 메모/GitHub 이슈 한 줄), 정리는 주 1회 이 파일로. 이 앱의 철학과 동일: 기록은 가볍게, 정리는 나중에.
 - AI 병행 운영: 발산(브레인스토밍, 초안, 설명)은 GPT / 수렴(설계 확정, 트레이드오프 판정, 구현, 문서 생성)은 Claude. GPT에 물을 때는 docs/product 핵심 + changelog를 컨텍스트로 제공하고 "확정 설계와 충돌하는 제안 금지" 명시.
 - 대화에서 결정이 나오면 세션 끝에 changelog/ideas 형식으로 추출해 저장소에 커밋. docx 재발행은 v3급 마일스톤에서만.
+
+## Pending 알림 정책 / 설정 (2026-07-08, 대화)
+
+- pending은 이전 운영일의 미정리 ScheduleBlock이며, 실패가 아니라 정리 대상이다.
+- 기본 방향은 다음 날 아침 pending 요약 알림이다.
+- 사용자를 즉시 압박하지 않는 것이 기본값이다.
+- 선택 설정으로 TIME_FIXED 블록의 end_time이 지난 뒤 즉시 알림을 제공할 수 있다.
+- 즉시 알림은 TASK에는 적용하지 않는다. TASK는 start_time/end_time이 없기 때문이다.
+- 설정 후보:
+  - 알림 끄기
+  - 다음 날 아침 요약
+  - 시간이 지난 TIME_FIXED 즉시 알림
+  - 둘 다
+- 세부 설정 후보:
+  - morningReminderTime
+  - immediateReminderDelayMinutes
+  - quietHours
+- 실제 PWA notification / push notification 구현은 MVP 제외이며, 1차-D 이후 또는 별도 릴리스에서 검토한다.
+- 상태: **1차-D 이후 검토**

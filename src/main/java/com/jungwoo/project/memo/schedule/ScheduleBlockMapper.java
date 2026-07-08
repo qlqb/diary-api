@@ -60,7 +60,7 @@ public interface ScheduleBlockMapper {
     );
 
     /**
-     * 기준일 이전의 미완료(PLANNED) 블록 조회 — "아직 못 한 것" 카드.
+     * 기준 운영일 이전 block_date에 속한 PLANNED 블록 조회.
      */
     List<ScheduleBlock> findPendingBefore(
             @Param("userId") Long userId,

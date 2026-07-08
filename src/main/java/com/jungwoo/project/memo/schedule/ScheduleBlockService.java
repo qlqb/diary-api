@@ -37,7 +37,6 @@ public class ScheduleBlockService {
 
         validateBlockTime(
                 request.getBlockType(),
-                request.getBlockDate(),
                 request.getStartTime(),
                 request.getEndTime()
         );
@@ -104,7 +103,6 @@ public class ScheduleBlockService {
 
         validateBlockTime(
                 request.getBlockType(),
-                request.getBlockDate(),
                 request.getStartTime(),
                 request.getEndTime()
         );
@@ -148,12 +146,11 @@ public class ScheduleBlockService {
 
         // 요청값을 기존값에 병합한 최종값으로 검증
         // null인 필드는 기존값을 유지
-        LocalDate     mergedDate  = request.getBlockDate() != null ? request.getBlockDate() : block.getBlockDate();
         ScheduleBlockType mergedType = request.getBlockType() != null ? request.getBlockType() : block.getBlockType();
         LocalDateTime mergedStart = request.getStartTime() != null ? request.getStartTime() : block.getStartTime();
         LocalDateTime mergedEnd   = request.getEndTime()   != null ? request.getEndTime()   : block.getEndTime();
 
-        validateBlockTime(mergedType, mergedDate, mergedStart, mergedEnd);
+        validateBlockTime(mergedType, mergedStart, mergedEnd);
 
         if (request.getTodoId() != null) {
             validateTodoOwnership(request.getTodoId(), userId);
@@ -207,44 +204,36 @@ public class ScheduleBlockService {
 
     private void validateBlockTime(
             ScheduleBlockType blockType,
-            LocalDate blockDate,
             LocalDateTime startTime,
             LocalDateTime endTime
     ) {
-        if (ScheduleBlockType.TIME_FIXED.equals(blockType) && (startTime == null || endTime == null)) {
-            throw new BadRequestException(ErrorCode.TIME_FIXED_REQUIRES_TIME);
-        }
-
         if ((startTime == null) != (endTime == null)) {
             throw new BadRequestException(ErrorCode.PARTIAL_TIME_RANGE);
         }
 
-        if (startTime == null) {
+        if (ScheduleBlockType.TASK.equals(blockType) && (startTime != null || endTime != null)) {
+            throw new BadRequestException(ErrorCode.TASK_MUST_NOT_HAVE_TIME);
+        }
+
+        if (ScheduleBlockType.TASK.equals(blockType)) {
             return;
         }
 
-        validateTimeRange(startTime, endTime);
-        validateBlockDateConsistency(blockDate, startTime, endTime);
+        if (ScheduleBlockType.TIME_FIXED.equals(blockType)) {
+            if (startTime == null) {
+                throw new BadRequestException(ErrorCode.TIME_FIXED_REQUIRES_TIME);
+            }
+
+            validateTimeRange(startTime, endTime);
+            return;
+        }
+
+        throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
     }
 
     private void validateTimeRange(LocalDateTime startTime, LocalDateTime endTime) {
         if (!endTime.isAfter(startTime)) {
             throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
-        }
-    }
-
-    /**
-     * blockDate와 startTime/endTime의 날짜가 모두 일치하는지 검증
-     * 예: blockDate=2026-07-01, startTime=2026-07-01T09:00 → 정상
-     *     blockDate=2026-07-01, startTime=2026-07-02T09:00 → 오류
-     */
-    private void validateBlockDateConsistency(
-            LocalDate blockDate, LocalDateTime startTime, LocalDateTime endTime) {
-        if (!startTime.toLocalDate().equals(blockDate)) {
-            throw new BadRequestException(ErrorCode.BLOCK_DATE_MISMATCH);
-        }
-        if (!endTime.toLocalDate().equals(blockDate)) {
-            throw new BadRequestException(ErrorCode.BLOCK_DATE_MISMATCH);
         }
     }
 

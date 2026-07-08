@@ -29,7 +29,7 @@ MonthlyPlan, YearlyPlan, LifeGoal, BehaviorPattern은 MVP에서 테이블도 만
 ```text
 daily_plan_id
 user_id
-date
+plan_date
 view_mode
 view_mode_source
 intensity
@@ -39,7 +39,7 @@ memo
 created_at
 updated_at
 
-UNIQUE(user_id, date)
+UNIQUE(user_id, plan_date)
 ```
 
 DailyPlan은 날짜별 하루 운영 상태다. 대상 날짜 DailyPlan이 없을 때 이동 액션 등에서 기본값으로 생성될 수 있다.
@@ -74,7 +74,7 @@ user_id
 daily_plan_id
 todo_id nullable
 routine_id nullable
-date
+block_date
 title
 block_type
 priority
@@ -100,6 +100,42 @@ CANCELLED
 ```
 
 MOVED, REDUCED는 status가 아니라 plan_item_events의 event_type으로 기록한다.
+
+ScheduleBlock 시간 정책은 다음과 같다.
+
+```text
+TIME_FIXED:
+- start_time NOT NULL
+- end_time NOT NULL
+- end_time > start_time
+
+TASK:
+- start_time NULL
+- end_time NULL
+```
+
+`block_date`는 운영상 하루 기준 날짜이고, `start_time`/`end_time`은 실제 시각이다. 따라서 서로 날짜가 다를 수 있다.
+
+DB와 서비스 모두 `DATE(start_time)=block_date` 제약을 두지 않는다.
+
+허용 가능한 DB 권장 제약 예시는 다음과 같다. MySQL/MariaDB 버전과 기존 데이터 상태에 따라 CHECK 적용 가능 여부를 먼저 확인한다.
+
+```sql
+CHECK (
+    (
+        block_type = 'TIME_FIXED'
+        AND start_time IS NOT NULL
+        AND end_time IS NOT NULL
+        AND end_time > start_time
+    )
+    OR
+    (
+        block_type = 'TASK'
+        AND start_time IS NULL
+        AND end_time IS NULL
+    )
+)
+```
 
 ## 6. plan_item_events
 

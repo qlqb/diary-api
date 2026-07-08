@@ -188,17 +188,17 @@ public class ScheduleBlockActionService {
         return ScheduleBlockResponse.from(scheduleBlockMapper.findByIdAndUserId(scheduleBlockId, userId));
     }
 
-    // ===== 아직 못 한 것 조회 =====
+    // ===== pending 조회 =====
 
     /**
-     * 기준일 이전의 미완료(PLANNED) 블록 조회.
-     * "아직 못 한 것" 카드의 데이터 소스.
+     * 기준 운영일 이전 block_date에 속한 PLANNED 블록 조회.
+     * pending은 실패가 아니라 아직 결론을 내리지 않은 이전 계획 항목이다.
      *
      * 1차-A 스코프: ScheduleBlock만 표시한다. (미배치 Todo는 1차-B에서 확장 — 의도된 범위)
      */
     @Transactional(readOnly = true)
     public List<ScheduleBlockResponse> getPendingBlocks(Long userId, LocalDate baseDate) {
-        log.info("미완료 블록 조회: userId={}, baseDate={}", userId, baseDate);
+        log.info("pending 블록 조회: userId={}, baseDate={}", userId, baseDate);
 
         return scheduleBlockMapper.findPendingBefore(userId, baseDate)
                 .stream()

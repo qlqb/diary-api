@@ -116,7 +116,7 @@ REQ-DAILY-PLAN-001
 사용자는 날짜별 DailyPlan을 가질 수 있다.
 
 REQ-DAILY-PLAN-002
-DailyPlan은 user_id + date 기준으로 유일하다.
+DailyPlan은 user_id + plan_date 기준으로 유일하다.
 
 REQ-DAILY-PLAN-003
 DailyPlan은 viewMode, intensity, conditionTags 또는 condition_note를 가진다.
@@ -148,6 +148,63 @@ ScheduleBlock은 MUST / SHOULD / OPTIONAL priority를 가진다.
 
 REQ-SCHEDULE-BLOCK-007
 CHECKLIST 표시 순서는 order_index로 관리한다.
+
+REQ-SCHEDULE-BLOCK-008
+TIME_FIXED 타입은 startTime/endTime을 반드시 가져야 한다.
+
+REQ-SCHEDULE-BLOCK-009
+TASK 타입은 startTime/endTime을 가지면 안 된다.
+
+REQ-SCHEDULE-BLOCK-010
+startTime/endTime 중 하나만 존재하는 값은 허용하지 않는다.
+
+REQ-SCHEDULE-BLOCK-011
+startTime/endTime이 모두 존재할 경우 endTime은 startTime보다 이후여야 한다.
+
+REQ-SCHEDULE-BLOCK-012
+blockDate는 이 블록이 속한 하루를 의미하며 startTime/endTime의 실제 날짜와 반드시 같을 필요는 없다.
+
+REQ-SCHEDULE-BLOCK-013
+서비스와 DB는 DATE(start_time)=block_date 같은 검증을 두지 않는다.
+
+REQ-SCHEDULE-BLOCK-014
+operationalDate는 추후 공통 유틸로 분리한다.
+
+REQ-SCHEDULE-BLOCK-015
+pending은 기준 운영일보다 이전 blockDate/block_date에 속했지만 아직 결론을 내리지 않은 PLANNED ScheduleBlock이다.
+
+REQ-SCHEDULE-BLOCK-016
+pending 조건은 status=PLANNED, is_deleted=false, block_date < baseOperationalDate다.
+
+REQ-SCHEDULE-BLOCK-017
+오늘 항목과 미래 항목은 pending이 아니다.
+
+REQ-SCHEDULE-BLOCK-018
+DONE/HOLD/CANCELLED/삭제 항목은 pending이 아니다.
+
+REQ-SCHEDULE-BLOCK-019
+HOLD는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태이며 pending 카드에 반복 노출하지 않는다.
+
+REQ-SCHEDULE-BLOCK-020
+1차-A에서는 ScheduleBlock만 pending 대상으로 한다. Todo pending은 1차-B Todo 액션 확장에서 다룬다.
+
+REQ-SCHEDULE-BLOCK-021
+pending 판단은 startTime/endTime이 아니라 blockDate/block_date 기준이다.
+
+REQ-SCHEDULE-BLOCK-022
+pending 판단과 알림 정책은 분리한다. pending 알림은 후순위 아이디어이며 07-ideas.md에 둔다. 푸시 알림은 MVP 제외다.
+
+REQ-SCHEDULE-BLOCK-023
+HOLD 항목은 나중에 별도 보류함 또는 다시 계획하기 흐름에서 다룬다.
+
+REQ-SCHEDULE-BLOCK-024
+HOLD를 다시 계획하는 흐름은 추후 RESUMED 이벤트로 확장할 수 있다.
+
+REQ-SCHEDULE-BLOCK-025
+1차-A에서는 hold 액션으로 상태를 HOLD로 바꾸고 HOLD 이벤트를 저장하는 것까지만 범위로 둔다.
+
+REQ-SCHEDULE-BLOCK-026
+보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 이번 범위에서 구현하지 않는다.
 ```
 
 ## 8. plan_item_events 요구사항
@@ -191,7 +248,7 @@ REQ-MOVE-001
 move 액션은 기존 ScheduleBlock row를 복제하지 않는다.
 
 REQ-MOVE-002
-기존 row의 date와 daily_plan_id를 이동 대상 날짜로 갱신한다.
+기존 row의 block_date와 daily_plan_id를 이동 대상 날짜로 갱신한다.
 
 REQ-MOVE-003
 대상 날짜 DailyPlan이 없으면 get-or-create 한다.

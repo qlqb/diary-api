@@ -401,3 +401,100 @@ Response `200 OK`:
   "achievementRate": 60.0
 }
 ```
+
+## ScheduleBlocks
+
+ScheduleBlock API는 인증된 사용자의 블록만 조회/수정/삭제합니다.
+
+Enum 값:
+
+- `blockType`: `TIME_FIXED`, `TASK`
+
+시간 정책:
+
+- `TIME_FIXED`는 `startTime`/`endTime`을 반드시 가져야 합니다.
+- `TASK`는 `startTime`/`endTime`을 가지면 안 됩니다.
+- `startTime`/`endTime` 중 하나만 있으면 `PARTIAL_TIME_RANGE` 오류입니다.
+- `startTime`/`endTime`이 모두 있으면 `endTime`은 `startTime`보다 이후여야 합니다.
+- `blockDate`는 이 블록이 속한 하루이고, `startTime`/`endTime`은 실제 시각입니다. 두 날짜가 달라도 허용합니다.
+
+### ScheduleBlock 생성 smoke 예시
+
+`POST /api/schedule-blocks`
+
+TASK + 시간 없음: 성공
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "연결 리스트 문제 풀기",
+  "blockType": "TASK"
+}
+```
+
+TASK + 시간 있음: `400 TASK_MUST_NOT_HAVE_TIME`
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "연결 리스트 문제 풀기",
+  "blockType": "TASK",
+  "startTime": "2026-07-08T20:00:00",
+  "endTime": "2026-07-08T21:00:00"
+}
+```
+
+TIME_FIXED + 시간 있음: 성공
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "스터디",
+  "blockType": "TIME_FIXED",
+  "startTime": "2026-07-08T20:00:00",
+  "endTime": "2026-07-08T21:00:00"
+}
+```
+
+TIME_FIXED + 시간 없음: `400 TIME_FIXED_REQUIRES_TIME`
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "스터디",
+  "blockType": "TIME_FIXED"
+}
+```
+
+startTime만 있음: `400 PARTIAL_TIME_RANGE`
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "스터디",
+  "blockType": "TIME_FIXED",
+  "startTime": "2026-07-08T20:00:00"
+}
+```
+
+blockDate와 실제 시각 날짜가 다름: 성공
+
+```json
+{
+  "blockDate": "2026-07-08",
+  "title": "새벽 정리",
+  "blockType": "TIME_FIXED",
+  "startTime": "2026-07-09T01:30:00",
+  "endTime": "2026-07-09T02:00:00"
+}
+```
+
+### Pending 조회
+
+`GET /api/schedule-blocks/pending?date=2026-07-09`
+
+`date` 파라미터는 실제 오늘 날짜가 아니라 pending 판단 기준 운영일(`baseOperationalDate`)입니다. 사용자가 날짜를 보내면 그 날짜를 우선하고, 생략하면 현재 구현은 임시로 `LocalDate.now()`를 사용합니다. 새벽 4시 기준 `operationalDate` 계산은 추후 공통 유틸로 분리할 예정입니다.
+
+pending은 `block_date < baseOperationalDate`, `status=PLANNED`, `is_deleted=false`인 ScheduleBlock입니다. 오늘 항목, 미래 항목, DONE/HOLD/CANCELLED/삭제 항목은 pending이 아닙니다. pending 판단에는 `startTime`/`endTime`의 실제 시각을 사용하지 않습니다.
+
+HOLD는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태이므로 pending 카드에 반복 노출하지 않습니다. 1차-A의 hold 액션은 상태를 HOLD로 바꾸고 HOLD 이벤트를 저장하는 것까지만 담당합니다. 보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 이후 범위입니다.
