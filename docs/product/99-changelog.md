@@ -1,5 +1,17 @@
 # 99. Change Log
 
+## 2026-07-08 — Today 실행 루프와 Todo/ScheduleBlock 역할 재정리
+
+- Today 화면을 사용자 기본 입구로 확정했다.
+- 1차-A의 핵심을 "오늘 할 일 생성 → 액션 → 이벤트 저장"으로 재정의했다.
+- ScheduleBlock은 Today 화면의 실행 카드로 정의했다.
+- Todo는 쓰레기통이 아니라 실행 후보 대기열로 정의했다.
+- Todo UI는 1차-A에서 숨긴다.
+- 월간/연간/장기목표는 실행 후보 보관함으로 쓰지 않는다.
+- 사용자 입력 분류 병목을 피하기 위해 Today 입력은 전부 ScheduleBlock으로 저장한다.
+- 이벤트는 사용자의 별도 기록이 아니라 액션 버튼의 부산물로 저장한다.
+- AI 추천은 현재 제외하고 이벤트 데이터 수집을 우선한다.
+
 ## 2026-07-08 — ScheduleBlock 시간 정책과 pending 정책 정리
 
 - `ScheduleBlockType`을 `TIME_FIXED / TASK` 기준으로 정리했다.

@@ -89,6 +89,7 @@ Authorization: Bearer {token}
 | [05-database.md](docs/product/05-database.md) | 테이블, enum, 인덱스 설계 메모 |
 | [06-mvp-roadmap.md](docs/product/06-mvp-roadmap.md) | 1차-A부터 1.5차까지 MVP 릴리스 단위 |
 | [07-ideas.md](docs/product/07-ideas.md) | 아이디어 주차장 / 미확정 아이디어 기록 |
+| [08-today-execution-loop.md](docs/product/08-today-execution-loop.md) | Today 화면 중심 실행 루프, Todo/ScheduleBlock 역할, 1차-A 사용자 입력 범위 정리 |
 | [99-changelog.md](docs/product/99-changelog.md) | 확정 변경 이력 |
 
 문서 수정 기준:

@@ -107,6 +107,9 @@ AI가 추천한 Todo를 사용자가 수정 후 저장하면 origin_type은 AI_S
 
 REQ-TODO-009
 Todo는 ScheduleBlock과 선택적으로 연결될 수 있다.
+
+REQ-TODO-010
+Todo는 아직 날짜가 확정되지 않은 실행 후보 대기열이며, 1차-A 사용자 화면에서는 노출하지 않는다.
 ```
 
 ## 6. DailyPlan 요구사항
@@ -129,7 +132,7 @@ REQ-DAILY-PLAN-004
 
 ```text
 REQ-SCHEDULE-BLOCK-001
-ScheduleBlock은 하루 안에 배치되는 행동 단위다.
+ScheduleBlock은 Today 화면에 올라온 오늘의 실행 카드다.
 
 REQ-SCHEDULE-BLOCK-002
 ScheduleBlock은 Todo와 선택적으로 연결될 수 있다.
@@ -205,6 +208,9 @@ REQ-SCHEDULE-BLOCK-025
 
 REQ-SCHEDULE-BLOCK-026
 보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 이번 범위에서 구현하지 않는다.
+
+REQ-SCHEDULE-BLOCK-027
+1차-A 기준 사용자 화면의 "오늘 해볼 것"은 내부적으로 ScheduleBlock으로 저장한다.
 ```
 
 ## 8. plan_item_events 요구사항

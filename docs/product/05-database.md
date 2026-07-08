@@ -101,6 +101,8 @@ CANCELLED
 
 MOVED, REDUCED는 status가 아니라 plan_item_events의 event_type으로 기록한다.
 
+1차-A 기준 사용자 화면의 "오늘 해볼 것"은 내부적으로 `schedule_blocks`에 저장한다. 시간이 없는 실행 카드도 ScheduleBlock이며 `block_type = TASK`를 사용한다.
+
 ScheduleBlock 시간 정책은 다음과 같다.
 
 ```text
@@ -239,7 +241,7 @@ EXPIRED
 
 ## 10. Todo 설계 메모
 
-Todo는 기존 구현 흐름을 유지하되, ScheduleBlock과 선택적으로 연결될 수 있는 행동 단위로 본다.
+Todo는 기존 구현 흐름을 유지하되, 아직 날짜가 확정되지 않은 실행 후보 대기열로 본다. 나중에 Today로 가져오면 ScheduleBlock이 생성될 수 있다. 1차-A 사용자 화면에서는 Todo를 노출하지 않지만 기존 Todo 백엔드와 테이블은 삭제하지 않는다.
 
 주요 조회 인덱스는 날짜별 조회와 상태별 조회를 우선한다.
 

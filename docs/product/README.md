@@ -15,9 +15,10 @@
 | 5 | 설계 | [05-database.md](05-database.md) | 테이블, enum, 인덱스 설계 메모 |
 | 6 | 로드맵 | [06-mvp-roadmap.md](06-mvp-roadmap.md) | 1차-A부터 1.5차까지 MVP 릴리스 단위 |
 | 7 | 메모 | [07-ideas.md](07-ideas.md) | 아이디어 주차장 / 미확정 아이디어 기록 |
-| 8 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
-| 9 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
-| 10 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
+| 8 | 설계 | [08-today-execution-loop.md](08-today-execution-loop.md) | Today 화면 중심 실행 루프, Todo/ScheduleBlock 역할, 1차-A 사용자 입력 범위 정리 |
+| 9 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
+| 10 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
+| 11 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
 
 ---
 
@@ -34,5 +35,6 @@
 - 테이블, 컬럼, enum, 인덱스가 바뀌면 `05-database.md`를 수정한다.
 - MVP 범위나 확장 순서가 바뀌면 `06-mvp-roadmap.md`를 수정한다.
 - 미확정 아이디어는 `07-ideas.md`에 기록한다.
+- Today 화면 중심 실행 루프와 Todo/ScheduleBlock 역할이 바뀌면 `08-today-execution-loop.md`를 수정한다.
 - 아이디어가 확정되면 해당 문서와 `99-changelog.md`에 반영한다.
 - 중요한 결정은 확정 변경 이력인 `99-changelog.md`에 기록한다.

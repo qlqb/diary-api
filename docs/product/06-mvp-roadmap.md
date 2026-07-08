@@ -9,12 +9,12 @@ MVP는 많은 기능을 한 번에 넣는 것이 아니라, 하루 운영 루프
 MVP의 중심 흐름은 다음과 같다.
 
 ```text
-오늘 상태 확인
-→ 할 일과 계획 확인
-→ 실행
+오늘의 기록
+→ 오늘 해볼 것 생성
+→ 오늘 목록 표시
 → 완료/이동/축소/보류
-→ 하루 마무리
-→ 주간 회고
+→ plan_item_events 저장
+→ 나중에 추천 데이터로 사용
 ```
 
 ## 2. 1차-A: 이벤트와 도메인 액션
@@ -23,6 +23,10 @@ MVP의 중심 흐름은 다음과 같다.
 
 - plan_item_events
 - ScheduleBlock 도메인 액션 API
+- Today 화면
+- 오늘의 기록 영역
+- 오늘 해볼 것 입력
+- 오늘 해볼 것 목록
 - `move`
 - `reduce`
 - `hold`
@@ -42,6 +46,8 @@ POST /api/schedule-blocks/{id}/complete
 완료 판정:
 
 - 아직 못 한 것 카드에서 버튼이 동작한다.
+- Today에 입력한 것은 전부 오늘 해볼 것으로 보고 ScheduleBlock으로 저장한다.
+- 1차-A에서는 Todo 사용자 화면을 만들지 않는다.
 - 완료/이동/축소/보류 이벤트가 저장된다.
 - move 액션이 하나의 트랜잭션으로 검증된다.
 - move는 ScheduleBlock row를 복제하지 않고 기존 row의 block_date와 daily_plan_id를 갱신한다.
