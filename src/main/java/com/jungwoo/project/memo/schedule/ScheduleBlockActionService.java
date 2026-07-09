@@ -147,8 +147,7 @@ public class ScheduleBlockActionService {
                 targetBlockType = request.getBlockType();
                 targetStartTime = request.getStartTime();
                 targetEndTime = request.getEndTime();
-                validateShrinkTime(targetBlockType, targetStartTime, targetEndTime);
-                validateShrinkActuallyChangesTime(block, targetBlockType, targetStartTime, targetEndTime);
+                validateShrinkTime(block, targetBlockType, targetStartTime, targetEndTime);
             }
             case CLEAR -> {
                 validateClearTime(request, block);
@@ -304,10 +303,17 @@ public class ScheduleBlockActionService {
     }
 
     private void validateShrinkTime(
+            ScheduleBlock block,
             ScheduleBlockType blockType,
             LocalDateTime startTime,
             LocalDateTime endTime
     ) {
+        if (!ScheduleBlockType.TIME_FIXED.equals(block.getBlockType())
+                || block.getStartTime() == null
+                || block.getEndTime() == null) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
         if (!ScheduleBlockType.TIME_FIXED.equals(blockType)) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
@@ -319,18 +325,16 @@ public class ScheduleBlockActionService {
         if (!endTime.isAfter(startTime)) {
             throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
         }
-    }
 
-    private void validateShrinkActuallyChangesTime(
-            ScheduleBlock block,
-            ScheduleBlockType targetBlockType,
-            LocalDateTime targetStartTime,
-            LocalDateTime targetEndTime
-    ) {
-        if (Objects.equals(block.getBlockType(), targetBlockType)
-                && Objects.equals(block.getStartTime(), targetStartTime)
-                && Objects.equals(block.getEndTime(), targetEndTime)) {
-            throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
+        if (!block.getBlockDate().equals(startTime.toLocalDate())
+                || !block.getBlockDate().equals(endTime.toLocalDate())) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        Duration beforeDuration = Duration.between(block.getStartTime(), block.getEndTime());
+        Duration afterDuration = Duration.between(startTime, endTime);
+        if (!afterDuration.minus(beforeDuration).isNegative()) {
+            throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
         }
     }
 

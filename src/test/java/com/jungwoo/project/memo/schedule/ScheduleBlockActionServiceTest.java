@@ -107,13 +107,13 @@ class ScheduleBlockActionServiceTest {
     }
 
     @Test
-    void reduce_shrinkFailsWhenTitleAndTimeAreSame() {
+    void reduce_shrinkFailsWhenTitleChangesButTimeIsSame() {
         ScheduleBlock block = timeFixedBlock("알고리즘 2문제 풀기", START_TIME, END_TIME);
         when(scheduleBlockMapper.findByIdAndUserId(SCHEDULE_BLOCK_ID, USER_ID))
                 .thenReturn(block);
 
         assertThatThrownBy(() -> service.reduce(SCHEDULE_BLOCK_ID, USER_ID, ScheduleBlockReduceRequest.builder()
-                .reducedTitle("알고리즘 2문제 풀기")
+                .reducedTitle("알고리즘 1문제 풀기")
                 .timeMode(ScheduleBlockReduceTimeMode.SHRINK)
                 .blockType(ScheduleBlockType.TIME_FIXED)
                 .startTime(START_TIME)
@@ -121,7 +121,61 @@ class ScheduleBlockActionServiceTest {
                 .build()))
                 .isInstanceOfSatisfying(BadRequestException.class, exception ->
                         org.assertj.core.api.Assertions.assertThat(exception.getErrorCode())
-                                .isEqualTo(ErrorCode.REDUCE_TITLE_UNCHANGED));
+                                .isEqualTo(ErrorCode.INVALID_TIME_RANGE));
+    }
+
+    @Test
+    void reduce_shrinkFailsWhenTitleChangesButTimeIsLonger() {
+        ScheduleBlock block = timeFixedBlock("알고리즘 2문제 풀기", START_TIME, END_TIME);
+        when(scheduleBlockMapper.findByIdAndUserId(SCHEDULE_BLOCK_ID, USER_ID))
+                .thenReturn(block);
+
+        assertThatThrownBy(() -> service.reduce(SCHEDULE_BLOCK_ID, USER_ID, ScheduleBlockReduceRequest.builder()
+                .reducedTitle("알고리즘 1문제 풀기")
+                .timeMode(ScheduleBlockReduceTimeMode.SHRINK)
+                .blockType(ScheduleBlockType.TIME_FIXED)
+                .startTime(START_TIME)
+                .endTime(LocalDateTime.of(2026, 7, 9, 22, 0))
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.getErrorCode())
+                                .isEqualTo(ErrorCode.INVALID_TIME_RANGE));
+    }
+
+    @Test
+    void reduce_shrinkFailsWhenCurrentBlockIsTask() {
+        ScheduleBlock block = taskBlock("알고리즘 2문제 풀기");
+        when(scheduleBlockMapper.findByIdAndUserId(SCHEDULE_BLOCK_ID, USER_ID))
+                .thenReturn(block);
+
+        assertThatThrownBy(() -> service.reduce(SCHEDULE_BLOCK_ID, USER_ID, ScheduleBlockReduceRequest.builder()
+                .reducedTitle("알고리즘 1문제 풀기")
+                .timeMode(ScheduleBlockReduceTimeMode.SHRINK)
+                .blockType(ScheduleBlockType.TIME_FIXED)
+                .startTime(START_TIME)
+                .endTime(LocalDateTime.of(2026, 7, 9, 19, 30))
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.getErrorCode())
+                                .isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
+    }
+
+    @Test
+    void reduce_shrinkFailsWhenRequestedTimeDateDiffersFromBlockDate() {
+        ScheduleBlock block = timeFixedBlock("알고리즘 2문제 풀기", START_TIME, END_TIME);
+        when(scheduleBlockMapper.findByIdAndUserId(SCHEDULE_BLOCK_ID, USER_ID))
+                .thenReturn(block);
+
+        assertThatThrownBy(() -> service.reduce(SCHEDULE_BLOCK_ID, USER_ID, ScheduleBlockReduceRequest.builder()
+                .reducedTitle("알고리즘 1문제 풀기")
+                .timeMode(ScheduleBlockReduceTimeMode.SHRINK)
+                .blockType(ScheduleBlockType.TIME_FIXED)
+                .startTime(LocalDateTime.of(2026, 7, 10, 19, 0))
+                .endTime(LocalDateTime.of(2026, 7, 10, 19, 30))
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, exception ->
+                        org.assertj.core.api.Assertions.assertThat(exception.getErrorCode())
+                                .isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
     }
 
     @Test
