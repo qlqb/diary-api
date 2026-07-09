@@ -152,6 +152,12 @@ from_date nullable
 to_date nullable
 before_title nullable
 after_title nullable
+before_block_type nullable
+after_block_type nullable
+before_start_time nullable
+after_start_time nullable
+before_end_time nullable
+after_end_time nullable
 memo
 created_at
 
@@ -170,6 +176,19 @@ schedule_block_id만 있음 = 계획 항목 이벤트
 ```
 
 블록 이벤트의 todo_id는 클라이언트 입력을 받지 않는다. 서버가 ScheduleBlock.todo_id에서 복사해 무결성을 유지한다.
+
+`REDUCED` 같은 조정 이벤트는 변경 전/후 blockType과 시간을 함께 저장할 수 있다.
+
+```text
+before_block_type
+after_block_type
+before_start_time
+after_start_time
+before_end_time
+after_end_time
+```
+
+컬럼명은 REDUCED 전용이 아니라 일반 before/after 구조로 둔다. 향후 EXPANDED/EXTENDED 같은 이벤트가 추가되어도 재사용 가능하다. 이번 작업에서 새 인덱스는 추가하지 않는다.
 
 ## 7. quick_logs
 
@@ -288,6 +307,7 @@ PlanItemEventType
 - MOVED
 - REDUCED
 - HOLD
+- REOPENED
 - RESUMED
 - DELETED
 

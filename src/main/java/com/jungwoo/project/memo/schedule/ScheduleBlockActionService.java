@@ -10,9 +10,11 @@ import com.jungwoo.project.memo.planitem.PlanItemEventMapper;
 import com.jungwoo.project.memo.planitem.domain.PlanItemEvent;
 import com.jungwoo.project.memo.planitem.domain.PlanItemEventType;
 import com.jungwoo.project.memo.schedule.domain.ScheduleBlock;
+import com.jungwoo.project.memo.schedule.domain.ScheduleBlockType;
 import com.jungwoo.project.memo.schedule.domain.ScheduleStatus;
 import com.jungwoo.project.memo.schedule.dto.ScheduleBlockMoveRequest;
 import com.jungwoo.project.memo.schedule.dto.ScheduleBlockReduceRequest;
+import com.jungwoo.project.memo.schedule.dto.ScheduleBlockReduceTimeMode;
 import com.jungwoo.project.memo.schedule.dto.ScheduleBlockResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,7 +27,7 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * 시간 블록 도메인 액션 (move / reduce / hold / complete).
+ * 시간 블록 도메인 액션 (move / reduce / hold / complete / uncomplete).
  *
  * 이 액션들은 리소스의 부분 수정이 아니라 부수효과를 포함한 명령이므로
  * PATCH가 아니라 POST 하위 액션으로 분리한다. (v2.1 확정)
@@ -34,9 +36,10 @@ import java.util.List;
  *
  * 상태 전이 규칙 (1차-A):
  * - move / reduce / hold : PLANNED 에서만 가능
- * - complete             : PLANNED, HOLD 에서 가능
- * - DONE, CANCELLED 블록에 대한 액션은 409 (INVALID_STATUS_TRANSITION)
- * - HOLD 해제(RESUMED)는 1차-A API에 없다. 보류 항목은 완료만 가능하다.
+ * - complete             : PLANNED, HOLD 에서 가능하며 이미 DONE이면 no-op 성공
+ * - uncomplete           : DONE 에서 가능하며 이미 PLANNED이면 no-op 성공
+ * - toggle API는 사용하지 않는다.
+ * - 허용되지 않는 상태 전이는 409 (INVALID_STATUS_TRANSITION)
  */
 @Slf4j
 @Service
@@ -119,14 +122,46 @@ public class ScheduleBlockActionService {
         validateStatusIn(block, ScheduleStatus.PLANNED);
 
         String beforeTitle = block.getTitle();
-        String afterTitle = request.getAfterTitle();
+        String reducedTitle = request.getReducedTitle();
 
-        if (afterTitle.equals(beforeTitle)) {
+        if (reducedTitle == null || reducedTitle.isBlank()) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        if (reducedTitle.equals(beforeTitle)) {
             throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
         }
 
         // 축소 후의 블록은 여전히 PLANNED — REDUCED는 상태가 아니라 사건이다
-        scheduleBlockMapper.updateTitle(scheduleBlockId, userId, afterTitle);
+        ScheduleBlockType targetBlockType = block.getBlockType();
+        LocalDateTime targetStartTime = block.getStartTime();
+        LocalDateTime targetEndTime = block.getEndTime();
+        ScheduleBlockReduceTimeMode timeMode = request.getTimeMode() == null
+                ? ScheduleBlockReduceTimeMode.KEEP
+                : request.getTimeMode();
+
+        switch (timeMode) {
+            case KEEP -> {
+                if (hasReduceTimeAdjustment(request)) {
+                    throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+                }
+            }
+            case SHRINK -> {
+                targetBlockType = request.getBlockType();
+                targetStartTime = request.getStartTime();
+                targetEndTime = request.getEndTime();
+                validateShrinkTime(targetBlockType, targetStartTime, targetEndTime);
+            }
+            case CLEAR -> {
+                validateClearTime(request);
+                targetBlockType = ScheduleBlockType.TASK;
+                targetStartTime = null;
+                targetEndTime = null;
+            }
+        }
+
+        scheduleBlockMapper.updateForReduce(scheduleBlockId, userId,
+                reducedTitle, targetBlockType, targetStartTime, targetEndTime);
 
         planItemEventMapper.insert(PlanItemEvent.builder()
                 .userId(userId)
@@ -135,11 +170,17 @@ public class ScheduleBlockActionService {
                 .eventType(PlanItemEventType.REDUCED)
                 .eventDate(LocalDate.now())
                 .beforeTitle(beforeTitle)
-                .afterTitle(afterTitle)
+                .afterTitle(reducedTitle)
+                .beforeBlockType(block.getBlockType())
+                .afterBlockType(targetBlockType)
+                .beforeStartTime(block.getStartTime())
+                .afterStartTime(targetStartTime)
+                .beforeEndTime(block.getEndTime())
+                .afterEndTime(targetEndTime)
                 .memo(request.getMemo())
                 .build());
 
-        log.info("블록 축소 완료: scheduleBlockId={}, '{}' → '{}'", scheduleBlockId, beforeTitle, afterTitle);
+        log.info("블록 축소 완료: scheduleBlockId={}, '{}' → '{}'", scheduleBlockId, beforeTitle, reducedTitle);
 
         return ScheduleBlockResponse.from(scheduleBlockMapper.findByIdAndUserId(scheduleBlockId, userId));
     }
@@ -254,6 +295,40 @@ public class ScheduleBlockActionService {
             throw new NotFoundException(ErrorCode.SCHEDULE_BLOCK_NOT_FOUND);
         }
         return block;
+    }
+
+    private boolean hasReduceTimeAdjustment(ScheduleBlockReduceRequest request) {
+        return request.getBlockType() != null
+                || request.getStartTime() != null
+                || request.getEndTime() != null;
+    }
+
+    private void validateShrinkTime(
+            ScheduleBlockType blockType,
+            LocalDateTime startTime,
+            LocalDateTime endTime
+    ) {
+        if (!ScheduleBlockType.TIME_FIXED.equals(blockType)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        if (startTime == null || endTime == null) {
+            throw new BadRequestException(ErrorCode.TIME_FIXED_REQUIRES_TIME);
+        }
+
+        if (!endTime.isAfter(startTime)) {
+            throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
+        }
+    }
+
+    private void validateClearTime(ScheduleBlockReduceRequest request) {
+        if (!ScheduleBlockType.TASK.equals(request.getBlockType())) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        if (request.getStartTime() != null || request.getEndTime() != null) {
+            throw new BadRequestException(ErrorCode.TASK_MUST_NOT_HAVE_TIME);
+        }
     }
 
     private void validateStatusIn(ScheduleBlock block, ScheduleStatus... allowed) {

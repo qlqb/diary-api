@@ -1,5 +1,17 @@
 # 99. Change Log
 
+## 2026-07-09 — reduce 액션 선택적 시간 조정 및 이벤트 시간 전후 기록 추가
+
+- ScheduleBlock reduce 요청 필드를 `reducedTitle` 중심으로 정리했다.
+- 하위 호환을 위해 기존 `afterTitle` 요청은 임시 허용한다.
+- reduce 액션에 `timeMode`를 추가했다.
+  - `KEEP`: 기존 시간 유지
+  - `SHRINK`: 시간 조정
+  - `CLEAR`: 시간 해제
+- 제목 축소, 시간 조정, `REDUCED` 이벤트 저장을 하나의 트랜잭션으로 처리한다.
+- `plan_item_events`에 before/after blockType 및 start/end time 컬럼을 추가했다.
+- rescale, scale-up, expand/extend 액션은 이번 범위에서 제외했다.
+
 ## 2026-07-09 — ScheduleBlock 완료취소 액션 추가
 
 - `POST /api/schedule-blocks/{id}/uncomplete` 명시적 완료취소 액션을 추가했다.

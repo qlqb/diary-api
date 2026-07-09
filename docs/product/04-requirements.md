@@ -337,3 +337,46 @@ REQ-SCHEDULE-ACTION-IDEMPOTENCY-005
 REQ-SCHEDULE-ACTION-IDEMPOTENCY-006
 완료취소는 toggle이 아니라 POST /api/schedule-blocks/{id}/uncomplete 명시적 액션으로 처리한다.
 ```
+
+## 15. ScheduleBlock reduce 확장 요구사항
+
+```text
+REQ-SCHEDULE-REDUCE-001
+reduce 요청의 공식 제목 필드는 reducedTitle이다.
+
+REQ-SCHEDULE-REDUCE-002
+기존 afterTitle 요청은 하위 호환을 위해 임시 허용한다.
+
+REQ-SCHEDULE-REDUCE-003
+reduce 액션은 timeMode를 받는다.
+
+REQ-SCHEDULE-REDUCE-004
+timeMode 값은 KEEP, SHRINK, CLEAR를 사용한다.
+
+REQ-SCHEDULE-REDUCE-005
+timeMode가 없으면 하위 호환을 위해 KEEP으로 처리한다.
+
+REQ-SCHEDULE-REDUCE-006
+KEEP은 기존 blockType, startTime, endTime을 유지한다.
+
+REQ-SCHEDULE-REDUCE-007
+SHRINK는 blockType=TIME_FIXED와 startTime/endTime을 요구한다.
+
+REQ-SCHEDULE-REDUCE-008
+CLEAR는 blockType=TASK를 요구하고 startTime/endTime을 null로 해제한다.
+
+REQ-SCHEDULE-REDUCE-009
+제목 축소, timeMode에 따른 시간 조정, REDUCED 이벤트 저장은 하나의 트랜잭션으로 처리한다.
+
+REQ-SCHEDULE-REDUCE-010
+REDUCED 후 ScheduleBlock.status는 PLANNED를 유지한다.
+
+REQ-SCHEDULE-REDUCE-011
+plan_item_events의 before_title, after_title은 이벤트 시점의 변경 전/후 제목 값으로 유지한다.
+
+REQ-SCHEDULE-REDUCE-012
+REDUCED 이벤트에는 before_block_type, after_block_type, before_start_time, after_start_time, before_end_time, after_end_time을 저장한다.
+
+REQ-SCHEDULE-REDUCE-013
+reduce는 범용 rescale이 아니며, scale-up은 이번 범위가 아니다.
+```

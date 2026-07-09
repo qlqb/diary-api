@@ -108,6 +108,18 @@
           AND is_deleted        = 0
     </update>
 
+    <!-- 축소: 제목 + 선택적 시간 정보 변경. status는 그대로(PLANNED 유지) -->
+    <update id="updateForReduce">
+        UPDATE schedule_blocks
+        SET title      = #{title},
+            block_type = #{blockType},
+            start_time = #{startTime},
+            end_time   = #{endTime}
+        WHERE schedule_block_id = #{scheduleBlockId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </update>
+
     <!-- 상태 전이: hold, complete -->
     <update id="updateStatus">
         UPDATE schedule_blocks

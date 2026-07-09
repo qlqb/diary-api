@@ -489,6 +489,57 @@ blockDate와 실제 시각 날짜가 다름: 성공
 }
 ```
 
+### ScheduleBlock reduce 액션
+
+`POST /api/schedule-blocks/{id}/reduce`
+
+reduce는 "작게 줄이기" 도메인 액션입니다. 신규 클라이언트는 `reducedTitle`을 사용합니다. 기존 `afterTitle` 요청은 하위 호환을 위해 임시 허용합니다.
+
+제목만 줄이기:
+
+```json
+{
+  "reducedTitle": "영어 단어 5개",
+  "timeMode": "KEEP",
+  "memo": "오늘 시간이 부족해서 작게 줄임"
+}
+```
+
+제목과 시간을 함께 줄이기:
+
+```json
+{
+  "reducedTitle": "영어 단어 5개",
+  "timeMode": "SHRINK",
+  "blockType": "TIME_FIXED",
+  "startTime": "2026-07-09T20:00:00",
+  "endTime": "2026-07-09T20:30:00",
+  "memo": "오늘 시간이 부족해서 작게 줄임"
+}
+```
+
+시간 없는 작업으로 줄이기:
+
+```json
+{
+  "reducedTitle": "영어 단어 5개",
+  "timeMode": "CLEAR",
+  "blockType": "TASK",
+  "startTime": null,
+  "endTime": null,
+  "memo": "시간은 정하지 않고 가볍게 하기"
+}
+```
+
+- `timeMode`는 `KEEP`, `SHRINK`, `CLEAR` 중 하나입니다.
+- `timeMode`가 없으면 하위 호환을 위해 `KEEP`으로 처리합니다.
+- `KEEP`은 기존 시간 정보를 유지하고, `blockType`/`startTime`/`endTime`이 들어오면 `400 Bad Request`입니다.
+- `SHRINK`는 `blockType=TIME_FIXED`와 `startTime`/`endTime`을 모두 요구하며, `endTime`은 `startTime`보다 뒤여야 합니다.
+- `CLEAR`는 `blockType=TASK`와 `startTime=null`, `endTime=null`을 요구합니다.
+- 제목 축소, 선택적 시간 조정, `REDUCED` 이벤트 저장은 하나의 트랜잭션으로 처리합니다.
+- reduce 후 ScheduleBlock `status`는 `PLANNED`를 유지합니다.
+- 프론트는 reduce 후 별도 PATCH로 시간을 수정하지 않습니다.
+
 ### Pending 조회
 
 `GET /api/schedule-blocks/pending?date=2026-07-09`

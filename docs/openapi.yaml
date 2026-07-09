@@ -482,8 +482,127 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/PageResponseDiaryResponse"
+  /api/schedule-blocks/{scheduleBlockId}/reduce:
+    post:
+      tags:
+      - schedule-block-action-controller
+      operationId: reduceScheduleBlock
+      parameters:
+      - name: scheduleBlockId
+        in: path
+        required: true
+        schema:
+          type: integer
+          format: int64
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleBlockReduceRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ScheduleBlockResponse"
 components:
   schemas:
+    ScheduleBlockReduceRequest:
+      type: object
+      properties:
+        reducedTitle:
+          type: string
+          maxLength: 255
+          minLength: 1
+          description: 공식 필드. 작게 줄인 결과 제목.
+        afterTitle:
+          type: string
+          deprecated: true
+          description: reducedTitle의 하위 호환 alias. 신규 클라이언트는 사용하지 않는다.
+        timeMode:
+          $ref: "#/components/schemas/ScheduleBlockReduceTimeMode"
+        memo:
+          type: string
+        blockType:
+          $ref: "#/components/schemas/ScheduleBlockType"
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+      anyOf:
+      - required:
+        - reducedTitle
+      - required:
+        - afterTitle
+    ScheduleBlockReduceTimeMode:
+      type: string
+      enum:
+      - KEEP
+      - SHRINK
+      - CLEAR
+      description: KEEP은 기존 시간 유지, SHRINK는 TIME_FIXED 시간 조정, CLEAR는 TASK로 시간 해제.
+    ScheduleBlockType:
+      type: string
+      enum:
+      - TIME_FIXED
+      - TASK
+    ScheduleBlockResponse:
+      type: object
+      properties:
+        scheduleBlockId:
+          type: integer
+          format: int64
+        userId:
+          type: integer
+          format: int64
+        dailyPlanId:
+          type: integer
+          format: int64
+        todoId:
+          type: integer
+          format: int64
+        blockDate:
+          type: string
+          format: date
+        title:
+          type: string
+        blockType:
+          $ref: "#/components/schemas/ScheduleBlockType"
+        startTime:
+          type: string
+          format: date-time
+          nullable: true
+        endTime:
+          type: string
+          format: date-time
+          nullable: true
+        memo:
+          type: string
+        status:
+          type: string
+          enum:
+          - PLANNED
+          - DONE
+          - HOLD
+          - CANCELLED
+        originType:
+          type: string
+        modifiedAfterCreation:
+          type: boolean
+        isDeleted:
+          type: boolean
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     TodoUpdateRequest:
       type: object
       properties:

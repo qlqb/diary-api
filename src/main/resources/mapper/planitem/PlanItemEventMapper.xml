@@ -16,6 +16,12 @@
         <result property="toDate"          column="to_date"/>
         <result property="beforeTitle"     column="before_title"/>
         <result property="afterTitle"      column="after_title"/>
+        <result property="beforeBlockType" column="before_block_type"/>
+        <result property="afterBlockType"  column="after_block_type"/>
+        <result property="beforeStartTime" column="before_start_time"/>
+        <result property="afterStartTime"  column="after_start_time"/>
+        <result property="beforeEndTime"   column="before_end_time"/>
+        <result property="afterEndTime"    column="after_end_time"/>
         <result property="memo"            column="memo"/>
         <result property="createdAt"       column="created_at"/>
     </resultMap>
@@ -31,6 +37,12 @@
             to_date,
             before_title,
             after_title,
+            before_block_type,
+            after_block_type,
+            before_start_time,
+            after_start_time,
+            before_end_time,
+            after_end_time,
             memo
         ) VALUES (
             #{userId},
@@ -42,6 +54,12 @@
             #{toDate},
             #{beforeTitle},
             #{afterTitle},
+            #{beforeBlockType},
+            #{afterBlockType},
+            #{beforeStartTime},
+            #{afterStartTime},
+            #{beforeEndTime},
+            #{afterEndTime},
             #{memo}
         )
     </insert>

@@ -23,7 +23,7 @@ import java.util.List;
  * PUT/PATCH(리소스 수정)가 아니라 POST 하위 액션으로 설계한다. (v2.1 확정)
  *
  * POST /api/schedule-blocks/{id}/move      body: { toDate, memo? }
- * POST /api/schedule-blocks/{id}/reduce    body: { afterTitle, memo? }
+ * POST /api/schedule-blocks/{id}/reduce    body: { reducedTitle, timeMode?, memo?, blockType?, startTime?, endTime? }
  * POST /api/schedule-blocks/{id}/hold      body: { memo? } (생략 가능)
  * POST /api/schedule-blocks/{id}/complete  body 없음
  * GET  /api/schedule-blocks/pending?date=  pending 조회

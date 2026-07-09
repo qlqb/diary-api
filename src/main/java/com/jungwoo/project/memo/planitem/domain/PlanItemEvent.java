@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.planitem.domain;
 
+import com.jungwoo.project.memo.schedule.domain.ScheduleBlockType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -36,6 +37,12 @@ public class PlanItemEvent {
     private LocalDate toDate;         // MOVED: 이동한 날짜
     private String beforeTitle;      // REDUCED: 줄이기 전 제목
     private String afterTitle;       // REDUCED: 줄인 후 제목
+    private ScheduleBlockType beforeBlockType;
+    private ScheduleBlockType afterBlockType;
+    private LocalDateTime beforeStartTime;
+    private LocalDateTime afterStartTime;
+    private LocalDateTime beforeEndTime;
+    private LocalDateTime afterEndTime;
     private String memo;
     private LocalDateTime createdAt;
 }

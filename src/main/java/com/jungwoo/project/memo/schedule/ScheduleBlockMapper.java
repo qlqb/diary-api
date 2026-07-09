@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.schedule;
 
 import com.jungwoo.project.memo.schedule.domain.ScheduleBlock;
+import com.jungwoo.project.memo.schedule.domain.ScheduleBlockType;
 import com.jungwoo.project.memo.schedule.domain.ScheduleStatus;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
@@ -48,6 +49,18 @@ public interface ScheduleBlockMapper {
             @Param("scheduleBlockId") Long scheduleBlockId,
             @Param("userId") Long userId,
             @Param("title") String title
+    );
+
+    /**
+     * 축소(reduce) 전용 갱신: 제목과 선택적 시간 정보를 함께 변경. status는 PLANNED 유지.
+     */
+    void updateForReduce(
+            @Param("scheduleBlockId") Long scheduleBlockId,
+            @Param("userId") Long userId,
+            @Param("title") String title,
+            @Param("blockType") ScheduleBlockType blockType,
+            @Param("startTime") LocalDateTime startTime,
+            @Param("endTime") LocalDateTime endTime
     );
 
     /**
