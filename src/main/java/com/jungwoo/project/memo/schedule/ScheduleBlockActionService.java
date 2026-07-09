@@ -25,6 +25,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 
 /**
  * 시간 블록 도메인 액션 (move / reduce / hold / complete / uncomplete).
@@ -128,10 +129,6 @@ public class ScheduleBlockActionService {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
 
-        if (reducedTitle.equals(beforeTitle)) {
-            throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
-        }
-
         // 축소 후의 블록은 여전히 PLANNED — REDUCED는 상태가 아니라 사건이다
         ScheduleBlockType targetBlockType = block.getBlockType();
         LocalDateTime targetStartTime = block.getStartTime();
@@ -151,14 +148,17 @@ public class ScheduleBlockActionService {
                 targetStartTime = request.getStartTime();
                 targetEndTime = request.getEndTime();
                 validateShrinkTime(targetBlockType, targetStartTime, targetEndTime);
+                validateShrinkActuallyChangesTime(block, targetBlockType, targetStartTime, targetEndTime);
             }
             case CLEAR -> {
-                validateClearTime(request);
+                validateClearTime(request, block);
                 targetBlockType = ScheduleBlockType.TASK;
                 targetStartTime = null;
                 targetEndTime = null;
             }
         }
+
+        validateReduceHasActualChange(block, reducedTitle, targetBlockType, targetStartTime, targetEndTime);
 
         scheduleBlockMapper.updateForReduce(scheduleBlockId, userId,
                 reducedTitle, targetBlockType, targetStartTime, targetEndTime);
@@ -321,13 +321,49 @@ public class ScheduleBlockActionService {
         }
     }
 
-    private void validateClearTime(ScheduleBlockReduceRequest request) {
+    private void validateShrinkActuallyChangesTime(
+            ScheduleBlock block,
+            ScheduleBlockType targetBlockType,
+            LocalDateTime targetStartTime,
+            LocalDateTime targetEndTime
+    ) {
+        if (Objects.equals(block.getBlockType(), targetBlockType)
+                && Objects.equals(block.getStartTime(), targetStartTime)
+                && Objects.equals(block.getEndTime(), targetEndTime)) {
+            throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
+        }
+    }
+
+    private void validateClearTime(ScheduleBlockReduceRequest request, ScheduleBlock block) {
         if (!ScheduleBlockType.TASK.equals(request.getBlockType())) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
 
         if (request.getStartTime() != null || request.getEndTime() != null) {
             throw new BadRequestException(ErrorCode.TASK_MUST_NOT_HAVE_TIME);
+        }
+
+        if (ScheduleBlockType.TASK.equals(block.getBlockType())
+                && block.getStartTime() == null
+                && block.getEndTime() == null) {
+            throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
+        }
+    }
+
+    private void validateReduceHasActualChange(
+            ScheduleBlock block,
+            String reducedTitle,
+            ScheduleBlockType targetBlockType,
+            LocalDateTime targetStartTime,
+            LocalDateTime targetEndTime
+    ) {
+        boolean changed = !Objects.equals(block.getTitle(), reducedTitle)
+                || !Objects.equals(block.getBlockType(), targetBlockType)
+                || !Objects.equals(block.getStartTime(), targetStartTime)
+                || !Objects.equals(block.getEndTime(), targetEndTime);
+
+        if (!changed) {
+            throw new BadRequestException(ErrorCode.REDUCE_TITLE_UNCHANGED);
         }
     }
 
