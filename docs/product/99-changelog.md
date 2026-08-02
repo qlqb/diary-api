@@ -1,5 +1,31 @@
 # 99. Change Log
 
+## 2026-08-03 — 최신 제품 구조로 문서 기준 통합
+
+- 제품의 중심 문제를 “AI와 만든 계획이 채팅에 묻히고 실행과 다음 계획으로 이어지지 않는 문제”로 재정의했다.
+- 최상위 화면을 `오늘 / 계획 / 실행 / 기록` 네 영역으로 고정했다.
+- AI 상담 패널은 전역 보조 도구, Quick은 축약 진입점으로 정의했다.
+- 계획과 실행 데이터를 다음 역할로 분리했다.
+  - `PlanItem`: 앞으로 하려는 의도와 범위
+  - `ExecutionItem`: 실제로 배치·조정하는 실행 조각
+  - `ExecutionRecord`: 실제 수행 결과
+  - `ExecutionItemEvent`: 이동·축소·보류·분할 같은 조정 사건
+- 기존 `todos + schedule_blocks`의 장기 원본을 `execution_items`로 통합하기로 확정했다.
+- 기존 `daily_plans`는 상위 계획이 아니라 하루 상태이므로 `daily_states`로 책임을 변경했다.
+- `ContextItem`을 1급 데이터로 두고 목표·결정·제약·선호·고민·관찰·인사이트를 구분한다.
+- ContextItem은 출처, 미확인/AI 추정/사용자 확정 상태, 유효 기간, 교체·철회 수명주기를 관리한다.
+- 외부 ChatGPT 대화 가져오기도 AIProposal 검토 흐름을 거치도록 요구사항에 포함했다.
+- AI 결과는 `ai_proposals / ai_proposal_items`에 초안으로 보존하고, 사용자가 항목별로 수정·적용·무시한다.
+- AI 수정 적용 시 `baseVersion`과 현재 version을 비교하고 오래된 제안은 `409 Conflict`로 거부한다.
+- 부분 수행은 `PARTIAL Record + 남은 ExecutionItem + SPLIT Event`를 한 트랜잭션으로 처리한다.
+- 완료는 `COMPLETED Record + DONE 상태`를 한 트랜잭션으로 처리하며, 완료 기록 없는 DONE을 금지한다.
+- 대화 중 실시간 화면 변경은 공식 데이터 변경이 아니라 ghost/diff 미리보기로 정의했다.
+- 구현 순서는 `리스트 → 주간 시간표 → 캘린더`로 고정했다.
+- 마이그레이션은 신규 테이블 생성 → 데이터 복사·보정 기록 → MyBatis 전환 → 레거시 쓰기 중단 순서로 진행하며 이중 쓰기를 금지한다.
+- 실제 이메일·일기·비밀번호가 포함된 DB 덤프는 Git에 올리지 않는다.
+- `docs/product` Markdown을 진실의 원천으로 유지하고, v2.1 DOCX는 2026-07-05 과거 스냅샷으로 명시했다.
+- 위 항목은 목표 설계이며, 현재 코드가 모두 전환됐다는 의미는 아니다.
+
 ## 2026-07-09 — reduce 액션 선택적 시간 조정 및 이벤트 시간 전후 기록 추가
 
 - ScheduleBlock reduce 요청 필드를 `reducedTitle` 중심으로 정리했다.

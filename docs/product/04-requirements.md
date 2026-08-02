@@ -1,382 +1,295 @@
 # 04. Requirements
 
-이 문서는 실제 구현 기준이 되는 요구사항을 관리한다.
+이 문서는 2026-08-03 이후 구현 기준이 되는 요구사항을 관리한다. 현재 코드가 아직 레거시 모델을 사용하더라도 새 기능은 아래 목표 구조와 충돌하지 않아야 한다.
 
-## 1. 공통 원칙
+## 1. 공통 요구사항
 
 ```text
 REQ-COMMON-001
-AI가 생성한 데이터는 자동 저장되지 않고 후보로 표시된다.
+백엔드는 Spring Boot + MyBatis Mapper/XML 패턴을 유지한다.
 
 REQ-COMMON-002
-사용자가 선택하거나 적용한 항목만 최종 저장된다.
+모든 사용자 데이터 조회·수정·삭제 쿼리는 user_id 소유권 조건을 포함한다.
 
 REQ-COMMON-003
-AI가 생성한 항목을 사용자가 수정 후 적용하면 origin_type은 AI_GENERATED 또는 AI_SUGGESTED 계열로 유지하고 modified_after_creation은 true로 저장한다.
+삭제는 기본적으로 soft delete를 사용하며 삭제된 항목은 일반 조회에 노출하지 않는다.
 
 REQ-COMMON-004
-AI 분석은 사용자가 명시적으로 요청한 경우에만 실행한다.
+동일한 실행 상태와 수행 결과를 여러 테이블이 각각 소유하지 않는다.
 
 REQ-COMMON-005
-구현 기준은 Spring Boot + MyBatis + Mapper XML 패턴이다.
+화면 이름과 내부 모델 이름은 분리할 수 있지만 문서·API·DB 사이의 의미는 일치해야 한다.
 ```
 
-## 2. 회원 요구사항
+## 2. AI 상담과 제안
 
 ```text
-REQ-USER-001
-사용자는 이메일, 비밀번호, 닉네임을 입력하여 회원가입할 수 있다.
+REQ-AI-001
+AI는 공식 PlanItem, ExecutionItem, ContextItem을 직접 생성·수정·삭제하지 않는다.
 
-REQ-USER-002
-사용자는 이메일과 비밀번호로 로그인할 수 있다.
+REQ-AI-002
+AI 결과는 먼저 AIProposal과 AIProposalItem으로 저장한다.
 
-REQ-USER-003
-이메일은 중복될 수 없다.
+REQ-AI-003
+사용자는 제안 항목별로 제목, 날짜, 시간, 순서, 분량, 우선순위를 수정할 수 있다.
+
+REQ-AI-004
+사용자는 대화로도 제안을 다시 조정할 수 있다.
+
+REQ-AI-005
+사용자가 적용한 항목만 공식 테이블에 반영한다.
+
+REQ-AI-006
+제안 상태는 PROPOSED / APPLIED / MODIFIED_APPLIED / DISMISSED / EXPIRED를 사용한다.
+
+REQ-AI-007
+AI 제안은 originalPayload와 사용자가 고친 editedPayload를 구분해 보존한다.
+
+REQ-AI-008
+기존 항목 변경 제안은 생성 당시 baseVersion을 저장한다.
+
+REQ-AI-009
+적용 시 현재 version이 baseVersion과 다르면 409 Conflict로 거부한다.
+
+REQ-AI-010
+거절한 제안은 DISMISSED로 남겨 같은 제안을 반복 강요하지 않게 한다.
+
+REQ-AI-011
+사용자는 외부 ChatGPT 대화 텍스트를 붙여넣거나 파일로 가져와 계획·컨텍스트 후보를 만들 수 있다.
+
+REQ-AI-012
+외부 대화에서 추출한 항목도 AIProposal 검토와 사용자 적용을 거쳐야 한다.
 ```
 
-## 3. 일기 요구사항
+## 3. 장기 컨텍스트
 
 ```text
-REQ-DIARY-001
-로그인한 사용자는 제목, 내용, 감정 상태를 입력하여 일기를 작성할 수 있다.
+REQ-CONTEXT-001
+ContextItem은 GOAL / DECISION / CONSTRAINT / PREFERENCE / CONCERN / OBSERVATION / INSIGHT / UNKNOWN 유형을 가진다.
 
-REQ-DIARY-002
-사용자는 자신의 일기 목록을 조회할 수 있다.
+REQ-CONTEXT-002
+ContextItem은 USER_INPUT / AI_CONVERSATION / EXECUTION_DERIVED 출처를 가진다.
 
-REQ-DIARY-003
-사용자는 자신의 일기 상세 내용을 조회할 수 있다.
+REQ-CONTEXT-003
+확인 상태는 UNCONFIRMED / AI_INFERRED / USER_CONFIRMED로 구분한다.
 
-REQ-DIARY-004
-사용자는 자신의 일기를 수정할 수 있다.
+REQ-CONTEXT-004
+AI_INFERRED 컨텍스트를 사용자 확정 사실처럼 취급하지 않는다.
 
-REQ-DIARY-005
-사용자는 자신의 일기를 삭제할 수 있다.
+REQ-CONTEXT-005
+사용자는 컨텍스트 후보의 내용과 확인 상태를 수정하고 활성·보관 처리할 수 있다.
+
+REQ-CONTEXT-006
+다음 상담에는 현재 요청과 관련된 활성 컨텍스트만 출처·확인 상태와 함께 제공한다.
+
+REQ-CONTEXT-007
+PlanItem과 ExecutionItem은 생성 이유를 설명할 수 있도록 관련 ContextItem과 연결될 수 있다.
+
+REQ-CONTEXT-008
+ContextItem은 선택적 validFrom/validTo로 유효 기간을 표현할 수 있다.
+
+REQ-CONTEXT-009
+새 ContextItem이 과거 항목을 대체하면 supersedesContextItemId와 SUPERSEDED 수명주기를 남긴다.
+
+REQ-CONTEXT-010
+사용자가 컨텍스트를 철회하면 WITHDRAWN 상태와 withdrawnAt을 남기고 이후 계획 생성에서 제외한다.
 ```
 
-## 4. 정리함 요구사항
+## 4. 계획 요구사항
 
 ```text
-REQ-PROBLEM-001
-사용자는 정리할 문제나 주제를 직접 등록할 수 있다.
+REQ-PLAN-001
+PlanItem은 제목, 설명, 선택적 시작일·종료일, 상태, 우선순위, version을 가진다.
 
-REQ-PROBLEM-002
-사용자는 정리함 목록을 조회할 수 있다.
+REQ-PLAN-002
+PlanItem 상태는 DRAFT / ACTIVE / HOLD / DONE / CANCELLED를 사용한다.
 
-REQ-PROBLEM-003
-사용자는 정리함 항목을 수정할 수 있다.
+REQ-PLAN-003
+사용자는 PlanItem을 날짜별·주차별·단계별·월별로 볼 수 있다.
 
-REQ-PROBLEM-004
-사용자는 정리함 항목을 삭제할 수 있다.
+REQ-PLAN-004
+PlanItem 하나에서 0개 이상의 ExecutionItem을 만들 수 있다.
 
-REQ-PROBLEM-005
-사용자는 일기 내용을 바탕으로 AI 문제 후보를 생성할 수 있다.
+REQ-PLAN-005
+PlanItem이 없어도 임시 ExecutionItem을 만들 수 있다.
 
-REQ-PROBLEM-006
-AI 문제 후보는 자동 저장되지 않고 후보로 표시된다.
-
-REQ-PROBLEM-007
-사용자가 선택한 문제 후보만 정리함에 저장된다.
+REQ-PLAN-006
+계획 적용 전 생성될 ExecutionItem과 기존 항목 변경 내용을 미리 보여준다.
 ```
 
-## 5. Todo 요구사항
+## 5. 실행 조각 요구사항
 
 ```text
-REQ-TODO-001
-사용자는 Todo를 등록할 수 있다.
+REQ-EXECUTION-001
+ExecutionItem은 UNSCHEDULED / DATE_ONLY / TIME_FIXED placementType을 가진다.
 
-REQ-TODO-002
-사용자는 날짜별 Todo 목록을 조회할 수 있다.
+REQ-EXECUTION-002
+UNSCHEDULED는 날짜와 시작·종료 시각을 가지지 않는다.
 
-REQ-TODO-003
-사용자는 Todo 완료 상태를 변경할 수 있다.
+REQ-EXECUTION-003
+DATE_ONLY는 scheduledDate만 가지고 시작·종료 시각을 가지지 않는다.
 
-REQ-TODO-004
-Todo가 DONE 상태로 변경되면 completed_at을 기록한다.
+REQ-EXECUTION-004
+TIME_FIXED는 scheduledDate, scheduledStartAt, scheduledEndAt을 모두 가진다.
 
-REQ-TODO-005
-사용자는 Todo를 수정할 수 있다.
+REQ-EXECUTION-005
+TIME_FIXED의 종료 시각은 시작 시각보다 이후여야 한다.
 
-REQ-TODO-006
-사용자는 Todo를 삭제할 수 있다.
+REQ-EXECUTION-006
+TIME_FIXED의 scheduledDate는 scheduledStartAt의 달력 날짜와 일치한다.
 
-REQ-TODO-007
-Todo는 origin_type을 가진다.
+REQ-EXECUTION-007
+ExecutionItem 상태는 PLANNED / PARTIAL / HOLD / DONE / CANCELLED를 사용한다.
 
-REQ-TODO-008
-AI가 추천한 Todo를 사용자가 수정 후 저장하면 origin_type은 AI_SUGGESTED로 유지하고 modified_after_creation은 true로 저장한다.
+REQ-EXECUTION-008
+ExecutionItem 우선순위는 MUST / SHOULD / OPTIONAL을 사용한다.
 
-REQ-TODO-009
-Todo는 ScheduleBlock과 선택적으로 연결될 수 있다.
+REQ-EXECUTION-009
+사용자는 제목·설명·날짜·시간·예상 분량·순서·우선순위를 직접 수정할 수 있다.
 
-REQ-TODO-010
-Todo는 아직 날짜가 확정되지 않은 실행 후보 대기열이며, 1차-A 사용자 화면에서는 노출하지 않는다.
+REQ-EXECUTION-010
+Today와 Execution 화면은 동일한 ExecutionItem 원본을 조회한다.
+
+REQ-EXECUTION-011
+모든 공식 변경은 version을 1 증가시킨다.
 ```
 
-## 6. DailyPlan 요구사항
+## 6. 실제 수행 기록
 
 ```text
-REQ-DAILY-PLAN-001
-사용자는 날짜별 DailyPlan을 가질 수 있다.
+REQ-RECORD-001
+ExecutionRecord outcome은 COMPLETED / PARTIAL / NOT_DONE을 사용한다.
 
-REQ-DAILY-PLAN-002
-DailyPlan은 user_id + plan_date 기준으로 유일하다.
+REQ-RECORD-002
+COMPLETED는 completionPercent=100이어야 한다.
 
-REQ-DAILY-PLAN-003
-DailyPlan은 viewMode, intensity, conditionTags 또는 condition_note를 가진다.
+REQ-RECORD-003
+PARTIAL은 completionPercent=1~99이며 남은 ExecutionItem을 반드시 연결한다.
 
-REQ-DAILY-PLAN-004
-이동 액션 등에서 대상 날짜 DailyPlan이 없으면 기본값으로 생성될 수 있다.
+REQ-RECORD-004
+NOT_DONE은 completionPercent=0이어야 한다.
+
+REQ-RECORD-005
+실제 시작·종료 시각과 actualMinutes를 모르면 NULL로 저장하며 추정하지 않는다.
+
+REQ-RECORD-006
+ExecutionItem을 DONE으로 만들 때 COMPLETED ExecutionRecord도 같은 트랜잭션에서 생성한다.
+
+REQ-RECORD-007
+유효한 COMPLETED ExecutionRecord 없이 ExecutionItem을 DONE으로 저장하지 않는다.
+
+REQ-RECORD-008
+부분 수행은 PARTIAL Record, 남은 ExecutionItem, SPLIT Event를 같은 트랜잭션에서 생성한다.
 ```
 
-## 7. ScheduleBlock 요구사항
+## 7. 조정 사건
 
 ```text
-REQ-SCHEDULE-BLOCK-001
-ScheduleBlock은 Today 화면에 올라온 오늘의 실행 카드다.
+REQ-EVENT-001
+ExecutionItemEvent는 CREATED / MOVED / REDUCED / SPLIT / HOLD / RESUMED / REOPENED / CANCELLED / PRIORITY_CHANGED / DELETED를 사용한다.
 
-REQ-SCHEDULE-BLOCK-002
-ScheduleBlock은 Todo와 선택적으로 연결될 수 있다.
+REQ-EVENT-002
+이동은 날짜·시간 변경과 MOVED Event 저장을 같은 트랜잭션에서 처리한다.
 
-REQ-SCHEDULE-BLOCK-003
-ScheduleStatus는 PLANNED / DONE / HOLD / CANCELLED만 사용한다.
+REQ-EVENT-003
+축소는 변경 전후 상태와 version을 REDUCED Event에 보존한다.
 
-REQ-SCHEDULE-BLOCK-004
-MOVED, REDUCED는 status가 아니라 event로 기록한다.
+REQ-EVENT-004
+보류는 상태를 HOLD로 바꾸고 HOLD Event를 저장한다.
 
-REQ-SCHEDULE-BLOCK-005
-ScheduleBlock은 TIME_FIXED 또는 TASK block_type을 가진다.
+REQ-EVENT-005
+HOLD 또는 CANCELLED 항목을 바로 DONE으로 변경하지 않고 먼저 재개 또는 재열기 처리한다.
 
-REQ-SCHEDULE-BLOCK-006
-ScheduleBlock은 MUST / SHOULD / OPTIONAL priority를 가진다.
+REQ-EVENT-006
+삭제는 soft delete와 DELETED Event를 같은 트랜잭션에서 처리한다.
 
-REQ-SCHEDULE-BLOCK-007
-CHECKLIST 표시 순서는 order_index로 관리한다.
-
-REQ-SCHEDULE-BLOCK-008
-TIME_FIXED 타입은 startTime/endTime을 반드시 가져야 한다.
-
-REQ-SCHEDULE-BLOCK-009
-TASK 타입은 startTime/endTime을 가지면 안 된다.
-
-REQ-SCHEDULE-BLOCK-010
-startTime/endTime 중 하나만 존재하는 값은 허용하지 않는다.
-
-REQ-SCHEDULE-BLOCK-011
-startTime/endTime이 모두 존재할 경우 endTime은 startTime보다 이후여야 한다.
-
-REQ-SCHEDULE-BLOCK-012
-blockDate는 이 블록이 속한 하루를 의미하며 startTime/endTime의 실제 날짜와 반드시 같을 필요는 없다.
-
-REQ-SCHEDULE-BLOCK-013
-서비스와 DB는 DATE(start_time)=block_date 같은 검증을 두지 않는다.
-
-REQ-SCHEDULE-BLOCK-014
-operationalDate는 추후 공통 유틸로 분리한다.
-
-REQ-SCHEDULE-BLOCK-015
-pending은 기준 운영일보다 이전 blockDate/block_date에 속했지만 아직 결론을 내리지 않은 PLANNED ScheduleBlock이다.
-
-REQ-SCHEDULE-BLOCK-016
-pending 조건은 status=PLANNED, is_deleted=false, block_date < baseOperationalDate다.
-
-REQ-SCHEDULE-BLOCK-017
-오늘 항목과 미래 항목은 pending이 아니다.
-
-REQ-SCHEDULE-BLOCK-018
-DONE/HOLD/CANCELLED/삭제 항목은 pending이 아니다.
-
-REQ-SCHEDULE-BLOCK-019
-HOLD는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태이며 pending 카드에 반복 노출하지 않는다.
-
-REQ-SCHEDULE-BLOCK-020
-1차-A에서는 ScheduleBlock만 pending 대상으로 한다. Todo pending은 1차-B Todo 액션 확장에서 다룬다.
-
-REQ-SCHEDULE-BLOCK-021
-pending 판단은 startTime/endTime이 아니라 blockDate/block_date 기준이다.
-
-REQ-SCHEDULE-BLOCK-022
-pending 판단과 알림 정책은 분리한다. pending 알림은 후순위 아이디어이며 07-ideas.md에 둔다. 푸시 알림은 MVP 제외다.
-
-REQ-SCHEDULE-BLOCK-023
-HOLD 항목은 나중에 별도 보류함 또는 다시 계획하기 흐름에서 다룬다.
-
-REQ-SCHEDULE-BLOCK-024
-HOLD를 다시 계획하는 흐름은 추후 RESUMED 이벤트로 확장할 수 있다.
-
-REQ-SCHEDULE-BLOCK-025
-1차-A에서는 hold 액션으로 상태를 HOLD로 바꾸고 HOLD 이벤트를 저장하는 것까지만 범위로 둔다.
-
-REQ-SCHEDULE-BLOCK-026
-보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 이번 범위에서 구현하지 않는다.
-
-REQ-SCHEDULE-BLOCK-027
-1차-A 기준 사용자 화면의 "오늘 해볼 것"은 내부적으로 ScheduleBlock으로 저장한다.
+REQ-EVENT-007
+Event는 실제 수행 결과를 대신하지 않는다. 완료·부분·미수행 사실은 ExecutionRecord가 소유한다.
 ```
 
-## 8. plan_item_events 요구사항
+## 8. 하루 상태
 
 ```text
-REQ-PLAN-EVENT-001
-사용자가 완료/이동/축소/보류/삭제 같은 조정 행위를 하면 이벤트를 저장한다.
+REQ-DAILY-001
+DailyState는 userId + stateDate 기준으로 유일하다.
 
-REQ-PLAN-EVENT-002
-eventType은 CREATED / DONE / MOVED / REDUCED / HOLD / REOPENED / RESUMED / DELETED를 사용한다.
+REQ-DAILY-002
+DailyState는 viewMode, viewModeSource, intensity, conditionNote, focusNote, memo를 가진다.
 
-REQ-PLAN-EVENT-003
-todo_id 또는 schedule_block_id 중 하나는 반드시 존재해야 한다.
+REQ-DAILY-003
+DailyState는 ExecutionItem의 부모가 아니다.
 
-REQ-PLAN-EVENT-004
-ScheduleBlock 이벤트의 todo_id는 클라이언트에게 받지 않고 서버가 ScheduleBlock.todo_id에서 복사한다.
+REQ-DAILY-004
+오늘 화면은 오늘 DailyState와 오늘 ExecutionItem을 별도로 조회해 합성한다.
 ```
 
-## 9. 도메인 액션 API 요구사항
-
-move / reduce / hold / complete는 PATCH가 아니라 POST 하위 액션이다.
+## 9. 화면 요구사항
 
 ```text
-REQ-SCHEDULE-ACTION-001
-POST /api/schedule-blocks/{id}/move
+REQ-UI-001
+최상위 탭은 오늘 / 계획 / 실행 / 기록을 사용한다.
 
-REQ-SCHEDULE-ACTION-002
-POST /api/schedule-blocks/{id}/reduce
+REQ-UI-002
+AI 상담 패널은 현재 화면과 선택 항목을 유지한 채 우측에서 열릴 수 있다.
 
-REQ-SCHEDULE-ACTION-003
-POST /api/schedule-blocks/{id}/hold
+REQ-UI-003
+대화 중 변경안은 신규·변경·삭제 상태가 구분되는 ghost/diff로 표시한다.
 
-REQ-SCHEDULE-ACTION-004
-POST /api/schedule-blocks/{id}/complete
+REQ-UI-004
+미리보기와 공식 상태는 시각적으로 구분한다.
 
-REQ-SCHEDULE-ACTION-005
-POST /api/schedule-blocks/{id}/uncomplete
+REQ-UI-005
+사용자는 변경안 전체 또는 일부만 적용할 수 있다.
+
+REQ-UI-006
+목록의 diff 표현을 먼저 검증하고 동일 계약을 시간표에 적용한다.
+
+REQ-UI-007
+캘린더는 목록과 시간표가 안정된 뒤 구현한다.
+
+REQ-UI-008
+1536x760 CSS px에서 좌측 내비게이션, 핵심 본문, 우측 AI 패널, 주요 액션이 스크롤 없이 보여야 한다.
+
+REQ-UI-009
+기본 글자 크기는 14px 이상이고 본문 대비는 4.5:1 이상이어야 한다.
 ```
 
-## 10. move 액션 요구사항
+## 10. 상태 불변조건
+
+- 삭제된 항목은 오늘·계획·실행 일반 목록에 노출하지 않는다.
+- 시작과 종료 중 하나만 존재하는 TIME_FIXED 항목을 허용하지 않는다.
+- 종료가 시작보다 빠른 시간 범위를 허용하지 않는다.
+- 완료 기록과 DONE 상태가 불일치하지 않아야 한다.
+- PARTIAL 기록에는 남은 실행 조각이 반드시 연결돼야 한다.
+- CANCELLED/HOLD 상태를 우회해 완료하지 않는다.
+- sourceExecutionItemId가 자기 자신을 가리키지 않는다.
+- 다른 사용자의 PlanItem, ContextItem, ExecutionItem을 연결하지 않는다.
+- 오래된 AI 제안으로 최신 사용자의 수정을 덮어쓰지 않는다.
+
+## 11. 마이그레이션 요구사항
 
 ```text
-REQ-MOVE-001
-move 액션은 기존 ScheduleBlock row를 복제하지 않는다.
+REQ-MIGRATION-001
+기존 todos와 schedule_blocks는 execution_items로 통합한다.
 
-REQ-MOVE-002
-기존 row의 block_date와 daily_plan_id를 이동 대상 날짜로 갱신한다.
+REQ-MIGRATION-002
+기존 plan_item_events는 execution_item_events와 execution_records로 역할을 분리한다.
 
-REQ-MOVE-003
-대상 날짜 DailyPlan이 없으면 get-or-create 한다.
+REQ-MIGRATION-003
+기존 daily_plans는 daily_states로 복사한다.
 
-REQ-MOVE-004
-ScheduleBlock 조회, DailyPlan get-or-create, block 갱신, MOVED 이벤트 저장은 하나의 트랜잭션이다.
-```
+REQ-MIGRATION-004
+레거시 원본은 전환 검증 전까지 삭제하지 않는다.
 
-## 11. quick_logs 요구사항
+REQ-MIGRATION-005
+신규 구조와 레거시 구조에 동시에 쓰지 않는다.
 
-quick_logs는 1차-B 범위다.
+REQ-MIGRATION-006
+없는 실제 수행 시간은 추정하지 않는다.
 
-```text
-REQ-QUICK-LOG-001
-SLEEP value_numeric은 1=6시간 미만, 2=6~7시간, 3=7시간 이상으로 저장한다.
+REQ-MIGRATION-007
+이상 데이터를 보정하면 원본을 수정하지 않고 보정 내역을 별도 기록한다.
 
-REQ-QUICK-LOG-002
-EMOTION value_numeric은 1=나쁨, 2=보통, 3=좋음으로 저장한다.
-
-REQ-QUICK-LOG-003
-value_numeric은 분석용 값이고 value_text는 표시용 값이다.
-```
-
-## 12. WeeklyReview / AI 요약 요구사항
-
-```text
-REQ-WEEKLY-REVIEW-001
-주간 회고 집계 화면은 1차-B 범위다.
-
-REQ-WEEKLY-REVIEW-002
-AI 주간 요약은 1.5차 범위다.
-
-REQ-WEEKLY-REVIEW-003
-AI 요약은 사용자가 명시적으로 요청한 경우에만 실행한다.
-
-REQ-WEEKLY-REVIEW-004
-일기 원문 전체를 기본 전송하지 않는다.
-
-REQ-WEEKLY-REVIEW-005
-AI 결과는 참고용 후보이며 자동 저장하지 않는다.
-```
-
-## 13. 지출 기록 요구사항
-
-```text
-REQ-EXPENSE-001
-사용자는 금액, 카테고리, 한 줄 메모, 감정 태그를 입력하여 지출을 기록할 수 있다.
-
-REQ-EXPENSE-002
-사용자는 일기 내용에서 AI가 추출한 지출 후보를 확인할 수 있다.
-
-REQ-EXPENSE-003
-AI가 추출한 지출 후보는 자동 저장되지 않는다.
-
-REQ-EXPENSE-004
-사용자가 저장한 지출 후보만 지출 기록으로 저장된다.
-```
-
-## 14. ScheduleBlock 액션 중복 요청 방어 요구사항
-
-```text
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-001
-완료 및 완료취소 액션 API는 idempotent하게 동작해야 한다.
-
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-002
-상태가 실제로 변경된 경우에만 plan_item_events를 저장한다.
-
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-003
-동일 상태에 대한 반복 요청은 이벤트를 중복 저장하지 않는다.
-
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-004
-상태 변경과 이벤트 저장은 하나의 트랜잭션으로 처리한다.
-
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-005
-프론트 pending 처리는 UX 보조 수단이며, 중복 요청에 대한 최종 방어는 서버에서 수행한다.
-
-REQ-SCHEDULE-ACTION-IDEMPOTENCY-006
-완료취소는 toggle이 아니라 POST /api/schedule-blocks/{id}/uncomplete 명시적 액션으로 처리한다.
-```
-
-## 15. ScheduleBlock reduce 확장 요구사항
-
-```text
-REQ-SCHEDULE-REDUCE-001
-reduce 요청의 공식 제목 필드는 reducedTitle이다.
-
-REQ-SCHEDULE-REDUCE-002
-기존 afterTitle 요청은 하위 호환을 위해 임시 허용한다.
-
-REQ-SCHEDULE-REDUCE-003
-reduce 액션은 timeMode를 받는다.
-
-REQ-SCHEDULE-REDUCE-004
-timeMode 값은 KEEP, SHRINK, CLEAR를 사용한다.
-
-REQ-SCHEDULE-REDUCE-005
-timeMode가 없으면 하위 호환을 위해 KEEP으로 처리한다.
-
-REQ-SCHEDULE-REDUCE-006
-KEEP은 기존 blockType, startTime, endTime을 유지한다.
-
-REQ-SCHEDULE-REDUCE-007
-SHRINK는 blockType=TIME_FIXED와 startTime/endTime을 요구한다.
-
-REQ-SCHEDULE-REDUCE-008
-CLEAR는 blockType=TASK를 요구하고 startTime/endTime을 null로 해제한다.
-
-REQ-SCHEDULE-REDUCE-009
-제목 축소, timeMode에 따른 시간 조정, REDUCED 이벤트 저장은 하나의 트랜잭션으로 처리한다.
-
-REQ-SCHEDULE-REDUCE-010
-REDUCED 후 ScheduleBlock.status는 PLANNED를 유지한다.
-
-REQ-SCHEDULE-REDUCE-011
-plan_item_events의 before_title, after_title은 이벤트 시점의 변경 전/후 제목 값으로 유지한다.
-
-REQ-SCHEDULE-REDUCE-012
-REDUCED 이벤트에는 before_block_type, after_block_type, before_start_time, after_start_time, before_end_time, after_end_time을 저장한다.
-
-REQ-SCHEDULE-REDUCE-013
-reduce는 범용 rescale이 아니며, scale-up은 이번 범위가 아니다.
+REQ-MIGRATION-008
+실제 이메일, 일기 원문, 비밀번호 해시가 포함된 덤프를 Git에 커밋하지 않는다.
 ```
