@@ -25,7 +25,14 @@ configurations {
 }
 
 
+ext {
+    springAiVersion = '2.0.0'
+}
+
 dependencies {
+    implementation platform("org.springframework.ai:spring-ai-bom:${springAiVersion}")
+    implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+
     implementation 'org.springframework.boot:spring-boot-h2console'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     implementation 'org.springframework.boot:spring-boot-starter-validation'

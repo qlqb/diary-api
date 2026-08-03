@@ -293,3 +293,59 @@ REQ-MIGRATION-007
 REQ-MIGRATION-008
 실제 이메일, 일기 원문, 비밀번호 해시가 포함된 덤프를 Git에 커밋하지 않는다.
 ```
+
+## 12. 구현 상태 (2026-08-04)
+
+이 절은 위 목표 요구사항 중 실제로 코드로 구현된 범위를 표시한다. 여기 없는 REQ는 아직 목표 설계 상태다.
+
+```text
+IMPL-001
+REQ-EXECUTION-001~011, REQ-RECORD-006/007을 execution_items/execution_records/execution_item_events로
+구현했다. Today 화면(TodayView)이 execution_items를 실제로 읽고 쓴다. schedule_blocks/todos에는
+더 이상 쓰지 않는다(이중 저장 없음).
+
+IMPL-002
+API: GET/POST /api/execution-items, GET /api/execution-items/pending,
+POST /api/execution-items/{id}/{complete|reopen|move|reduce|hold}, DELETE /api/execution-items/{id}.
+모든 조회·수정에 user_id 소유권 조건을 걸고, 공식 변경마다 version을 1 증가시키며 요청 버전이
+서버 값과 다르면 409 Conflict를 반환한다.
+
+IMPL-003
+REQ-AI-002/005/006/009(AIProposal 초안 저장, 상태값, 사용자 적용 전 미반영, baseVersion류 재검증 정신)를
+ai_proposals/ai_proposal_items로 구현했다. 단 이번 범위는 REQ-AI-003(항목별 날짜·시간·순서·분량 수정)의
+일부(제목/설명/예상 시간/우선순위 편집)만 지원하고, REQ-AI-004(대화로 재조정), REQ-AI-011/012(외부
+ChatGPT 대화 가져오기)는 구현하지 않았다.
+
+IMPL-004
+API: POST/GET /api/ai/proposals, POST /api/ai/proposals/{id}/apply. LLM 호출(Spring AI ChatClient,
+OpenAI 단일 구현체)은 DB 트랜잭션 밖에서 수행하고, 검증까지 마친 결과만 짧은 트랜잭션으로 저장한다.
+구조화 출력 파싱·검증에 실패하면 ai_proposals/ai_proposal_items를 저장하지 않는다.
+
+IMPL-005
+적용(apply)은 proposal_id+user_id 행 잠금(SELECT ... FOR UPDATE) 하에 헤더 상태가 PROPOSED인지
+재확인한 뒤, 모든 ProposalItem을 execution_items로 생성하고 각 CREATED 이벤트를 저장하고 헤더/항목
+상태를 갱신하는 하나의 트랜잭션으로 처리한다. 같은 Proposal을 다시 적용하면 409 Conflict를 반환하고
+중복 생성하지 않는다.
+
+IMPL-006
+REQ-UI-005(전체 또는 일부 적용) 중 이번 범위는 "전체 적용"만 구현했다. 사용자가 수정 없이 그대로
+적용한 항목은 APPLIED, 값을 고쳐 적용한 항목은 MODIFIED_APPLIED다. 헤더는 하나라도 수정된 항목이
+있으면 MODIFIED_APPLIED, 전부 그대로면 APPLIED다. PARTIALLY_APPLIED는 없다. 항목별 부분 적용은
+후속 범위다.
+
+IMPL-007
+AI가 만드는 execution_item 제안은 항상 placement_type='DATE_ONLY'다. TIME_FIXED AI 추천은 후속 범위다.
+
+IMPL-008
+AI_PROVIDER=none이거나 API 키가 없어도 서버 부팅과 테스트는 정상 동작한다. 이 상태에서 제안 생성을
+호출하면 503 AI_NOT_CONFIGURED를 반환한다.
+
+IMPL-009
+상담 원문, AI 원문 응답 전체, API 키, JWT는 로그에 남기지 않는다. /api/ai/**와 /api/execution-items/**는
+permitAll로 열지 않는다.
+
+IMPL-010
+이번 범위에서 구현하지 않은 것: REQ-PLAN-*(PlanItem 전체 CRUD), REQ-CONTEXT-*(ContextItem),
+REQ-DAILY-*(DailyState), REQ-RECORD-003/008 및 REQ-EVENT-*의 부분 수행(PARTIAL)·SPLIT 흐름,
+REQ-UI-003(ghost/diff 미리보기), 외부 ChatGPT 대화 가져오기, 캘린더.
+```

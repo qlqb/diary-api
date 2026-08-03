@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.AiProposalItemMapper">
+
+    <resultMap id="aiProposalItemResultMap"
+               type="com.jungwoo.project.memo.ai.domain.AiProposalItem">
+        <id     property="proposalItemId"  column="proposal_item_id"/>
+        <result property="proposalId"      column="proposal_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="itemType"        column="item_type"/>
+        <result property="originalPayload" column="original_payload"/>
+        <result property="editedPayload"   column="edited_payload"/>
+        <result property="targetItemId"    column="target_item_id"/>
+        <result property="baseVersion"     column="base_version"/>
+        <result property="status"          column="status"/>
+        <result property="createdItemType" column="created_item_type"/>
+        <result property="createdItemId"   column="created_item_id"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="respondedAt"     column="responded_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="proposalItemId">
+        INSERT INTO ai_proposal_items (
+            proposal_id,
+            user_id,
+            item_type,
+            original_payload,
+            target_item_id,
+            base_version,
+            status
+        ) VALUES (
+            #{proposalId},
+            #{userId},
+            #{itemType},
+            #{originalPayload},
+            #{targetItemId},
+            #{baseVersion},
+            #{status}
+        )
+    </insert>
+
+    <select id="findByProposalIdAndUserId" resultMap="aiProposalItemResultMap">
+        SELECT *
+        FROM ai_proposal_items
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+        ORDER BY proposal_item_id ASC
+    </select>
+
+    <update id="updateAfterApply">
+        UPDATE ai_proposal_items
+        SET status            = #{status},
+            edited_payload    = #{editedPayload},
+            created_item_type = #{createdItemType},
+            created_item_id   = #{createdItemId},
+            responded_at      = #{respondedAt}
+        WHERE proposal_item_id = #{proposalItemId}
+          AND user_id          = #{userId}
+    </update>
+
+</mapper>

@@ -46,6 +46,29 @@
 
 ## 4. 2단계: 실행 액션 계약
 
+> **구현 상태(2026-08-04)**: 완료·재열기·이동·축소·보류·삭제는 아래 API로 구현되어 있다.
+> 부분 수행(PARTIAL)·미수행(NOT_DONE)·재개(RESUMED)·취소(CANCELLED) 액션은 아직 구현하지 않았다.
+>
+> ```text
+> GET    /api/execution-items?date=
+> GET    /api/execution-items/pending?beforeDate=
+> POST   /api/execution-items
+> POST   /api/execution-items/{id}/complete
+> POST   /api/execution-items/{id}/reopen
+> POST   /api/execution-items/{id}/move
+> POST   /api/execution-items/{id}/reduce
+> POST   /api/execution-items/{id}/hold
+> DELETE /api/execution-items/{id}
+> ```
+>
+> Today 화면(TodayView)이 이 API로 execution_items를 실제로 읽고 쓴다. schedule_blocks에는 더 이상 쓰지 않는다.
+>
+> 같은 시점에 AI 오늘 제안(생성/조회/전체 적용)도 구현했다:
+> `POST/GET /api/ai/proposals`, `POST /api/ai/proposals/{id}/apply`. 자연어 상담 → 구조화된
+> 후보(1~5개, DATE_ONLY만) → 사용자 편집 → 묶음 전체 단일 트랜잭션 적용까지만 지원하며, 항목별
+> 부분 적용·TIME_FIXED 추천·기존 항목 수정 제안은 후속 범위다. AI가 비활성화된 상태
+> (AI_PROVIDER=none 또는 키 없음)에서도 서버는 정상 부팅하며 제안 생성 호출은 503을 반환한다.
+
 작업:
 
 - 완료, 부분 수행, 미수행

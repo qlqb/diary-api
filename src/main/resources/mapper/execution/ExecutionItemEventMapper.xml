@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.execution.ExecutionItemEventMapper">
+
+    <resultMap id="executionItemEventResultMap"
+               type="com.jungwoo.project.memo.execution.domain.ExecutionItemEvent">
+        <id     property="executionItemEventId"  column="execution_item_event_id"/>
+        <result property="userId"                column="user_id"/>
+        <result property="executionItemId"       column="execution_item_id"/>
+        <result property="relatedExecutionItemId" column="related_execution_item_id"/>
+        <result property="eventType"             column="event_type"/>
+        <result property="reason"                column="reason"/>
+        <result property="beforeState"           column="before_state"/>
+        <result property="afterState"            column="after_state"/>
+        <result property="beforeVersion"         column="before_version"/>
+        <result property="afterVersion"          column="after_version"/>
+        <result property="actorType"             column="actor_type"/>
+        <result property="occurredAt"            column="occurred_at"/>
+        <result property="createdAt"             column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="executionItemEventId">
+        INSERT INTO execution_item_events (
+            user_id,
+            execution_item_id,
+            related_execution_item_id,
+            event_type,
+            reason,
+            before_state,
+            after_state,
+            before_version,
+            after_version,
+            actor_type
+        ) VALUES (
+            #{userId},
+            #{executionItemId},
+            #{relatedExecutionItemId},
+            #{eventType},
+            #{reason},
+            #{beforeState},
+            #{afterState},
+            #{beforeVersion},
+            #{afterVersion},
+            #{actorType}
+        )
+    </insert>
+
+</mapper>

@@ -1,5 +1,15 @@
 # 99. Change Log
 
+## 2026-08-04 — Today 화면 execution_items 전환 + AI 오늘 제안 1차 구현
+
+- Today 화면(TodayView)이 더 이상 mock 데이터가 아니라 `execution_items`를 실제로 읽고 쓰도록 전환했다. `schedule_blocks`에는 더 이상 쓰지 않는다(이중 저장 없음).
+- `GET/POST /api/execution-items`, `POST /api/execution-items/{id}/{complete|reopen|move|reduce|hold}`, `DELETE /api/execution-items/{id}`, `GET /api/execution-items/pending`을 구현했다. 모든 조회·수정에 `user_id` 소유권 검증을 걸고, 공식 변경마다 `version`을 증가시키며 요청 버전이 다르면 409를 반환한다.
+- Spring AI(`ChatClient`, OpenAI 단일 구현체)로 오늘 실행 후보를 생성하는 `POST /api/ai/proposals`, `GET /api/ai/proposals/{id}`, `POST /api/ai/proposals/{id}/apply`를 구현했다.
+- AI TODAY Proposal의 생성·조회·전체 적용을 구현했다. 이번 1차 UI는 Proposal 묶음 전체를 하나의 트랜잭션으로 원자 적용하는 것만 지원한다. 항목별 부분 적용은 후속 범위로 남겨둔다.
+- AI가 만드는 제안 항목은 모두 `placement_type='DATE_ONLY'`다. `TIME_FIXED` AI 추천은 후속 범위다.
+- `AI_PROVIDER=none`이거나 `OPENAI_API_KEY`가 없어도 서버 부팅과 테스트는 정상 동작하며, 이 상태에서 제안 생성을 호출하면 `503 AI_NOT_CONFIGURED`를 반환한다.
+- 레거시 `schedule_blocks`/`todos` → `execution_items` 데이터 이관은 이번 작업 이전에 이미 완료되어 있었다(`legacy_execution_item_map`). 위 2026-08-03 문서 동기화가 정의한 목표 구조 중 실행 조각 조회·조정 액션과 AI TODAY 제안 묶음 적용 구간을 실제로 구현한 것이다.
+
 ## 2026-08-03 — 최신 제품 구조로 문서 기준 통합
 
 - 제품의 중심 문제를 “AI와 만든 계획이 채팅에 묻히고 실행과 다음 계획으로 이어지지 않는 문제”로 재정의했다.

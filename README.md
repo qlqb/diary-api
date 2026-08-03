@@ -48,6 +48,18 @@ ai_proposals/items         적용 전 AI 초안과 사용자 반응
 
 프런트엔드는 [diary-ui](https://github.com/qlqb/diary-ui)의 React + Vite + Tailwind CSS 구성을 사용합니다. JPA를 전제로 설계하지 않습니다.
 
+## 지금 구현된 것 (2026-08-04)
+
+위 목표 구조 중 아래는 이미 코드로 구현되어 있습니다. 나머지(ContextItem, 외부 대화 가져오기, ghost/diff, 캘린더 등)는 여전히 목표 설계입니다.
+
+- 회원가입/로그인: `/api/auth/signup`, `/api/auth/login`
+- 현재 사용자 조회: `/api/users/me`, `/api/users/me/detail`
+- 일기 CRUD, 검색, 즐겨찾기, 수정 이력, 통계
+- Todo CRUD, 완료/미완료 처리, 일별 달성률 통계
+- ExecutionItem(실행 조각): Today/Execution 화면의 공식 실행 원본. 조회/생성/완료/재열기/이동/축소/보류/삭제
+- AI 오늘 제안: Spring AI(OpenAI) 기반 자연어 상담 → 오늘 실행 후보 생성 → 편집 → 묶음 전체 적용 (`ai_proposals`/`ai_proposal_items`)
+- 정적 테스트 페이지: `/login.html`, `/signup.html`, `/diary.html`
+
 ## 실행 전 준비
 
 `src/main/resources/application.properties`는 DB 접속 정보와 JWT 시크릿을 환경변수로 읽습니다.
@@ -68,6 +80,17 @@ $env:JWT_SECRET="your-jwt-secret"
 $env:DB_URL="jdbc:mysql://localhost:3306/memo?serverTimezone=Asia/Seoul&characterEncoding=UTF-8"
 $env:DB_USERNAME="your-db-username"
 $env:DB_PASSWORD="your-db-password"
+```
+
+로컬 MySQL에 `memo` 데이터베이스와 필요한 테이블을 준비한 뒤 실행하세요. 현재 저장소에는 별도 SQL 마이그레이션 파일이 없습니다.
+
+AI 오늘 제안 기능은 다음 환경변수를 선택적으로 사용합니다. 설정하지 않으면(`AI_PROVIDER` 기본값 `none`)
+서버는 정상 부팅되고, 제안 생성 호출만 `503 AI_NOT_CONFIGURED`를 반환합니다. API 키는 코드나 Git에 커밋하지 마세요.
+
+```powershell
+$env:AI_PROVIDER="openai"
+$env:OPENAI_API_KEY="your-openai-api-key"
+$env:OPENAI_MODEL="gpt-5-mini"
 ```
 
 ## 실행과 테스트
@@ -110,3 +133,45 @@ Authorization: Bearer {token}
 - 화면 이름, 데이터 이름, 상태값을 문서마다 다르게 정의하지 않습니다.
 - 현재 구현과 목표 구조를 섞어 이미 구현된 것처럼 쓰지 않습니다.
 - 실제 사용자 데이터가 포함된 SQL 덤프는 저장소에 커밋하지 않습니다.
+
+## 지금 구현된 API
+
+| 구분 | 메서드/경로 | 설명 |
+| --- | --- | --- |
+| Auth | `POST /api/auth/signup` | 회원가입 및 JWT 발급 |
+| Auth | `POST /api/auth/login` | 로그인 및 JWT 발급 |
+| Users | `GET /api/users/me` | 현재 사용자 기본 정보 |
+| Users | `GET /api/users/me/detail` | 현재 사용자 상세 정보 |
+| Diaries | `GET /api/diaries` | 일기 목록, 필터, 페이지 조회 |
+| Diaries | `GET /api/diaries/search` | 일기 검색 |
+| Diaries | `POST /api/diaries` | 일기 작성 |
+| Diaries | `GET /api/diaries/{diaryId}` | 일기 상세 조회 |
+| Diaries | `PUT /api/diaries/{diaryId}` | 일기 수정 |
+| Diaries | `DELETE /api/diaries/{diaryId}` | 일기 삭제 |
+| Diaries | `PATCH /api/diaries/{diaryId}/favorite` | 즐겨찾기 토글 |
+| Diaries | `GET /api/diaries/{diaryId}/revisions` | 수정 이력 조회 |
+| Diaries | `POST /api/diaries/{diaryId}/revisions/{revisionId}/restore` | 수정 이력 복원 |
+| Diaries | `GET /api/diaries/statistics/summary` | 일기 요약 통계 |
+| Diaries | `GET /api/diaries/statistics/mood` | 기분별 통계 |
+| Diaries | `GET /api/diaries/statistics/monthly` | 월별 통계 |
+| Diaries | `GET /api/diaries/statistics/streak` | 연속 작성 통계 |
+| Todos | `POST /api/todos` | Todo 생성 |
+| Todos | `GET /api/todos?date=YYYY-MM-DD` | 날짜별 Todo 목록 |
+| Todos | `GET /api/todos/{todoId}` | Todo 상세 조회 |
+| Todos | `PUT /api/todos/{todoId}` | Todo 수정 |
+| Todos | `PATCH /api/todos/{todoId}/complete` | Todo 완료 처리 |
+| Todos | `PATCH /api/todos/{todoId}/uncomplete` | Todo 미완료 처리 |
+| Todos | `DELETE /api/todos/{todoId}` | Todo 삭제 |
+| Todos | `GET /api/todos/statistics/daily?date=YYYY-MM-DD` | Todo 일별 통계 |
+| ExecutionItems | `GET /api/execution-items?date=YYYY-MM-DD` | 날짜별 실행 조각 조회 |
+| ExecutionItems | `GET /api/execution-items/pending?beforeDate=YYYY-MM-DD` | pending 조회 |
+| ExecutionItems | `POST /api/execution-items` | 실행 조각 생성 |
+| ExecutionItems | `POST /api/execution-items/{id}/complete` | 완료 (execution_record 동시 생성) |
+| ExecutionItems | `POST /api/execution-items/{id}/reopen` | 재열기 |
+| ExecutionItems | `POST /api/execution-items/{id}/move` | 이동 |
+| ExecutionItems | `POST /api/execution-items/{id}/reduce` | 축소 |
+| ExecutionItems | `POST /api/execution-items/{id}/hold` | 보류 |
+| ExecutionItems | `DELETE /api/execution-items/{id}?version=` | 삭제 (soft delete) |
+| AI Proposals | `POST /api/ai/proposals` | 오늘 실행 제안 생성 |
+| AI Proposals | `GET /api/ai/proposals/{id}` | 제안 조회 |
+| AI Proposals | `POST /api/ai/proposals/{id}/apply` | 제안 묶음 전체 적용 |
