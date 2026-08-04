@@ -21,10 +21,10 @@ import java.util.List;
 /**
  * ai_proposals/ai_proposal_items 저장 전용.
  *
- * LLM 호출(TodayProposalGenerator.generate)이 끝난 뒤, 서버 검증까지 마친
- * ProposalItemPayload 목록만 받아 짧은 트랜잭션으로 저장한다.
- * 이 클래스에만 @Transactional을 두고, LLM 호출을 포함하는 AiProposalService.create()에는
- * 붙이지 않는다 — 별도 빈으로 분리해야 Spring AOP 자기호출 문제 없이 트랜잭션 경계가 보장된다.
+ * 대화 스트리밍(AiConversationService)이 끝난 뒤, 서버 검증까지 마친 ProposalItemPayload
+ * 목록만 받아 짧은 트랜잭션으로 저장한다. 이 클래스에만 @Transactional을 두고, LLM 스트림
+ * 소비를 포함하는 호출부에는 붙이지 않는다 — 별도 빈으로 분리해야 Spring AOP 자기호출
+ * 문제 없이 트랜잭션 경계가 보장된다.
  */
 @Slf4j
 @Service
@@ -36,9 +36,11 @@ public class AiProposalPersistenceService {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Transactional
-    public AiProposalResponse save(Long userId, List<ProposalItemPayload> items) {
+    public AiProposalResponse save(Long userId, Long conversationId, Long sourceMessageId, List<ProposalItemPayload> items) {
         AiProposal proposal = AiProposal.builder()
                 .userId(userId)
+                .conversationId(conversationId)
+                .sourceMessageId(sourceMessageId)
                 .targetScope(AiProposalTargetScope.TODAY)
                 .status(AiProposalStatus.PROPOSED)
                 .build();
@@ -65,6 +67,9 @@ public class AiProposalPersistenceService {
                     .expectedMinutes(payload.expectedMinutes())
                     .priority(payload.priority())
                     .targetDate(payload.targetDate())
+                    .placementType(payload.placementType())
+                    .scheduledStartAt(payload.scheduledStartAt())
+                    .scheduledEndAt(payload.scheduledEndAt())
                     .modified(false)
                     .build());
         }

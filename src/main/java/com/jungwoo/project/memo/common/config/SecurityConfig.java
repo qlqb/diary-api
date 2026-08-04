@@ -89,10 +89,10 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // 허용할 Origin (프론트엔드 주소)
-        configuration.setAllowedOrigins(List.of(
-                "http://localhost:5173",      // React 개발 서버
-                "http://localhost:8080"       // 같은 서버
+        // 허용할 Origin (프론트엔드 개발 서버)
+        configuration.setAllowedOriginPatterns(List.of(
+                "http://localhost:*",
+                "http://127.0.0.1:*"
         ));
 
         // 허용할 HTTP 메서드

@@ -88,6 +88,14 @@
         ORDER BY order_index ASC, scheduled_start_at ASC, execution_item_id ASC
     </select>
 
+    <select id="findMaxOrderIndexByUserIdAndDate" resultType="java.lang.Integer">
+        SELECT MAX(order_index)
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND scheduled_date = #{scheduledDate}
+    </select>
+
     <select id="findPendingBefore" resultMap="executionItemResultMap">
         SELECT *
         FROM execution_items

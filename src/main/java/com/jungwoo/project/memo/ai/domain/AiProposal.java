@@ -23,7 +23,10 @@ public class AiProposal {
 
     private Long userId;
 
-    private String conversationId;
+    private Long conversationId;
+
+    /** 이 제안을 만들게 한 사용자 메시지. AI 실패와 무관하게 원문은 이 메시지에 남아있다. */
+    private Long sourceMessageId;
 
     private AiProposalTargetScope targetScope;
 

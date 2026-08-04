@@ -63,11 +63,14 @@
 >
 > Today 화면(TodayView)이 이 API로 execution_items를 실제로 읽고 쓴다. schedule_blocks에는 더 이상 쓰지 않는다.
 >
-> 같은 시점에 AI 오늘 제안(생성/조회/전체 적용)도 구현했다:
-> `POST/GET /api/ai/proposals`, `POST /api/ai/proposals/{id}/apply`. 자연어 상담 → 구조화된
-> 후보(1~5개, DATE_ONLY만) → 사용자 편집 → 묶음 전체 단일 트랜잭션 적용까지만 지원하며, 항목별
-> 부분 적용·TIME_FIXED 추천·기존 항목 수정 제안은 후속 범위다. AI가 비활성화된 상태
-> (AI_PROVIDER=none 또는 키 없음)에서도 서버는 정상 부팅하며 제안 생성 호출은 503을 반환한다.
+> 2026-08-05부터 AI 오늘 제안은 1회성 강제 생성이 아니라 실제 상담 대화다:
+> `POST /api/ai/conversations`, `GET/POST /api/ai/conversations/{id}/messages`(POST는 SSE
+> 스트리밍), `GET /api/ai/proposals/{id}`, `POST /api/ai/proposals/{id}/apply`. 자유 대화 →
+> 목표·제약 파악 → (정보가 충분하지만 요청 전이면) 초안 생성 여부 확인(OFFER) → 사용자 요청
+> 또는 동의 시에만 구조화된 후보(1~5개, DATE_ONLY 또는 TIME_FIXED) 생성(PROPOSAL) → 사용자
+> 편집·제외 → 묶음 전체 단일 트랜잭션 적용까지 지원한다. 기존 항목 수정 제안은 여전히 후속
+> 범위다. AI가 비활성화된 상태(AI_PROVIDER=none 또는 키 없음)에서도 서버는 정상 부팅하며
+> 상담 호출은 503을 반환한다.
 
 작업:
 

@@ -1,10 +1,12 @@
 package com.jungwoo.project.memo.ai.dto;
 
+import com.jungwoo.project.memo.execution.domain.PlacementType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Data
@@ -16,6 +18,9 @@ public class AiProposalApplyRequest {
     /** 실제로 수정된 항목만 포함한다. 포함되지 않은 항목은 원본 payload를 그대로 쓴다. */
     private List<EditedProposalItem> editedItems;
 
+    /** 사용자가 이 묶음에서 뺀(적용하지 않을) 항목 ID들. 실행 조각으로 만들지 않고 DISMISSED로 남긴다. */
+    private List<Long> excludedItemIds;
+
     @Data
     @NoArgsConstructor
     @AllArgsConstructor
@@ -26,5 +31,9 @@ public class AiProposalApplyRequest {
         private String description;
         private Integer expectedMinutes;
         private String priority;
+        /** null이면 원본 배치를 유지한다. 값을 주면 placementType/시각 세트를 통째로 교체한다. */
+        private PlacementType placementType;
+        private LocalDateTime scheduledStartAt;
+        private LocalDateTime scheduledEndAt;
     }
 }

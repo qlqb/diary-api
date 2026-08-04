@@ -7,10 +7,8 @@ import com.jungwoo.project.memo.ai.domain.AiProposalItemType;
 import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
-import com.jungwoo.project.memo.ai.dto.AiProposalCreateRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
-import com.jungwoo.project.memo.ai.dto.TodayProposal;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -19,6 +17,7 @@ import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
+import com.jungwoo.project.memo.execution.domain.PlacementType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,6 +25,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -40,17 +41,17 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * TodayProposalGenerator는 실제 OpenAI를 호출하지 않도록 항상 mock 처리한다.
+ * AiProposalService는 더 이상 LLM을 직접 부르지 않는다 (AiConversationService가 스트리밍/파싱을
+ * 담당). 여기서는 createFromItems()의 서버 검증과 apply()의 적용/제외/시간 규칙만 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
 class AiProposalServiceTest {
 
     private static final Long USER_ID = 1L;
     private static final Long PROPOSAL_ID = 100L;
+    private static final Long CONVERSATION_ID = 10L;
+    private static final Long SOURCE_MESSAGE_ID = 50L;
     private static final LocalDate TARGET_DATE = LocalDate.of(2026, 8, 4);
-
-    @Mock
-    private TodayProposalGenerator proposalGenerator;
 
     @Mock
     private AiProposalPersistenceService persistenceService;
@@ -67,6 +68,78 @@ class AiProposalServiceTest {
     @InjectMocks
     private AiProposalService service;
 
+    // ===== createFromItems =====
+
+    @Test
+    void createFromItems_doesNotSave_whenItemCountOutOfRange() {
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(), TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_doesNotSave_whenPriorityInvalid() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 30, "URGENT"));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_doesNotSave_whenExpectedMinutesOutOfRange() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 3, "SHOULD"));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_doesNotSave_whenTimeFixedMissingTimes() {
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, null, null));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_doesNotSave_whenDateOnlyHasTimes() {
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "제목", "설명", 30, "SHOULD", PlacementType.DATE_ONLY, LocalTime.of(9, 0), null));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_saves_whenTimeFixedValid() {
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, LocalTime.of(9, 0), LocalTime.of(9, 30)));
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        AiProposalResponse response = service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+
+        assertThat(response.getProposalId()).isEqualTo(PROPOSAL_ID);
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+    }
+
+    // ===== apply =====
+
     @Test
     void get_deniesAccess_whenProposalNotOwnedByCurrentUser() {
         when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(null);
@@ -74,57 +147,6 @@ class AiProposalServiceTest {
         assertThatThrownBy(() -> service.get(PROPOSAL_ID, USER_ID))
                 .isInstanceOfSatisfying(NotFoundException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_PROPOSAL_NOT_FOUND));
-    }
-
-    @Test
-    void create_returns503_whenAiNotConfigured_andDoesNotSaveProposal() {
-        when(proposalGenerator.isConfigured()).thenReturn(false);
-
-        assertThatThrownBy(() -> service.create(USER_ID, createRequest("오늘 뭔가 하고 싶은데 피곤해")))
-                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_NOT_CONFIGURED));
-
-        verify(persistenceService, never()).save(any(), any());
-    }
-
-    @Test
-    void create_doesNotSaveProposal_whenGeneratedItemCountOutOfRange() {
-        when(proposalGenerator.isConfigured()).thenReturn(true);
-        when(proposalGenerator.generate(any(), any())).thenReturn(new TodayProposal(List.of()));
-
-        assertThatThrownBy(() -> service.create(USER_ID, createRequest("...")))
-                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
-
-        verify(persistenceService, never()).save(any(), any());
-    }
-
-    @Test
-    void create_doesNotSaveProposal_whenPriorityInvalid() {
-        when(proposalGenerator.isConfigured()).thenReturn(true);
-        when(proposalGenerator.generate(any(), any())).thenReturn(new TodayProposal(List.of(
-                new ProposalItem("제목", "설명", 30, "URGENT")
-        )));
-
-        assertThatThrownBy(() -> service.create(USER_ID, createRequest("...")))
-                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
-
-        verify(persistenceService, never()).save(any(), any());
-    }
-
-    @Test
-    void create_doesNotSaveProposal_whenExpectedMinutesNotPositive() {
-        when(proposalGenerator.isConfigured()).thenReturn(true);
-        when(proposalGenerator.generate(any(), any())).thenReturn(new TodayProposal(List.of(
-                new ProposalItem("제목", "설명", 0, "SHOULD")
-        )));
-
-        assertThatThrownBy(() -> service.create(USER_ID, createRequest("...")))
-                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
-
-        verify(persistenceService, never()).save(any(), any());
     }
 
     @Test
@@ -141,7 +163,7 @@ class AiProposalServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED));
 
         verify(executionItemService, never()).createFromApprovedProposal(
-                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean());
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
     }
 
     @Test
@@ -159,7 +181,7 @@ class AiProposalServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION));
 
         verify(executionItemService, never()).createFromApprovedProposal(
-                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean());
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
     }
 
     @Test
@@ -179,7 +201,7 @@ class AiProposalServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION));
 
         verify(executionItemService, never()).createFromApprovedProposal(
-                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean());
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
     }
 
     @Test
@@ -187,11 +209,13 @@ class AiProposalServiceTest {
         when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
                 .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+        when(executionItemService.nextOrderIndexStart(USER_ID, TARGET_DATE)).thenReturn(0);
 
         ExecutionItem created = ExecutionItem.builder().executionItemId(500L).build();
         when(executionItemService.createFromApprovedProposal(
                 eq(USER_ID), eq("교재 6장 읽기"), isNull(), eq(TARGET_DATE), eq(30),
-                eq(ExecutionPriority.SHOULD), eq(0), eq(false)
+                eq(ExecutionPriority.SHOULD), eq(0), eq(false),
+                eq(PlacementType.DATE_ONLY), isNull(), isNull()
         )).thenReturn(created);
 
         AiProposalResponse response = service.apply(PROPOSAL_ID, USER_ID, new AiProposalApplyRequest());
@@ -210,11 +234,13 @@ class AiProposalServiceTest {
         when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
                 .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+        when(executionItemService.nextOrderIndexStart(USER_ID, TARGET_DATE)).thenReturn(0);
 
         ExecutionItem created = ExecutionItem.builder().executionItemId(501L).build();
         when(executionItemService.createFromApprovedProposal(
                 eq(USER_ID), eq("바뀐 제목"), isNull(), eq(TARGET_DATE), eq(30),
-                eq(ExecutionPriority.SHOULD), eq(0), eq(true)
+                eq(ExecutionPriority.SHOULD), eq(0), eq(true),
+                eq(PlacementType.DATE_ONLY), isNull(), isNull()
         )).thenReturn(created);
 
         AiProposalApplyRequest request = new AiProposalApplyRequest();
@@ -228,8 +254,48 @@ class AiProposalServiceTest {
                 eq(1L), eq(USER_ID), eq(AiProposalItemStatus.MODIFIED_APPLIED), any(), eq("EXECUTION_ITEM"), eq(501L), any());
     }
 
-    private AiProposalCreateRequest createRequest(String sourceText) {
-        return AiProposalCreateRequest.builder().sourceText(sourceText).targetDate(TARGET_DATE).build();
+    @Test
+    void apply_dismissesExcludedItem_withoutCreatingExecutionItem() {
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, samplePayloadJson()), proposalItem(2L, samplePayloadJson())));
+        when(executionItemService.nextOrderIndexStart(USER_ID, TARGET_DATE)).thenReturn(0);
+        when(executionItemService.createFromApprovedProposal(
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any()
+        )).thenReturn(ExecutionItem.builder().executionItemId(700L).build());
+
+        AiProposalApplyRequest request = new AiProposalApplyRequest();
+        request.setExcludedItemIds(List.of(1L));
+
+        AiProposalResponse response = service.apply(PROPOSAL_ID, USER_ID, request);
+
+        assertThat(response.getItems()).hasSize(2);
+        assertThat(response.getItems().stream().filter(i -> i.getProposalItemId().equals(1L)).findFirst().orElseThrow().getStatus())
+                .isEqualTo(AiProposalItemStatus.DISMISSED);
+
+        // 제외된 항목(1L)만큼 줄어든 1번만 execution_items가 만들어진다 (전체 2개 중 제외 1개).
+        verify(executionItemService, org.mockito.Mockito.times(1)).createFromApprovedProposal(
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
+        verify(aiProposalItemMapper).updateAfterApply(
+                eq(1L), eq(USER_ID), eq(AiProposalItemStatus.DISMISSED), isNull(), isNull(), isNull(), any());
+    }
+
+    @Test
+    void apply_rejectsExcludingEveryItem() {
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+
+        AiProposalApplyRequest request = new AiProposalApplyRequest();
+        request.setExcludedItemIds(List.of(1L));
+
+        assertThatThrownBy(() -> service.apply(PROPOSAL_ID, USER_ID, request))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION));
+    }
+
+    private ProposalItem dateOnlyItem(String title, int expectedMinutes, String priority) {
+        return new ProposalItem(title, "설명", expectedMinutes, priority, PlacementType.DATE_ONLY, null, null);
     }
 
     private AiProposal proposedProposal() {
@@ -253,6 +319,7 @@ class AiProposalServiceTest {
 
     private String samplePayloadJson() {
         return "{\"title\":\"교재 6장 읽기\",\"description\":null,\"expectedMinutes\":30,"
-                + "\"priority\":\"SHOULD\",\"targetDate\":\"2026-08-04\"}";
+                + "\"priority\":\"SHOULD\",\"targetDate\":\"2026-08-04\",\"placementType\":\"DATE_ONLY\","
+                + "\"scheduledStartAt\":null,\"scheduledEndAt\":null}";
     }
 }

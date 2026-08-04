@@ -1,19 +1,20 @@
 package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
-import com.jungwoo.project.memo.ai.dto.AiProposalCreateRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.common.security.UserPrincipal;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * AI 오늘 제안 컨트롤러.
+ * AI 제안(Proposal) 조회·적용 컨트롤러.
+ *
+ * 생성은 여기 없다 — Proposal은 AiConversationController의 대화 흐름에서 사용자가
+ * 명시적으로 요청했거나 OFFER에 동의했을 때만 만들어진다 (POST /api/ai/proposals 같은
+ * 강제 생성 엔드포인트를 두지 않는다).
  *
  * /api/** 는 SecurityConfig에서 기본적으로 인증이 필요하다 (permitAll로 열지 않는다).
  * 상담 원문, AI 원문 응답, JWT는 로그에 남기지 않는다.
@@ -25,18 +26,6 @@ import org.springframework.web.bind.annotation.*;
 public class AiProposalController {
 
     private final AiProposalService aiProposalService;
-
-    @PostMapping
-    public ResponseEntity<AiProposalResponse> create(
-            @AuthenticationPrincipal UserPrincipal principal,
-            @Valid @RequestBody AiProposalCreateRequest request
-    ) {
-        log.info("POST /api/ai/proposals - userId={}, targetDate={}",
-                principal.getUserId(), request.getTargetDate());
-
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(aiProposalService.create(principal.getUserId(), request));
-    }
 
     @GetMapping("/{proposalId}")
     public ResponseEntity<AiProposalResponse> get(

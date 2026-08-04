@@ -28,6 +28,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -304,20 +305,42 @@ public class ExecutionItemService {
     // ===== AI 제안 적용 전용 =====
 
     /**
+     * 해당 날짜에 이미 있는 항목 뒤로 이어 붙일 order_index 시작값.
+     * AiProposalService.apply()가 묶음 안 항목들에 순서를 매기기 전에 한 번 호출한다.
+     */
+    @Transactional(readOnly = true)
+    public int nextOrderIndexStart(Long userId, LocalDate date) {
+        Integer max = executionItemMapper.findMaxOrderIndexByUserIdAndDate(userId, date);
+        return max != null ? max + 1 : 0;
+    }
+
+    /**
      * AI 제안이 승인되어 execution_items에 생성될 때 쓰는 생성 경로.
      * AiProposalService.apply()의 트랜잭션 안에서 호출된다 (기본 전파: REQUIRED로 합류).
+     *
+     * placementType/scheduledStartAt/scheduledEndAt은 AI가 만들거나 사용자가 편집한 값을
+     * 그대로 받는다 — DATE_ONLY로 무조건 덮어쓰지 않는다. 대신 execution_items의 배치
+     * 무결성 조건(validatePlacement)을 그대로 통과해야 하고, 어기면 검증 오류로 막는다.
+     *
+     * actor_type은 USER로 남긴다 — origin_type=AI_GENERATED가 "무엇이 만들었는지"를 이미
+     * 담고, actor_type은 "누가 이 이벤트를 일으켰는지"(즉 적용을 누른 사용자)를 뜻한다.
      */
     @Transactional
     public ExecutionItem createFromApprovedProposal(
             Long userId, String title, String description, LocalDate scheduledDate,
-            Integer expectedMinutes, ExecutionPriority priority, int orderIndex, boolean modifiedAfterCreation
+            Integer expectedMinutes, ExecutionPriority priority, int orderIndex, boolean modifiedAfterCreation,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt
     ) {
+        validatePlacement(placementType, scheduledDate, scheduledStartAt, scheduledEndAt);
+
         ExecutionItem item = ExecutionItem.builder()
                 .userId(userId)
                 .title(title)
                 .description(description)
-                .placementType(PlacementType.DATE_ONLY)
+                .placementType(placementType)
                 .scheduledDate(scheduledDate)
+                .scheduledStartAt(scheduledStartAt)
+                .scheduledEndAt(scheduledEndAt)
                 .expectedMinutes(expectedMinutes)
                 .status(ExecutionStatus.PLANNED)
                 .priority(priority)
@@ -332,7 +355,10 @@ public class ExecutionItemService {
 
         Map<String, Object> afterState = new LinkedHashMap<>();
         afterState.put("title", title);
+        afterState.put("placementType", placementType);
         afterState.put("scheduledDate", scheduledDate);
+        afterState.put("scheduledStartAt", scheduledStartAt);
+        afterState.put("scheduledEndAt", scheduledEndAt);
         afterState.put("priority", priority);
         afterState.put("expectedMinutes", expectedMinutes);
 
@@ -385,11 +411,21 @@ public class ExecutionItemService {
         }
 
         if (PlacementType.TIME_FIXED.equals(placementType)) {
+            if (start == null || end == null) {
+                throw new BadRequestException(ErrorCode.TIME_FIXED_REQUIRES_TIME);
+            }
             if (!end.isAfter(start)) {
                 throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
             }
             if (!scheduledDate.equals(start.toLocalDate()) || !scheduledDate.equals(end.toLocalDate())) {
                 throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+            }
+        } else if (PlacementType.DATE_ONLY.equals(placementType)) {
+            if (start != null || end != null) {
+                throw new BadRequestException(ErrorCode.TASK_MUST_NOT_HAVE_TIME);
+            }
+            if (scheduledDate == null) {
+                throw new BadRequestException(ErrorCode.MISSING_INPUT_VALUE);
             }
         }
     }

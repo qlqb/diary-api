@@ -211,13 +211,33 @@ REOPENED / CANCELLED / PRIORITY_CHANGED / DELETED
 
 완료·부분 수행·미수행은 Event만으로 표현하지 않고 ExecutionRecord로 남긴다.
 
-## 10. ai_proposals / ai_proposal_items
+## 10. ai_conversations / ai_messages / ai_proposals / ai_proposal_items
 
-`ai_proposals`는 한 번의 AI 변경안 묶음을, `ai_proposal_items`는 사용자가 개별 적용할 수 있는 항목을 저장한다.
+2026-08-05부터 AI 패널은 1회성 제안 생성기가 아니라 실제 다회차 상담이다. `ai_conversations`/`ai_messages`가
+대화와 메시지를 저장하고, Proposal은 대화 중 사용자가 명시적으로 요청하거나 OFFER에 동의했을 때만 만들어지는
+승인 전 초안으로 남는다. DDL은 `docs/sql/2026-08-05-ai-consultation-conversations.sql` 참고 (Flyway/Liquibase
+미도입 — 기존 `docs/sql/*.sql` 날짜 파일 컨벤션을 따라 수동 적용한다).
 
 ```text
+ai_conversations
+- conversation_id, user_id
+- scope                  PLAN / TODAY / EXECUTION / CONTEXT / MIXED
+- status                 ACTIVE / ARCHIVED
+- summary nullable       (오래된 메시지 요약. 이번 버전은 생성 로직 없이 컬럼만 둔다)
+- created_at, updated_at
+
+ai_messages
+- message_id, conversation_id, user_id
+- role                   USER / ASSISTANT
+- content
+- response_type nullable CHAT / OFFER / PROPOSAL (ASSISTANT만 값을 가진다)
+- proposal_id nullable   (해당 턴이 PROPOSAL을 만들었으면 그 proposal_id)
+- idempotency_key nullable  (user_id + idempotency_key UNIQUE — 동일 전송 중복 AI 호출 차단)
+- status                 COMPLETED / FAILED
+- created_at
+
 ai_proposals
-- proposal_id, user_id, conversation_id
+- proposal_id, user_id, conversation_id nullable, source_message_id nullable
 - target_scope           PLAN / TODAY / EXECUTION / CONTEXT / MIXED
 - status
 - created_at, expires_at, responded_at
@@ -225,7 +245,8 @@ ai_proposals
 ai_proposal_items
 - proposal_item_id, proposal_id, user_id
 - item_type              PLAN_ITEM / EXECUTION_ITEM / CONTEXT_ITEM
-- original_payload JSON
+- original_payload JSON  (title/description/expectedMinutes/priority/targetDate/
+                          placementType/scheduledStartAt/scheduledEndAt)
 - edited_payload JSON nullable
 - target_item_id nullable
 - base_version nullable
@@ -234,10 +255,13 @@ ai_proposal_items
 - created_at, responded_at
 ```
 
+`source_message_id`는 이 Proposal을 만들게 한 사용자 메시지를 가리킨다. AI 생성이나 파싱이 실패해도
+사용자 메시지(`ai_messages`)는 항상 먼저 저장되어 있으므로 원문이 사라지지 않는다.
+
 상태:
 
 ```text
-PROPOSED / APPLIED / MODIFIED_APPLIED / DISMISSED / EXPIRED
+ai_proposals / ai_proposal_items: PROPOSED / APPLIED / MODIFIED_APPLIED / DISMISSED / EXPIRED
 ```
 
 ## 11. version과 동시 수정 방지

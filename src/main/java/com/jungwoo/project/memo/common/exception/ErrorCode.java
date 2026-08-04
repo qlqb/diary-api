@@ -57,6 +57,12 @@ public enum ErrorCode {
     VERSION_CONFLICT(HttpStatus.CONFLICT, "E409_004", "다른 곳에서 먼저 변경되었습니다"),
     AI_PROPOSAL_ALREADY_RESPONDED(HttpStatus.CONFLICT, "E409_005", "이미 처리된 제안입니다"),
 
+    // ===== 429 Too Many Requests =====
+    AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",
+            "AI 사용 한도 또는 결제 상태를 확인한 뒤 다시 시도해 주세요"),
+    AI_USAGE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_002",
+            "오늘의 AI 상담 호출 한도를 모두 사용했습니다"),
+
     // ===== 500 Internal Server Error =====
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "E500_001", "서버 내부 오류가 발생했습니다"),
 

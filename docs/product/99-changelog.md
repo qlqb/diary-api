@@ -1,5 +1,64 @@
 # 99. Change Log
 
+## 2026-08-05 — AI 상담 구조 개편: 강제 제안 생성 → 자유 대화 + CHAT/OFFER/PROPOSAL
+
+이전 AI 패널은 이름만 상담이고 실제로는 자연어 입력 1회 → 실행 조각 1~5개 강제 생성이었다.
+이번 변경으로 실제 다회차 상담으로 바꿨다.
+
+- `ai_conversations`/`ai_messages` 테이블을 추가했다(`docs/sql/2026-08-05-ai-consultation-conversations.sql`,
+  Flyway/Liquibase 미도입 — 기존 `docs/sql/*.sql` 날짜 파일 컨벤션대로 수동 적용).
+  `ai_proposals`에 `source_message_id`를 추가하고 `conversation_id` 타입을 실제 대화 PK와
+  맞춰 BIGINT로 바꿨다(그동안 항상 NULL로만 저장되던 컬럼이라 기존 데이터 영향 없음).
+- AI 응답을 `AiResponseType`(CHAT/OFFER/PROPOSAL) 3상태 계약으로 바꿨다. 시스템 프롬프트에서
+  "설명문·인사말 금지, 무조건 1~5개 생성" 규칙을 제거하고, 먼저 대화하고 정보가 충분해도
+  사용자가 요청하기 전에는 초안을 만들지 않는 원칙으로 재작성했다. 전역 `MIN_ITEMS=1` 강제
+  검증을 제거하고 PROPOSAL 응답에만 1~5개 검증을 건다.
+- `POST /api/ai/proposals`(강제 생성) 엔드포인트를 없앴다. 대신
+  `POST /api/ai/conversations`, `GET/POST /api/ai/conversations/{id}/messages`를 새로 만들었다.
+  메시지 전송(POST)은 SSE로 스트리밍한다: `message.started/message.delta/offer.ready/
+  proposal.ready/message.completed/message.error`. `GET /api/ai/proposals/{id}`,
+  `POST /api/ai/proposals/{id}/apply`는 그대로 재사용한다.
+- 사용자 메시지는 AI 호출 전에 먼저 저장해 AI 실패·파싱 실패에도 원문이 남는다. 완료된
+  ASSISTANT 응답은 스트림이 끝까지 성공했을 때 한 번만 저장한다. `idempotencyKey`가 같은
+  재전송은 AI를 다시 부르지 않고 저장된 응답을 재생한다.
+- 스트리밍과 구조화 응답(CHAT/OFFER/PROPOSAL 판단 + PROPOSAL 항목)을 사용자 메시지당 모델
+  호출 1회로 유지했다. Spring AI 2.0에서 `.stream()`과 `.entity()`(구조화 출력)는 같은 호출에서
+  함께 못 쓴다(entity()는 완결된 응답이 있어야 스키마 파싱이 가능). 대신 시스템 프롬프트가
+  "자연어 reply 먼저, 그 다음 줄에 고정 구분자, 그 아래에만 JSON"을 지키게 하고
+  `AiStreamParser`가 그 경계를 스트리밍 중에 찾는다. reply는 토큰 단위로 즉시 보여주고,
+  구분자 뒤 JSON은 스트림이 끝난 뒤에만 파싱해 OFFER/PROPOSAL을 확정한다. 별도의 분류용
+  2차 AI 호출은 추가하지 않았다.
+- AI가 만드는 실행 조각은 이제 DATE_ONLY와 TIME_FIXED를 모두 지원한다(그동안
+  `createFromApprovedProposal`이 무조건 DATE_ONLY로 덮어썼다). `ExecutionItemService`의
+  배치 무결성 검증에 DATE_ONLY인데 시각이 채워진 경우(`TASK_MUST_NOT_HAVE_TIME`) 케이스가
+  빠져 있던 것도 이번에 같이 막았다.
+- Proposal 적용 시 사용자가 뺀 항목은 `DISMISSED`로 남기고 `execution_items`를 만들지
+  않는다(`excludedItemIds`). 여러 항목의 `order_index`는 항상 그 날짜의 기존 최대값 다음부터
+  이어 붙인다. 동시 apply 중복 생성 차단(`SELECT ... FOR UPDATE` + 상태 재확인)은 기존 구현이
+  이미 만족하고 있어 그대로 유지했다.
+- OpenAI 429(쿼터/결제)를 `AI_GENERATION_FAILED`와 분리해 `AI_QUOTA_EXCEEDED`(429)로 노출하고,
+  프론트에 "AI 사용 한도 또는 결제 상태를 확인한 뒤 다시 시도해 주세요" 메시지를 보여준다.
+  `spring.ai.retry.max-attempts=2`로 과도한 자동 재시도를 막았다. `ai_usage_logs`에
+  모델/토큰 수/요청 ID 메타데이터만 남기고(전체 프롬프트·API 키 제외), 사용자별 일/월 호출
+  한도를 `ai.usage.daily-limit`/`ai.usage.monthly-limit` 설정값으로 제어한다(Redis 등 외부
+  시스템 도입 없이 기존 로그 테이블 집계만 사용).
+- 컨텍스트는 매번 전체 대화를 보내지 않는다. 서버가 최근 메시지 최대 `ai.context.recent-message-limit`
+  (기본 6)개만 모아 보낸다. 대화 요약(`ai_conversations.summary`) 컬럼은 미리 만들어 뒀지만
+  이번 범위에서 요약을 생성하는 별도 AI 호출은 추가하지 않았다 — 사용자 메시지마다 두 번째
+  AI 호출을 만들지 말라는 제약 때문에, 다음 버전 과제로 남긴다.
+- 프론트 `AiPanelShell`을 1회성 생성 폼에서 스트리밍 대화 UI로 다시 만들었다: 말풍선,
+  실시간 스트리밍 표시, OFFER 단일 액션 버튼, PROPOSAL 초안 카드(점선 테두리 + "AI 초안"
+  배지, 카드별 제외 토글, 카드별 적용 버튼 없음), 하단 단일 "오늘에 적용" 버튼. `api.js`에
+  POST 기반 SSE를 직접 파싱하는 스트리밍 클라이언트를 추가했다(네이티브 EventSource는
+  POST와 Authorization 헤더를 못 보내서 fetch의 ReadableStream을 직접 읽는다).
+- Today 화면은 이미 `execution_items` 하나만 읽고 쓰는 상태였다(2026-08-04에 완료). 이번
+  작업에서 새로 발견된 문제는 없었고, AI 적용 결과가 그대로 반영되는 것만 재확인했다.
+- 알려진 한계: 이 저장소의 로컬 개발 DB에는 아직 새 마이그레이션이 적용되지 않았다 —
+  `docs/sql/2026-08-05-ai-consultation-conversations.sql`을 수동으로 실행해야
+  `POST /api/ai/conversations`가 동작한다(적용 전에는 테이블 없음 오류). `OPENAI_API_KEY`가
+  없는 로컬 환경에서는 실제 스트리밍 대화를 끝까지 확인할 수 없어, 대화 생성·라우팅·인증과
+  CHAT/OFFER/PROPOSAL 단위 테스트(모델 응답을 mock 처리)로 검증을 마쳤다.
+
 ## 2026-08-04 — Today 화면 execution_items 전환 + AI 오늘 제안 1차 구현
 
 - Today 화면(TodayView)이 더 이상 mock 데이터가 아니라 `execution_items`를 실제로 읽고 쓰도록 전환했다. `schedule_blocks`에는 더 이상 쓰지 않는다(이중 저장 없음).

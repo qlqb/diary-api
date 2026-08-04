@@ -7,12 +7,10 @@ import com.jungwoo.project.memo.ai.domain.AiProposalItemStatus;
 import com.jungwoo.project.memo.ai.domain.AiProposalItemType;
 import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
-import com.jungwoo.project.memo.ai.dto.AiProposalCreateRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalItemResponse;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
-import com.jungwoo.project.memo.ai.dto.TodayProposal;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -21,6 +19,7 @@ import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
+import com.jungwoo.project.memo.execution.domain.PlacementType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -37,9 +36,10 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * AI 오늘 제안 생성/조회/적용.
+ * AI 제안(Proposal) 저장·조회·적용.
  *
- * 생성 흐름: LLM 호출(트랜잭션 밖) -> 서버 검증 -> 저장(짧은 트랜잭션, AiProposalPersistenceService).
+ * 생성은 더 이상 이 서비스가 LLM을 직접 부르지 않는다 — AiConversationService가 대화 한 턴을
+ * 스트리밍하고 구조화 결과를 파싱한 뒤, PROPOSAL로 판단됐을 때만 createFromItems()를 부른다.
  * 적용 흐름: 행 잠금(SELECT ... FOR UPDATE) -> 상태 재확인 -> execution_items 생성 -> 상태 갱신,
  *          전부 하나의 트랜잭션.
  */
@@ -51,42 +51,45 @@ public class AiProposalService {
     private static final Set<String> VALID_PRIORITIES = Set.of("MUST", "SHOULD", "OPTIONAL");
     private static final int MIN_ITEMS = 1;
     private static final int MAX_ITEMS = 5;
+    private static final int MIN_EXPECTED_MINUTES = 5;
+    private static final int MAX_EXPECTED_MINUTES = 120;
 
-    private final TodayProposalGenerator proposalGenerator;
     private final AiProposalPersistenceService persistenceService;
     private final AiProposalMapper aiProposalMapper;
     private final AiProposalItemMapper aiProposalItemMapper;
     private final ExecutionItemService executionItemService;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
-    // ===== 생성 =====
+    // ===== 생성 (PROPOSAL 턴에서만 호출) =====
 
-    public AiProposalResponse create(Long userId, AiProposalCreateRequest request) {
-        if (!proposalGenerator.isConfigured()) {
-            throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
-        }
-
-        TodayProposal generated = proposalGenerator.generate(request.getSourceText(), request.getTargetDate());
-        List<ProposalItemPayload> validated = validateAndNormalize(generated, request.getTargetDate());
-
-        return persistenceService.save(userId, validated);
+    /**
+     * 이미 파싱된 모델 출력(items)을 검증해 ai_proposals/ai_proposal_items로 저장한다.
+     * CHAT/OFFER 턴에서는 절대 호출되지 않는다 — 항목 1~5개 검증은 여기, PROPOSAL 한 곳에만 있다.
+     */
+    public AiProposalResponse createFromItems(
+            Long userId, Long conversationId, Long sourceMessageId,
+            List<ProposalItem> items, LocalDate targetDate
+    ) {
+        List<ProposalItemPayload> validated = validateAndNormalize(items, targetDate);
+        return persistenceService.save(userId, conversationId, sourceMessageId, validated);
     }
 
-    private List<ProposalItemPayload> validateAndNormalize(TodayProposal generated, LocalDate targetDate) {
-        if (generated == null || generated.items() == null
-                || generated.items().size() < MIN_ITEMS || generated.items().size() > MAX_ITEMS) {
+    private List<ProposalItemPayload> validateAndNormalize(List<ProposalItem> items, LocalDate targetDate) {
+        if (items == null || items.size() < MIN_ITEMS || items.size() > MAX_ITEMS) {
             log.warn("AI 제안 구조 검증 실패: 항목 개수가 범위를 벗어남");
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
         List<ProposalItemPayload> result = new ArrayList<>();
-        for (ProposalItem item : generated.items()) {
+        for (ProposalItem item : items) {
             if (item.title() == null || item.title().isBlank()) {
                 log.warn("AI 제안 구조 검증 실패: 제목 누락");
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
-            if (item.expectedMinutes() <= 0) {
-                log.warn("AI 제안 구조 검증 실패: expectedMinutes가 양수가 아님");
+            if (item.expectedMinutes() == null
+                    || item.expectedMinutes() < MIN_EXPECTED_MINUTES
+                    || item.expectedMinutes() > MAX_EXPECTED_MINUTES) {
+                log.warn("AI 제안 구조 검증 실패: expectedMinutes가 유효 범위를 벗어남");
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
             if (item.priority() == null || !VALID_PRIORITIES.contains(item.priority())) {
@@ -94,8 +97,29 @@ public class AiProposalService {
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
 
+            PlacementType placementType = item.placementType() != null ? item.placementType() : PlacementType.DATE_ONLY;
+            LocalDateTime scheduledStartAt = null;
+            LocalDateTime scheduledEndAt = null;
+
+            if (placementType == PlacementType.TIME_FIXED) {
+                if (item.startTime() == null || item.endTime() == null) {
+                    log.warn("AI 제안 구조 검증 실패: TIME_FIXED인데 시작/종료 시각 누락");
+                    throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+                if (!item.endTime().isAfter(item.startTime())) {
+                    log.warn("AI 제안 구조 검증 실패: 종료 시각이 시작 시각보다 이후가 아님");
+                    throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+                scheduledStartAt = LocalDateTime.of(targetDate, item.startTime());
+                scheduledEndAt = LocalDateTime.of(targetDate, item.endTime());
+            } else if (item.startTime() != null || item.endTime() != null) {
+                log.warn("AI 제안 구조 검증 실패: DATE_ONLY인데 시각이 채워짐");
+                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            }
+
             result.add(new ProposalItemPayload(
-                    item.title(), item.description(), item.expectedMinutes(), item.priority(), targetDate));
+                    item.title(), item.description(), item.expectedMinutes(), item.priority(), targetDate,
+                    placementType, scheduledStartAt, scheduledEndAt));
         }
         return result;
     }
@@ -143,12 +167,32 @@ public class AiProposalService {
         }
 
         Map<Long, AiProposalApplyRequest.EditedProposalItem> editedById = indexAndValidateEditedItems(request, items);
+        Set<Long> excludedIds = request.getExcludedItemIds() != null
+                ? new HashSet<>(request.getExcludedItemIds())
+                : Set.of();
+        validateExcludedIds(excludedIds, items);
+
+        if (excludedIds.size() == items.size()) {
+            // 전부 제외하면 적용할 것이 없다 — 빈 묶음을 APPLIED로 만들지 않는다.
+            throw new BadRequestException(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION);
+        }
+
+        LocalDate targetDate = fromJson(items.get(0).getOriginalPayload()).targetDate();
+        int orderIndex = executionItemService.nextOrderIndexStart(userId, targetDate);
 
         boolean anyModified = false;
         List<AiProposalItemResponse> responses = new ArrayList<>();
-        int orderIndex = 0;
+        LocalDateTime respondedAt = LocalDateTime.now();
 
         for (AiProposalItem item : items) {
+            if (excludedIds.contains(item.getProposalItemId())) {
+                aiProposalItemMapper.updateAfterApply(
+                        item.getProposalItemId(), userId, AiProposalItemStatus.DISMISSED,
+                        null, null, null, respondedAt);
+                responses.add(toDismissedResponse(item));
+                continue;
+            }
+
             ProposalItemPayload original = fromJson(item.getOriginalPayload());
             AiProposalApplyRequest.EditedProposalItem edit = editedById.get(item.getProposalItemId());
 
@@ -156,6 +200,9 @@ public class AiProposalService {
             String description = original.description();
             Integer expectedMinutes = original.expectedMinutes();
             String priority = original.priority();
+            PlacementType placementType = original.placementType();
+            LocalDateTime scheduledStartAt = original.scheduledStartAt();
+            LocalDateTime scheduledEndAt = original.scheduledEndAt();
             boolean modified = false;
 
             if (edit != null) {
@@ -163,6 +210,9 @@ public class AiProposalService {
                 String newDescription = edit.getDescription() != null ? edit.getDescription() : original.description();
                 Integer newMinutes = edit.getExpectedMinutes() != null ? edit.getExpectedMinutes() : original.expectedMinutes();
                 String newPriority = edit.getPriority() != null ? edit.getPriority() : original.priority();
+                PlacementType newPlacementType = edit.getPlacementType() != null ? edit.getPlacementType() : original.placementType();
+                LocalDateTime newStart = edit.getPlacementType() != null ? edit.getScheduledStartAt() : original.scheduledStartAt();
+                LocalDateTime newEnd = edit.getPlacementType() != null ? edit.getScheduledEndAt() : original.scheduledEndAt();
 
                 if (newTitle == null || newTitle.isBlank()) {
                     throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
@@ -173,31 +223,39 @@ public class AiProposalService {
                 if (!VALID_PRIORITIES.contains(newPriority)) {
                     throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
                 }
+                // placementType/시각 무결성은 execution_items 생성 시 validatePlacement가 최종 확인한다.
 
                 modified = !Objects.equals(newTitle, original.title())
                         || !Objects.equals(newDescription, original.description())
                         || !Objects.equals(newMinutes, original.expectedMinutes())
-                        || !Objects.equals(newPriority, original.priority());
+                        || !Objects.equals(newPriority, original.priority())
+                        || !Objects.equals(newPlacementType, original.placementType())
+                        || !Objects.equals(newStart, original.scheduledStartAt())
+                        || !Objects.equals(newEnd, original.scheduledEndAt());
 
                 title = newTitle;
                 description = newDescription;
                 expectedMinutes = newMinutes;
                 priority = newPriority;
+                placementType = newPlacementType;
+                scheduledStartAt = newStart;
+                scheduledEndAt = newEnd;
             }
 
             anyModified = anyModified || modified;
 
             ExecutionItem createdItem = executionItemService.createFromApprovedProposal(
                     userId, title, description, original.targetDate(),
-                    expectedMinutes, ExecutionPriority.valueOf(priority), orderIndex++, modified);
+                    expectedMinutes, ExecutionPriority.valueOf(priority), orderIndex++, modified,
+                    placementType, scheduledStartAt, scheduledEndAt);
 
             AiProposalItemStatus newStatus = modified
                     ? AiProposalItemStatus.MODIFIED_APPLIED
                     : AiProposalItemStatus.APPLIED;
             String editedJson = modified
-                    ? toJson(new ProposalItemPayload(title, description, expectedMinutes, priority, original.targetDate()))
+                    ? toJson(new ProposalItemPayload(title, description, expectedMinutes, priority,
+                            original.targetDate(), placementType, scheduledStartAt, scheduledEndAt))
                     : null;
-            LocalDateTime respondedAt = LocalDateTime.now();
 
             aiProposalItemMapper.updateAfterApply(
                     item.getProposalItemId(), userId, newStatus, editedJson,
@@ -211,13 +269,15 @@ public class AiProposalService {
                     .expectedMinutes(expectedMinutes)
                     .priority(priority)
                     .targetDate(original.targetDate())
+                    .placementType(placementType)
+                    .scheduledStartAt(scheduledStartAt)
+                    .scheduledEndAt(scheduledEndAt)
                     .modified(modified)
                     .createdItemId(createdItem.getExecutionItemId())
                     .build());
         }
 
         AiProposalStatus headerStatus = anyModified ? AiProposalStatus.MODIFIED_APPLIED : AiProposalStatus.APPLIED;
-        LocalDateTime respondedAt = LocalDateTime.now();
         aiProposalMapper.updateStatusAndRespondedAt(proposalId, userId, headerStatus, respondedAt);
 
         log.info("AI 제안 적용 완료: proposalId={}, userId={}, status={}", proposalId, userId, headerStatus);
@@ -230,6 +290,39 @@ public class AiProposalService {
                 .expiresAt(proposal.getExpiresAt())
                 .respondedAt(respondedAt)
                 .items(responses)
+                .build();
+    }
+
+    private void validateExcludedIds(Set<Long> excludedIds, List<AiProposalItem> items) {
+        if (excludedIds.isEmpty()) {
+            return;
+        }
+        Set<Long> validIds = new HashSet<>();
+        for (AiProposalItem item : items) {
+            validIds.add(item.getProposalItemId());
+        }
+        for (Long excludedId : excludedIds) {
+            if (!validIds.contains(excludedId)) {
+                throw new BadRequestException(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION);
+            }
+        }
+    }
+
+    private AiProposalItemResponse toDismissedResponse(AiProposalItem item) {
+        ProposalItemPayload payload = fromJson(item.getOriginalPayload());
+        return AiProposalItemResponse.builder()
+                .proposalItemId(item.getProposalItemId())
+                .status(AiProposalItemStatus.DISMISSED)
+                .title(payload.title())
+                .description(payload.description())
+                .expectedMinutes(payload.expectedMinutes())
+                .priority(payload.priority())
+                .targetDate(payload.targetDate())
+                .placementType(payload.placementType())
+                .scheduledStartAt(payload.scheduledStartAt())
+                .scheduledEndAt(payload.scheduledEndAt())
+                .modified(false)
+                .createdItemId(null)
                 .build();
     }
 
@@ -272,6 +365,9 @@ public class AiProposalService {
                 .expectedMinutes(effective.expectedMinutes())
                 .priority(effective.priority())
                 .targetDate(effective.targetDate())
+                .placementType(effective.placementType())
+                .scheduledStartAt(effective.scheduledStartAt())
+                .scheduledEndAt(effective.scheduledEndAt())
                 .modified(item.getEditedPayload() != null)
                 .createdItemId(item.getCreatedItemId())
                 .build();

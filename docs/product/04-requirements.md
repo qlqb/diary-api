@@ -59,6 +59,29 @@ REQ-AI-011
 
 REQ-AI-012
 외부 대화에서 추출한 항목도 AIProposal 검토와 사용자 적용을 거쳐야 한다.
+
+REQ-AI-013
+AI 패널의 기본 동작은 자유 대화다. 인사·잡담·감정 표현·정보가 부족한 입력을 실행 조각으로
+바꾸지 않는다. 모든 AI 턴은 CHAT / OFFER / PROPOSAL 중 하나이며, 모든 턴에 자연스러운
+reply가 있어야 한다.
+
+REQ-AI-014
+CHAT과 OFFER 턴에서는 proposalItems가 항상 빈 배열이고 ai_proposals/ai_proposal_items
+행을 만들지 않는다. PROPOSAL에서만 1~5개 항목을 만든다.
+
+REQ-AI-015
+목표·기간·제약 등 계획을 짤 정보가 충분해도 사용자가 아직 요청하지 않았다면 OFFER로
+응답하고 초안 생성 여부를 먼저 물어본다. 사용자가 명시적으로 요청하거나 OFFER에 동의했을
+때만 PROPOSAL을 만든다.
+
+REQ-AI-016
+사용자 메시지는 AI 호출 전에 먼저 저장한다(ai_messages). AI 생성이나 구조화 파싱이
+실패해도 사용자가 입력한 원문은 사라지지 않는다. Proposal은 자신을 만들게 한 사용자
+메시지(source_message_id)를 참조한다.
+
+REQ-AI-017
+동일 idempotencyKey로 재전송된 메시지는 AI를 다시 호출하지 않고 저장된 응답을 그대로
+재생한다.
 ```
 
 ## 3. 장기 컨텍스트
