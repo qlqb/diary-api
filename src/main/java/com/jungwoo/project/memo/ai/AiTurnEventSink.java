@@ -11,7 +11,8 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
  */
 public interface AiTurnEventSink {
 
-    void onStarted();
+    /** requestMessageId는 이번 턴을 대표하는 USER 메시지 id — 연결 종료 시 잠금 해제에 쓴다. */
+    void onStarted(Long requestMessageId);
 
     /** reply 텍스트 조각. 구분자 뒤 구조화 JSON 구간은 절대 여기로 오지 않는다. */
     void onDelta(String text);

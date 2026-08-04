@@ -1,6 +1,9 @@
 package com.jungwoo.project.memo.ai;
 
+import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+
+import java.util.concurrent.TimeoutException;
 
 /**
  * 스트리밍 중 발생한 예외를 사용자에게 노출할 ErrorCode로 분류한다.
@@ -12,6 +15,24 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 final class AiErrorClassifier {
 
     private AiErrorClassifier() {
+    }
+
+    /** ai_usage_logs.result_status로 남길 값. 타임아웃과 그 외 오류를 구분한다. */
+    static UsageResultStatus classifyUsageStatus(Throwable throwable) {
+        return isTimeout(throwable) ? UsageResultStatus.TIMEOUT : UsageResultStatus.FAILED;
+    }
+
+    private static boolean isTimeout(Throwable throwable) {
+        Throwable current = throwable;
+        int depth = 0;
+        while (current != null && depth < 10) {
+            if (current instanceof TimeoutException) {
+                return true;
+            }
+            current = current.getCause() == current ? null : current.getCause();
+            depth++;
+        }
+        return false;
     }
 
     static ErrorCode classify(Throwable throwable) {

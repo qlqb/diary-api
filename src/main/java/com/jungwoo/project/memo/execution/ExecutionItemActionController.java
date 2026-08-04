@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemResumeRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -90,5 +91,17 @@ public class ExecutionItemActionController {
 
         return ResponseEntity.ok(
                 executionItemService.hold(executionItemId, principal.getUserId(), request));
+    }
+
+    @PostMapping("/{executionItemId}/resume")
+    public ResponseEntity<ExecutionItemResponse> resume(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionItemId,
+            @Valid @RequestBody ExecutionItemResumeRequest request
+    ) {
+        log.info("POST /api/execution-items/{}/resume - userId={}", executionItemId, principal.getUserId());
+
+        return ResponseEntity.ok(
+                executionItemService.resume(executionItemId, principal.getUserId(), request));
     }
 }

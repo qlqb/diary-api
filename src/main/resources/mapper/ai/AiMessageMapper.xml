@@ -6,16 +6,16 @@
 
     <resultMap id="aiMessageResultMap"
                type="com.jungwoo.project.memo.ai.domain.AiMessage">
-        <id     property="messageId"      column="message_id"/>
-        <result property="conversationId" column="conversation_id"/>
-        <result property="userId"         column="user_id"/>
-        <result property="role"           column="role"/>
-        <result property="content"        column="content"/>
-        <result property="responseType"   column="response_type"/>
-        <result property="proposalId"     column="proposal_id"/>
-        <result property="idempotencyKey" column="idempotency_key"/>
-        <result property="status"         column="status"/>
-        <result property="createdAt"      column="created_at"/>
+        <id     property="messageId"        column="message_id"/>
+        <result property="conversationId"   column="conversation_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="role"             column="role"/>
+        <result property="content"          column="content"/>
+        <result property="responseType"     column="response_type"/>
+        <result property="replyToMessageId" column="reply_to_message_id"/>
+        <result property="idempotencyKey"   column="idempotency_key"/>
+        <result property="status"           column="status"/>
+        <result property="createdAt"        column="created_at"/>
     </resultMap>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="messageId">
@@ -25,7 +25,7 @@
             role,
             content,
             response_type,
-            proposal_id,
+            reply_to_message_id,
             idempotency_key,
             status
         ) VALUES (
@@ -34,7 +34,7 @@
             #{role},
             #{content},
             #{responseType},
-            #{proposalId},
+            #{replyToMessageId},
             #{idempotencyKey},
             #{status}
         )
@@ -68,14 +68,20 @@
         LIMIT 1
     </select>
 
-    <select id="findNextAssistantReply" resultMap="aiMessageResultMap">
+    <select id="findByReplyToMessageIdAndUserId" resultMap="aiMessageResultMap">
         SELECT *
         FROM ai_messages
-        WHERE conversation_id = #{conversationId}
-          AND message_id      > #{afterMessageId}
-          AND role            = 'ASSISTANT'
-        ORDER BY message_id ASC
+        WHERE reply_to_message_id = #{replyToMessageId}
+          AND user_id             = #{userId}
         LIMIT 1
     </select>
+
+    <update id="updateStatusIfCurrent">
+        UPDATE ai_messages
+        SET status = #{toStatus}
+        WHERE message_id = #{messageId}
+          AND user_id    = #{userId}
+          AND status     = #{fromStatus}
+    </update>
 
 </mapper>

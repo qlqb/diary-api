@@ -75,9 +75,11 @@ REQ-AI-015
 때만 PROPOSAL을 만든다.
 
 REQ-AI-016
-사용자 메시지는 AI 호출 전에 먼저 저장한다(ai_messages). AI 생성이나 구조화 파싱이
-실패해도 사용자가 입력한 원문은 사라지지 않는다. Proposal은 자신을 만들게 한 사용자
-메시지(source_message_id)를 참조한다.
+사용자 메시지는 AI 호출 전에 PROCESSING 상태로 먼저 저장한다(ai_messages). AI 생성이나
+구조화 파싱이 실패해도 사용자가 입력한 원문은 사라지지 않고 FAILED로 남는다. Proposal은
+자신을 만든 ASSISTANT 메시지(source_message_id)를 참조하고, 그 ASSISTANT가 어떤 사용자
+요청에 대한 응답인지는 ai_messages.reply_to_message_id로 추적한다 — 같은 관계를 두 컬럼이
+중복 보관하지 않는다.
 
 REQ-AI-017
 동일 idempotencyKey로 재전송된 메시지는 AI를 다시 호출하지 않고 저장된 응답을 그대로

@@ -22,6 +22,7 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemResumeRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -121,7 +122,9 @@ public class ExecutionItemService {
     public ExecutionItemResponse complete(Long executionItemId, Long userId, ExecutionItemCompleteRequest request) {
         ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
         requireVersion(item, request.getVersion());
-        requireStatusIn(item, ExecutionStatus.PLANNED, ExecutionStatus.HOLD);
+        // HOLD는 먼저 resume()으로 PLANNED로 되돌린 뒤에만 완료할 수 있다 — 보류 중인 항목을
+        // 건너뛰고 바로 완료 처리하지 않는다.
+        requireStatusIn(item, ExecutionStatus.PLANNED);
 
         int updated = executionItemMapper.completeWithVersion(executionItemId, userId, request.getVersion());
         if (updated != 1) {
@@ -277,6 +280,31 @@ public class ExecutionItemService {
                 item.getVersion(), item.getVersion() + 1);
 
         log.info("실행 조각 보류: executionItemId={}, userId={}", executionItemId, userId);
+
+        return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
+    }
+
+    // ===== 보류 해제(재개) =====
+
+    @Transactional
+    public ExecutionItemResponse resume(Long executionItemId, Long userId, ExecutionItemResumeRequest request) {
+        ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
+        requireVersion(item, request.getVersion());
+        requireStatusIn(item, ExecutionStatus.HOLD);
+
+        int updated = executionItemMapper.updateStatusWithVersion(
+                executionItemId, userId, request.getVersion(), ExecutionStatus.PLANNED);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.VERSION_CONFLICT);
+        }
+
+        insertEvent(executionItemId, userId, ExecutionEventType.RESUMED, ExecutionEventActorType.USER,
+                request.getReason(),
+                toJson(Map.of("status", ExecutionStatus.HOLD)),
+                toJson(Map.of("status", ExecutionStatus.PLANNED)),
+                item.getVersion(), item.getVersion() + 1);
+
+        log.info("실행 조각 보류 해제: executionItemId={}, userId={}", executionItemId, userId);
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }

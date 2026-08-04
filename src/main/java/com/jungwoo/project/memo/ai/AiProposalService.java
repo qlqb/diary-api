@@ -126,6 +126,16 @@ public class AiProposalService {
 
     // ===== 조회 =====
 
+    /** 이 ASSISTANT 메시지가 만든 제안을 조회한다. 없으면 null(예외 아님 — CHAT/OFFER 메시지는 정상적으로 없다). */
+    @Transactional(readOnly = true)
+    public AiProposalResponse findBySourceMessageId(Long assistantMessageId, Long userId) {
+        AiProposal proposal = aiProposalMapper.findBySourceMessageIdAndUserId(assistantMessageId, userId);
+        if (proposal == null) {
+            return null;
+        }
+        return get(proposal.getProposalId(), userId);
+    }
+
     @Transactional(readOnly = true)
     public AiProposalResponse get(Long proposalId, Long userId) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);

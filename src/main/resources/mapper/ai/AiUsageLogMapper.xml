@@ -8,20 +8,28 @@
         INSERT INTO ai_usage_logs (
             user_id,
             conversation_id,
+            request_message_id,
             feature,
             model,
             input_tokens,
             cached_tokens,
             output_tokens,
+            result_status,
+            error_code,
+            provider_request_id,
             request_id
         ) VALUES (
             #{userId},
             #{conversationId},
+            #{requestMessageId},
             #{feature},
             #{model},
             #{inputTokens},
             #{cachedTokens},
             #{outputTokens},
+            #{resultStatus},
+            #{errorCode},
+            #{providerRequestId},
             #{requestId}
         )
     </insert>

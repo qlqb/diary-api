@@ -25,7 +25,12 @@ public class AiProposal {
 
     private Long conversationId;
 
-    /** 이 제안을 만들게 한 사용자 메시지. AI 실패와 무관하게 원문은 이 메시지에 남아있다. */
+    /**
+     * 이 제안을 만든 ASSISTANT 메시지(사용자 메시지가 아니다). 한 메시지는 제안을 하나만
+     * 만들 수 있다(uq_ai_proposals_source_message). 그 ASSISTANT가 어떤 사용자 요청에
+     * 대한 응답인지는 ai_messages.reply_to_message_id로 이미 추적되므로, 여기서 사용자
+     * 메시지를 직접 가리키면 같은 관계를 두 컬럼이 중복 보관하게 된다.
+     */
     private Long sourceMessageId;
 
     private AiProposalTargetScope targetScope;

@@ -12,8 +12,10 @@ import com.jungwoo.project.memo.execution.domain.ExecutionRecordOutcome;
 import com.jungwoo.project.memo.execution.domain.ExecutionStatus;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemResumeRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -27,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -93,6 +96,80 @@ class ExecutionItemServiceTest {
     }
 
     @Test
+    void complete_fails_whenItemIsOnHold_mustResumeFirst() {
+        ExecutionItem item = holdItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.complete(ITEM_ID, USER_ID,
+                ExecutionItemCompleteRequest.builder().version(0L).build()))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION));
+
+        verify(executionItemMapper, never()).completeWithVersion(any(), any(), any());
+    }
+
+    @Test
+    void resume_transitionsHoldToPlanned_andWritesResumedEvent() {
+        ExecutionItem item = holdItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateStatusWithVersion(ITEM_ID, USER_ID, 0L, ExecutionStatus.PLANNED)).thenReturn(1);
+
+        service.resume(ITEM_ID, USER_ID, ExecutionItemResumeRequest.builder().version(0L).build());
+
+        verify(executionItemMapper).updateStatusWithVersion(ITEM_ID, USER_ID, 0L, ExecutionStatus.PLANNED);
+        verify(executionItemEventMapper).insert(argThat(event ->
+                event.getEventType() == ExecutionEventType.RESUMED
+                        && event.getExecutionItemId().equals(ITEM_ID)));
+    }
+
+    @Test
+    void resume_rejectsItem_whenNotOnHold() {
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.resume(ITEM_ID, USER_ID,
+                ExecutionItemResumeRequest.builder().version(0L).build()))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION));
+
+        verify(executionItemMapper, never()).updateStatusWithVersion(any(), any(), any(), any());
+    }
+
+    @Test
+    void hold_transitionsPlannedToHold() {
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateStatusWithVersion(ITEM_ID, USER_ID, 0L, ExecutionStatus.HOLD)).thenReturn(1);
+
+        service.hold(ITEM_ID, USER_ID, ExecutionItemHoldRequest.builder().version(0L).build());
+
+        verify(executionItemMapper).updateStatusWithVersion(ITEM_ID, USER_ID, 0L, ExecutionStatus.HOLD);
+    }
+
+    @Test
+    void complete_succeeds_forTimeFixedItem_placementTypeDoesNotBlockCompletion() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.completeWithVersion(ITEM_ID, USER_ID, 0L)).thenReturn(1);
+
+        service.complete(ITEM_ID, USER_ID, ExecutionItemCompleteRequest.builder().version(0L).build());
+
+        verify(executionItemMapper).completeWithVersion(ITEM_ID, USER_ID, 0L);
+    }
+
+    @Test
+    void reduce_succeeds_forTimeFixedItem_placementTypeDoesNotBlockReduce() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull())).thenReturn(1);
+
+        service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .reducedTitle("줄인 제목").version(0L).build());
+
+        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull());
+    }
+
+    @Test
     void move_updatesItem_andWritesMovedEvent_together() {
         ExecutionItem item = plannedItem(0L);
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
@@ -154,5 +231,23 @@ class ExecutionItemServiceTest {
                 .version(version)
                 .isDeleted(false)
                 .build();
+    }
+
+    private ExecutionItem holdItem(Long version) {
+        ExecutionItem item = plannedItem(version);
+        item.setStatus(ExecutionStatus.HOLD);
+        return item;
+    }
+
+    /**
+     * TIME_FIXED(시작·종료 시각이 정해진 배치 형식)는 isFixed(이동·축소·보류 등을 제한하는
+     * 잠금 속성)와 다른 개념이다 — 이 항목은 완료·축소가 막히면 안 된다.
+     */
+    private ExecutionItem timeFixedItem(Long version) {
+        ExecutionItem item = plannedItem(version);
+        item.setPlacementType(PlacementType.TIME_FIXED);
+        item.setScheduledStartAt(DATE.atTime(9, 0));
+        item.setScheduledEndAt(DATE.atTime(9, 30));
+        return item;
     }
 }

@@ -31,4 +31,10 @@ public interface AiProposalMapper {
             @Param("status") AiProposalStatus status,
             @Param("respondedAt") LocalDateTime respondedAt
     );
+
+    /** 이 ASSISTANT 메시지가 만든 제안(있으면 하나뿐). 대화 이력 표시·idempotency 재생용. */
+    AiProposal findBySourceMessageIdAndUserId(
+            @Param("sourceMessageId") Long sourceMessageId,
+            @Param("userId") Long userId
+    );
 }

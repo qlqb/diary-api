@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.domain.AiUsageLog;
+import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.TooManyRequestsException;
 import lombok.RequiredArgsConstructor;
@@ -50,18 +51,23 @@ public class AiUsageLimitService {
     }
 
     @Transactional
-    public void record(Long userId, Long conversationId, String model,
-                        Integer inputTokens, Integer cachedTokens, Integer outputTokens, String requestId) {
+    public void record(Long userId, Long conversationId, Long requestMessageId, String model,
+                        Integer inputTokens, Integer cachedTokens, Integer outputTokens,
+                        UsageResultStatus resultStatus, String errorCode) {
         try {
             aiUsageLogMapper.insert(AiUsageLog.builder()
                     .userId(userId)
                     .conversationId(conversationId)
+                    .requestMessageId(requestMessageId)
                     .feature(FEATURE)
                     .model(model)
                     .inputTokens(inputTokens)
                     .cachedTokens(cachedTokens)
                     .outputTokens(outputTokens)
-                    .requestId(requestId)
+                    .resultStatus(resultStatus != null ? resultStatus : UsageResultStatus.SUCCESS)
+                    .errorCode(errorCode)
+                    // Spring AI 표준 API로는 provider request id를 안정적으로 얻을 수 없다 — 추측해 채우지 않는다.
+                    .providerRequestId(null)
                     .build());
         } catch (Exception e) {
             // 사용량 로그 저장 실패로 상담 자체를 실패시키지 않는다.

@@ -8,14 +8,17 @@ import com.jungwoo.project.memo.common.security.UserPrincipal;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.Disposable;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * AI 상담 대화 컨트롤러. 강제 생성 API(POST /api/ai/proposals) 대신 이 대화 흐름이
@@ -30,6 +33,13 @@ import java.util.List;
 public class AiConversationController {
 
     private final AiConversationService aiConversationService;
+
+    @Value("${ai.request.timeout-seconds:90}")
+    private int requestTimeoutSeconds;
+
+    /** Flux 타임아웃이 항상 먼저 걸리도록 SseEmitter 자체 타임아웃(백스톱)에 여유를 더 둔다. */
+    @Value("${ai.sse.timeout-buffer-seconds:30}")
+    private int sseTimeoutBufferSeconds;
 
     @PostMapping
     public ResponseEntity<AiConversationResponse> create(
@@ -55,14 +65,40 @@ public class AiConversationController {
             @PathVariable Long conversationId,
             @Valid @RequestBody AiMessageRequest request
     ) {
+        Long userId = principal.getUserId();
         log.info("POST /api/ai/conversations/{}/messages - userId={}, requestedAction={}",
-                conversationId, principal.getUserId(), request.getRequestedAction());
+                conversationId, userId, request.getRequestedAction());
 
-        // AI 스트리밍은 사용자에 따라 오래 걸릴 수 있어 서버가 스스로 완료/에러 처리한다 (타임아웃 없음).
-        SseEmitter emitter = new SseEmitter(0L);
-        AiTurnEventSink sink = new SseAiTurnEventSink(emitter);
+        // 소유권/idempotency/대화방 잠금/AI 설정/사용량 한도 확인. 여기서 예외가 나면 아직 SSE를
+        // 시작하지 않았으므로(emitter를 만들기 전) GlobalExceptionHandler가 실제 HTTP 409/
+        // 503/429로 응답한다 — OpenAI는 이 시점까지 한 번도 호출되지 않는다.
+        AiTurnLifecycleService.PreparedTurn prepared = aiConversationService.prepareTurn(conversationId, userId, request);
 
-        aiConversationService.handleMessage(conversationId, principal.getUserId(), request, sink);
+        long sseTimeoutMillis = (requestTimeoutSeconds + sseTimeoutBufferSeconds) * 1000L;
+        SseEmitter emitter = new SseEmitter(sseTimeoutMillis);
+        SseAiTurnEventSink sink = new SseAiTurnEventSink(emitter);
+
+        if (prepared.replay()) {
+            aiConversationService.replayStoredTurn(prepared, sink);
+            return emitter;
+        }
+
+        AtomicReference<Disposable> subscriptionRef = new AtomicReference<>();
+        Runnable onDisconnect = () -> {
+            if (sink.markTerminatedOnce()) {
+                Disposable subscription = subscriptionRef.get();
+                if (subscription != null) {
+                    subscription.dispose();
+                }
+                aiConversationService.abortTurn(conversationId, userId, sink.getRequestMessageId());
+            }
+        };
+        emitter.onTimeout(onDisconnect::run);
+        emitter.onError(ex -> onDisconnect.run());
+        emitter.onCompletion(onDisconnect::run);
+
+        Disposable subscription = aiConversationService.streamAndComplete(prepared, request, sink);
+        subscriptionRef.set(subscription);
 
         return emitter;
     }

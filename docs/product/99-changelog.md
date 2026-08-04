@@ -1,5 +1,79 @@
 # 99. Change Log
 
+## 2026-08-05 (2차) — AI 상담 안전성 보강: 중복 호출 차단·동시 요청 직렬화·트랜잭션 경계
+
+바로 아래 "AI 상담 구조 개편" 작업으로 CHAT/OFFER/PROPOSAL 대화 흐름 자체는 이미 있었다. 이번
+작업은 그 흐름을 다시 설계하지 않고, 실제 운영에서 위험한 구멍들을 막았다.
+
+- **사용자 메시지당 OpenAI 호출 최대 1회를 구조로 보장한다.** `spring.ai.retry.max-attempts=1`로
+  Spring AI 자체 재시도(RetryTemplate)도 껐다 — 코드에서 Reactor `retry()`/`retryWhen()`,
+  재귀 AI 호출, 파싱 실패 후 재생성, OFFER/PROPOSAL 판단용 추가 호출은 애초에 쓰지 않는다
+  (구분자 기반 단일 호출 설계는 유지).
+- **대화방 동시 요청을 DB로 직렬화한다.** `ai_conversations.active_request_message_id` /
+  `active_request_started_at`을 추가하고, `AiTurnLifecycleService.prepareTurn()`이
+  `SELECT ... FOR UPDATE`로 행을 잠근 뒤 원자적으로 진행 권한을 확인·획득한다. 이미 다른
+  요청이 진행 중이면(그리고 오래되지 않았으면) OpenAI를 부르지 않고 `409 AI_CONVERSATION_BUSY`를
+  반환한다 — 이 예외는 아직 SSE 스트림을 시작하기 전에 던져지므로 실제 HTTP 409로 응답한다.
+  실제 로컬 DB에 두 스레드로 동시 요청을 보내 정확히 하나만 진행하고 나머지는 막히는 것을
+  통합 테스트로 확인했다(`AiTurnLifecycleServiceConcurrencyTest`).
+- **idempotency가 중복 INSERT 차단을 넘어 실제로 동작한다.** `ai_messages.status`를
+  PROCESSING/COMPLETED/FAILED 3상태로 나눴다. 동일 idempotencyKey 재전송 시: COMPLETED면
+  저장된 응답을 재생(AI 재호출 없음), PROCESSING이면 409로 막고(AI 재호출 없음), FAILED면
+  자동 재시도하지 않고 막는다(사용자가 새 키로 다시 시도해야 한다).
+- **서버 비정상 종료로 남는 오래된 PROCESSING을 회수한다.** 설정된 타임아웃(`ai.request.timeout-seconds`,
+  기본 90초) + 여유 버퍼(`ai.conversation.stale-lock-buffer-seconds`, 기본 30초)를 넘긴
+  요청만 명시적으로 FAILED 처리하고 잠금을 회수한다 — 아직 살아있을 가능성이 있는 요청을
+  임의로 탈취하지 않는다.
+- **턴에 서버 타임아웃을 건다.** `Flux.timeout(Duration.ofSeconds(ai.request.timeout-seconds))`로
+  AI 스트리밍을 강제 종료한다. 타임아웃·오류·연결 종료 모두 재호출 없이 요청을 FAILED로
+  종료하고 대화방 잠금을 해제한다.
+- **SSE 취소를 실제로 처리한다.** 브라우저 연결이 끊기면(`SseEmitter.onTimeout/onError/onCompletion`)
+  Reactor 구독의 `Disposable`을 dispose해 업스트림 스트림까지 취소를 전파하고, 진행 중이던
+  요청을 FAILED로 정리한다. 완료 처리와 연결-종료 처리가 경합해도 원자적 플래그
+  (`SseAiTurnEventSink.markTerminatedOnce()`)로 한쪽만 실행되게 막아 메시지·Proposal이
+  중복 저장되지 않는다.
+- **AI 스트리밍 중 DB 커넥션을 붙잡지 않는다.** `AiConversationService`에는 `@Transactional`을
+  걸지 않는다. 실제 쓰기는 스트리밍 전/후의 짧은 트랜잭션(`AiTurnLifecycleService.prepareTurn`
+  / `completeTurnSuccess` / `completeTurnFailure`)에만 있고, 그 사이 네트워크 I/O 구간은
+  트랜잭션 밖이다.
+- **ai_proposals ↔ ai_messages 연결 방향을 통일했다.** 기존에 `ai_messages.proposal_id`와
+  `ai_proposals.source_message_id`가 같은 관계를 양쪽에서 들고 있었다. `ai_messages.proposal_id`를
+  없애고 `ai_proposals.source_message_id`(이제 그 제안을 만든 ASSISTANT 메시지를 가리킨다,
+  UNIQUE)만 남겼다. 어떤 USER 요청에 대한 응답인지는 새로 추가한
+  `ai_messages.reply_to_message_id`(UNIQUE)로 추적한다. 이 SQL이 적용되지 않은 로컬 DB였음을
+  먼저 확인했으므로 `docs/sql/2026-08-05-ai-consultation-conversations.sql` 자체를 최종
+  구조로 수정했다(이미 적용된 환경이 있다면 이 파일을 다시 실행하지 말고 별도 ALTER를 새로
+  작성해야 한다).
+- `ai_usage_logs`에 `request_message_id`/`result_status`(SUCCESS/FAILED/CANCELLED/TIMEOUT)/
+  `error_code`/`provider_request_id`를 추가하고 토큰 컬럼에 `>= 0` CHECK를 걸었다.
+  `cached_tokens`는 Spring AI 표준 API로 얻을 수 없어 계속 NULL만 허용한다(추측해 채우지 않는다).
+- **gpt-5 계열 출력 토큰 설정 오류를 고쳤다.** `spring.ai.openai.chat.options.max-tokens`는
+  gpt-5류 reasoning 모델에 대해 OpenAI가 거부하는 필드다 — `max-completion-tokens`로 바꿨다.
+  이 상태로는 실제 키가 있어도 매 호출이 실패했을 것이다.
+- **실행 조각 상태 전이 구멍을 메웠다.** `ExecutionEventType.RESUMED`가 정의만 있고 이를 만드는
+  경로가 없었고, `complete()`가 HOLD에서도 곧장 DONE으로 전환되는 것을 허용하고 있었다.
+  `ExecutionItemService.resume()`(HOLD → PLANNED, `POST /api/execution-items/{id}/resume`)을
+  추가하고 `complete()`는 PLANNED에서만 허용하도록 좁혔다 — 프론트에 hold 진입 UI가 아직 없어
+  실사용 영향은 없다.
+- **`isFixed` 오추론을 고쳤다.** `diary-ui`의 `toFrontendExecutionItem`이
+  `isFixed: placementType === 'TIME_FIXED'`로 값을 만들고 있었다. `isFixed`(이동·축소·보류를
+  막는 잠금 속성)와 `placementType`(TIME_FIXED=시작·종료 시각이 정해진 배치 형식)은 다른
+  개념이고 백엔드에는 아직 잠금 속성 자체가 없다 — 항상 `false`로 바꿨다(TIME_FIXED 항목도
+  완료·이동·축소가 막히지 않아야 한다).
+- 프론트 `AiPanelShell`에 `AbortController`를 연결했다: 컴포넌트가 실제로 unmount되면 진행
+  중인 스트림을 취소하고, 취소 후 자동으로 다시 연결하지 않는다. 스트리밍 중 전송 버튼/Enter
+  중복 전송 차단은 이미 있던 `sending` 가드로 충분해 별도 변경 없이 테스트로 고정했다.
+- 프론트에 처음으로 테스트 인프라(vitest + @testing-library/react)를 추가했다. 중복 전송
+  차단, unmount 시 abort, delta 누적이 말풍선 하나에만 반영되는지, OFFER 카드 렌더링을
+  검증한다.
+- **알려진 사실**: `실행` 탭의 계획별 묶기(`ExecutionView`)는 아직 `mock/executionMock.js`의
+  `MOCK_PLAN_ITEMS`/`MOCK_PLANS` 정적 데이터를 쓴다(`items` prop 자체는 실제 `execution_items`).
+  이번 작업 범위가 아니라 손대지 않았다.
+- **DB 마이그레이션 적용 순서**: 로컬 개발 DB(`memo`, MariaDB 10.4)에 정보 스키마를 먼저
+  조회해 미적용 상태(`ai_conversations` 등 부재, `ai_proposals.conversation_id`는
+  VARCHAR(100)이고 전량 NULL)를 확인한 뒤 `docs/sql/2026-08-05-ai-consultation-conversations.sql`을
+  그대로 적용했다. `DROP TABLE`/`TRUNCATE`/임의 데이터 삭제는 없다.
+
 ## 2026-08-05 — AI 상담 구조 개편: 강제 제안 생성 → 자유 대화 + CHAT/OFFER/PROPOSAL
 
 이전 AI 패널은 이름만 상담이고 실제로는 자연어 입력 1회 → 실행 조각 1~5개 강제 생성이었다.

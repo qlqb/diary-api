@@ -91,8 +91,41 @@ class AiProposalServiceTest {
     }
 
     @Test
-    void createFromItems_doesNotSave_whenExpectedMinutesOutOfRange() {
-        List<ProposalItem> items = List.of(dateOnlyItem("제목", 3, "SHOULD"));
+    void createFromItems_doesNotSave_whenExpectedMinutesIs4_belowMinimum() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 4, "SHOULD"));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_saves_whenExpectedMinutesIs5_atMinimum() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 5, "SHOULD"));
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+    }
+
+    @Test
+    void createFromItems_saves_whenExpectedMinutesIs120_atMaximum() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 120, "SHOULD"));
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+    }
+
+    @Test
+    void createFromItems_doesNotSave_whenExpectedMinutesIs121_aboveMaximum() {
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 121, "SHOULD"));
 
         assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->

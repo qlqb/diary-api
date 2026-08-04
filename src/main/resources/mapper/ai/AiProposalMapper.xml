@@ -58,4 +58,12 @@
           AND user_id     = #{userId}
     </update>
 
+    <select id="findBySourceMessageIdAndUserId" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE source_message_id = #{sourceMessageId}
+          AND user_id           = #{userId}
+        LIMIT 1
+    </select>
+
 </mapper>

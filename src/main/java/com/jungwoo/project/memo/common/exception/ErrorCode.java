@@ -56,6 +56,7 @@ public enum ErrorCode {
     INVALID_STATUS_TRANSITION(HttpStatus.CONFLICT, "E409_003", "현재 상태에서는 수행할 수 없는 작업입니다"),
     VERSION_CONFLICT(HttpStatus.CONFLICT, "E409_004", "다른 곳에서 먼저 변경되었습니다"),
     AI_PROPOSAL_ALREADY_RESPONDED(HttpStatus.CONFLICT, "E409_005", "이미 처리된 제안입니다"),
+    AI_CONVERSATION_BUSY(HttpStatus.CONFLICT, "E409_006", "다른 상담 요청이 진행 중입니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

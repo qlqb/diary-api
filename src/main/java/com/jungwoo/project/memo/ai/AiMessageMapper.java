@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.domain.AiMessage;
+import com.jungwoo.project.memo.ai.domain.MessageStatus;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 
@@ -15,7 +16,7 @@ public interface AiMessageMapper {
     List<AiMessage> findByConversationIdAndUserId(@Param("conversationId") Long conversationId,
                                                    @Param("userId") Long userId);
 
-    /** 컨텍스트 스냅샷용 — 오래된 순으로 최근 limit개만. */
+    /** 컨텍스트 스냅샷용 — 오래된 순으로 최근 limit개만 (DB에서 LIMIT, 전체를 메모리로 읽지 않는다). */
     List<AiMessage> findRecentByConversationIdAndUserId(@Param("conversationId") Long conversationId,
                                                           @Param("userId") Long userId,
                                                           @Param("limit") int limit);
@@ -24,7 +25,16 @@ public interface AiMessageMapper {
     AiMessage findByUserIdAndIdempotencyKey(@Param("userId") Long userId,
                                              @Param("idempotencyKey") String idempotencyKey);
 
-    /** idempotency 재생 시, 해당 사용자 메시지 다음에 저장된 ASSISTANT 응답을 찾는다. */
-    AiMessage findNextAssistantReply(@Param("conversationId") Long conversationId,
-                                      @Param("afterMessageId") Long afterMessageId);
+    /** 이 USER 요청에 대한 ASSISTANT 응답(있으면 하나뿐). idempotency 재생, 히스토리 표시용. */
+    AiMessage findByReplyToMessageIdAndUserId(@Param("replyToMessageId") Long replyToMessageId,
+                                               @Param("userId") Long userId);
+
+    /**
+     * from 상태일 때만 to로 바꾼다(가드된 전이). 이미 다른 경로로 종료 처리됐으면 0을 반환하고
+     * 아무것도 바뀌지 않는다 — 완료·실패·취소 처리기가 두 번 실행돼도 중복 반영을 막는다.
+     */
+    int updateStatusIfCurrent(@Param("messageId") Long messageId,
+                               @Param("userId") Long userId,
+                               @Param("fromStatus") MessageStatus fromStatus,
+                               @Param("toStatus") MessageStatus toStatus);
 }

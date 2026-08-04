@@ -24,15 +24,25 @@ public class AiUsageLog {
 
     private Long conversationId;
 
+    /** 이 사용량이 발생한 요청(ai_messages의 USER 행). */
+    private Long requestMessageId;
+
     private String feature;
 
     private String model;
 
     private Integer inputTokens;
 
+    /** Spring AI 표준 API로 얻을 수 없는 값. 채울 수 있게 되기 전까지 항상 null이며, 추측해 채우지 않는다. */
     private Integer cachedTokens;
 
     private Integer outputTokens;
+
+    private UsageResultStatus resultStatus;
+
+    private String errorCode;
+
+    private String providerRequestId;
 
     private String requestId;
 
