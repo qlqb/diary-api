@@ -51,6 +51,14 @@ public class AiConversationController {
                 .body(aiConversationService.createConversation(principal.getUserId(), request));
     }
 
+    /** 로그인한 사용자의 대화 목록. 마지막 메시지 시각 내림차순, 본인 것만. */
+    @GetMapping
+    public ResponseEntity<List<AiConversationResponse>> list(
+            @AuthenticationPrincipal UserPrincipal principal
+    ) {
+        return ResponseEntity.ok(aiConversationService.listConversations(principal.getUserId()));
+    }
+
     @GetMapping("/{conversationId}/messages")
     public ResponseEntity<List<AiMessageResponse>> getMessages(
             @AuthenticationPrincipal UserPrincipal principal,

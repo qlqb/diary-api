@@ -14,6 +14,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
+import jakarta.servlet.DispatcherType;
 
 import java.util.List;
 
@@ -52,6 +53,10 @@ public class SecurityConfig {
 
                 // 엔드포인트별 인증 규칙
                 .authorizeHttpRequests(auth -> auth
+                        .dispatcherTypeMatchers(
+                                        DispatcherType.ASYNC,
+                                        DispatcherType.ERROR
+                                ).permitAll()
                         // 인증 없이 접근 가능한 엔드포인트
                         .requestMatchers(
                                 "/v3/api-docs/**",

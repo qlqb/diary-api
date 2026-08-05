@@ -36,6 +36,44 @@
           AND user_id         = #{userId}
     </select>
 
+    <resultMap id="aiConversationSummaryResultMap"
+               type="com.jungwoo.project.memo.ai.dto.AiConversationResponse">
+        <id     property="conversationId"       column="conversation_id"/>
+        <result property="scope"                column="scope"/>
+        <result property="status"               column="status"/>
+        <result property="createdAt"            column="created_at"/>
+        <result property="updatedAt"            column="updated_at"/>
+        <result property="title"                column="first_user_message"/>
+        <result property="lastMessageAt"        column="last_message_at"/>
+        <result property="pendingProposalCount" column="pending_proposal_count"/>
+    </resultMap>
+
+    <select id="findSummariesByUserId" resultMap="aiConversationSummaryResultMap">
+        SELECT
+            c.conversation_id,
+            c.scope,
+            c.status,
+            c.created_at,
+            c.updated_at,
+            (SELECT m.content
+               FROM ai_messages m
+              WHERE m.conversation_id = c.conversation_id
+                AND m.role            = 'USER'
+              ORDER BY m.message_id ASC
+              LIMIT 1) AS first_user_message,
+            (SELECT MAX(m2.created_at)
+               FROM ai_messages m2
+              WHERE m2.conversation_id = c.conversation_id) AS last_message_at,
+            (SELECT COUNT(*)
+               FROM ai_proposals p
+              WHERE p.conversation_id = c.conversation_id
+                AND p.status          = 'PROPOSED') AS pending_proposal_count
+        FROM ai_conversations c
+        WHERE c.user_id = #{userId}
+        HAVING last_message_at IS NOT NULL
+        ORDER BY last_message_at DESC
+    </select>
+
     <select id="findByIdAndUserIdForUpdate" resultMap="aiConversationResultMap">
         SELECT *
         FROM ai_conversations

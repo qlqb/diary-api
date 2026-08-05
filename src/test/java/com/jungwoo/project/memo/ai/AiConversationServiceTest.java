@@ -7,14 +7,18 @@ import com.jungwoo.project.memo.ai.domain.AiResponseType;
 import com.jungwoo.project.memo.ai.domain.ConversationStatus;
 import com.jungwoo.project.memo.ai.domain.MessageRole;
 import com.jungwoo.project.memo.ai.domain.MessageStatus;
+import com.jungwoo.project.memo.ai.dto.AiConversationResponse;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.NotFoundException;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -25,11 +29,16 @@ import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -62,6 +71,16 @@ class AiConversationServiceTest {
     @InjectMocks
     private AiConversationService service;
 
+    /** 과제 예시와 동일한 고정 시각: UTC 2026-08-05T05:30:00Z = KST 2026-08-05T14:30:00+09:00(수요일). */
+    private static final Clock FIXED_CLOCK = Clock.fixed(Instant.parse("2026-08-05T05:30:00Z"), ZoneOffset.UTC);
+
+    @BeforeEach
+    void setUpClock() {
+        // 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트 없이 @Value를 처리하지 않으므로
+        // clock 빈이 주입되지 않는다 — 고정 Clock을 직접 넣어 실제 서버 시각에 의존하지 않게 한다.
+        ReflectionTestUtils.setField(service, "clock", FIXED_CLOCK);
+    }
+
     @Test
     void streamAndComplete_chat_singleAiCall_noProposal() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
@@ -81,6 +100,66 @@ class AiConversationServiceTest {
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+    }
+
+    @Test
+    void streamAndComplete_includesCurrentTimeBlock_inSystemPrompt_onceOnly() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 뭐 해야 해?", "k-time-1"), sink);
+        awaitTerminal(sink, d);
+
+        ArgumentCaptor<String> systemPromptCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> userPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient, times(1)).streamTurn(systemPromptCaptor.capture(), userPromptCaptor.capture());
+        String systemPrompt = systemPromptCaptor.getValue();
+        String userPrompt = userPromptCaptor.getValue();
+
+        assertThat(systemPrompt).contains("[현재 시간 정보]");
+        assertThat(systemPrompt).contains("현재 일시: 2026-08-05T14:30:00+09:00");
+        assertThat(systemPrompt).contains("사용자 시간대: Asia/Seoul");
+        assertThat(systemPrompt).contains("오늘 날짜: 2026-08-05");
+        assertThat(systemPrompt).contains("오늘 요일: 수요일");
+        // 한 번만 포함돼야 한다(과거 메시지마다 반복 삽입 금지).
+        assertThat(countOccurrences(systemPrompt, "[현재 시간 정보]")).isEqualTo(1);
+
+        // 시간 메타데이터는 사용자 메시지 본문에 섞이지 않는다.
+        assertThat(userPrompt).doesNotContain("[현재 시간 정보]");
+        assertThat(userPrompt).doesNotContain("사용자 시간대");
+        assertThat(userPrompt).contains("오늘 뭐 해야 해?");
+    }
+
+    @Test
+    void streamAndComplete_generatesFreshTime_onEachNewRequest() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
+
+        awaitTerminal(new RecordingSink(),
+                service.streamAndComplete(preparedTurn(), request("첫 요청", "k-time-2a"), new RecordingSink()));
+
+        ArgumentCaptor<String> firstCapture = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient, times(1)).streamTurn(firstCapture.capture(), any());
+        assertThat(firstCapture.getValue()).contains("현재 일시: 2026-08-05T14:30:00+09:00");
+
+        // 다음 요청 시점으로 시계를 하루 앞당긴다 — 새 요청은 새 시각을 반영해야 한다.
+        ReflectionTestUtils.setField(service, "clock",
+                Clock.fixed(Instant.parse("2026-08-06T05:30:00Z"), ZoneOffset.UTC));
+
+        awaitTerminal(new RecordingSink(),
+                service.streamAndComplete(preparedTurn(), request("다음날 요청", "k-time-2b"), new RecordingSink()));
+
+        ArgumentCaptor<String> secondCapture = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient, times(2)).streamTurn(secondCapture.capture(), any());
+        assertThat(secondCapture.getValue()).contains("현재 일시: 2026-08-06T14:30:00+09:00");
+        assertThat(secondCapture.getValue()).contains("오늘 요일: 목요일");
     }
 
     @Test
@@ -199,6 +278,56 @@ class AiConversationServiceTest {
         verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any());
     }
 
+    @Test
+    void getMessages_throwsNotFound_whenConversationNotOwned() {
+        // findByIdAndUserId는 "존재하지 않음"과 "다른 사용자 소유"를 똑같이 null로 돌려준다 —
+        // 그래서 이 하나의 예외 분기가 두 경우를 구분 없이 같은 404로 응답하게 만든다
+        // (다른 사용자에게 "존재는 하지만 권한 없음"이라는 정보 자체를 흘리지 않는다).
+        when(aiConversationMapper.findByIdAndUserId(CONVERSATION_ID, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.getMessages(CONVERSATION_ID, USER_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ENTITY_NOT_FOUND));
+
+        verify(aiMessageMapper, never()).findByConversationIdAndUserId(any(), any());
+    }
+
+    @Test
+    void listConversations_queriesByUserId_andCleansUpTitles() {
+        AiConversationResponse raw = AiConversationResponse.builder()
+                .conversationId(CONVERSATION_ID)
+                .title("  프로젝트 때문에\n\n   좀    막막해요   정말로 어떻게 해야 할지 모르겠어요  ")
+                .lastMessageAt(LocalDateTime.of(2026, 8, 5, 10, 0))
+                .pendingProposalCount(2)
+                .build();
+        when(aiConversationMapper.findSummariesByUserId(USER_ID)).thenReturn(new ArrayList<>(List.of(raw)));
+
+        List<AiConversationResponse> result = service.listConversations(USER_ID);
+
+        verify(aiConversationMapper).findSummariesByUserId(USER_ID);
+        assertThat(result).hasSize(1);
+        // 줄바꿈·연속 공백이 하나로 정리되고, 24자를 넘으면 말줄임표가 붙는다.
+        assertThat(result.get(0).getTitle()).doesNotContain("\n");
+        assertThat(result.get(0).getTitle()).endsWith("…");
+        assertThat(result.get(0).getTitle().length()).isEqualTo(25); // 24자 + '…'
+        assertThat(result.get(0).getPendingProposalCount()).isEqualTo(2);
+    }
+
+    @Test
+    void listConversations_keepsShortTitleAsIs_withoutEllipsis() {
+        AiConversationResponse raw = AiConversationResponse.builder()
+                .conversationId(CONVERSATION_ID)
+                .title("안녕")
+                .lastMessageAt(LocalDateTime.now())
+                .pendingProposalCount(0)
+                .build();
+        when(aiConversationMapper.findSummariesByUserId(USER_ID)).thenReturn(new ArrayList<>(List.of(raw)));
+
+        List<AiConversationResponse> result = service.listConversations(USER_ID);
+
+        assertThat(result.get(0).getTitle()).isEqualTo("안녕");
+    }
+
     // ===== helpers =====
 
     /**
@@ -258,6 +387,16 @@ class AiConversationServiceTest {
 
     private ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    private int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) != -1) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
     }
 
     private static class RecordingSink implements AiTurnEventSink {

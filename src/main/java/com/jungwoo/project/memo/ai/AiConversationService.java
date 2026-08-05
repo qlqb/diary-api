@@ -30,9 +30,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import reactor.core.Disposable;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -49,6 +55,9 @@ import java.util.concurrent.atomic.AtomicReference;
 @RequiredArgsConstructor
 public class AiConversationService {
 
+    /** 대화 제목 길이 상한(과제 기준 20~30자 범위 안). AI를 호출하지 않고 첫 사용자 메시지에서 계산한다. */
+    private static final int TITLE_MAX_LENGTH = 24;
+
     private final AiConversationMapper aiConversationMapper;
     private final AiMessageMapper aiMessageMapper;
     private final AiTurnLifecycleService aiTurnLifecycleService;
@@ -56,6 +65,7 @@ public class AiConversationService {
     private final AiConsultationClient aiConsultationClient;
     private final AiProposalService aiProposalService;
     private final AiUsageLimitService aiUsageLimitService;
+    private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
@@ -63,6 +73,12 @@ public class AiConversationService {
 
     @Value("${ai.context.max-input-tokens:6000}")
     private int maxInputTokens;
+
+    // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
+    // 없이 @Value를 처리하지 않는다. 사용자별 저장된 시간대는 아직 없다(User 엔티티에 컬럼
+    // 없음, 이번 작업에서 추가하지 않는다) — 항상 이 기본값을 쓴다.
+    @Value("${ai.context.default-time-zone:Asia/Seoul}")
+    private String defaultTimeZoneId = "Asia/Seoul";
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초(즉시 타임아웃)가 된다.
@@ -92,6 +108,20 @@ public class AiConversationService {
         return aiMessageMapper.findByConversationIdAndUserId(conversationId, userId).stream()
                 .map(this::toMessageResponse)
                 .toList();
+    }
+
+    /**
+     * 로그인한 사용자의 대화 목록. 마지막 메시지 시각 내림차순이며, 첫 메시지를 아직 보내지
+     * 않은(메시지가 0개인) 대화는 애초에 쿼리에서 제외된다 — "+ 새 대화"를 누르기만 하고
+     * 아무것도 보내지 않은 빈 대화가 쌓이지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<AiConversationResponse> listConversations(Long userId) {
+        List<AiConversationResponse> summaries = aiConversationMapper.findSummariesByUserId(userId);
+        for (AiConversationResponse summary : summaries) {
+            summary.setTitle(buildConversationTitle(summary.getTitle()));
+        }
+        return summaries;
     }
 
     // ===== 메시지 처리 =====
@@ -159,15 +189,20 @@ public class AiConversationService {
         Long userId = conversation.getUserId();
         Long requestMessageId = prepared.requestMessageId();
 
+        // 이 턴 전체에서 "지금"은 이 시점 하나뿐이다 — 스트리밍 도중 다시 계산하지 않는다.
+        ZoneId userZone = resolveUserZone(userId);
+        ZonedDateTime requestMoment = ZonedDateTime.now(clock).withZoneSameInstant(userZone);
+
         String contextBlock = contextSnapshotService.buildContextBlock(conversationId, userId, conversation.getSummary());
-        String userPrompt = buildUserPrompt(request, contextBlock);
+        String userPrompt = buildUserPrompt(request, contextBlock, requestMoment.toLocalDate());
+        String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT + buildCurrentTimeBlock(requestMoment, userZone);
 
         sink.onStarted(requestMessageId);
 
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
 
-        return aiConsultationClient.streamTurn(OpenAiConsultationClient.SYSTEM_PROMPT, userPrompt)
+        return aiConsultationClient.streamTurn(systemPrompt, userPrompt)
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .subscribe(
                         chatResponse -> {
@@ -194,7 +229,7 @@ public class AiConversationService {
                                 sink.onDelta(result.unemittedTail());
                             }
                             try {
-                                completeTurnSuccessfully(conversation, requestMessageId, result, sink);
+                                completeTurnSuccessfully(conversation, requestMessageId, result, sink, requestMoment.toLocalDate());
                                 recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
                                         UsageResultStatus.SUCCESS, null);
                             } catch (Exception e) {
@@ -223,7 +258,8 @@ public class AiConversationService {
     }
 
     private void completeTurnSuccessfully(
-            AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink
+            AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink,
+            LocalDate targetDate
     ) {
         AiTurnStructured structured = parseStructured(result.structuredJson());
         AiResponseType responseType = structured != null ? structured.responseType() : AiResponseType.CHAT;
@@ -233,7 +269,7 @@ public class AiConversationService {
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
-                result.reply(), responseType, proposalItems, LocalDate.now());
+                result.reply(), responseType, proposalItems, targetDate);
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -282,11 +318,43 @@ public class AiConversationService {
         }
     }
 
-    private String buildUserPrompt(AiMessageRequest request, String contextBlock) {
+    /**
+     * 사용자별로 저장된 시간대가 아직 없다(User 엔티티에 시간대 컬럼이 없고, 이번 작업에서
+     * 추가하지 않는다) — 항상 설정된 기본 시간대를 쓴다. 나중에 저장된 값이 생기면 이
+     * 메서드만 그 값을 조회하도록 바꾸면 된다.
+     */
+    private ZoneId resolveUserZone(Long userId) {
+        return ZoneId.of(defaultTimeZoneId);
+    }
+
+    /**
+     * "오늘", "내일", "지금부터" 같은 상대 시간 표현을 모델이 정확히 해석하도록 매 호출마다
+     * 현재 일시를 시스템 프롬프트에 동적으로 붙인다. 사용자 메시지 본문에는 절대 섞지 않는다
+     * (ai_messages.content에도 저장되지 않는다 — 이 블록은 시스템 프롬프트에만 존재한다).
+     */
+    private String buildCurrentTimeBlock(ZonedDateTime requestMoment, ZoneId userZone) {
+        String isoDateTime = requestMoment.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        String todayDate = requestMoment.toLocalDate().toString();
+        String dayOfWeekKorean = requestMoment.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.KOREAN);
+
+        return """
+
+                [현재 시간 정보]
+                현재 일시: %s
+                사용자 시간대: %s
+                오늘 날짜: %s
+                오늘 요일: %s
+
+                '오늘', '내일', '이번 주', '지금부터' 같은 표현은 위 시간 정보를 기준으로 해석한다.
+                '지금'은 이 요청이 시작된 시각을 의미한다.
+                """.formatted(isoDateTime, userZone.getId(), todayDate, dayOfWeekKorean);
+    }
+
+    private String buildUserPrompt(AiMessageRequest request, String contextBlock, LocalDate targetDate) {
         String budgetedContext = enforceInputBudget(contextBlock, request.getMessage());
 
         StringBuilder sb = new StringBuilder();
-        sb.append("targetDate: ").append(LocalDate.now()).append("\n\n");
+        sb.append("targetDate: ").append(targetDate).append("\n\n");
         if (!budgetedContext.isEmpty()) {
             sb.append(budgetedContext).append('\n');
         }
@@ -331,6 +399,25 @@ public class AiConversationService {
             return null;
         }
         return chatResponse.getMetadata().getUsage();
+    }
+
+    /**
+     * 첫 사용자 메시지 원문에서 대화 제목을 만든다. 줄바꿈·연속 공백을 하나로 정리하고
+     * TITLE_MAX_LENGTH자를 넘으면 말줄임표를 붙인다. 원문(ai_messages.content) 자체는
+     * 건드리지 않는다 — 이건 목록 표시용으로 매번 계산해서 보여줄 뿐이다.
+     */
+    private String buildConversationTitle(String firstUserMessage) {
+        if (firstUserMessage == null) {
+            return null;
+        }
+        String normalized = firstUserMessage.replaceAll("\\s+", " ").trim();
+        if (normalized.isEmpty()) {
+            return null;
+        }
+        if (normalized.length() <= TITLE_MAX_LENGTH) {
+            return normalized;
+        }
+        return normalized.substring(0, TITLE_MAX_LENGTH) + "…";
     }
 
     private AiConversation requireOwnedConversation(Long conversationId, Long userId) {

@@ -20,4 +20,12 @@ public class AiConversationResponse {
     private ConversationStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    /**
+     * 대화 목록 전용 필드 — POST(생성) 응답에서는 항상 null/0이다.
+     * title은 첫 사용자 메시지에서 서버가 계산한다(별도 저장 컬럼 없음, AI 추가 호출 없음).
+     */
+    private String title;
+    private LocalDateTime lastMessageAt;
+    private Integer pendingProposalCount;
 }
