@@ -84,6 +84,21 @@ REQ-AI-016
 REQ-AI-017
 동일 idempotencyKey로 재전송된 메시지는 AI를 다시 호출하지 않고 저장된 응답을 그대로
 재생한다.
+
+REQ-AI-018 (2026-08-07)
+사용자가 "계획 초안 만들기"로 명시적으로 요청한 턴(CREATE_PROPOSAL)은 결과 계약을 엄격하게
+검사한다: reply가 비어 있지 않고, 구분자와 구조화 JSON이 존재하며 파싱에 성공하고,
+responseType=PROPOSAL이며, proposalItems가 1개 이상이어야 한다. 하나라도 어기면 CHAT으로
+조용히 대체하지 않고 AI 생성 실패(기존 FAILED lifecycle, 503 AI_GENERATION_FAILED)로
+처리한다. 이 경우 빈 ASSISTANT 메시지·AIProposal·ExecutionItem을 만들지 않으며 자동으로
+재호출하지 않는다.
+
+REQ-AI-019 (2026-08-07)
+requestedAction과 무관하게, 모델 응답이 reply와 구조화 데이터 모두 비어 있거나
+finishReason=LENGTH(토큰 상한 종료)로 응답의 일부가 빈 채로 끝났으면 실패로 처리한다.
+max_completion_tokens에는 사용자에게 보이는 텍스트뿐 아니라 reasoning 토큰도 포함되므로,
+토큰 상한만 올리는 것으로는 이 문제를 해결하지 않는다 — reasoning-effort/verbosity를
+낮춰 reasoning 토큰 사용을 줄이는 것과 함께 적용한다.
 ```
 
 ## 3. 장기 컨텍스트

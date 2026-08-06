@@ -1,5 +1,50 @@
 # 99. Change Log
 
+## 2026-08-07 — 계획 초안(CREATE_PROPOSAL) 빈 CHAT 오처리 수정
+
+장애 로그에서 CREATE_PROPOSAL 요청이 OpenAI 호출까지는 성공(input=1772, output=2400,
+output이 설정 상한과 정확히 일치)했지만 최종 reply/구조화 JSON이 완전히 빈 채로
+`responseType=CHAT`으로 잘못 대체되어 "성공"으로 저장되는 것을 확인했다. gpt-5-mini 같은
+reasoning 모델은 `max_completion_tokens`를 내부 추론(reasoning) 토큰까지 포함해 쓰므로,
+추론이 상한을 전부 써버리면 사용자에게 보일 텍스트가 하나도 남지 않을 수 있다.
+
+- **CREATE_PROPOSAL 응답 계약을 엄격화했다(REQ-AI-018).** reply 비어있지 않음, 구분자·구조화
+  JSON 존재, JSON 파싱 성공, responseType=PROPOSAL, proposalItems 1개 이상을 전부 만족해야
+  성공으로 본다. 하나라도 어기면 `AiConversationService.enforceTurnContract()`가
+  `ServiceUnavailableException(AI_GENERATION_FAILED)`를 던지고, 스트림 완료 콜백의 기존
+  catch 블록이 그대로 받아 `completeTurnFailure` + `sink.onError(503)`로 처리한다 — 새
+  실패 상태·테이블을 만들지 않고 기존 FAILED lifecycle을 재사용했다. 빈 ASSISTANT
+  메시지·AIProposal·ExecutionItem을 만들지 않으며, idempotency 재생 경로도 그대로라 자동
+  재호출은 생기지 않는다.
+- **requestedAction과 무관한 일반 판정도 추가했다(REQ-AI-019).** reply·구조화 데이터가
+  모두 비어 있거나, `finishReason=LENGTH`(토큰 상한 종료)로 응답 일부가 빈 채로 끝났으면
+  action에 상관없이 실패로 처리한다 — "빈 CHAT을 성공으로 저장"하는 이번 장애의 근본
+  패턴을 일반적으로 막는다. finishReason은 Spring AI의 공개 인터페이스
+  (`ChatResponse.getResult().getMetadata().getFinishReason()`)로만 얻고 내부 클래스를
+  캐스팅하지 않았다. 스트리밍 중 finishReason은 마지막 청크에만 채워지므로 `AtomicReference`로
+  마지막 값을 누적한다(기존 `lastUsage` 캡처와 같은 패턴). finishReason을 못 얻는 극단적인
+  경우에만 `outputTokens >= max_completion_tokens`를 보조 판정으로 쓴다(정상 종료인데
+  우연히 상한과 같은 토큰 수를 쓴 경우까지 실패로 몰지 않도록, finishReason이 있으면
+  보조 판정은 쓰지 않는다).
+- **OpenAI 요청 옵션을 공식(비-deprecated) 프로퍼티로 정리하고 강화했다.**
+  `spring.ai.openai.chat.options.max-completion-tokens`(deprecated alias, 계속 동작은 함)
+  대신 `spring.ai.openai.chat.max-completion-tokens`를 쓰고, `reasoning-effort=low`,
+  `verbosity=low`를 추가해 상한을 6000으로 올렸다(Spring AI 2.0
+  `spring-configuration-metadata.json`에서 세 키 모두 공식 키의 deprecation replacement로
+  확인). `minimal`은 계획 항목 분해에 약할 수 있어 `low`를 썼다. `ChatModel` 기본 옵션에
+  자동 바인딩되므로 `OpenAiConsultationClient`의 호출 코드는 바꾸지 않았다(별도 옵션 오버라이드
+  없이 기존과 동일하게 `.stream()`만 호출).
+- CREATE_PROPOSAL 사용자 프롬프트와 시스템 프롬프트에 "reply는 짧게, proposalItems 내용을
+  reply에서 다시 설명하지 말라"는 간결성 지시를 추가해 출력량 자체도 줄였다 — 기존
+  JSON 스키마·CHAT/OFFER/PROPOSAL 계약·구분자 파싱 방식은 바꾸지 않았다.
+- 일반 SEND_MESSAGE(AUTO)의 CHAT/OFFER/PROPOSAL 흐름과 malformed-JSON일 때의 CHAT 폴백은
+  그대로 유지된다 — 이번 강화는 CREATE_PROPOSAL 전용 계약과, 응답이 진짜로 텅 비었거나
+  토큰 상한에 걸린 경우에만 적용된다.
+- 테스트: `AiConversationServiceTest`에 CREATE_PROPOSAL의 빈 응답/구분자 없음/JSON 없음/
+  JSON 파싱 실패/CHAT 반환/OFFER 반환/빈 proposalItems/정상 성공 케이스와, action과 무관한
+  토큰 상한 실패·정상 종료(STOP) 시 우연한 토큰 수 일치 오탐 방지 테스트를 추가했다(10개).
+  Java 21 환경에서 `./gradlew test`, `./gradlew build` 모두 통과를 확인했다.
+
 ## 2026-08-06 — Timefold Solver 기반 7일 범위 일정 후보 배치
 
 사용자가 여러 날에 걸친 계획("이번 주 안에 강의 4개 들어야 해, 화·목 저녁은 알바")을 말하면,
