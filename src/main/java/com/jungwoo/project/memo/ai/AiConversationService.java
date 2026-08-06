@@ -19,8 +19,10 @@ import com.jungwoo.project.memo.ai.dto.AiTurnStructured;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
+import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
@@ -84,6 +86,13 @@ public class AiConversationService {
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초(즉시 타임아웃)가 된다.
     @Value("${ai.request.timeout-seconds:90}")
     private int requestTimeoutSeconds = 90;
+
+    // finishReason을 스트리밍 메타데이터에서 안정적으로 못 얻는 경우의 보조 판정에만 쓴다
+    // (outputTokens가 이 값에 도달 + reply/구조화 데이터 중 하나라도 빔 = 상한 종료로 간주).
+    // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
+    // 없이 @Value를 처리하지 않는다.
+    @Value("${spring.ai.openai.chat.max-completion-tokens:6000}")
+    private int maxCompletionTokens = 6000;
 
     // ===== 대화 생성/조회 =====
 
@@ -201,6 +210,7 @@ public class AiConversationService {
 
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
+        AtomicReference<String> lastFinishReason = new AtomicReference<>();
 
         return aiConsultationClient.streamTurn(systemPrompt, userPrompt)
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
@@ -214,6 +224,10 @@ public class AiConversationService {
                             Usage usage = extractUsage(chatResponse);
                             if (usage != null) {
                                 lastUsage.set(usage);
+                            }
+                            String finishReason = extractFinishReason(chatResponse);
+                            if (finishReason != null) {
+                                lastFinishReason.set(finishReason);
                             }
                         },
                         error -> {
@@ -229,7 +243,9 @@ public class AiConversationService {
                                 sink.onDelta(result.unemittedTail());
                             }
                             try {
-                                completeTurnSuccessfully(conversation, requestMessageId, result, sink, requestMoment.toLocalDate());
+                                completeTurnSuccessfully(conversation, requestMessageId, result, sink,
+                                        requestMoment.toLocalDate(), request.getRequestedAction(),
+                                        lastFinishReason.get(), lastUsage.get());
                                 recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
                                         UsageResultStatus.SUCCESS, null);
                             } catch (Exception e) {
@@ -259,16 +275,28 @@ public class AiConversationService {
 
     private void completeTurnSuccessfully(
             AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink,
-            LocalDate targetDate
+            LocalDate targetDate, RequestedAction requestedAction, String finishReason, Usage usage
     ) {
         AiTurnStructured structured = parseStructured(result.structuredJson());
         AiResponseType responseType = structured != null ? structured.responseType() : AiResponseType.CHAT;
         OfferAction offerAction = structured != null ? structured.offerAction() : null;
         List<ProposalItem> proposalItems = structured != null && structured.proposalItems() != null
                 ? structured.proposalItems() : List.of();
-        List<com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec> unavailableWindows =
+        List<UnavailableWindowSpec> unavailableWindows =
                 structured != null && structured.unavailableWindows() != null
                         ? structured.unavailableWindows() : List.of();
+
+        Integer inputTokens = safeTokenCount(usage, true);
+        Integer outputTokens = safeTokenCount(usage, false);
+        log.info("AI 턴 완료 판정: action={}, finishReason={}, inputTokens={}, outputTokens={}, "
+                        + "replyLength={}, structuredDataLength={}, parsedResponseType={}, proposalItemCount={}",
+                requestedAction, finishReason, inputTokens, outputTokens,
+                result.reply() == null ? 0 : result.reply().length(),
+                result.structuredJson() == null ? 0 : result.structuredJson().length(),
+                structured != null ? structured.responseType() : null,
+                proposalItems.size());
+
+        enforceTurnContract(requestedAction, result, structured, responseType, finishReason, outputTokens);
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
@@ -365,7 +393,9 @@ public class AiConversationService {
         if (request.getRequestedAction() == RequestedAction.CREATE_PROPOSAL) {
             sb.append("[사용자 요청 종류]\n사용자가 지금까지의 대화 내용으로 계획 초안 생성을 요청했다. ")
                     .append("반드시 responseType=PROPOSAL로 응답하고, 위 대화 맥락을 근거로 실행 조각을 만들어라. ")
-                    .append("맥락에 없는 목표나 제약은 지어내지 마라.\n\n");
+                    .append("맥락에 없는 목표나 제약은 지어내지 마라. ")
+                    .append("reply는 1~2문장으로 짧게 쓰고, proposalItems에 넣을 내용을 reply에서 다시 설명하지 마라. ")
+                    .append("이미 확정된 기존 계획 전체나 실행 조각 목록을 다시 나열하지 말고, 이번에 새로 만드는 후보만 출력해라.\n\n");
         }
 
         String messageText = request.getMessage() != null ? request.getMessage() : "";
@@ -402,6 +432,87 @@ public class AiConversationService {
             return null;
         }
         return chatResponse.getMetadata().getUsage();
+    }
+
+    /**
+     * OpenAI 스트리밍은 마지막 청크에만 finishReason을 채운다(그 전 청크는 null) — 내부
+     * 클래스를 캐스팅하지 않고 Spring AI의 공개 인터페이스(ChatGenerationMetadata)만으로
+     * "STOP"/"LENGTH"/"CONTENT_FILTER" 등을 그대로 받는다.
+     */
+    private String extractFinishReason(ChatResponse chatResponse) {
+        if (chatResponse == null || chatResponse.getResult() == null
+                || chatResponse.getResult().getMetadata() == null) {
+            return null;
+        }
+        String reason = chatResponse.getResult().getMetadata().getFinishReason();
+        return (reason != null && !reason.isBlank()) ? reason : null;
+    }
+
+    private Integer safeTokenCount(Usage usage, boolean prompt) {
+        if (usage == null) {
+            return null;
+        }
+        try {
+            return prompt ? usage.getPromptTokens() : usage.getCompletionTokens();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 턴 결과가 저장해도 되는 상태인지 판정한다. 여기서 던지는 예외는 호출부(스트림 완료
+     * 콜백)의 기존 catch 블록이 그대로 잡아 completeTurnFailure + sink.onError(503)로
+     * 처리한다 — 새 실패 상태나 오류 코드를 만들지 않고 기존 lifecycle을 재사용한다.
+     *
+     * 1) 응답이 완전히 비어 있거나(reply·구조화 데이터 모두 없음), 토큰 상한 종료로 응답의
+     *    일부가 비어 있으면 action과 무관하게 실패로 본다 — "빈 CHAT을 성공으로 저장"하는
+     *    이번 장애의 근본 패턴을 일반적으로 막는다.
+     * 2) CREATE_PROPOSAL은 계획 초안 생성이 목적이므로, 위 조건을 통과했더라도 실제
+     *    PROPOSAL 계약(파싱 성공, responseType=PROPOSAL, 항목 1개 이상)을 못 지키면 CHAT으로
+     *    조용히 대체하지 않고 실패로 처리한다. 항목별 세부 검증(1~5개, 필드 유효성)은 이후
+     *    aiProposalService.createFromItems()가 최종 확인한다.
+     */
+    private void enforceTurnContract(
+            RequestedAction requestedAction, AiStreamParser.Result result, AiTurnStructured structured,
+            AiResponseType responseType, String finishReason, Integer outputTokens
+    ) {
+        boolean replyBlank = result.reply() == null || result.reply().isBlank();
+        boolean structuredDataBlank = result.structuredJson() == null || result.structuredJson().isBlank();
+        // finishReason을 못 얻는 경우에만 "출력 상한에 도달"을 outputTokens로 추정한다 —
+        // 정상 종료(STOP)인데 우연히 상한과 같은 토큰 수를 쓴 경우까지 실패로 몰지 않는다.
+        boolean tokenLimitReached = "LENGTH".equalsIgnoreCase(finishReason)
+                || (finishReason == null && outputTokens != null && outputTokens >= maxCompletionTokens);
+
+        if (replyBlank && structuredDataBlank) {
+            log.warn("AI 턴 실패 처리: 응답이 완전히 비어 있음 (action={}, finishReason={})",
+                    requestedAction, finishReason);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (tokenLimitReached && (replyBlank || structuredDataBlank)) {
+            log.warn("AI 턴 실패 처리: 토큰 상한 종료로 응답 일부가 비어 있음 (action={}, finishReason={}, outputTokens={})",
+                    requestedAction, finishReason, outputTokens);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+
+        if (requestedAction != RequestedAction.CREATE_PROPOSAL) {
+            return;
+        }
+        if (replyBlank) {
+            log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 reply가 비어 있음");
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (structuredDataBlank || structured == null) {
+            log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 구조화 데이터가 없거나 파싱에 실패함");
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (responseType != AiResponseType.PROPOSAL) {
+            log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 responseType={}", responseType);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (structured.proposalItems() == null || structured.proposalItems().isEmpty()) {
+            log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 proposalItems가 비어 있음");
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
     }
 
     /**

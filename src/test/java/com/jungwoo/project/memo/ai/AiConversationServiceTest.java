@@ -23,6 +23,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.DefaultUsage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -222,6 +225,175 @@ class AiConversationServiceTest {
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
+    // ===== CREATE_PROPOSAL 응답 계약 (빈 CHAT으로 잘못 성공 처리되던 장애 수정) =====
+
+    @Test
+    void createProposal_emptyResponse_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse("")));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.completed).isNull();
+        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_noDelimiter_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse("그냥 대답만 하고 끝냄")));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
+    }
+
+    @Test
+    void createProposal_delimiterWithNoJsonAfterIt_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(aiConsultationClient.streamTurn(any(), any()))
+                .thenReturn(Flux.just(chatResponse("답변\n<<<AI_STRUCTURED>>>\n")));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp3"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_invalidJson_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(aiConsultationClient.streamTurn(any(), any()))
+                .thenReturn(Flux.just(chatResponse("답변\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님")));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp4"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_returnsChat_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "그냥 대화로만 답할게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp5"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_returnsOffer_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "먼저 물어볼게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"responseType\":\"OFFER\",\"proposalItems\":[],"
+                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp6"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_emptyProposalItems_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"responseType\":\"PROPOSAL\",\"proposalItems\":[],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp7"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_validProposal_succeeds_andSavesProposal() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "세 조각을 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"responseType\":\"PROPOSAL\",\"proposalItems\":["
+                + "{\"title\":\"교재 6장 읽기\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(910L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(205L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp8"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNull();
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.completed.proposalId()).isEqualTo(910L);
+        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
+        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+    }
+
+    @Test
+    void tokenLimitReached_partialResponse_fails_evenForPlainAutoMessage() {
+        // CREATE_PROPOSAL 전용이 아니라 일반적인 판정임을 확인한다: AUTO 요청이라도 토큰
+        // 상한(LENGTH)에서 끊겨 구조화 데이터가 전혀 없이 답변만 일부 남은 경우는 실패로 본다.
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(aiConsultationClient.streamTurn(any(), any()))
+                .thenReturn(Flux.just(chatResponse("부분적으로만 답변하다가 끊김", "LENGTH", 1772, 2400)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("아무 질문", "k-len-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
+        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
+    }
+
+    @Test
+    void normalFinish_withOutputTokensCoincidentallyEqualToCap_doesNotFail() {
+        // finishReason=STOP(정상 종료)인데 우연히 outputTokens가 상한과 같은 값이어도 실패로
+        // 몰지 않는다 — 보조 판정(outputTokens>=cap)은 finishReason을 못 얻었을 때만 쓴다.
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "정상적으로 잘 끝난 답변.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        when(aiConsultationClient.streamTurn(any(), any()))
+                .thenReturn(Flux.just(chatResponse(raw, "STOP", 1772, 6000)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("안녕", "k-len-2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNull();
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+    }
+
     @Test
     void streamAndComplete_openAiError_marksFailed_releasesLock_noRetry() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
@@ -387,6 +559,29 @@ class AiConversationServiceTest {
 
     private ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    /** finishReason/토큰 사용량을 함께 실어야 하는 테스트(토큰 상한 종료 판정 등)용. */
+    private ChatResponse chatResponse(String text, String finishReason, Integer promptTokens, Integer completionTokens) {
+        Generation generation = finishReason != null
+                ? new Generation(new AssistantMessage(text), ChatGenerationMetadata.builder().finishReason(finishReason).build())
+                : new Generation(new AssistantMessage(text));
+        if (promptTokens == null && completionTokens == null) {
+            return new ChatResponse(List.of(generation));
+        }
+        ChatResponseMetadata metadata = ChatResponseMetadata.builder()
+                .usage(new DefaultUsage(promptTokens, completionTokens))
+                .build();
+        return new ChatResponse(List.of(generation), metadata);
+    }
+
+    private AiMessageRequest createProposalRequest(String idempotencyKey) {
+        return AiMessageRequest.builder()
+                .message(null)
+                .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .sourceMessageId(199L)
+                .idempotencyKey(idempotencyKey)
+                .build();
     }
 
     private int countOccurrences(String haystack, String needle) {
