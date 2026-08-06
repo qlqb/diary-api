@@ -179,6 +179,48 @@ REQ-EXECUTION-011
 모든 공식 변경은 version을 1 증가시킨다.
 ```
 
+## 5.5 7일 범위 일정 후보 배치
+
+```text
+REQ-SCHEDULING-001
+새 PROPOSAL 항목은 placementType=UNSCHEDULED로 만들 수 있다. 이 경우 실제 배치 날짜·시각은
+모델이 정하지 않고 서버의 Timefold Solver가 계산한다.
+
+REQ-SCHEDULING-002
+가용시간은 기존 TIME_FIXED 실행 조각, 현재 대화에서 사용자가 명시한 사용 불가 시간, 사용자가
+미리보기에서 고친 예외, Asia/Seoul 기준 기본 추정 시간대(근거 없을 때만, LOW 신뢰도)를 조합해
+추정한다. 각 후보 시간은 source/confidence/reason을 가진다.
+
+REQ-SCHEDULING-003
+Timefold 배치는 계획 범위(최대 7일), 현재 시각 이후, 기존 일정·신규 후보 간 미겹침, 명시된
+마감일 준수를 강한 제약으로 지킨다. 우선순위(MUST/SHOULD/OPTIONAL), 신뢰도, 하루 과부하,
+여유시간은 선호 제약이다.
+
+REQ-SCHEDULING-004
+시간이 부족하면 낮은 우선순위 항목을 미배치로 남긴다. 미배치는 오류가 아니며 사유와 함께
+표시한다. Solver나 서버가 미배치 항목을 임의로 축소·보류하지 않는다.
+
+REQ-SCHEDULING-005
+사용자가 가용시간 예외를 고치거나 항목을 특정 시각에 고정하면, 그 재계산은 OpenAI를 다시
+호출하지 않고 Timefold만 다시 돈다.
+
+REQ-SCHEDULING-006
+배치 미리보기(가용시간 요약, 배치/미배치 결과)는 승인 전까지 공식 execution_items를
+변경하지 않으며, 새로고침해도 마지막 계산 결과가 복원된다.
+
+REQ-SCHEDULING-007
+사용자가 최종 승인한 날짜·시간만 ExecutionItem을 만든다. 배치된 항목은 TIME_FIXED, 날짜만
+확정한 항목은 DATE_ONLY, 배치하지 못했지만 남기기로 한 항목은 UNSCHEDULED로 생성한다.
+
+REQ-SCHEDULING-008
+Timefold 계산 모델(SchedulingTask/SchedulingPlan 등)은 ExecutionItem/AiProposalItem과
+분리된 별도 모델이며, DB 엔티티에 Timefold 어노테이션을 붙이지 않는다.
+
+REQ-SCHEDULING-009
+Solver는 상시 실행되지 않는다. 사용자 요청(재배치)마다 짧은 시간 제한을 두고 새로
+실행하고 버린다.
+```
+
 ## 6. 실제 수행 기록
 
 ```text
@@ -373,4 +415,28 @@ IMPL-010
 이번 범위에서 구현하지 않은 것: REQ-PLAN-*(PlanItem 전체 CRUD), REQ-CONTEXT-*(ContextItem),
 REQ-DAILY-*(DailyState), REQ-RECORD-003/008 및 REQ-EVENT-*의 부분 수행(PARTIAL)·SPLIT 흐름,
 REQ-UI-003(ghost/diff 미리보기), 외부 ChatGPT 대화 가져오기, 캘린더.
+
+IMPL-011 (2026-08-06)
+REQ-SCHEDULING-001~009를 구현했다. Java 21 + Timefold Solver 2.4.0(`timefold-solver-core`,
+Spring Boot 4용 별도 스타터 없이 core만 사용)을 도입했다. `scheduling.domain/solver/service`
+패키지에 계산 전용 모델(SchedulingTask/BusyWindow/AvailabilityWindow/SchedulingPlan)과
+`SchedulingConstraintProvider`(HardMediumSoftScore — HARD 5개, MEDIUM 1개(우선순위 배치
+선호, SOFT보다 항상 우선), SOFT 3개), `SchedulingSolverService`(요청마다 새 SolverFactory를
+만들어 짧게 한 번 돌리는 방식, 기본 타임아웃 5초)를 구현했다.
+
+`AiProposalItem.originalPayload`에 earliestStartDate/deadlineDate를, 모델 출력 JSON에
+placementType=UNSCHEDULED와 fixedStartAt/fixedEndAt, 대화 차원 unavailableWindows를
+추가했다(TODAY 흐름의 기존 DATE_ONLY/TIME_FIXED 출력은 그대로 유지 — 하위 호환).
+`POST/GET /api/ai/proposals/{id}/schedule-preview`(둘 다 OpenAI 미호출)로 가용시간 추정과
+Timefold 재계산을 수행하고, 결과를 `ai_proposal_schedule_previews`에 저장해 새로고침 후
+복원한다. `AiProposalService.apply()`는 항목마다 다른 날짜로 승인할 수 있도록 확장했다
+(기존에는 제안 전체가 단일 targetDate를 공유했다 — TODAY 흐름은 여전히 그 값을 그대로 쓰므로
+동작이 바뀌지 않는다).
+
+실측 검증(gpt-5-mini): PROPOSAL 항목당 필드가 늘며 기존 `max-completion-tokens=1200`으로는
+reasoning 토큰과 합쳐 종종 응답이 잘려 `responseType=CHAT`+빈 reply로 폴백하는 것을 확인해
+2400으로 올렸다.
+
+구현하지 않은 것: 기존 ExecutionItem을 옮기거나 줄이는 PATCH 재계획, ContextItem 기반 장기
+자동 학습, 상시 자동 재계획(SolverManager/데몬), 실시간 ProblemChange.
 ```

@@ -6,6 +6,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -35,5 +36,11 @@ public class AiProposalApplyRequest {
         private PlacementType placementType;
         private LocalDateTime scheduledStartAt;
         private LocalDateTime scheduledEndAt;
+        /**
+         * 이 항목이 최종적으로 배치될 날짜. null이면 TIME_FIXED 시각의 날짜 또는 제안 생성
+         * 당시의 날짜를 그대로 쓴다. 7일 범위 배치 미리보기처럼 항목마다 다른 날짜로 확정된
+         * 경우에만 채운다 — 기존 "오늘" 단일 제안 흐름에서는 사용하지 않는다.
+         */
+        private LocalDate scheduledDate;
     }
 }

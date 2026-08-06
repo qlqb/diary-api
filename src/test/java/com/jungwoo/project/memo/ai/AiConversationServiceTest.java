@@ -87,7 +87,7 @@ class AiConversationServiceTest {
         String raw = "안녕! 오늘은 어떤 얘기부터 해볼까?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
 
         RecordingSink sink = new RecordingSink();
@@ -98,7 +98,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed.proposalId()).isNull();
         assertThat(sink.deltas.toString()).isEqualTo("안녕! 오늘은 어떤 얘기부터 해볼까?\n");
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
     }
 
@@ -107,7 +107,7 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
 
         RecordingSink sink = new RecordingSink();
@@ -139,7 +139,7 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
 
         awaitTerminal(new RecordingSink(),
@@ -169,7 +169,7 @@ class AiConversationServiceTest {
                 + "{\"responseType\":\"OFFER\",\"proposalItems\":[],"
                 + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(202L), null));
 
         RecordingSink sink = new RecordingSink();
@@ -179,7 +179,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
         assertThat(sink.offerAction).isNotNull();
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -191,7 +191,7 @@ class AiConversationServiceTest {
                 + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(900L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(203L), proposalResponse));
 
         RecordingSink sink = new RecordingSink();
@@ -202,7 +202,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed.proposalId()).isEqualTo(900L);
         assertThat(sink.proposalReady).isNotNull();
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -210,7 +210,7 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "음, 알겠어.\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any()))
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(204L), null));
 
         RecordingSink sink = new RecordingSink();
@@ -219,7 +219,7 @@ class AiConversationServiceTest {
 
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -236,7 +236,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed).isNull();
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -275,7 +275,7 @@ class AiConversationServiceTest {
 
         assertThat(sink.completed.reply()).isEqualTo("이미 답변했던 내용");
         verify(aiConsultationClient, never()).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

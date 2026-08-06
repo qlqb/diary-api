@@ -266,10 +266,13 @@ public class AiConversationService {
         OfferAction offerAction = structured != null ? structured.offerAction() : null;
         List<ProposalItem> proposalItems = structured != null && structured.proposalItems() != null
                 ? structured.proposalItems() : List.of();
+        List<com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec> unavailableWindows =
+                structured != null && structured.unavailableWindows() != null
+                        ? structured.unavailableWindows() : List.of();
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
-                result.reply(), responseType, proposalItems, targetDate);
+                result.reply(), responseType, proposalItems, targetDate, unavailableWindows);
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();

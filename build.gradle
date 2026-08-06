@@ -14,7 +14,8 @@ repositories {
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        // Timefold Solver 2.x는 Java 21+를 요구한다(2026-08-06 기준 공식 최신 안정 버전 2.4.0).
+        languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
@@ -27,6 +28,7 @@ configurations {
 
 ext {
     springAiVersion = '2.0.0'
+    timefoldVersion = '2.4.0'
 }
 
 dependencies {
@@ -41,6 +43,10 @@ dependencies {
     implementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter:4.0.0'
     implementation 'io.jsonwebtoken:jjwt-api:0.12.3'
     implementation 'org.thymeleaf.extras:thymeleaf-extras-springsecurity6'
+    // Timefold는 Spring Boot 4용 공식 스타터가 아직 없어 core만 쓴다. Solver는 사용자 요청 시
+    // 짧게(초 단위 termination) 동기 실행하는 용도로만 쓰고, 상시 SolverManager/데몬으로
+    // 구동하지 않는다 — scheduling.solver.SchedulingSolverService 참고.
+    implementation "ai.timefold.solver:timefold-solver-core:${timefoldVersion}"
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'
@@ -51,6 +57,9 @@ dependencies {
     testImplementation 'org.springframework.boot:spring-boot-starter-thymeleaf-test'
     testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
     testImplementation 'org.mybatis.spring.boot:mybatis-spring-boot-starter-test:4.0.0'
+    // Timefold 2.x부터 ConstraintVerifier가 timefold-solver-core 안으로 들어왔다
+    // (ai.timefold.solver.core.api.score.stream.test) — 별도 timefold-solver-test
+    // 아티팩트는 2.x 라인에 없다(1.x까지만 배포됨).
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.1"
 }

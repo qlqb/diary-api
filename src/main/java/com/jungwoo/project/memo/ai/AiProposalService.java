@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.ai.dto.AiProposalItemResponse;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
+import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -68,10 +69,10 @@ public class AiProposalService {
      */
     public AiProposalResponse createFromItems(
             Long userId, Long conversationId, Long sourceMessageId,
-            List<ProposalItem> items, LocalDate targetDate
+            List<ProposalItem> items, LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows
     ) {
         List<ProposalItemPayload> validated = validateAndNormalize(items, targetDate);
-        return persistenceService.save(userId, conversationId, sourceMessageId, validated);
+        return persistenceService.save(userId, conversationId, sourceMessageId, validated, unavailableWindows);
     }
 
     private List<ProposalItemPayload> validateAndNormalize(List<ProposalItem> items, LocalDate targetDate) {
@@ -100,8 +101,22 @@ public class AiProposalService {
             PlacementType placementType = item.placementType() != null ? item.placementType() : PlacementType.DATE_ONLY;
             LocalDateTime scheduledStartAt = null;
             LocalDateTime scheduledEndAt = null;
+            LocalDate earliestStartDate = null;
+            LocalDate deadlineDate = null;
 
-            if (placementType == PlacementType.TIME_FIXED) {
+            if (item.fixedStartAt() != null || item.fixedEndAt() != null) {
+                // 사용자가 명확한 날짜+시각을 함께 말한 경우 — 이 후보를 그 시각에 고정한다.
+                // Timefold가 계산하지 않고 그대로 TIME_FIXED로 저장한다.
+                if (item.fixedStartAt() == null || item.fixedEndAt() == null
+                        || !item.fixedEndAt().isAfter(item.fixedStartAt())) {
+                    log.warn("AI 제안 구조 검증 실패: fixedStartAt/fixedEndAt이 올바르지 않음");
+                    throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+                placementType = PlacementType.TIME_FIXED;
+                scheduledStartAt = item.fixedStartAt();
+                scheduledEndAt = item.fixedEndAt();
+                targetDate = scheduledStartAt.toLocalDate();
+            } else if (placementType == PlacementType.TIME_FIXED) {
                 if (item.startTime() == null || item.endTime() == null) {
                     log.warn("AI 제안 구조 검증 실패: TIME_FIXED인데 시작/종료 시각 누락");
                     throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
@@ -112,14 +127,31 @@ public class AiProposalService {
                 }
                 scheduledStartAt = LocalDateTime.of(targetDate, item.startTime());
                 scheduledEndAt = LocalDateTime.of(targetDate, item.endTime());
-            } else if (item.startTime() != null || item.endTime() != null) {
-                log.warn("AI 제안 구조 검증 실패: DATE_ONLY인데 시각이 채워짐");
-                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            } else if (placementType == PlacementType.DATE_ONLY) {
+                if (item.startTime() != null || item.endTime() != null) {
+                    log.warn("AI 제안 구조 검증 실패: DATE_ONLY인데 시각이 채워짐");
+                    throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+            } else if (placementType == PlacementType.UNSCHEDULED) {
+                if (item.startTime() != null || item.endTime() != null) {
+                    log.warn("AI 제안 구조 검증 실패: UNSCHEDULED인데 시각이 채워짐");
+                    throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+                // earliestStartDate/deadlineDate는 AI_INFERRED 힌트일 뿐이다 — 모델이 이상한
+                // 값(범위 역전 등)을 내도 전체 PROPOSAL을 실패시키지 않고 조용히 무시한다
+                // ("파싱 실패 시 AI 자동 재호출 금지" 원칙과 같은 이유로, 여기서도 재호출 없이
+                // 최선으로 진행한다).
+                earliestStartDate = item.earliestStartDate();
+                deadlineDate = item.deadlineDate();
+                if (earliestStartDate != null && deadlineDate != null && deadlineDate.isBefore(earliestStartDate)) {
+                    earliestStartDate = null;
+                    deadlineDate = null;
+                }
             }
 
             result.add(new ProposalItemPayload(
                     item.title(), item.description(), item.expectedMinutes(), item.priority(), targetDate,
-                    placementType, scheduledStartAt, scheduledEndAt));
+                    placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate));
         }
         return result;
     }
@@ -187,8 +219,10 @@ public class AiProposalService {
             throw new BadRequestException(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION);
         }
 
-        LocalDate targetDate = fromJson(items.get(0).getOriginalPayload()).targetDate();
-        int orderIndex = executionItemService.nextOrderIndexStart(userId, targetDate);
+        // 항목마다 최종 날짜가 다를 수 있다(7일 범위 배치 미리보기 적용 시) — 날짜별로 별도
+        // order_index 시작값을 그날의 기존 최대값 다음부터 이어 붙인다. 오늘 하루짜리 기존
+        // 흐름은 items가 전부 같은 날짜이므로 동작이 그대로다.
+        Map<LocalDate, Integer> nextOrderIndexByDate = new HashMap<>();
 
         boolean anyModified = false;
         List<AiProposalItemResponse> responses = new ArrayList<>();
@@ -213,6 +247,8 @@ public class AiProposalService {
             PlacementType placementType = original.placementType();
             LocalDateTime scheduledStartAt = original.scheduledStartAt();
             LocalDateTime scheduledEndAt = original.scheduledEndAt();
+            LocalDate scheduledDate = placementType == PlacementType.TIME_FIXED && scheduledStartAt != null
+                    ? scheduledStartAt.toLocalDate() : original.targetDate();
             boolean modified = false;
 
             if (edit != null) {
@@ -223,6 +259,14 @@ public class AiProposalService {
                 PlacementType newPlacementType = edit.getPlacementType() != null ? edit.getPlacementType() : original.placementType();
                 LocalDateTime newStart = edit.getPlacementType() != null ? edit.getScheduledStartAt() : original.scheduledStartAt();
                 LocalDateTime newEnd = edit.getPlacementType() != null ? edit.getScheduledEndAt() : original.scheduledEndAt();
+                // scheduledDate: 편집에서 명시했으면 그 값을, 아니면 TIME_FIXED 시각의 날짜를,
+                // 그마저 없으면(UNSCHEDULED 등) 원래 날짜를 그대로 쓴다. 7일 범위 배치 미리보기는
+                // 항목마다 다른 날짜를 편집으로 함께 보낸다 — 하나의 targetDate를 모든 항목에
+                // 강제하던 기존 방식으로는 다른 날짜에 배치된 항목을 적용할 수 없었다.
+                LocalDate newScheduledDate = edit.getScheduledDate() != null
+                        ? edit.getScheduledDate()
+                        : (newPlacementType == PlacementType.TIME_FIXED && newStart != null
+                                ? newStart.toLocalDate() : original.targetDate());
 
                 if (newTitle == null || newTitle.isBlank()) {
                     throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
@@ -241,7 +285,8 @@ public class AiProposalService {
                         || !Objects.equals(newPriority, original.priority())
                         || !Objects.equals(newPlacementType, original.placementType())
                         || !Objects.equals(newStart, original.scheduledStartAt())
-                        || !Objects.equals(newEnd, original.scheduledEndAt());
+                        || !Objects.equals(newEnd, original.scheduledEndAt())
+                        || !Objects.equals(newScheduledDate, scheduledDate);
 
                 title = newTitle;
                 description = newDescription;
@@ -250,13 +295,26 @@ public class AiProposalService {
                 placementType = newPlacementType;
                 scheduledStartAt = newStart;
                 scheduledEndAt = newEnd;
+                scheduledDate = newScheduledDate;
             }
 
             anyModified = anyModified || modified;
 
+            // UNSCHEDULED는 날짜·시각을 갖지 않는다(REQ-EXECUTION-002) — 원본 payload의
+            // 임시 targetDate나 편집값에 남아있을 수 있는 날짜를 여기서 확실히 비운다.
+            if (placementType == PlacementType.UNSCHEDULED) {
+                scheduledDate = null;
+                scheduledStartAt = null;
+                scheduledEndAt = null;
+            }
+
+            int orderIndex = nextOrderIndexByDate.computeIfAbsent(
+                    scheduledDate, d -> executionItemService.nextOrderIndexStart(userId, d));
+            nextOrderIndexByDate.put(scheduledDate, orderIndex + 1);
+
             ExecutionItem createdItem = executionItemService.createFromApprovedProposal(
-                    userId, title, description, original.targetDate(),
-                    expectedMinutes, ExecutionPriority.valueOf(priority), orderIndex++, modified,
+                    userId, title, description, scheduledDate,
+                    expectedMinutes, ExecutionPriority.valueOf(priority), orderIndex, modified,
                     placementType, scheduledStartAt, scheduledEndAt);
 
             AiProposalItemStatus newStatus = modified
@@ -264,7 +322,7 @@ public class AiProposalService {
                     : AiProposalItemStatus.APPLIED;
             String editedJson = modified
                     ? toJson(new ProposalItemPayload(title, description, expectedMinutes, priority,
-                            original.targetDate(), placementType, scheduledStartAt, scheduledEndAt))
+                            scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null))
                     : null;
 
             aiProposalItemMapper.updateAfterApply(
@@ -278,7 +336,7 @@ public class AiProposalService {
                     .description(description)
                     .expectedMinutes(expectedMinutes)
                     .priority(priority)
-                    .targetDate(original.targetDate())
+                    .targetDate(scheduledDate)
                     .placementType(placementType)
                     .scheduledStartAt(scheduledStartAt)
                     .scheduledEndAt(scheduledEndAt)

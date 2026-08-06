@@ -180,7 +180,7 @@
 - `Duckling`은 한국어 시간 규칙 후보지만 별도 실행 환경의 운영 부담이 있어 현재는 보류한다.
 - `BAML`은 구조화 출력·테스트·모델 교체를 체계화하는 후보, `LangGraph`·`Temporal`은 장시간 AI 작업의 중단·재개와 장애 복구 후보로만 기록한다.
 - Kafka·Redis·벡터 DB는 현재의 JSON 형식, 출력 토큰, 일정 계산 문제를 직접 해결하지 않으므로 이 문제의 해결책으로 도입하지 않는다.
-- 상태: **Timefold·Natty·Duckling·BAML·LangGraph·Temporal 모두 현재 구현 제외**
+- 상태: **승격(`03-planning-system.md`, `04-requirements.md`, `05-database.md`, `06-mvp-roadmap.md`) — 2026-08-06, Timefold Solver 2.4.0을 새 PROPOSAL 항목의 7일 범위 후보 배치 한 바퀴에 한해 도입했다.** 범위는 새 후보 배치 계산 하나로 좁게 유지했다: 기존 ExecutionItem을 옮기거나 줄이거나 보류하는 PATCH 재계획, ContextItem 기반 장기 자동 학습, 상시 자동 재계획(daemon/SolverManager), 실시간 ProblemChange 스트리밍은 이번에도 만들지 않았다 — 여전히 후속 범위다. `Natty`·`Duckling`·`BAML`·`LangGraph`·`Temporal`·Kafka·Redis·벡터 DB는 이 결정과 무관하게 계속 현재 구현 제외다.
 
 ## 설계 과밀화 방지 판정 (2026-08-06, 대화)
 

@@ -228,12 +228,12 @@ class AiTurnLifecycleServiceTest {
 
     @Test
     void completeTurnSuccess_createsProposal_whenProposalType_andReleasesLock() {
-        when(aiProposalService.createFromItems(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any()))
+        when(aiProposalService.createFromItems(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(900L).items(List.of()).build());
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.PROPOSAL,
-                List.of(sampleItem()), LocalDate.now());
+                List.of(sampleItem()), LocalDate.now(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNotNull();
         assertThat(result.proposalResponseOrNull().getProposalId()).isEqualTo(900L);
@@ -244,10 +244,10 @@ class AiTurnLifecycleServiceTest {
     @Test
     void completeTurnSuccess_doesNotCreateProposal_whenChat() {
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
-                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now());
+                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNull();
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -283,6 +283,7 @@ class AiTurnLifecycleServiceTest {
 
     private ProposalItem sampleItem() {
         return new ProposalItem("제목", "설명", 30, "SHOULD",
-                com.jungwoo.project.memo.execution.domain.PlacementType.DATE_ONLY, null, null);
+                com.jungwoo.project.memo.execution.domain.PlacementType.DATE_ONLY, null, null,
+                null, null, null, null);
     }
 }

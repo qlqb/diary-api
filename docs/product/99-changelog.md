@@ -1,5 +1,71 @@
 # 99. Change Log
 
+## 2026-08-06 — Timefold Solver 기반 7일 범위 일정 후보 배치
+
+사용자가 여러 날에 걸친 계획("이번 주 안에 강의 4개 들어야 해, 화·목 저녁은 알바")을 말하면,
+그동안은 AI가 만든 PROPOSAL 항목이 항상 오늘 하루(DATE_ONLY/TIME_FIXED)에만 묶였다. 이번
+작업으로 실제 날짜·시각 배치를 서버의 Timefold Solver에 맡기는 한 바퀴를 완성했다.
+
+- **Java 17 → 21, Timefold Solver 2.4.0 도입.** `timefold-solver-core`만 쓴다(Spring Boot 4용
+  공식 스타터가 아직 없다). `ConstraintVerifier`가 core 안으로 들어와 있어(2.x부터) 별도
+  `timefold-solver-test` 아티팩트는 필요 없다(1.x까지만 배포됨).
+- **계산 모델을 DB 엔티티와 분리했다.** `scheduling.domain`(SchedulingTask/BusyWindow/
+  AvailabilityWindow/TimeSlotOption/SchedulingPlan/SchedulingContext), `scheduling.solver`
+  (SchedulingConstraintProvider, SchedulingSolverService), `scheduling.service`
+  (AvailabilityEstimateService, SchedulePreviewService). `ExecutionItem`/`AiProposalItem`에는
+  Timefold 어노테이션을 붙이지 않았다.
+- **제약**: HardMediumSoftScore를 썼다 — HARD 5개(신규 후보끼리 안 겹침, 기존 고정 일정과
+  안 겹침, 계획 범위 안, 과거 아님, 마감 안 넘김), MEDIUM 1개(우선순위 순 배치 선호), SOFT 3개
+  (신뢰도 높은 시간 우선, 하루 과부하 방지, 여유시간 선호). 우선순위 선호를 SOFT가 아니라
+  MEDIUM에 둔 이유: 같은 레벨에 두면 "미배치 페널티"와 "낮은 신뢰도 배치 페널티"가 우연히
+  같아질 때 시간이 남는데도 솔버가 임의로 미배치를 선택하는 것을 실제로 확인했다(구성
+  휴리스틱 로그로 재현). Solver는 상시 실행하지 않는다 — 요청마다(기본 5초 상한) 새로
+  만들고 버린다.
+- **AI 응답 계약 확장(하위 호환)**: PROPOSAL 항목 `placementType`에 `UNSCHEDULED`를
+  추가하고, `earliestStartDate/deadlineDate`(선택적 힌트)와 `fixedStartAt/fixedEndAt`(사용자가
+  명확한 날짜+시각을 말했을 때만, Timefold가 움직이지 않는 고정값)을 추가했다. 구조화 JSON에
+  대화 차원 `unavailableWindows`(사용자가 명시한 사용 불가 시간, day-of-week 또는 특정 날짜
+  반복)도 추가했다. 기존 TODAY 흐름(DATE_ONLY/TIME_FIXED, 오늘 하루)은 그대로 동작한다 —
+  CHAT/OFFER/PROPOSAL 최상위 계약, 메시지당 OpenAI 호출 1회, 구분자 기반 스트리밍 파싱은
+  전혀 바꾸지 않았다.
+- **`POST/GET /api/ai/proposals/{proposalId}/schedule-preview` 추가.** 둘 다 OpenAI를
+  호출하지 않는다. POST는 가용시간을 다시 추정하고 Timefold를 재계산해 결과를
+  `ai_proposal_schedule_previews`(신규 테이블, `docs/sql/2026-08-06-scheduling-preview.sql`)에
+  upsert한다. GET은 새로고침 후 마지막 계산 결과를 복원한다(없으면 204).
+- **가용시간 추정(AvailabilityEstimateService)**: 기존 TIME_FIXED 실행 조각(제외 불가) +
+  대화에서 파악한 사용 불가 시간(HIGH, AI_INFERRED) + 사용자가 미리보기에서 고친 예외
+  (USER_OVERRIDE, HIGH) + 근거 없을 때 Asia/Seoul 기준 보수적 기본 활동 시간대
+  (DEFAULT_INFERENCE, LOW)를 조합한다. 현재 시각 이전과 계획 범위(최대 7일, 설정 가능) 밖은
+  항상 제외한다. ContextItem/실행 패턴 집계는 아직 없어 그 출처(USER_CONFIRMED_CONTEXT/
+  EXECUTION_PATTERN)는 계약만 남기고 이번 구현에서 채우지 않는다.
+- **`AiProposalService.apply()`를 다중 날짜 승인이 가능하도록 확장했다.** 기존에는 제안
+  묶음 전체가 생성 당시의 단일 `targetDate`를 공유해, 항목마다 다른 날로 확정하는 이번
+  기능을 적용할 방법이 없었다. `EditedProposalItem`에 `scheduledDate`를 추가하고, 지정하지
+  않으면 TIME_FIXED 시각의 날짜 또는 기존 targetDate로 자동 대체해 **TODAY 흐름은 동작이
+  그대로다**. `order_index` 시드도 프로포절 전체 단일값에서 날짜별 값으로 바꿨다(여러 날짜에
+  항목이 흩어지므로). `UNSCHEDULED`로 확정되는 항목은 scheduledDate/시각을 서버가 강제로
+  비운다(REQ-EXECUTION-002).
+- **실측(gpt-5-mini, 실제 OpenAI 키)으로 확인**: "이번 주 안에 강의 4개, 화·목 저녁 알바"
+  시나리오를 실제로 끝까지 실행했다 — PROPOSAL이 UNSCHEDULED 후보 4개 + unavailableWindows를
+  만들고, Timefold가 화요일 저녁을 피해 겹치지 않게 4개를 배치했다(0hard/0medium 달성, 전부
+  배치). 이 과정에서 `spring.ai.openai.chat.options.max-completion-tokens=1200`으로는 항목당
+  필드가 늘어난 새 스키마가 reasoning 토큰과 합쳐 종종 잘려 `responseType=CHAT`+빈 reply로
+  폴백하는 것을 실제로 관측해 2400으로 올렸다. 프론트에서 "이 시간은 안 돼요"로 예외를
+  추가하자 OpenAI 재호출 없이 Timefold만 재계산해 4개를 다른 시간대로 재배치했고, 최종
+  "오늘에 적용"이 재계산된 시각 그대로 4개의 `execution_items`(TIME_FIXED)를 만드는 것도
+  확인했다.
+- 프론트 `AiPanelShell`: 카드에 `placementType==='UNSCHEDULED'` 후보가 있을 때만(기존
+  DATE_ONLY/TIME_FIXED 전용 TODAY 흐름은 전혀 건드리지 않는다) 가용시간 요약, 신뢰도 배지,
+  "이 시간은 안 돼요" 예외 폼, 미배치 목록, 항목별 "날짜·시간 직접 수정", "이 기준으로 다시
+  배치" 버튼을 추가로 보여준다. 새 Proposal이 도착하거나(SSE) 적용 전 제안이 있는 대화를
+  다시 열면(새로고침 포함) 저장된 미리보기를 복원하거나 없으면 자동으로 첫 계산을 요청한다.
+  최종 "오늘에 적용"은 배치 결과(placed/unplaced)를 반영한 `editedItems`를 기존
+  `proposalAPI.apply`에 그대로 보낸다 — 적용 API 자체나 카드/OFFER/제외 토글 구조는 바꾸지
+  않았다. `api.js`에 `schedulePreviewAPI`(get/recompute)를 추가했다.
+- 알려진 한계: 기존 ExecutionItem을 옮기거나 줄이는 PATCH 재계획, ContextItem 기반 장기
+  자동 학습, 상시 자동 재계획(SolverManager), 실시간 ProblemChange는 이번 범위가 아니다
+  (`07-ideas.md` 참고).
+
 ## 2026-08-05 (2차) — AI 상담 안전성 보강: 중복 호출 차단·동시 요청 직렬화·트랜잭션 경계
 
 바로 아래 "AI 상담 구조 개편" 작업으로 CHAT/OFFER/PROPOSAL 대화 흐름 자체는 이미 있었다. 이번

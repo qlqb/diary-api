@@ -184,7 +184,31 @@ EXPIRED
 - 같은 항목을 두 화면이 각각 소유하지 않는다.
 - 오늘에서 바꾼 항목은 실행에도, 실행에서 바꾼 오늘 항목은 오늘에도 즉시 반영된다.
 
-## 12. 레거시 전환
+## 12. 7일 범위 일정 후보 배치 (2026-08-06)
+
+사용자가 여러 날에 걸친 계획("이번 주 안에 강의 4개")을 요청하면, PROPOSAL 항목은 특정 날짜에
+묶이지 않은 `placementType=UNSCHEDULED` 후보로 만들어진다. 실제 날짜와 시각은 GPT가 정하지
+않는다 — 서버가 가용시간을 추정하고 Timefold Solver가 최대 7일 범위 안에서 계산한다.
+
+```text
+PROPOSAL(UNSCHEDULED 후보 1~5개 + 대화에서 파악한 사용 불가 시간)
+→ AvailabilityEstimateService: 기존 TIME_FIXED 일정 + 사용 불가 시간 + 기본 추정 시간대
+→ SchedulingSolverService(Timefold): 겹치지 않게, 마감 안 넘기게, 우선순위 순으로 배치
+→ 배치 결과 미리보기(placedItems/unplacedItems) 저장
+→ 사용자가 예외 수정 또는 항목 고정 → Timefold만 재계산(OpenAI 재호출 없음)
+→ 사용자가 최종 확인한 날짜·시간으로 승인 → ExecutionItem 생성(TIME_FIXED/DATE_ONLY/UNSCHEDULED)
+```
+
+계산 모델(`scheduling.domain/solver/service` 패키지)은 ExecutionItem·AiProposalItem과 완전히
+분리된 별도 모델이다. Timefold 어노테이션은 DB 엔티티에 붙지 않는다. Solver는 상시 실행되지
+않고, 요청마다(주로 "다시 배치" 클릭) 짧게(기본 5초 상한) 한 번 돌고 버려진다.
+
+미배치는 오류가 아니라 "배치 가능한 시간이 부족함" 같은 사유로 남는다. 사용자는 미배치 항목을
+그대로 `UNSCHEDULED`로 남기거나, 날짜·시간을 직접 고정하거나, 제외할 수 있다. 이번 범위는 새
+PROPOSAL 항목의 최초 배치만 다룬다 — 기존 ExecutionItem을 옮기거나 줄이는 PATCH 재계획은 다루지
+않는다(`07-ideas.md`).
+
+## 13. 레거시 전환
 
 현재 구현의 `todos + schedule_blocks`는 목표 구조에서 `execution_items`로 통합한다. `plan_item_events`는 `execution_item_events`로, 완료 사실은 `execution_records`로 옮긴다. `daily_plans`는 `daily_states`로 책임을 바꾼다.
 

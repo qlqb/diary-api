@@ -35,6 +35,13 @@ public class AiProposal {
 
     private AiProposalTargetScope targetScope;
 
+    /**
+     * 이 제안을 만든 대화에서 사용자가 명시한 사용 불가 시간(JSON, UnavailableWindowSpec 목록).
+     * AI_INFERRED 성격이며 별도 확정 저장소(ContextItem)가 아직 없어 이 제안 범위 안에서만
+     * 재사용한다 — schedule-preview 재계산마다 다시 반영하기 위해 원본 그대로 보존한다.
+     */
+    private String unavailableWindows;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

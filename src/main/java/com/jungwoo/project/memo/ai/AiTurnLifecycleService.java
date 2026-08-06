@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
+import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -148,7 +149,8 @@ public class AiTurnLifecycleService {
     public TurnCompletionResult completeTurnSuccess(
             Long conversationId, Long userId, Long requestMessageId,
             String replyContent, AiResponseType responseType,
-            List<ProposalItem> proposalItemsIfProposal, LocalDate targetDateIfProposal
+            List<ProposalItem> proposalItemsIfProposal, LocalDate targetDateIfProposal,
+            List<UnavailableWindowSpec> unavailableWindowsIfProposal
     ) {
         AiMessage assistantMessage = AiMessage.builder()
                 .conversationId(conversationId)
@@ -164,7 +166,8 @@ public class AiTurnLifecycleService {
         AiProposalResponse proposalResponse = null;
         if (responseType == AiResponseType.PROPOSAL) {
             proposalResponse = aiProposalService.createFromItems(
-                    userId, conversationId, assistantMessage.getMessageId(), proposalItemsIfProposal, targetDateIfProposal);
+                    userId, conversationId, assistantMessage.getMessageId(), proposalItemsIfProposal,
+                    targetDateIfProposal, unavailableWindowsIfProposal);
         }
 
         aiMessageMapper.updateStatusIfCurrent(requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);

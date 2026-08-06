@@ -11,6 +11,7 @@
         <result property="conversationId"  column="conversation_id"/>
         <result property="sourceMessageId" column="source_message_id"/>
         <result property="targetScope"     column="target_scope"/>
+        <result property="unavailableWindows" column="unavailable_windows"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -23,6 +24,7 @@
             conversation_id,
             source_message_id,
             target_scope,
+            unavailable_windows,
             status,
             expires_at
         ) VALUES (
@@ -30,6 +32,7 @@
             #{conversationId},
             #{sourceMessageId},
             #{targetScope},
+            #{unavailableWindows},
             #{status},
             #{expiresAt}
         )

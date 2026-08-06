@@ -264,6 +264,30 @@ ai_proposal_items
 ai_proposals / ai_proposal_items: PROPOSED / APPLIED / MODIFIED_APPLIED / DISMISSED / EXPIRED
 ```
 
+## 10.5 ai_proposals.unavailable_windows / ai_proposal_schedule_previews
+
+2026-08-06부터 7일 범위 일정 후보 배치(Timefold)를 지원한다. DDL은
+`docs/sql/2026-08-06-scheduling-preview.sql` 참고.
+
+`ai_proposals`에 `unavailable_windows JSON NULL` 컬럼을 추가했다. 이 제안을 만든 대화에서
+사용자가 명시한 사용 불가 시간(예: "화요일 저녁은 알바")을 원본 그대로 보존한다 —
+AI_INFERRED 성격이며 별도 확정 저장소(ContextItem)가 아직 없어 이 제안 범위 안에서만
+재사용한다.
+
+```text
+ai_proposal_schedule_previews
+- schedule_preview_id, proposal_id(UNIQUE), user_id
+- horizon_start, horizon_end
+- availability_windows JSON   (계산 당시 화면에 보여준 가용시간 요약: 출처·신뢰도·이유)
+- user_overrides JSON nullable (사용자가 이 계산에 반영한 예외)
+- placed_items JSON            (배치된 제안 항목)
+- unplaced_items JSON          (배치하지 못한 제안 항목과 사유)
+- computed_at, created_at, updated_at
+```
+
+Proposal 하나당 미리보기는 최신 계산 결과 하나만 보존한다(재계산은 upsert) — 이 표는 승인
+전까지 공식 `execution_items`가 아니며, 새로고침 후 미리보기를 복원하는 용도로만 쓴다.
+
 ## 11. version과 동시 수정 방지
 
 PlanItem, ContextItem, ExecutionItem은 version을 가진다. 기존 항목을 수정하는 AI 제안은 생성 당시 version을 baseVersion으로 저장한다.

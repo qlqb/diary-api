@@ -71,6 +71,13 @@
 > 편집·제외 → 묶음 전체 단일 트랜잭션 적용까지 지원한다. 기존 항목 수정 제안은 여전히 후속
 > 범위다. AI가 비활성화된 상태(AI_PROVIDER=none 또는 키 없음)에서도 서버는 정상 부팅하며
 > 상담 호출은 503을 반환한다.
+>
+> 2026-08-06부터 PROPOSAL 항목은 `placementType=UNSCHEDULED`(특정 날짜에 묶이지 않은 후보)도
+> 지원한다. `POST/GET /api/ai/proposals/{id}/schedule-preview`가 가용시간을 추정하고 Timefold
+> Solver로 최대 7일 범위에 배치한 뒤 미리보기를 저장한다(둘 다 OpenAI를 호출하지 않는다).
+> 사용자가 가용시간 예외를 고치거나 항목을 고정하면 Timefold만 다시 돈다. 최종 승인은 기존
+> `POST /api/ai/proposals/{id}/apply`를 그대로 쓴다(항목별로 다른 날짜를 지정하도록 확장).
+> 자세한 흐름은 `03-planning-system.md` §12, 요구사항은 `04-requirements.md` REQ-SCHEDULING-*.
 
 작업:
 

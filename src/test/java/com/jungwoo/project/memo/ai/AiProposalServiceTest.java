@@ -72,103 +72,106 @@ class AiProposalServiceTest {
 
     @Test
     void createFromItems_doesNotSave_whenItemCountOutOfRange() {
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(), TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(), TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_doesNotSave_whenPriorityInvalid() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 30, "URGENT"));
 
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_doesNotSave_whenExpectedMinutesIs4_belowMinimum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 4, "SHOULD"));
 
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_saves_whenExpectedMinutesIs5_atMinimum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 5, "SHOULD"));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
-        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
     }
 
     @Test
     void createFromItems_saves_whenExpectedMinutesIs120_atMaximum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 120, "SHOULD"));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
-        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
     }
 
     @Test
     void createFromItems_doesNotSave_whenExpectedMinutesIs121_aboveMaximum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 121, "SHOULD"));
 
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_doesNotSave_whenTimeFixedMissingTimes() {
         List<ProposalItem> items = List.of(new ProposalItem(
-                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, null, null));
+                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, null, null,
+                null, null, null, null));
 
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_doesNotSave_whenDateOnlyHasTimes() {
         List<ProposalItem> items = List.of(new ProposalItem(
-                "제목", "설명", 30, "SHOULD", PlacementType.DATE_ONLY, LocalTime.of(9, 0), null));
+                "제목", "설명", 30, "SHOULD", PlacementType.DATE_ONLY, LocalTime.of(9, 0), null,
+                null, null, null, null));
 
-        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE))
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
-        verify(persistenceService, never()).save(any(), any(), any(), any());
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
     }
 
     @Test
     void createFromItems_saves_whenTimeFixedValid() {
         List<ProposalItem> items = List.of(new ProposalItem(
-                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, LocalTime.of(9, 0), LocalTime.of(9, 30)));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any()))
+                "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, LocalTime.of(9, 0), LocalTime.of(9, 30),
+                null, null, null, null));
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
-        AiProposalResponse response = service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE);
+        AiProposalResponse response = service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
         assertThat(response.getProposalId()).isEqualTo(PROPOSAL_ID);
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
     }
 
     // ===== apply =====
@@ -327,8 +330,73 @@ class AiProposalServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION));
     }
 
+    @Test
+    void apply_usesEditedScheduledDate_forMultiDayPlacement() {
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+
+        LocalDate differentDate = LocalDate.of(2026, 8, 6);
+        LocalDateTime start = LocalDateTime.of(differentDate, LocalTime.of(10, 0));
+        LocalDateTime end = LocalDateTime.of(differentDate, LocalTime.of(10, 30));
+        when(executionItemService.nextOrderIndexStart(USER_ID, differentDate)).thenReturn(0);
+        when(executionItemService.createFromApprovedProposal(
+                eq(USER_ID), any(), any(), eq(differentDate), any(), any(), anyInt(), eq(true),
+                eq(PlacementType.TIME_FIXED), eq(start), eq(end)
+        )).thenReturn(ExecutionItem.builder().executionItemId(600L).build());
+
+        // 7일 범위 배치 미리보기가 원래 제안 날짜(TARGET_DATE)와 다른 날(differentDate)에
+        // 배치를 확정한 뒤, 사용자가 "최종 적용"을 누르면 프론트가 이 값을 editedItems로 보낸다.
+        AiProposalApplyRequest request = new AiProposalApplyRequest();
+        request.setEditedItems(List.of(AiProposalApplyRequest.EditedProposalItem.builder()
+                .proposalItemId(1L)
+                .placementType(PlacementType.TIME_FIXED)
+                .scheduledStartAt(start)
+                .scheduledEndAt(end)
+                .scheduledDate(differentDate)
+                .build()));
+
+        AiProposalResponse response = service.apply(PROPOSAL_ID, USER_ID, request);
+
+        assertThat(response.getItems().get(0).getTargetDate()).isEqualTo(differentDate);
+        assertThat(response.getItems().get(0).getCreatedItemId()).isEqualTo(600L);
+        verify(executionItemService).createFromApprovedProposal(
+                eq(USER_ID), any(), any(), eq(differentDate), any(), any(), anyInt(), eq(true),
+                eq(PlacementType.TIME_FIXED), eq(start), eq(end));
+    }
+
+    @Test
+    void apply_clearsDateAndTimes_whenEditedToUnscheduled() {
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+        when(executionItemService.nextOrderIndexStart(eq(USER_ID), isNull())).thenReturn(0);
+        when(executionItemService.createFromApprovedProposal(
+                eq(USER_ID), any(), any(), isNull(), any(), any(), anyInt(), eq(true),
+                eq(PlacementType.UNSCHEDULED), isNull(), isNull()
+        )).thenReturn(ExecutionItem.builder().executionItemId(601L).build());
+
+        // Timefold가 배치하지 못해 사용자가 "그래도 남기기"로 선택한 항목 — UNSCHEDULED는
+        // 날짜·시각을 전혀 갖지 않아야 한다(REQ-EXECUTION-002).
+        AiProposalApplyRequest request = new AiProposalApplyRequest();
+        request.setEditedItems(List.of(AiProposalApplyRequest.EditedProposalItem.builder()
+                .proposalItemId(1L)
+                .placementType(PlacementType.UNSCHEDULED)
+                .build()));
+
+        AiProposalResponse response = service.apply(PROPOSAL_ID, USER_ID, request);
+
+        assertThat(response.getItems().get(0).getPlacementType()).isEqualTo(PlacementType.UNSCHEDULED);
+        assertThat(response.getItems().get(0).getScheduledStartAt()).isNull();
+        assertThat(response.getItems().get(0).getScheduledEndAt()).isNull();
+        verify(executionItemService).createFromApprovedProposal(
+                eq(USER_ID), any(), any(), isNull(), any(), any(), anyInt(), eq(true),
+                eq(PlacementType.UNSCHEDULED), isNull(), isNull());
+    }
+
     private ProposalItem dateOnlyItem(String title, int expectedMinutes, String priority) {
-        return new ProposalItem(title, "설명", expectedMinutes, priority, PlacementType.DATE_ONLY, null, null);
+        return new ProposalItem(title, "설명", expectedMinutes, priority, PlacementType.DATE_ONLY, null, null,
+                null, null, null, null);
     }
 
     private AiProposal proposedProposal() {

@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.dto.AiProposalItemResponse;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
+import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,12 +37,14 @@ public class AiProposalPersistenceService {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Transactional
-    public AiProposalResponse save(Long userId, Long conversationId, Long sourceMessageId, List<ProposalItemPayload> items) {
+    public AiProposalResponse save(Long userId, Long conversationId, Long sourceMessageId,
+                                    List<ProposalItemPayload> items, List<UnavailableWindowSpec> unavailableWindows) {
         AiProposal proposal = AiProposal.builder()
                 .userId(userId)
                 .conversationId(conversationId)
                 .sourceMessageId(sourceMessageId)
                 .targetScope(AiProposalTargetScope.TODAY)
+                .unavailableWindows(toJson(unavailableWindows))
                 .status(AiProposalStatus.PROPOSED)
                 .build();
         aiProposalMapper.insert(proposal);
@@ -94,6 +97,18 @@ public class AiProposalPersistenceService {
         } catch (Exception e) {
             log.warn("제안 payload 직렬화 실패", e);
             throw new IllegalStateException("제안 payload 직렬화 실패", e);
+        }
+    }
+
+    private String toJson(List<UnavailableWindowSpec> unavailableWindows) {
+        if (unavailableWindows == null || unavailableWindows.isEmpty()) {
+            return null;
+        }
+        try {
+            return objectMapper.writeValueAsString(unavailableWindows);
+        } catch (Exception e) {
+            log.warn("사용 불가 시간 직렬화 실패 - 저장 없이 진행", e);
+            return null;
         }
     }
 }
