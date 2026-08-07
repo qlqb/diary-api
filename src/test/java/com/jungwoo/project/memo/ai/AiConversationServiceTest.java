@@ -48,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -100,7 +101,7 @@ class AiConversationServiceTest {
 
     @Test
     void streamAndComplete_chat_singleAiCall_noProposal() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "안녕! 오늘은 어떤 얘기부터 해볼까?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
@@ -121,7 +122,7 @@ class AiConversationServiceTest {
 
     @Test
     void streamAndComplete_includesCurrentTimeBlock_andAutoModeBlock() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
@@ -157,7 +158,7 @@ class AiConversationServiceTest {
 
     @Test
     void streamAndComplete_generatesFreshTime_onEachNewRequest() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
@@ -183,9 +184,38 @@ class AiConversationServiceTest {
         assertThat(secondCapture.getValue()).contains("오늘 요일: 목요일");
     }
 
+    /**
+     * 컨텍스트 배분 자체(최근 대화/장기 컨텍스트/이전 요약)는 ContextSnapshotServiceTest가
+     * 검증한다 — 여기서는 AiConversationService가 "전체 입력 예산 - 현재 사용자 메시지 길이"를
+     * 정확히 계산해 그 서비스에 넘기는지만 확인한다. 이 로직 때문에 현재 사용자 메시지 자체가
+     * 잘리는 일은 없다(메시지는 buildContextBlock이 아니라 사용자 프롬프트에 그대로 붙는다).
+     */
+    @Test
+    void streamAndComplete_passesCurrentMessageDeductedBudget_toContextSnapshotService() {
+        ReflectionTestUtils.setField(service, "maxInputTokens", 100); // maxChars = 100*4 = 400
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
+        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of()));
+
+        String userMessage = "가".repeat(50);
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request(userMessage, "k-budget-1"), sink);
+        awaitTerminal(sink, d);
+
+        ArgumentCaptor<Integer> budgetCaptor = ArgumentCaptor.forClass(Integer.class);
+        verify(contextSnapshotService).buildContextBlock(any(), any(), any(), budgetCaptor.capture());
+        assertThat(budgetCaptor.getValue()).isEqualTo(400 - 50);
+        // 현재 사용자 메시지는 buildContextBlock과 무관하게 사용자 프롬프트에 원문 그대로 남는다.
+        ArgumentCaptor<String> userPromptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient, times(1)).streamTurn(any(), userPromptCaptor.capture());
+        assertThat(userPromptCaptor.getValue()).contains(userMessage);
+    }
+
     @Test
     void streamAndComplete_malformedStructuredJson_autoFallsBackToChat_withoutRecalling() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "음, 알겠어.\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
@@ -205,7 +235,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_decisionChat_resolvesToChat_noProposalSaved() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "천천히 얘기해보자.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
                 + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
@@ -226,7 +256,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_decisionAskClarification_repliesWithClarifyingQuestion_asChat() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "언제 끝나는지부터 확인할게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
                 + "\"missingInformation\":[\"알바 종료 시각\"],\"proposalItems\":[],\"unavailableWindows\":[]}";
@@ -247,7 +277,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_decisionOfferProposal_resolvesToOffer_withServerBuiltOfferAction() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "정보는 충분해 보여.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
                 + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
@@ -273,7 +303,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_decisionProposalReady_isModelContractViolation_downgradesToOffer_discardsProposalData() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // AUTO에서 모델이 계약을 어기고 PROPOSAL_READY를 반환해도 서버는 날짜 검증조차 하지
         // 않고 즉시 OFFER로 강등하며 proposalItems/기간/unavailableWindows를 모두 버린다.
         String raw = "이렇게 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -307,7 +337,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_shortAffirmation_neverCreatesProposal_andNeverLooksUpPriorAssistantMessage() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // "응"만으로는 무슨 판단이든 AUTO는 PROPOSAL을 만들 수 없다 — 설령 모델이 착각해서
         // PROPOSAL_READY를 반환해도 마찬가지다. 이전 세션처럼 "직전 응답이 OFFER였는지"를
         // 조회하는 로직 자체가 이제 존재하지 않는다 — aiMessageMapper가 이 흐름에서 전혀
@@ -333,7 +363,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_negationSentence_modelDecisionChat_staysChat_noRegexInvolved() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // "계획은 만들지 말고..."라는 문장 자체를 서버가 정규식으로 해석하지 않는다 — 오직
         // 모델의 decision만 본다. 모델이 CHAT이라고 판단했으면 그대로 CHAT이다.
         String raw = "고민을 들어볼게.\n<<<AI_STRUCTURED>>>\n"
@@ -354,7 +384,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_decisionContractViolation_chatWithClarifyingQuestion_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // decision=CHAT인데 clarifyingQuestion이 채워져 있는 모순 — 조용히 고쳐 쓰지 않고
         // 기존 실패 lifecycle로 처리한다(원칙 7의 일반 규칙, PROPOSAL_READY만 예외).
         String raw = "음.\n<<<AI_STRUCTURED>>>\n"
@@ -377,7 +407,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_chatWithPlanScope_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "음.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"planScope\":\"WEEK\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
@@ -393,7 +423,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_chatWithPeriod_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "음.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"periodStartDate\":\"2026-08-10\",\"periodEndDate\":\"2026-08-16\","
                 + "\"proposalItems\":[]}";
@@ -409,7 +439,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_chatWithUnavailableWindows_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "음.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"unavailableWindows\":[{\"date\":\"2026-08-10\","
                 + "\"startTime\":\"17:00\",\"endTime\":\"23:00\",\"reason\":\"알바\"}],\"proposalItems\":[]}";
@@ -425,7 +455,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_askClarificationWithPlanScope_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "확인할게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"언제가 좋아요?\","
                 + "\"planScope\":\"DAY\",\"proposalItems\":[]}";
@@ -441,7 +471,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_askClarificationWithPeriod_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "확인할게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"언제가 좋아요?\","
                 + "\"periodStartDate\":\"2026-08-10\",\"periodEndDate\":\"2026-08-10\",\"proposalItems\":[]}";
@@ -457,7 +487,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_askClarificationWithUnavailableWindows_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "확인할게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"언제가 좋아요?\","
                 + "\"unavailableWindows\":[{\"dayOfWeek\":\"MONDAY\",\"startTime\":\"17:00\",\"endTime\":\"23:00\","
@@ -474,7 +504,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_offerProposalWithPlanScope_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // OFFER 단계에서는 모델이 기간이나 제약 블록을 미리 생성하지 않는다.
         String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"planScope\":\"DAY\",\"proposalItems\":[]}";
@@ -490,7 +520,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_offerProposalWithPeriod_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"periodStartDate\":\"2026-08-10\","
                 + "\"periodEndDate\":\"2026-08-10\",\"proposalItems\":[]}";
@@ -506,7 +536,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_offerProposalWithUnavailableWindows_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"unavailableWindows\":[{\"dayOfWeek\":\"MONDAY\","
                 + "\"startTime\":\"17:00\",\"endTime\":\"23:00\",\"reason\":\"알바\"}],\"proposalItems\":[]}";
@@ -524,7 +554,7 @@ class AiConversationServiceTest {
 
     @Test
     void serverBuildsOfferAction_evenThoughModelJsonHasNoOfferActionField() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 새 스키마에는 offerAction 필드 자체가 없다 — 모델이 절대 버튼을 구성할 수 없고,
         // OFFER일 때 보여줄 버튼은 항상 서버가 만든다.
         String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
@@ -543,7 +573,7 @@ class AiConversationServiceTest {
 
     @Test
     void savedResponseType_reflectsServerResolution_notRawModelDecisionName() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // decision=ASK_CLARIFICATION은 AiResponseType에 존재하지 않는 이름이다 — 저장되는
         // responseType은 모델의 decision 문자열을 그대로 쓰는 게 아니라 서버(resolveTurn)가
         // 새로 결정한 AiResponseType.CHAT이어야 한다.
@@ -568,7 +598,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_decisionProposalReady_succeeds_andSavesProposal() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "세 조각을 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
                 + "\"planScope\":\"DAY\",\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\","
@@ -595,7 +625,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_decisionAskClarification_succeedsAsChat_notAFailure() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 정보 부족은 정상적인 상담 흐름이다 — CREATE_PROPOSAL이라도 503이 아니라 CHAT으로
         // 정상 완료돼야 한다.
         String raw = "하나만 더 확인할게.\n<<<AI_STRUCTURED>>>\n"
@@ -618,7 +648,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_emptyResponse_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse("")));
 
         RecordingSink sink = new RecordingSink();
@@ -635,7 +665,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_noDelimiter_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse("그냥 대답만 하고 끝냄")));
 
         RecordingSink sink = new RecordingSink();
@@ -649,7 +679,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_delimiterWithNoJsonAfterIt_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse("답변\n<<<AI_STRUCTURED>>>\n")));
 
@@ -663,7 +693,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_invalidJson_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse("답변\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님")));
 
@@ -677,7 +707,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_decisionChat_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "그냥 대화로만 답할게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
@@ -692,7 +722,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_decisionOfferProposal_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 이미 사용자가 생성을 요청했다 — 다시 OFFER_PROPOSAL로 답하면 계약 위반이다.
         String raw = "먼저 물어볼게.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[]}";
@@ -708,7 +738,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_proposalReadyWithEmptyItems_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
                 + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":[]}";
@@ -724,7 +754,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_proposalReadyWithoutPeriod_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
                 + "\"periodStartDate\":null,\"periodEndDate\":null,\"proposalItems\":["
@@ -742,7 +772,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_askClarificationWithProposalItems_violatesContract_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // ASK_CLARIFICATION인데 proposalItems가 있는 모순 — 조용히 고쳐 쓰지 않고 실패시킨다.
         String raw = "확인이 더 필요해.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
@@ -763,7 +793,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_proposalReadyMissingPlanScope_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // planScope=null인 PROPOSAL_READY는 기간과 항목이 정상이어도 계약 위반이다 — 예전처럼
         // DAY로 조용히 대체하지 않는다.
         String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -785,7 +815,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_proposalReadyWithEmptyReply_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // CREATE_PROPOSAL은 실제로 PROPOSAL을 저장하고 그 reply를 assistant 메시지로 남긴다 —
         // 구조화 데이터가 정상이어도 reply가 비어 있으면 빈 문장으로 저장되는 것을 막는다.
         String raw = "<<<AI_STRUCTURED>>>\n"
@@ -807,7 +837,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_proposalReadyWithEmptyReply_stillDowngradesToOffer_notAFailure() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // AUTO+PROPOSAL_READY는 서버 고정 OFFER reply를 쓰므로, 모델의 자연어 reply가 비어
         // 있어도 실패가 아니라 정상적으로 OFFER로 강등된다 — CREATE_PROPOSAL과의 차이점이다.
         String raw = "<<<AI_STRUCTURED>>>\n"
@@ -834,7 +864,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_tomorrowDayRequest_keepsTomorrowAsTargetDate_notForcedToToday() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // "내일 계획 만들어줘"는 DAY 범위이지만 대상 날짜는 내일(2026-08-06)이어야 한다 —
         // 서버가 LocalDate.now()(오늘, 2026-08-05)로 강제로 되돌리면 안 된다.
         String raw = "내일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -861,7 +891,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_specificDateDayRequest_keepsThatDateAsTargetDate() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "8월 20일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
                 + "\"periodStartDate\":\"2026-08-20\",\"periodEndDate\":\"2026-08-20\",\"proposalItems\":["
@@ -886,7 +916,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_dayScopeItemOutsidePeriod_violatesContract_notClamped() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // planScope=DAY, periodStartDate=periodEndDate=오늘인데 UNSCHEDULED 항목의 deadlineDate가
         // 일주일 뒤다 — 오늘로 조용히 클램프하지 않고 계약 위반으로 실패시킨다.
         String raw = "오늘 안에서만 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -908,7 +938,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_weekScope_withinSevenDays_succeeds() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // WEEK는 periodStartDate로부터 최대 7일 범위(경계값 6일 차이)까지 허용된다.
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
@@ -931,7 +961,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_weekScope_exceedsSevenDays_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
                 + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-13\",\"proposalItems\":["
@@ -950,7 +980,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_monthScope_boundary31DaysInclusive_succeeds() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 시작일부터 종료일까지 포함해 31일(=spanDays 30) — 경계값으로 통과해야 한다.
         String raw = "이번 달 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"MONTH\","
@@ -973,7 +1003,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_monthScope_boundary32DaysInclusive_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 시작일부터 종료일까지 포함해 32일(=spanDays 31) — 경계값 하나 차이로 위반돼야 한다.
         // ChronoUnit.DAYS.between은 차이값이라 spanDays>31이 아니라 spanDays>30으로 판정해야
         // 이 케이스를 잡는다.
@@ -995,7 +1025,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_earliestStartDateAfterPeriodEndDate_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // earliestStartDate(8/20)가 periodEndDate(8/11)보다 이후 — 예전에는 earliestStartDate가
         // periodStartDate보다 이른지만 봤기 때문에 이 방향은 통과할 수 있었다.
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -1016,7 +1046,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_deadlineDateBeforePeriodStartDate_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // deadlineDate(8/1)가 periodStartDate(8/5)보다 이전 — 예전에는 deadlineDate가
         // periodEndDate보다 늦는지만 봤기 때문에 이 방향은 통과할 수 있었다.
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -1037,7 +1067,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_earliestStartDateAfterDeadlineDate_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // earliestStartDate(8/10)가 deadlineDate(8/7)보다 이후 — 둘 다 개별적으로는
         // periodStartDate~periodEndDate(8/5~8/11) 범위 안이라 range 검사만으로는 못 잡는다.
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -1058,7 +1088,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_fixedEndAtAfterPeriodEndDate_fails() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // fixedEndAt(8/12) 날짜가 periodEndDate(8/11)보다 이후 — fixedStartAt은 범위 안(8/11)
         // 이라 fixedStartAt만 보면 통과할 뻔한 케이스다.
         String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
@@ -1083,7 +1113,7 @@ class AiConversationServiceTest {
     void tokenLimitReached_partialResponse_fails_evenForPlainAutoMessage() {
         // CREATE_PROPOSAL 전용이 아니라 일반적인 판정임을 확인한다: AUTO 요청이라도 토큰
         // 상한(LENGTH)에서 끊겨 구조화 데이터가 전혀 없이 답변만 일부 남은 경우는 실패로 본다.
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse("부분적으로만 답변하다가 끊김", "LENGTH", 1772, 2400)));
 
@@ -1101,7 +1131,7 @@ class AiConversationServiceTest {
     void normalFinish_withOutputTokensCoincidentallyEqualToCap_doesNotFail() {
         // finishReason=STOP(정상 종료)인데 우연히 outputTokens가 상한과 같은 값이어도 실패로
         // 몰지 않는다 — 보조 판정(outputTokens>=cap)은 finishReason을 못 얻었을 때만 쓴다.
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "정상적으로 잘 끝난 답변.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse(raw, "STOP", 1772, 6000)));
@@ -1118,7 +1148,7 @@ class AiConversationServiceTest {
 
     @Test
     void streamAndComplete_openAiError_marksFailed_releasesLock_noRetry() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.error(new RuntimeException("429 insufficient_quota")));
 
@@ -1137,7 +1167,7 @@ class AiConversationServiceTest {
     void streamAndComplete_timeout_marksFailed_releasesLock_noRetry() {
         // 테스트가 실제로 90초를 기다리지 않도록 타임아웃을 1초로 줄인다.
         ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 1);
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         // 절대 완료되지 않는 스트림 — .timeout()이 강제로 끊어야 한다.
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.never());
 
@@ -1274,7 +1304,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_chat_withContextChanges_passesThrough_andEmitsContextSuggestionsReady() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "알겠어요.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[],"
                 + "\"contextChanges\":[{\"operation\":\"SUPERSEDE\",\"targetContextId\":13,"
                 + "\"content\":\"현재 알바에서 집까지 약 20분 걸린다.\",\"reason\":\"사용자가 새 이동시간을 알려줌\"}]}";
@@ -1302,7 +1332,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_offer_withContextChanges_stillEmitsContextSuggestionsReady() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "초안을 만들어볼까요?\n<<<AI_STRUCTURED>>>\n{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[],"
                 + "\"contextChanges\":[{\"operation\":\"ADD\",\"targetContextId\":null,"
                 + "\"content\":\"늦게 퇴근한 다음 날에는 가벼운 계획을 선호한다.\",\"reason\":\"사용자가 말함\"}]}";
@@ -1322,7 +1352,7 @@ class AiConversationServiceTest {
 
     @Test
     void auto_askClarification_withContextChanges_stillEmitsContextSuggestionsReady() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "몇 시에 끝나나요?\n<<<AI_STRUCTURED>>>\n{\"decision\":\"ASK_CLARIFICATION\","
                 + "\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\",\"proposalItems\":[],"
                 + "\"contextChanges\":[{\"operation\":\"MARK_STALE\",\"targetContextId\":20,"
@@ -1343,7 +1373,7 @@ class AiConversationServiceTest {
 
     @Test
     void createProposal_withContextChanges_failsTurn_contextChangesForcedEmptyOnly() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "초안이에요.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
                 + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
@@ -1368,7 +1398,7 @@ class AiConversationServiceTest {
         // ContextChangeSuggestionServiceTest가 담당한다. 여기서는 AiConversationService가
         // user_contexts나 UserContextMapper/ContextChangeSuggestionService를 직접 건드리지
         // 않고, 항상 aiTurnLifecycleService.completeTurnSuccess에만 위임한다는 것만 확인한다.
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt())).thenReturn("");
         String raw = "알겠어요.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[],"
                 + "\"contextChanges\":[{\"operation\":\"ADD\",\"targetContextId\":null,"
                 + "\"content\":\"새 정보\",\"reason\":\"reason\"}]}";
