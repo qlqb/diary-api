@@ -98,6 +98,10 @@ public class AiProposalService {
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
 
+            // 메서드 파라미터 targetDate는 반복문 안에서 절대 바꾸지 않는다 — 한 항목의
+            // fixedStartAt 날짜가 다음 항목(예: DATE_ONLY)에 새어 들어가는 것을 막기 위해,
+            // 이번 항목에만 적용되는 지역 변수로만 다룬다.
+            LocalDate itemTargetDate = targetDate;
             PlacementType placementType = item.placementType() != null ? item.placementType() : PlacementType.DATE_ONLY;
             LocalDateTime scheduledStartAt = null;
             LocalDateTime scheduledEndAt = null;
@@ -115,7 +119,7 @@ public class AiProposalService {
                 placementType = PlacementType.TIME_FIXED;
                 scheduledStartAt = item.fixedStartAt();
                 scheduledEndAt = item.fixedEndAt();
-                targetDate = scheduledStartAt.toLocalDate();
+                itemTargetDate = scheduledStartAt.toLocalDate();
             } else if (placementType == PlacementType.TIME_FIXED) {
                 if (item.startTime() == null || item.endTime() == null) {
                     log.warn("AI 제안 구조 검증 실패: TIME_FIXED인데 시작/종료 시각 누락");
@@ -125,8 +129,8 @@ public class AiProposalService {
                     log.warn("AI 제안 구조 검증 실패: 종료 시각이 시작 시각보다 이후가 아님");
                     throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
                 }
-                scheduledStartAt = LocalDateTime.of(targetDate, item.startTime());
-                scheduledEndAt = LocalDateTime.of(targetDate, item.endTime());
+                scheduledStartAt = LocalDateTime.of(itemTargetDate, item.startTime());
+                scheduledEndAt = LocalDateTime.of(itemTargetDate, item.endTime());
             } else if (placementType == PlacementType.DATE_ONLY) {
                 if (item.startTime() != null || item.endTime() != null) {
                     log.warn("AI 제안 구조 검증 실패: DATE_ONLY인데 시각이 채워짐");
@@ -150,7 +154,7 @@ public class AiProposalService {
             }
 
             result.add(new ProposalItemPayload(
-                    item.title(), item.description(), item.expectedMinutes(), item.priority(), targetDate,
+                    item.title(), item.description(), item.expectedMinutes(), item.priority(), itemTargetDate,
                     placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate));
         }
         return result;

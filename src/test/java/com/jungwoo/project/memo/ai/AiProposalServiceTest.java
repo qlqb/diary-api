@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
+import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -20,6 +21,7 @@ import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -172,6 +174,57 @@ class AiProposalServiceTest {
 
         assertThat(response.getProposalId()).isEqualTo(PROPOSAL_ID);
         verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
+    }
+
+    // ===== targetDate 오염 방지(수정사항 4: 항목별 itemTargetDate가 메서드 파라미터를 오염시키지 않음) =====
+
+    @Test
+    void createFromItems_fixedStartAtItem_doesNotLeakDateToSubsequentDateOnlyItem() {
+        LocalDateTime fixedStart = LocalDateTime.of(2026, 8, 10, 9, 0);
+        LocalDateTime fixedEnd = LocalDateTime.of(2026, 8, 10, 9, 30);
+        ProposalItem fixedItem = new ProposalItem(
+                "고정 일정", "설명", 30, "MUST", null, null, null,
+                null, null, fixedStart, fixedEnd);
+        ProposalItem dateOnly = dateOnlyItem("날짜만 있는 항목", 20, "SHOULD");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
+                List.of(fixedItem, dateOnly), TARGET_DATE, List.of());
+
+        List<ProposalItemPayload> saved = captor.getValue();
+        // 1번 항목(fixedStartAt=8/10)은 그 날짜를 쓰고, 2번 DATE_ONLY 항목은 메서드에 전달된
+        // 원래 targetDate(8/4)를 그대로 유지해야 한다 — 1번 처리 중 targetDate 파라미터 자체를
+        // 바꿔버리면 2번도 8/10을 물려받는 오염이 생긴다.
+        assertThat(saved.get(0).targetDate()).isEqualTo(LocalDate.of(2026, 8, 10));
+        assertThat(saved.get(1).targetDate()).isEqualTo(TARGET_DATE);
+    }
+
+    @Test
+    void createFromItems_dateOnlyBeforeFixedStartAtItem_keepsIndependentTargetDates() {
+        ProposalItem dateOnly = dateOnlyItem("날짜만 있는 항목", 20, "SHOULD");
+        LocalDateTime fixedStart = LocalDateTime.of(2026, 8, 10, 9, 0);
+        LocalDateTime fixedEnd = LocalDateTime.of(2026, 8, 10, 9, 30);
+        ProposalItem fixedItem = new ProposalItem(
+                "고정 일정", "설명", 30, "MUST", null, null, null,
+                null, null, fixedStart, fixedEnd);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        // 순서를 반대로 바꿔도(먼저 DATE_ONLY, 그다음 fixedStartAt) 각 항목의 날짜가
+        // 서로에게 영향을 주지 않아야 한다.
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
+                List.of(dateOnly, fixedItem), TARGET_DATE, List.of());
+
+        List<ProposalItemPayload> saved = captor.getValue();
+        assertThat(saved.get(0).targetDate()).isEqualTo(TARGET_DATE);
+        assertThat(saved.get(1).targetDate()).isEqualTo(LocalDate.of(2026, 8, 10));
     }
 
     // ===== apply =====

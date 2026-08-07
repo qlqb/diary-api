@@ -381,14 +381,36 @@ public class AiConversationService {
     }
 
     /**
-     * "만들어줘"류의 직접 지시 표현. 문장 아무 곳에 있어도 명시적 요청으로 인정한다
-     * (예: "적용할 계획 후보를 만들어줘", "응, 계획 짜줘"). 직전 응답이 무엇이었는지와
-     * 무관하게 항상 동의로 인정한다 — 사용자가 방금 스스로 생성을 요청했기 때문이다.
+     * "만들어줘"/"짜줘"/"생성해줘"류 — 그 자체로 생성 의도가 분명해 다른 표현과 짝지어질
+     * 필요가 없다("적용할 계획 후보를 만들어줘", "응, 계획 짜줘" 등 어디에 있어도 인정).
      */
-    private static final Pattern PROPOSAL_REQUEST_PATTERN = Pattern.compile(
-            "만들어\\s*줘|만들어\\s*줄래|만들어\\s*주세요|짜\\s*줘|짜\\s*줄래|짜\\s*주세요|"
-                    + "보여\\s*줘|보여\\s*주세요|정리해\\s*줘|정리해\\s*주세요|생성해\\s*줘|생성해\\s*주세요|"
-                    + "진행해\\s*줘|진행해\\s*주세요|적용해\\s*줘|적용해\\s*주세요");
+    private static final Pattern UNAMBIGUOUS_GENERATION_VERB_PATTERN = Pattern.compile(
+            "만들어\\s*줘|만들어\\s*줄래|만들어\\s*주세요|"
+                    + "짜\\s*줘|짜\\s*줄래|짜\\s*주세요|"
+                    + "생성해\\s*줘|생성해\\s*줄래|생성해\\s*주세요");
+
+    /**
+     * "보여줘"/"정리해줘"류 — 그 자체만으로는 새 계획 생성인지("계획 초안 보여줘") 기존
+     * 내용 조회/요약인지("현재 저장된 내용만 보여줘", "고민만 정리해줘") 구분할 수 없다.
+     * PLAN_TARGET_TERM_PATTERN(계획/일정/초안)과 함께 있을 때만 생성 요청으로 인정한다
+     * (containsProposalGenerationRequest 참고). "진행해줘"/"적용해줘"는 여기 포함하지
+     * 않는다 — 특히 "적용해줘"는 이미 만들어진 제안을 적용하라는 뜻일 수 있어 새 PROPOSAL
+     * 생성 동의로 쓰지 않는다.
+     */
+    private static final Pattern TARGET_QUALIFIED_GENERATION_VERB_PATTERN = Pattern.compile(
+            "보여\\s*줘|보여\\s*주세요|정리해\\s*줘|정리해\\s*주세요");
+
+    /** "계획"/"일정"/"초안" — "계획 후보"/"하루 계획"/"오늘 계획"/"주간 계획"도 부분 문자열로 포함한다. */
+    private static final Pattern PLAN_TARGET_TERM_PATTERN = Pattern.compile("계획|일정|초안");
+
+    /**
+     * 계획 생성을 거절/취소하는 표현. containsProposalGenerationRequest보다 먼저 검사해서,
+     * "계획은 만들지 말고 고민만 정리해줘."처럼 부정과 긍정 표현이 한 문장에 섞여 있어도
+     * 거절이 우선하도록 한다(hasExplicitProposalConsent 참고).
+     */
+    private static final Pattern PROPOSAL_GENERATION_NEGATION_PATTERN = Pattern.compile(
+            "만들지\\s*마|만들지\\s*말고|짜지\\s*마|짜지\\s*말고|생성하지\\s*마|생성하지\\s*말고|"
+                    + "초안은\\s*필요\\s*없|계획은\\s*필요\\s*없|계획\\s*말고|일정\\s*말고");
 
     /**
      * 메시지 전체가 짧은 긍정 응답 하나뿐일 때만 후보가 된다("응", "그래", "좋아" 등).
@@ -400,16 +422,39 @@ public class AiConversationService {
             "^(응|어|웅|그래|그래요|좋아|좋아요|네|넵|넹|콜|오케이|ok|okay)[!.~,\\s]*$",
             Pattern.CASE_INSENSITIVE);
 
+    /** "계획은 만들지 말고", "초안은 필요 없어"처럼 계획 생성을 거절/취소하는 표현이 있는지. */
+    private boolean containsProposalGenerationNegation(String trimmedMessage) {
+        return PROPOSAL_GENERATION_NEGATION_PATTERN.matcher(trimmedMessage).find();
+    }
+
+    /**
+     * 계획 생성을 직접 지시하는 표현이 있는지. "만들어줘"류는 그 자체로 인정하고,
+     * "보여줘"/"정리해줘"류는 "계획"/"일정"/"초안" 같은 대상 표현과 함께 있을 때만
+     * 인정한다 — "현재 저장된 내용만 보여줘."처럼 대상 표현 없이 단독으로 쓰이면
+     * 조회/요약 요청일 뿐 생성 동의가 아니다.
+     */
+    private boolean containsProposalGenerationRequest(String trimmedMessage) {
+        if (UNAMBIGUOUS_GENERATION_VERB_PATTERN.matcher(trimmedMessage).find()) {
+            return true;
+        }
+        return TARGET_QUALIFIED_GENERATION_VERB_PATTERN.matcher(trimmedMessage).find()
+                && PLAN_TARGET_TERM_PATTERN.matcher(trimmedMessage).find();
+    }
+
+    /** 메시지 전체가 짧은 긍정 응답 하나뿐인지("응", "그래" 등). 동의로 인정되는지는 직전 응답에 달려 있다. */
+    private boolean isShortAffirmation(String trimmedMessage) {
+        return SHORT_AFFIRMATION_PATTERN.matcher(trimmedMessage).matches();
+    }
+
     /**
      * 사용자가 이번 메시지에서 계획 초안 생성에 명시적으로 동의했는지 판단한다. requestedAction이
      * CREATE_PROPOSAL(OFFER 버튼 클릭)일 때는 그 자체가 동의이므로 이 메서드를 부르지 않는다 —
      * 이건 AUTO 전송(타이핑한 메시지)에서 모델이 스스로 PROPOSAL을 만들었을 때만 쓰는 안전망이다.
      *
-     * "만들어줘"류의 직접 지시는 대화 맥락과 무관하게 항상 동의로 인정하지만, "응"/"그래"/
-     * "좋아" 같은 짧은 긍정 응답은 그 자체만으로는 의미가 없다 — 방금 AI가 "알바는 몇 시에
-     * 끝나나요?"처럼 정보를 확인하는 CHAT 질문을 했을 수도 있기 때문이다. 그래서 짧은
-     * 긍정 응답은 바로 직전 AI 응답의 responseType이 OFFER(초안을 만들어볼지 물어본 상태)일
-     * 때만 동의로 인정한다.
+     * 판정 순서: 1) 거절 표현이 있으면 무조건 동의 아님(긍정 표현이 섞여 있어도 거절이 우선한다).
+     * 2) 짧은 긍정 응답("응" 등)은 바로 직전 AI 응답이 OFFER(초안을 만들어볼지 물어본 상태)일
+     * 때만 동의로 인정한다 — 방금 AI가 "알바는 몇 시에 끝나나요?"처럼 정보를 확인하는 CHAT
+     * 질문을 했을 수도 있기 때문이다. 3) 그 외에는 계획 생성을 직접 지시하는 표현이 있는지 본다.
      */
     private boolean hasExplicitProposalConsent(String message, AiResponseType lastAssistantResponseType) {
         if (message == null) {
@@ -419,10 +464,13 @@ public class AiConversationService {
         if (trimmed.isEmpty()) {
             return false;
         }
-        if (SHORT_AFFIRMATION_PATTERN.matcher(trimmed).matches()) {
+        if (containsProposalGenerationNegation(trimmed)) {
+            return false;
+        }
+        if (isShortAffirmation(trimmed)) {
             return lastAssistantResponseType == AiResponseType.OFFER;
         }
-        return PROPOSAL_REQUEST_PATTERN.matcher(trimmed).find();
+        return containsProposalGenerationRequest(trimmed);
     }
 
     /** 이 대화방에서 이번 턴 이전에 가장 최근에 완료된 ASSISTANT 메시지의 responseType(없으면 null). */
@@ -438,15 +486,17 @@ public class AiConversationService {
     /**
      * needsClarification/clarifyingQuestion/missingInformation과 responseType의 내적 일관성만
      * 검증한다 — "정보가 실제로 충분한가"라는 판단 자체는 모델의 몫이고, 서버는 그 진위를 알
-     * 방법이 없다. 모델이 스스로 낸 값끼리 모순되면(예: needsClarification=true인데
-     * responseType=PROPOSAL) PROPOSAL을 그대로 통과시키지 않고 CHAT으로 되돌리며, reply도
-     * clarifyingQuestion으로 교체한다(기존 PROPOSAL reply를 그대로 노출하지 않는다).
+     * 방법이 없다. needsClarification=true, clarifyingQuestion 존재, missingInformation
+     * 비어있지 않음 중 하나라도 있으면 "명확화가 필요하다"는 신호로 보고, 그럴 때는
+     * responseType=CHAT + proposalItems 빈 배열 + clarifyingQuestion 보유만 허용한다 —
+     * OFFER나 PROPOSAL로는 절대 통과시키지 않는다(예: OFFER인데 clarifyingQuestion이 채워진
+     * 경우도 모순으로 본다). 위반이면 CHAT으로 되돌리고 reply도 clarifyingQuestion으로
+     * 교체한다(기존 OFFER/PROPOSAL reply를 그대로 노출하지 않는다).
      */
     private GuardOutcome enforceClarificationContract(AiTurnStructured structured, String reply) {
         if (structured == null) {
             return new GuardOutcome(null, reply);
         }
-        boolean needsClarification = structured.needsClarification();
         String clarifyingQuestion = structured.clarifyingQuestion();
         boolean hasClarifyingQuestion = clarifyingQuestion != null && !clarifyingQuestion.isBlank();
         List<String> missingInformation = structured.missingInformation() != null
@@ -454,17 +504,22 @@ public class AiConversationService {
         List<ProposalItem> proposalItems = structured.proposalItems() != null
                 ? structured.proposalItems() : List.of();
 
-        boolean violated = needsClarification
-                && (structured.responseType() != AiResponseType.CHAT || !proposalItems.isEmpty() || !hasClarifyingQuestion);
-        violated |= structured.responseType() == AiResponseType.PROPOSAL
-                && (needsClarification || hasClarifyingQuestion || !missingInformation.isEmpty());
+        boolean signalsClarificationNeeded = structured.needsClarification()
+                || hasClarifyingQuestion || !missingInformation.isEmpty();
+        if (!signalsClarificationNeeded) {
+            return new GuardOutcome(structured, reply);
+        }
 
+        boolean violated = structured.responseType() != AiResponseType.CHAT
+                || !proposalItems.isEmpty()
+                || !hasClarifyingQuestion;
         if (!violated) {
             return new GuardOutcome(structured, reply);
         }
 
-        log.warn("AI 응답 강등: needsClarification({})과 responseType({})이 모순됨 - CHAT으로 대체",
-                needsClarification, structured.responseType());
+        log.warn("AI 응답 강등: 명확화 신호(needsClarification={}, clarifyingQuestion={}, missingInformation={}개)와 "
+                        + "responseType({})이 모순됨 - CHAT으로 대체",
+                structured.needsClarification(), hasClarifyingQuestion, missingInformation.size(), structured.responseType());
         return new GuardOutcome(discardToChat(structured), hasClarifyingQuestion ? clarifyingQuestion : DEFAULT_CLARIFICATION_REPLY);
     }
 
@@ -514,7 +569,12 @@ public class AiConversationService {
         return new GuardOutcome(discardToChat(structured), PERIOD_VIOLATION_REPLY);
     }
 
-    /** periodViolationReason이 null이 아니면 위반 사유 문자열, 위반이 없으면 null. */
+    /**
+     * periodViolationReason이 null이 아니면 위반 사유 문자열, 위반이 없으면 null.
+     *
+     * ChronoUnit.DAYS.between(start, end)는 두 날짜의 차이이지 포함 일수가 아니다 — 시작·종료를
+     * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH는 최대 31일(spanDays<=30)까지만 허용한다.
+     */
     private String periodViolationReason(AiTurnStructured structured) {
         AiPlanScope planScope = structured.planScope() != null ? structured.planScope() : AiPlanScope.DAY;
         LocalDate start = structured.periodStartDate();
@@ -530,29 +590,68 @@ public class AiConversationService {
             return "planScope=DAY인데 periodStartDate(" + start + ")와 periodEndDate(" + end + ")가 다름";
         }
         if (planScope == AiPlanScope.WEEK && spanDays > 6) {
-            return "planScope=WEEK인데 기간이 7일을 넘음(" + start + "~" + end + ")";
+            return "planScope=WEEK인데 기간이 7일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
         }
-        if (planScope == AiPlanScope.MONTH && spanDays > 31) {
-            return "planScope=MONTH인데 기간이 31일을 넘음(" + start + "~" + end + ")";
+        if (planScope == AiPlanScope.MONTH && spanDays > 30) {
+            return "planScope=MONTH인데 기간이 31일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
         }
 
         List<ProposalItem> items = structured.proposalItems() != null ? structured.proposalItems() : List.of();
         for (ProposalItem item : items) {
-            if (item.fixedStartAt() != null) {
-                LocalDate itemDate = item.fixedStartAt().toLocalDate();
-                if (itemDate.isBefore(start) || itemDate.isAfter(end)) {
-                    return "항목 '" + item.title() + "'의 fixedStartAt 날짜(" + itemDate
-                            + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
-                }
+            String violation = itemPeriodViolationReason(item, start, end);
+            if (violation != null) {
+                return violation;
             }
-            if (item.earliestStartDate() != null && item.earliestStartDate().isBefore(start)) {
-                return "항목 '" + item.title() + "'의 earliestStartDate(" + item.earliestStartDate()
-                        + ")가 요청 범위 시작(" + start + ")보다 이름";
+        }
+        return null;
+    }
+
+    /**
+     * 항목 하나의 날짜(fixedStartAt/fixedEndAt/earliestStartDate/deadlineDate)를 periodStartDate~
+     * periodEndDate 범위와 양방향으로 검증한다 — 예전에는 earliestStartDate가 시작보다 이른지,
+     * deadlineDate가 종료보다 늦은지만 봤다. 그래서 earliestStartDate가 periodEndDate보다
+     * 늦거나, deadlineDate가 periodStartDate보다 이르거나, earliestStartDate가 deadlineDate보다
+     * 늦은 경우가 통과할 수 있었다. AiProposalService도 fixedStartAt/fixedEndAt 순서를
+     * 검증하지만, 계획 기간 자체를 벗어났는지는 여기(기간 계약 단계)에서만 잡을 수 있다.
+     */
+    private String itemPeriodViolationReason(ProposalItem item, LocalDate start, LocalDate end) {
+        if (item.fixedStartAt() != null && item.fixedEndAt() != null
+                && !item.fixedEndAt().isAfter(item.fixedStartAt())) {
+            return "항목 '" + item.title() + "'의 fixedEndAt(" + item.fixedEndAt()
+                    + ")이 fixedStartAt(" + item.fixedStartAt() + ")보다 이후가 아님";
+        }
+        if (item.fixedStartAt() != null) {
+            LocalDate d = item.fixedStartAt().toLocalDate();
+            if (d.isBefore(start) || d.isAfter(end)) {
+                return "항목 '" + item.title() + "'의 fixedStartAt 날짜(" + d
+                        + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
             }
-            if (item.deadlineDate() != null && item.deadlineDate().isAfter(end)) {
-                return "항목 '" + item.title() + "'의 deadlineDate(" + item.deadlineDate()
-                        + ")가 요청 범위 끝(" + end + ")을 벗어남";
+        }
+        if (item.fixedEndAt() != null) {
+            LocalDate d = item.fixedEndAt().toLocalDate();
+            if (d.isBefore(start) || d.isAfter(end)) {
+                return "항목 '" + item.title() + "'의 fixedEndAt 날짜(" + d
+                        + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
             }
+        }
+        if (item.earliestStartDate() != null) {
+            LocalDate d = item.earliestStartDate();
+            if (d.isBefore(start) || d.isAfter(end)) {
+                return "항목 '" + item.title() + "'의 earliestStartDate(" + d
+                        + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
+            }
+        }
+        if (item.deadlineDate() != null) {
+            LocalDate d = item.deadlineDate();
+            if (d.isBefore(start) || d.isAfter(end)) {
+                return "항목 '" + item.title() + "'의 deadlineDate(" + d
+                        + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
+            }
+        }
+        if (item.earliestStartDate() != null && item.deadlineDate() != null
+                && item.earliestStartDate().isAfter(item.deadlineDate())) {
+            return "항목 '" + item.title() + "'의 earliestStartDate(" + item.earliestStartDate()
+                    + ")가 deadlineDate(" + item.deadlineDate() + ")보다 이후임";
         }
         return null;
     }
