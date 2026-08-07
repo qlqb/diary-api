@@ -474,6 +474,13 @@ public class AiConversationService {
 
     private ResolvedTurn resolveCreateProposalTurn(AiTurnStructured structured, String originalReply, LocalDate todayDate) {
         if (structured.decision() == AiModelDecision.PROPOSAL_READY) {
+            // AUTO+PROPOSAL_READY는 서버 고정 OFFER reply를 쓰므로 빈 모델 reply를 그냥 넘기지만,
+            // CREATE_PROPOSAL은 실제로 PROPOSAL을 저장하고 그 reply를 assistant 메시지로 남긴다 —
+            // 빈 문장으로 저장되는 것을 막는다.
+            if (!hasText(originalReply)) {
+                log.warn("AI 턴 실패 처리: CREATE_PROPOSAL+PROPOSAL_READY인데 reply가 비어 있음");
+                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            }
             String violation = periodViolationReason(structured.planScope(), structured.periodStartDate(),
                     structured.periodEndDate(), structured.proposalItems());
             if (violation != null) {
@@ -495,10 +502,12 @@ public class AiConversationService {
     }
 
     /**
-     * decision과 그 나머지 필드(clarifyingQuestion/missingInformation/proposalItems/기간)의
-     * 내적 일관성을 검증한다. requestedAction과 무관하게 항상 적용된다 — 단, resolveTurn이
-     * 이미 처리한 AUTO+PROPOSAL_READY 조합은 이 메서드에 도달하기 전에 걸러진다. 모순이면
-     * 조용히 고쳐 쓰지 않고 기존 실패 lifecycle(AI_GENERATION_FAILED)로 처리한다.
+     * decision과 그 나머지 필드(clarifyingQuestion/missingInformation/proposalItems/planScope/
+     * 기간/unavailableWindows) 전부의 내적 일관성을 검증한다. requestedAction과 무관하게 항상
+     * 적용된다 — 단, resolveTurn이 이미 처리한 AUTO+PROPOSAL_READY 조합은 이 메서드에 도달하기
+     * 전에 걸러진다. 모순이면 조용히 고쳐 쓰지 않고 기존 실패 lifecycle(AI_GENERATION_FAILED)로
+     * 처리한다 — 최종 결과에서 버려질 필드(예: CHAT인데 딸려온 unavailableWindows)라도 모델
+     * 출력 계약 위반 자체는 서버가 잡는다.
      */
     private void validateDecisionContract(AiTurnStructured structured) {
         boolean hasClarifyingQuestion = hasText(structured.clarifyingQuestion());
@@ -508,22 +517,29 @@ public class AiConversationService {
                 ? structured.proposalItems() : List.of();
         List<UnavailableWindowSpec> unavailableWindows = structured.unavailableWindows() != null
                 ? structured.unavailableWindows() : List.of();
+        boolean hasPlanScope = structured.planScope() != null;
         boolean hasPeriod = structured.periodStartDate() != null || structured.periodEndDate() != null;
+        boolean hasUnavailableWindows = !unavailableWindows.isEmpty();
 
         boolean violated = switch (structured.decision()) {
-            case CHAT -> hasClarifyingQuestion || !missingInformation.isEmpty() || !proposalItems.isEmpty();
+            case CHAT -> hasClarifyingQuestion || !missingInformation.isEmpty() || !proposalItems.isEmpty()
+                    || hasUnavailableWindows || hasPlanScope || hasPeriod;
+            // missingInformation은 선택 정보라 비어 있어도 위반이 아니다.
             case ASK_CLARIFICATION -> !hasClarifyingQuestion || !proposalItems.isEmpty()
-                    || hasPeriod || !unavailableWindows.isEmpty();
+                    || hasUnavailableWindows || hasPlanScope || hasPeriod;
             case OFFER_PROPOSAL -> hasClarifyingQuestion || !missingInformation.isEmpty()
-                    || !proposalItems.isEmpty() || hasPeriod;
-            case PROPOSAL_READY -> hasClarifyingQuestion || !missingInformation.isEmpty()
-                    || proposalItems.isEmpty() || structured.periodStartDate() == null || structured.periodEndDate() == null;
+                    || !proposalItems.isEmpty() || hasUnavailableWindows || hasPlanScope || hasPeriod;
+            // unavailableWindows는 PROPOSAL_READY에서 있어도 없어도 된다 — 검사하지 않는다.
+            case PROPOSAL_READY -> hasClarifyingQuestion || !missingInformation.isEmpty() || proposalItems.isEmpty()
+                    || !hasPlanScope || structured.periodStartDate() == null || structured.periodEndDate() == null;
         };
 
         if (violated) {
             log.warn("AI 턴 실패 처리: decision({})과 나머지 필드가 모순됨 "
-                            + "(clarifyingQuestion={}, missingInformation={}개, proposalItems={}개, 기간존재={})",
-                    structured.decision(), hasClarifyingQuestion, missingInformation.size(), proposalItems.size(), hasPeriod);
+                            + "(clarifyingQuestion={}, missingInformation={}개, proposalItems={}개, "
+                            + "planScope존재={}, 기간존재={}, unavailableWindows존재={})",
+                    structured.decision(), hasClarifyingQuestion, missingInformation.size(), proposalItems.size(),
+                    hasPlanScope, hasPeriod, hasUnavailableWindows);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
     }
@@ -537,11 +553,17 @@ public class AiConversationService {
      * 반환한다. 벗어난 날짜를 상한으로 조용히 옮기지 않는다 — 위반이면 호출부가 PROPOSAL 전체를
      * 실패로 처리한다.
      *
+     * planScope=null을 DAY로 조용히 대체하지 않는다 — decision=PROPOSAL_READY에서 planScope는
+     * 필수이고(validateDecisionContract가 이미 막지만, 이 메서드도 독립적으로 방어한다), 어느
+     * 경로로 호출되든 두 메서드의 계약이 어긋나지 않아야 한다.
+     *
      * ChronoUnit.DAYS.between(start, end)는 두 날짜의 차이이지 포함 일수가 아니다 — 시작·종료를
      * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH는 최대 31일(spanDays<=30)까지만 허용한다.
      */
     private String periodViolationReason(AiPlanScope planScope, LocalDate start, LocalDate end, List<ProposalItem> items) {
-        AiPlanScope effectiveScope = planScope != null ? planScope : AiPlanScope.DAY;
+        if (planScope == null) {
+            return "planScope가 비어 있음";
+        }
         if (start == null || end == null) {
             return "periodStartDate/periodEndDate가 비어 있음";
         }
@@ -549,13 +571,13 @@ public class AiConversationService {
             return "periodEndDate(" + end + ")가 periodStartDate(" + start + ")보다 이전임";
         }
         long spanDays = ChronoUnit.DAYS.between(start, end);
-        if (effectiveScope == AiPlanScope.DAY && !start.equals(end)) {
+        if (planScope == AiPlanScope.DAY && !start.equals(end)) {
             return "planScope=DAY인데 periodStartDate(" + start + ")와 periodEndDate(" + end + ")가 다름";
         }
-        if (effectiveScope == AiPlanScope.WEEK && spanDays > 6) {
+        if (planScope == AiPlanScope.WEEK && spanDays > 6) {
             return "planScope=WEEK인데 기간이 7일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
         }
-        if (effectiveScope == AiPlanScope.MONTH && spanDays > 30) {
+        if (planScope == AiPlanScope.MONTH && spanDays > 30) {
             return "planScope=MONTH인데 기간이 31일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
         }
 
