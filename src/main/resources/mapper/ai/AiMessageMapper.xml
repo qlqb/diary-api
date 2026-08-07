@@ -76,6 +76,17 @@
         LIMIT 1
     </select>
 
+    <select id="findLastAssistantMessageByConversationIdAndUserId" resultMap="aiMessageResultMap">
+        SELECT *
+        FROM ai_messages
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+          AND role             = 'ASSISTANT'
+          AND status           = 'COMPLETED'
+        ORDER BY message_id DESC
+        LIMIT 1
+    </select>
+
     <update id="updateStatusIfCurrent">
         UPDATE ai_messages
         SET status = #{toStatus}

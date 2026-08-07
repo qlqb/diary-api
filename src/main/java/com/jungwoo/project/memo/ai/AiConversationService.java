@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiMessage;
+import com.jungwoo.project.memo.ai.domain.AiPlanScope;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.domain.AiResponseType;
 import com.jungwoo.project.memo.ai.domain.ConversationStatus;
@@ -39,9 +40,11 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 
 /**
  * AI 상담 대화 한 턴을 조정한다: (컨트롤러가 이미 AiTurnLifecycleService.prepareTurn으로
@@ -59,6 +62,18 @@ public class AiConversationService {
 
     /** 대화 제목 길이 상한(과제 기준 20~30자 범위 안). AI를 호출하지 않고 첫 사용자 메시지에서 계산한다. */
     private static final int TITLE_MAX_LENGTH = 24;
+
+    private static final String DEFAULT_OFFER_LABEL = "이 내용으로 계획 초안 만들기";
+
+    /** 명시적 동의 없이 PROPOSAL을 시도해 OFFER로 강등할 때 보여줄 reply. */
+    private static final String CONSENT_MISSING_REPLY = "말해준 내용을 바탕으로 계획 초안을 만들어볼까요?";
+
+    /** needsClarification 계약이 위반됐는데 clarifyingQuestion마저 비어 있을 때의 대체 reply. */
+    private static final String DEFAULT_CLARIFICATION_REPLY = "계획을 만들기 전에 확인이 조금 더 필요해요.";
+
+    /** periodStartDate~periodEndDate 계약이 위반됐을 때 보여줄 reply. */
+    private static final String PERIOD_VIOLATION_REPLY =
+            "방금 만든 초안이 요청한 기간을 벗어나서 다시 확인이 필요해요. 계획할 날짜를 다시 말씀해 주시겠어요?";
 
     private final AiConversationMapper aiConversationMapper;
     private final AiMessageMapper aiMessageMapper;
@@ -168,7 +183,7 @@ public class AiConversationService {
         OfferAction offerAction = null;
         Long proposalId = null;
         if (assistantReply.getResponseType() == AiResponseType.OFFER) {
-            offerAction = OfferAction.createProposal("이 내용으로 계획 초안 만들기");
+            offerAction = OfferAction.createProposal(DEFAULT_OFFER_LABEL);
             sink.onOfferReady(offerAction);
         } else if (assistantReply.getResponseType() == AiResponseType.PROPOSAL) {
             AiProposalResponse proposalResponse = aiProposalService.findBySourceMessageId(
@@ -244,7 +259,7 @@ public class AiConversationService {
                             }
                             try {
                                 completeTurnSuccessfully(conversation, requestMessageId, result, sink,
-                                        requestMoment.toLocalDate(), request.getRequestedAction(),
+                                        requestMoment.toLocalDate(), request,
                                         lastFinishReason.get(), lastUsage.get());
                                 recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
                                         UsageResultStatus.SUCCESS, null);
@@ -275,9 +290,20 @@ public class AiConversationService {
 
     private void completeTurnSuccessfully(
             AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink,
-            LocalDate targetDate, RequestedAction requestedAction, String finishReason, Usage usage
+            LocalDate todayDate, AiMessageRequest request, String finishReason, Usage usage
     ) {
+        RequestedAction requestedAction = request.getRequestedAction();
         AiTurnStructured structured = parseStructured(result.structuredJson());
+
+        // 모델의 구조화 판단을 서버가 순서대로 일관성 검증한다 — 각 단계는 그 앞 단계가 이미
+        // CHAT/OFFER로 강등했으면 더 손대지 않는다(모두 PROPOSAL일 때만 의미가 있다).
+        GuardOutcome outcome = enforceClarificationContract(structured, result.reply());
+        outcome = enforceConsentContract(outcome, requestedAction, request.getMessage(),
+                conversation.getConversationId(), conversation.getUserId());
+        outcome = enforcePeriodContract(outcome);
+
+        structured = outcome.structured();
+        String reply = outcome.reply();
         AiResponseType responseType = structured != null ? structured.responseType() : AiResponseType.CHAT;
         OfferAction offerAction = structured != null ? structured.offerAction() : null;
         List<ProposalItem> proposalItems = structured != null && structured.proposalItems() != null
@@ -285,6 +311,11 @@ public class AiConversationService {
         List<UnavailableWindowSpec> unavailableWindows =
                 structured != null && structured.unavailableWindows() != null
                         ? structured.unavailableWindows() : List.of();
+        // PROPOSAL의 실제 대상 날짜는 모델이 선언한 periodStartDate를 그대로 쓴다(계약 위반이면
+        // 이미 위에서 CHAT으로 강등돼 이 분기에 도달하지 않는다) — "내일"/특정 날짜 요청이
+        // 서버 시계의 "오늘"로 되돌려지지 않는다. CHAT/OFFER는 이 값을 쓰지 않으므로 오늘로 둔다.
+        LocalDate effectiveTargetDate = responseType == AiResponseType.PROPOSAL
+                ? structured.periodStartDate() : todayDate;
 
         Integer inputTokens = safeTokenCount(usage, true);
         Integer outputTokens = safeTokenCount(usage, false);
@@ -300,7 +331,7 @@ public class AiConversationService {
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
-                result.reply(), responseType, proposalItems, targetDate, unavailableWindows);
+                reply, responseType, proposalItems, effectiveTargetDate, unavailableWindows);
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -311,13 +342,13 @@ public class AiConversationService {
             sink.onProposalReady(proposalResponse);
         } else if (responseType == AiResponseType.OFFER) {
             if (offerAction == null) {
-                offerAction = OfferAction.createProposal("이 내용으로 계획 초안 만들기");
+                offerAction = OfferAction.createProposal(DEFAULT_OFFER_LABEL);
             }
             sink.onOfferReady(offerAction);
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
-                responseType, result.reply(), proposalId, proposalItemResponses, offerAction,
+                responseType, reply, proposalId, proposalItemResponses, offerAction,
                 requestMessageId, completion.assistantMessage().getMessageId()));
     }
 
@@ -347,6 +378,195 @@ public class AiConversationService {
             log.warn("AI 구조화 응답 파싱 실패 - CHAT으로 대체: {}", e.getClass().getSimpleName());
             return null;
         }
+    }
+
+    /**
+     * "만들어줘"류의 직접 지시 표현. 문장 아무 곳에 있어도 명시적 요청으로 인정한다
+     * (예: "적용할 계획 후보를 만들어줘", "응, 계획 짜줘"). 직전 응답이 무엇이었는지와
+     * 무관하게 항상 동의로 인정한다 — 사용자가 방금 스스로 생성을 요청했기 때문이다.
+     */
+    private static final Pattern PROPOSAL_REQUEST_PATTERN = Pattern.compile(
+            "만들어\\s*줘|만들어\\s*줄래|만들어\\s*주세요|짜\\s*줘|짜\\s*줄래|짜\\s*주세요|"
+                    + "보여\\s*줘|보여\\s*주세요|정리해\\s*줘|정리해\\s*주세요|생성해\\s*줘|생성해\\s*주세요|"
+                    + "진행해\\s*줘|진행해\\s*주세요|적용해\\s*줘|적용해\\s*주세요");
+
+    /**
+     * 메시지 전체가 짧은 긍정 응답 하나뿐일 때만 후보가 된다("응", "그래", "좋아" 등).
+     * "그럼 몇 시에 자는 게 좋아?"처럼 문장 속에 섞인 경우는 매칭되지 않는다 — 전체 문자열이
+     * 정확히 이 패턴과 일치해야 한다. 단, 이 패턴에 매칭돼도 곧바로 동의는 아니다 — 바로
+     * 직전 AI 응답이 OFFER였을 때만 동의로 인정한다(hasExplicitProposalConsent 참고).
+     */
+    private static final Pattern SHORT_AFFIRMATION_PATTERN = Pattern.compile(
+            "^(응|어|웅|그래|그래요|좋아|좋아요|네|넵|넹|콜|오케이|ok|okay)[!.~,\\s]*$",
+            Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 사용자가 이번 메시지에서 계획 초안 생성에 명시적으로 동의했는지 판단한다. requestedAction이
+     * CREATE_PROPOSAL(OFFER 버튼 클릭)일 때는 그 자체가 동의이므로 이 메서드를 부르지 않는다 —
+     * 이건 AUTO 전송(타이핑한 메시지)에서 모델이 스스로 PROPOSAL을 만들었을 때만 쓰는 안전망이다.
+     *
+     * "만들어줘"류의 직접 지시는 대화 맥락과 무관하게 항상 동의로 인정하지만, "응"/"그래"/
+     * "좋아" 같은 짧은 긍정 응답은 그 자체만으로는 의미가 없다 — 방금 AI가 "알바는 몇 시에
+     * 끝나나요?"처럼 정보를 확인하는 CHAT 질문을 했을 수도 있기 때문이다. 그래서 짧은
+     * 긍정 응답은 바로 직전 AI 응답의 responseType이 OFFER(초안을 만들어볼지 물어본 상태)일
+     * 때만 동의로 인정한다.
+     */
+    private boolean hasExplicitProposalConsent(String message, AiResponseType lastAssistantResponseType) {
+        if (message == null) {
+            return false;
+        }
+        String trimmed = message.trim();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        if (SHORT_AFFIRMATION_PATTERN.matcher(trimmed).matches()) {
+            return lastAssistantResponseType == AiResponseType.OFFER;
+        }
+        return PROPOSAL_REQUEST_PATTERN.matcher(trimmed).find();
+    }
+
+    /** 이 대화방에서 이번 턴 이전에 가장 최근에 완료된 ASSISTANT 메시지의 responseType(없으면 null). */
+    private AiResponseType lastAssistantResponseType(Long conversationId, Long userId) {
+        AiMessage last = aiMessageMapper.findLastAssistantMessageByConversationIdAndUserId(conversationId, userId);
+        return last != null ? last.getResponseType() : null;
+    }
+
+    /** 강등 파이프라인의 각 단계가 넘겨주는 결과 — 구조화 응답과 그에 맞게 교체된 reply를 함께 들고 다닌다. */
+    private record GuardOutcome(AiTurnStructured structured, String reply) {
+    }
+
+    /**
+     * needsClarification/clarifyingQuestion/missingInformation과 responseType의 내적 일관성만
+     * 검증한다 — "정보가 실제로 충분한가"라는 판단 자체는 모델의 몫이고, 서버는 그 진위를 알
+     * 방법이 없다. 모델이 스스로 낸 값끼리 모순되면(예: needsClarification=true인데
+     * responseType=PROPOSAL) PROPOSAL을 그대로 통과시키지 않고 CHAT으로 되돌리며, reply도
+     * clarifyingQuestion으로 교체한다(기존 PROPOSAL reply를 그대로 노출하지 않는다).
+     */
+    private GuardOutcome enforceClarificationContract(AiTurnStructured structured, String reply) {
+        if (structured == null) {
+            return new GuardOutcome(null, reply);
+        }
+        boolean needsClarification = structured.needsClarification();
+        String clarifyingQuestion = structured.clarifyingQuestion();
+        boolean hasClarifyingQuestion = clarifyingQuestion != null && !clarifyingQuestion.isBlank();
+        List<String> missingInformation = structured.missingInformation() != null
+                ? structured.missingInformation() : List.of();
+        List<ProposalItem> proposalItems = structured.proposalItems() != null
+                ? structured.proposalItems() : List.of();
+
+        boolean violated = needsClarification
+                && (structured.responseType() != AiResponseType.CHAT || !proposalItems.isEmpty() || !hasClarifyingQuestion);
+        violated |= structured.responseType() == AiResponseType.PROPOSAL
+                && (needsClarification || hasClarifyingQuestion || !missingInformation.isEmpty());
+
+        if (!violated) {
+            return new GuardOutcome(structured, reply);
+        }
+
+        log.warn("AI 응답 강등: needsClarification({})과 responseType({})이 모순됨 - CHAT으로 대체",
+                needsClarification, structured.responseType());
+        return new GuardOutcome(discardToChat(structured), hasClarifyingQuestion ? clarifyingQuestion : DEFAULT_CLARIFICATION_REPLY);
+    }
+
+    /**
+     * 사용자 승인 없이 PROPOSAL로 전환되지 않는지 서버에서도 강제한다. requestedAction=
+     * CREATE_PROPOSAL(OFFER 버튼 클릭)은 그 자체가 명시적 동의이므로 건드리지 않는다 —
+     * enforceTurnContract가 그 경로는 이미 PROPOSAL만 허용하도록 별도로 검증한다. 앞
+     * 단계(enforceClarificationContract)가 이미 CHAT으로 강등했으면 여기서는 더 손대지 않는다.
+     */
+    private GuardOutcome enforceConsentContract(
+            GuardOutcome in, RequestedAction requestedAction, String userMessage, Long conversationId, Long userId
+    ) {
+        AiTurnStructured structured = in.structured();
+        if (structured == null || structured.responseType() != AiResponseType.PROPOSAL
+                || requestedAction == RequestedAction.CREATE_PROPOSAL) {
+            return in;
+        }
+        AiResponseType lastAssistantResponseType = lastAssistantResponseType(conversationId, userId);
+        if (hasExplicitProposalConsent(userMessage, lastAssistantResponseType)) {
+            return in;
+        }
+
+        log.warn("AI 응답 강등: 명시적 생성 동의 없이 PROPOSAL을 시도함(직전 응답={}) - OFFER로 대체",
+                lastAssistantResponseType);
+        OfferAction offerAction = structured.offerAction() != null
+                ? structured.offerAction() : OfferAction.createProposal(DEFAULT_OFFER_LABEL);
+        return new GuardOutcome(discardToOffer(structured, offerAction), CONSENT_MISSING_REPLY);
+    }
+
+    /**
+     * periodStartDate~periodEndDate 계약(수정사항 3)을 검증한다. 예전처럼 범위를 벗어난
+     * 날짜를 상한으로 조용히 옮기지 않는다 — 여러 날짜가 하루로 몰리는 왜곡을 막기 위해,
+     * 위반이면 proposalItems를 통째로 버리고 CHAT으로 강등한다. 앞 단계가 이미 CHAT/OFFER로
+     * 강등했으면 여기서는 더 손대지 않는다.
+     */
+    private GuardOutcome enforcePeriodContract(GuardOutcome in) {
+        AiTurnStructured structured = in.structured();
+        if (structured == null || structured.responseType() != AiResponseType.PROPOSAL) {
+            return in;
+        }
+        String violation = periodViolationReason(structured);
+        if (violation == null) {
+            return in;
+        }
+
+        log.warn("AI 제안 범위 계약 위반 - CHAT으로 대체: {}", violation);
+        return new GuardOutcome(discardToChat(structured), PERIOD_VIOLATION_REPLY);
+    }
+
+    /** periodViolationReason이 null이 아니면 위반 사유 문자열, 위반이 없으면 null. */
+    private String periodViolationReason(AiTurnStructured structured) {
+        AiPlanScope planScope = structured.planScope() != null ? structured.planScope() : AiPlanScope.DAY;
+        LocalDate start = structured.periodStartDate();
+        LocalDate end = structured.periodEndDate();
+        if (start == null || end == null) {
+            return "periodStartDate/periodEndDate가 비어 있음";
+        }
+        if (end.isBefore(start)) {
+            return "periodEndDate(" + end + ")가 periodStartDate(" + start + ")보다 이전임";
+        }
+        long spanDays = ChronoUnit.DAYS.between(start, end);
+        if (planScope == AiPlanScope.DAY && !start.equals(end)) {
+            return "planScope=DAY인데 periodStartDate(" + start + ")와 periodEndDate(" + end + ")가 다름";
+        }
+        if (planScope == AiPlanScope.WEEK && spanDays > 6) {
+            return "planScope=WEEK인데 기간이 7일을 넘음(" + start + "~" + end + ")";
+        }
+        if (planScope == AiPlanScope.MONTH && spanDays > 31) {
+            return "planScope=MONTH인데 기간이 31일을 넘음(" + start + "~" + end + ")";
+        }
+
+        List<ProposalItem> items = structured.proposalItems() != null ? structured.proposalItems() : List.of();
+        for (ProposalItem item : items) {
+            if (item.fixedStartAt() != null) {
+                LocalDate itemDate = item.fixedStartAt().toLocalDate();
+                if (itemDate.isBefore(start) || itemDate.isAfter(end)) {
+                    return "항목 '" + item.title() + "'의 fixedStartAt 날짜(" + itemDate
+                            + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
+                }
+            }
+            if (item.earliestStartDate() != null && item.earliestStartDate().isBefore(start)) {
+                return "항목 '" + item.title() + "'의 earliestStartDate(" + item.earliestStartDate()
+                        + ")가 요청 범위 시작(" + start + ")보다 이름";
+            }
+            if (item.deadlineDate() != null && item.deadlineDate().isAfter(end)) {
+                return "항목 '" + item.title() + "'의 deadlineDate(" + item.deadlineDate()
+                        + ")가 요청 범위 끝(" + end + ")을 벗어남";
+            }
+        }
+        return null;
+    }
+
+    /** proposalItems/offerAction/unavailableWindows/기간 데이터를 모두 비우고 CHAT으로 강등한다. */
+    private AiTurnStructured discardToChat(AiTurnStructured structured) {
+        return new AiTurnStructured(AiResponseType.CHAT, List.of(), null, List.of(), structured.planScope(),
+                false, null, List.of(), null, null);
+    }
+
+    /** proposalItems/기간 데이터를 모두 비우고 OFFER로 강등한다. offerAction만 유지한다. */
+    private AiTurnStructured discardToOffer(AiTurnStructured structured, OfferAction offerAction) {
+        return new AiTurnStructured(AiResponseType.OFFER, List.of(), offerAction, List.of(), structured.planScope(),
+                false, null, List.of(), null, null);
     }
 
     /**
@@ -381,11 +601,13 @@ public class AiConversationService {
                 """.formatted(isoDateTime, userZone.getId(), todayDate, dayOfWeekKorean);
     }
 
-    private String buildUserPrompt(AiMessageRequest request, String contextBlock, LocalDate targetDate) {
+    private String buildUserPrompt(AiMessageRequest request, String contextBlock, LocalDate todayDate) {
         String budgetedContext = enforceInputBudget(contextBlock, request.getMessage());
 
         StringBuilder sb = new StringBuilder();
-        sb.append("targetDate: ").append(targetDate).append("\n\n");
+        // 이 값은 참고용 "오늘"일 뿐이다 — 실제 계획 대상 날짜(오늘/내일/특정 날짜)는 네가
+        // periodStartDate/periodEndDate로 직접 판단해 채운다. 서버가 무조건 이 값으로 덮어쓰지 않는다.
+        sb.append("오늘 날짜(참고용, 상대 표현 계산에만 쓴다): ").append(todayDate).append("\n\n");
         if (!budgetedContext.isEmpty()) {
             sb.append(budgetedContext).append('\n');
         }
@@ -393,6 +615,7 @@ public class AiConversationService {
         if (request.getRequestedAction() == RequestedAction.CREATE_PROPOSAL) {
             sb.append("[사용자 요청 종류]\n사용자가 지금까지의 대화 내용으로 계획 초안 생성을 요청했다. ")
                     .append("반드시 responseType=PROPOSAL로 응답하고, 위 대화 맥락을 근거로 실행 조각을 만들어라. ")
+                    .append("periodStartDate/periodEndDate도 지금까지 대화에서 정해진 기간과 일치하게 채워라. ")
                     .append("맥락에 없는 목표나 제약은 지어내지 마라. ")
                     .append("reply는 1~2문장으로 짧게 쓰고, proposalItems에 넣을 내용을 reply에서 다시 설명하지 마라. ")
                     .append("이미 확정된 기존 계획 전체나 실행 조각 목록을 다시 나열하지 말고, 이번에 새로 만드는 후보만 출력해라.\n\n");
