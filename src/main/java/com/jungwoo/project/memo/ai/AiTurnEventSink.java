@@ -2,8 +2,11 @@ package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
+import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+
+import java.util.List;
 
 /**
  * AiConversationService가 SSE 이벤트를 내보낼 때 쓰는 콜백. 컨트롤러가 SseEmitter에
@@ -20,6 +23,12 @@ public interface AiTurnEventSink {
     void onOfferReady(OfferAction offerAction);
 
     void onProposalReady(AiProposalResponse proposal);
+
+    /**
+     * 장기 컨텍스트 변경 후보가 있으면 responseType(CHAT/OFFER/PROPOSAL)과 무관하게 함께
+     * 알린다 — 이 후보는 sidecar이며 아직 user_contexts에는 반영되지 않은 PROPOSED 상태다.
+     */
+    void onContextSuggestionsReady(List<ContextSuggestionResponse> suggestions);
 
     void onCompleted(AiTurnCompletedPayload payload);
 

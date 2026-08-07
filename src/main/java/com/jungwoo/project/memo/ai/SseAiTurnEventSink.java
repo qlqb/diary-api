@@ -2,12 +2,14 @@ package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
+import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -57,6 +59,11 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     @Override
     public void onProposalReady(AiProposalResponse proposal) {
         send("proposal.ready", Map.of("proposalId", proposal.getProposalId(), "items", proposal.getItems()));
+    }
+
+    @Override
+    public void onContextSuggestionsReady(List<ContextSuggestionResponse> suggestions) {
+        send("context.suggestions.ready", Map.of("suggestions", suggestions));
     }
 
     @Override

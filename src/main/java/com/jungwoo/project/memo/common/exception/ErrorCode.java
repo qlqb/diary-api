@@ -49,6 +49,7 @@ public enum ErrorCode {
     EXECUTION_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_007", "실행 조각을 찾을 수 없습니다"),
     PLAN_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_008", "계획 항목을 찾을 수 없습니다"),
     AI_PROPOSAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_009", "AI 제안을 찾을 수 없습니다"),
+    CONTEXT_SUGGESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_010", "컨텍스트 변경 후보를 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -57,6 +58,8 @@ public enum ErrorCode {
     VERSION_CONFLICT(HttpStatus.CONFLICT, "E409_004", "다른 곳에서 먼저 변경되었습니다"),
     AI_PROPOSAL_ALREADY_RESPONDED(HttpStatus.CONFLICT, "E409_005", "이미 처리된 제안입니다"),
     AI_CONVERSATION_BUSY(HttpStatus.CONFLICT, "E409_006", "다른 상담 요청이 진행 중입니다"),
+    CONTEXT_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_007", "이미 처리된 컨텍스트 변경 후보입니다"),
+    CONTEXT_APPLY_CONFLICT(HttpStatus.CONFLICT, "E409_008", "컨텍스트 상태가 그 사이 바뀌어 적용할 수 없습니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiMessage;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.domain.AiResponseType;
+import com.jungwoo.project.memo.ai.domain.ContextChangeOperation;
 import com.jungwoo.project.memo.ai.domain.ConversationStatus;
 import com.jungwoo.project.memo.ai.domain.MessageRole;
 import com.jungwoo.project.memo.ai.domain.MessageStatus;
@@ -11,6 +12,8 @@ import com.jungwoo.project.memo.ai.dto.AiConversationResponse;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
+import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
+import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
@@ -78,6 +81,7 @@ class AiConversationServiceTest {
     @Mock private AiConsultationClient aiConsultationClient;
     @Mock private AiProposalService aiProposalService;
     @Mock private AiUsageLimitService aiUsageLimitService;
+    @Mock private ContextChangeSuggestionService contextChangeSuggestionService;
 
     @InjectMocks
     private AiConversationService service;
@@ -100,8 +104,8 @@ class AiConversationServiceTest {
         String raw = "안녕! 오늘은 어떤 얘기부터 해볼까?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("안녕", "k1"), sink);
@@ -120,8 +124,8 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 뭐 해야 해?", "k-time-1"), sink);
@@ -156,8 +160,8 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of()));
 
         awaitTerminal(new RecordingSink(),
                 service.streamAndComplete(preparedTurn(), request("첫 요청", "k-time-2a"), new RecordingSink()));
@@ -184,8 +188,8 @@ class AiConversationServiceTest {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "음, 알겠어.\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(204L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(204L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("음", "k4"), sink);
@@ -207,8 +211,8 @@ class AiConversationServiceTest {
                 + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
                 + "\"periodStartDate\":null,\"periodEndDate\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(300L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(300L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 많이 피곤해", "k-auto-chat"), sink);
@@ -227,8 +231,8 @@ class AiConversationServiceTest {
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
                 + "\"missingInformation\":[\"알바 종료 시각\"],\"proposalItems\":[],\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(301L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(301L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(),
@@ -249,8 +253,8 @@ class AiConversationServiceTest {
                 + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
                 + "\"periodStartDate\":null,\"periodEndDate\":null}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(302L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(302L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(),
@@ -279,8 +283,8 @@ class AiConversationServiceTest {
                 + "\"priority\":\"SHOULD\",\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
                 + "\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(303L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(303L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 계획 만들어줘", "k-auto-violation"), sink);
@@ -296,7 +300,7 @@ class AiConversationServiceTest {
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
         verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), responseTypeCaptor.capture(), itemsCaptor.capture(), any(), any());
+                any(), any(), any(), any(), responseTypeCaptor.capture(), itemsCaptor.capture(), any(), any(), any());
         assertThat(responseTypeCaptor.getValue()).isEqualTo(AiResponseType.OFFER);
         assertThat(itemsCaptor.getValue()).isEmpty();
     }
@@ -315,8 +319,8 @@ class AiConversationServiceTest {
                 + "\"priority\":\"SHOULD\",\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
                 + "\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(304L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(304L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("응", "k-auto-short"), sink);
@@ -336,8 +340,8 @@ class AiConversationServiceTest {
                 + "{\"decision\":\"CHAT\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
                 + "\"proposalItems\":[],\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(305L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(305L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(),
@@ -363,7 +367,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
@@ -383,7 +387,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
@@ -400,7 +404,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -416,7 +420,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -432,7 +436,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -448,7 +452,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -465,7 +469,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -481,7 +485,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -497,7 +501,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -513,7 +517,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     // ===== 서버가 offerAction/responseType을 직접 만든다는 것을 확인 =====
@@ -526,8 +530,8 @@ class AiConversationServiceTest {
         String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(306L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(306L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("정보 다 줬어", "k-server-offer"), sink);
@@ -547,8 +551,8 @@ class AiConversationServiceTest {
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"언제가 좋아요?\","
                 + "\"missingInformation\":[],\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(307L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(307L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("계획 좀 도와줘", "k-server-resolve"), sink);
@@ -556,7 +560,7 @@ class AiConversationServiceTest {
 
         ArgumentCaptor<AiResponseType> responseTypeCaptor = ArgumentCaptor.forClass(AiResponseType.class);
         verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), responseTypeCaptor.capture(), any(), any(), any());
+                any(), any(), any(), any(), responseTypeCaptor.capture(), any(), any(), any(), any());
         assertThat(responseTypeCaptor.getValue()).isEqualTo(AiResponseType.CHAT);
     }
 
@@ -573,8 +577,8 @@ class AiConversationServiceTest {
                 + "\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(910L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(205L), proposalResponse));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(205L), proposalResponse, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp8"), sink);
@@ -585,7 +589,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed.proposalId()).isEqualTo(910L);
         assertThat(sink.proposalReady).isNotNull();
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
     }
 
@@ -598,8 +602,8 @@ class AiConversationServiceTest {
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
                 + "\"missingInformation\":[\"알바 종료 시각\"],\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp9"), sink);
@@ -624,7 +628,7 @@ class AiConversationServiceTest {
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
         assertThat(sink.completed).isNull();
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
@@ -639,7 +643,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
@@ -654,7 +658,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -668,7 +672,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -683,7 +687,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -699,7 +703,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -715,7 +719,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -733,7 +737,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -752,7 +756,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     // ===== PROPOSAL_READY 필수 필드(수정사항 2: planScope 필수, 수정사항 3: reply 빈 값 금지) =====
@@ -775,7 +779,7 @@ class AiConversationServiceTest {
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
         assertThat(sink.proposalReady).isNull();
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
@@ -797,7 +801,7 @@ class AiConversationServiceTest {
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
         assertThat(sink.proposalReady).isNull();
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
@@ -812,8 +816,8 @@ class AiConversationServiceTest {
                 + "{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
                 + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(308L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(308L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 계획 만들어줘", "k-auto-empty-reply"), sink);
@@ -840,8 +844,8 @@ class AiConversationServiceTest {
                 + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(931L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(217L), proposalResponse));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(217L), proposalResponse, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-tomorrow-1"), sink);
@@ -851,7 +855,7 @@ class AiConversationServiceTest {
 
         ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
         verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
+                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any(), any());
         assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 6));
     }
 
@@ -865,8 +869,8 @@ class AiConversationServiceTest {
                 + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(932L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(218L), proposalResponse));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(218L), proposalResponse, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-specific-1"), sink);
@@ -876,7 +880,7 @@ class AiConversationServiceTest {
 
         ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
         verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
+                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any(), any());
         assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 20));
     }
 
@@ -899,7 +903,7 @@ class AiConversationServiceTest {
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
         assertThat(sink.proposalReady).isNull();
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -914,8 +918,8 @@ class AiConversationServiceTest {
                 + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-11\"}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(933L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(219L), proposalResponse));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(219L), proposalResponse, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-1"), sink);
@@ -956,8 +960,8 @@ class AiConversationServiceTest {
                 + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-09-04\"}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(934L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(221L), proposalResponse));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(221L), proposalResponse, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-month-1"), sink);
@@ -1088,7 +1092,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
     }
@@ -1101,8 +1105,8 @@ class AiConversationServiceTest {
         String raw = "정상적으로 잘 끝난 답변.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse(raw, "STOP", 1772, 6000)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null, List.of()));
 
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request("안녕", "k-len-2"), sink);
@@ -1167,7 +1171,7 @@ class AiConversationServiceTest {
         assertThat(sink.completed.reply()).isEqualTo("이미 답변했던 내용");
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
         verify(aiConsultationClient, never()).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -1264,6 +1268,125 @@ class AiConversationServiceTest {
         List<AiConversationResponse> result = service.listConversations(USER_ID);
 
         assertThat(result.get(0).getTitle()).isEqualTo("안녕");
+    }
+
+    // ===== Context 변경 후보(contextChanges) sidecar =====
+
+    @Test
+    void auto_chat_withContextChanges_passesThrough_andEmitsContextSuggestionsReady() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "알겠어요.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[],"
+                + "\"contextChanges\":[{\"operation\":\"SUPERSEDE\",\"targetContextId\":13,"
+                + "\"content\":\"현재 알바에서 집까지 약 20분 걸린다.\",\"reason\":\"사용자가 새 이동시간을 알려줌\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        ContextSuggestionResponse suggestionResponse = ContextSuggestionResponse.builder().suggestionId(900L).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(401L), null, List.of(suggestionResponse)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("이사해서 이동시간 짧아졌어", "k-ctx-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.contextSuggestionsReady).containsExactly(suggestionResponse);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ContextChangeSuggestion>> captor = ArgumentCaptor.forClass(List.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), any(), any(), captor.capture());
+        assertThat(captor.getValue()).hasSize(1);
+        assertThat(captor.getValue().get(0).operation()).isEqualTo(ContextChangeOperation.SUPERSEDE);
+        assertThat(captor.getValue().get(0).targetContextId()).isEqualTo(13L);
+    }
+
+    @Test
+    void auto_offer_withContextChanges_stillEmitsContextSuggestionsReady() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "초안을 만들어볼까요?\n<<<AI_STRUCTURED>>>\n{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[],"
+                + "\"contextChanges\":[{\"operation\":\"ADD\",\"targetContextId\":null,"
+                + "\"content\":\"늦게 퇴근한 다음 날에는 가벼운 계획을 선호한다.\",\"reason\":\"사용자가 말함\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        ContextSuggestionResponse suggestionResponse = ContextSuggestionResponse.builder().suggestionId(901L).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(402L), null, List.of(suggestionResponse)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("피곤한 다음날은 가볍게 하고 싶어", "k-ctx-2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.contextSuggestionsReady).containsExactly(suggestionResponse);
+    }
+
+    @Test
+    void auto_askClarification_withContextChanges_stillEmitsContextSuggestionsReady() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "몇 시에 끝나나요?\n<<<AI_STRUCTURED>>>\n{\"decision\":\"ASK_CLARIFICATION\","
+                + "\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\",\"proposalItems\":[],"
+                + "\"contextChanges\":[{\"operation\":\"MARK_STALE\",\"targetContextId\":20,"
+                + "\"content\":null,\"reason\":\"전제가 바뀐 것 같음\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        ContextSuggestionResponse suggestionResponse = ContextSuggestionResponse.builder().suggestionId(902L).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(403L), null, List.of(suggestionResponse)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("이제 학교를 안 다녀", "k-ctx-3"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.contextSuggestionsReady).containsExactly(suggestionResponse);
+    }
+
+    @Test
+    void createProposal_withContextChanges_failsTurn_contextChangesForcedEmptyOnly() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "초안이에요.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
+                + "{\"title\":\"할 일\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"MUST\","
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
+                + "\"contextChanges\":[{\"operation\":\"ADD\",\"targetContextId\":null,"
+                + "\"content\":\"새 정보\",\"reason\":\"reason\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-ctx-4"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNotNull();
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void aiGeneratedContextChanges_doesNotAutoModifyUserContexts_onlySavedAsProposed() {
+        // AiTurnLifecycleService는 이 테스트에서 목이므로, contextChanges 저장/검증은
+        // ContextChangeSuggestionServiceTest가 담당한다. 여기서는 AiConversationService가
+        // user_contexts나 UserContextMapper/ContextChangeSuggestionService를 직접 건드리지
+        // 않고, 항상 aiTurnLifecycleService.completeTurnSuccess에만 위임한다는 것만 확인한다.
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "알겠어요.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[],"
+                + "\"contextChanges\":[{\"operation\":\"ADD\",\"targetContextId\":null,"
+                + "\"content\":\"새 정보\",\"reason\":\"reason\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(404L), null, List.of(ContextSuggestionResponse.builder()
+                                .suggestionId(903L).status(com.jungwoo.project.memo.ai.domain.ContextSuggestionStatus.PROPOSED)
+                                .build())));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("새로운 사실이야", "k-ctx-5"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.contextSuggestionsReady).hasSize(1);
+        assertThat(sink.contextSuggestionsReady.get(0).getStatus())
+                .isEqualTo(com.jungwoo.project.memo.ai.domain.ContextSuggestionStatus.PROPOSED);
+        verifyNoInteractions(contextChangeSuggestionService);
     }
 
     // ===== helpers =====
@@ -1366,6 +1489,7 @@ class AiConversationServiceTest {
         ErrorCode errorCode;
         OfferAction offerAction;
         AiProposalResponse proposalReady;
+        List<ContextSuggestionResponse> contextSuggestionsReady;
         AtomicInteger startedCount = new AtomicInteger(0);
         List<String> events = new ArrayList<>();
 
@@ -1373,6 +1497,7 @@ class AiConversationServiceTest {
         @Override public void onDelta(String text) { deltas.append(text); }
         @Override public void onOfferReady(OfferAction offerAction) { this.offerAction = offerAction; }
         @Override public void onProposalReady(AiProposalResponse proposal) { this.proposalReady = proposal; }
+        @Override public void onContextSuggestionsReady(List<ContextSuggestionResponse> suggestions) { this.contextSuggestionsReady = suggestions; }
         @Override public void onCompleted(AiTurnCompletedPayload payload) { this.completed = payload; }
         @Override public void onError(ErrorCode errorCode) { this.errorCode = errorCode; }
     }

@@ -18,6 +18,8 @@ import com.jungwoo.project.memo.ai.dto.AiProposalItemResponse;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
 import com.jungwoo.project.memo.ai.dto.AiTurnStructured;
+import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
+import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
@@ -133,6 +135,7 @@ public class AiConversationService {
     private final AiConsultationClient aiConsultationClient;
     private final AiProposalService aiProposalService;
     private final AiUsageLimitService aiUsageLimitService;
+    private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -183,6 +186,16 @@ public class AiConversationService {
         return aiMessageMapper.findByConversationIdAndUserId(conversationId, userId).stream()
                 .map(this::toMessageResponse)
                 .toList();
+    }
+
+    /**
+     * 대화 재진입(새로고침 포함) 시 아직 승인/거절하지 않은 Context 변경 후보를 복구한다.
+     * 메모리 state에만 있고 새로고침하면 사라지는 방식으로 만들지 않기 위한 API다.
+     */
+    @Transactional(readOnly = true)
+    public List<ContextSuggestionResponse> getPendingContextSuggestions(Long conversationId, Long userId) {
+        requireOwnedConversation(conversationId, userId);
+        return contextChangeSuggestionService.listPendingByConversation(conversationId, userId);
     }
 
     /**
@@ -244,6 +257,13 @@ public class AiConversationService {
                 items = proposalResponse.getItems();
                 sink.onProposalReady(proposalResponse);
             }
+        }
+
+        // Context 변경 후보는 responseType과 무관한 sidecar다 — 재생 시에도 그대로 다시 알려준다.
+        List<ContextSuggestionResponse> contextSuggestions = contextChangeSuggestionService.findBySourceMessageId(
+                assistantReply.getMessageId(), requestMessage.getUserId());
+        if (!contextSuggestions.isEmpty()) {
+            sink.onContextSuggestionsReady(contextSuggestions);
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
@@ -362,7 +382,7 @@ public class AiConversationService {
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
                 resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.targetDate(),
-                resolved.unavailableWindows());
+                resolved.unavailableWindows(), resolved.contextChanges());
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -374,6 +394,10 @@ public class AiConversationService {
             sink.onProposalReady(proposalResponse);
         } else if (resolved.responseType() == AiResponseType.OFFER) {
             sink.onOfferReady(offerAction);
+        }
+
+        if (!completion.contextSuggestions().isEmpty()) {
+            sink.onContextSuggestionsReady(completion.contextSuggestions());
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
@@ -416,7 +440,8 @@ public class AiConversationService {
             List<ProposalItem> proposalItems,
             List<UnavailableWindowSpec> unavailableWindows,
             LocalDate targetDate,
-            OfferAction offerAction
+            OfferAction offerAction,
+            List<ContextChangeSuggestion> contextChanges
     ) {
     }
 
@@ -434,15 +459,27 @@ public class AiConversationService {
      * 실패나 503이 되면 안 된다"). 그 외의 구조적 모순(validateDecisionContract)이나
      * requestedAction·decision 불일치는 전부 기존 실패 lifecycle(AI_GENERATION_FAILED)로
      * 처리한다 — 조용히 억지로 변환하지 않는다.
+     *
+     * contextChanges는 decision과 독립된 sidecar이므로 이 메서드가 만드는 모든 ResolvedTurn에
+     * decision 분기와 무관하게 그대로 실어 나른다. 단 CREATE_PROPOSAL 요청에서 모델이 contextChanges를
+     * 채워 보내면 계약 위반으로 턴 전체를 실패시킨다 — 계획 생성 버튼을 눌렀다고 이전 대화의
+     * Context 후보를 또 만들면 중복이 생기기 때문이다.
      */
     private ResolvedTurn resolveTurn(
             RequestedAction requestedAction, AiTurnStructured structured, String originalReply, LocalDate todayDate
     ) {
         if (structured == null || structured.decision() == null) {
             if (requestedAction == RequestedAction.AUTO) {
-                return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null);
+                return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null, List.of());
             }
             log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 구조화 데이터가 없거나 decision이 없음");
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+
+        List<ContextChangeSuggestion> contextChanges = structured.contextChanges() != null
+                ? structured.contextChanges() : List.of();
+        if (requestedAction == RequestedAction.CREATE_PROPOSAL && !contextChanges.isEmpty()) {
+            log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 contextChanges가 존재함 (개수={})", contextChanges.size());
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
@@ -450,29 +487,34 @@ public class AiConversationService {
             log.warn("AI 응답 강등: AUTO 요청인데 decision=PROPOSAL_READY - OFFER로 대체 "
                     + "(계획 초안 생성 권한은 CREATE_PROPOSAL 요청에만 있음)");
             return new ResolvedTurn(AiResponseType.OFFER, AUTO_OFFER_REPLY, List.of(), List.of(), todayDate,
-                    OfferAction.createProposal(DEFAULT_OFFER_LABEL));
+                    OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
         }
 
         validateDecisionContract(structured);
 
         return requestedAction == RequestedAction.CREATE_PROPOSAL
-                ? resolveCreateProposalTurn(structured, originalReply, todayDate)
-                : resolveAutoTurn(structured, originalReply, todayDate);
+                ? resolveCreateProposalTurn(structured, originalReply, todayDate, contextChanges)
+                : resolveAutoTurn(structured, originalReply, todayDate, contextChanges);
     }
 
-    private ResolvedTurn resolveAutoTurn(AiTurnStructured structured, String originalReply, LocalDate todayDate) {
+    private ResolvedTurn resolveAutoTurn(
+            AiTurnStructured structured, String originalReply, LocalDate todayDate, List<ContextChangeSuggestion> contextChanges
+    ) {
         if (structured.decision() == AiModelDecision.CHAT) {
-            return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null);
+            return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null, contextChanges);
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
-            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null);
+            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null,
+                    contextChanges);
         }
         // decision == OFFER_PROPOSAL (PROPOSAL_READY는 resolveTurn에서 이미 처리됐다).
         return new ResolvedTurn(AiResponseType.OFFER, AUTO_OFFER_REPLY, List.of(), List.of(), todayDate,
-                OfferAction.createProposal(DEFAULT_OFFER_LABEL));
+                OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
     }
 
-    private ResolvedTurn resolveCreateProposalTurn(AiTurnStructured structured, String originalReply, LocalDate todayDate) {
+    private ResolvedTurn resolveCreateProposalTurn(
+            AiTurnStructured structured, String originalReply, LocalDate todayDate, List<ContextChangeSuggestion> contextChanges
+    ) {
         if (structured.decision() == AiModelDecision.PROPOSAL_READY) {
             // AUTO+PROPOSAL_READY는 서버 고정 OFFER reply를 쓰므로 빈 모델 reply를 그냥 넘기지만,
             // CREATE_PROPOSAL은 실제로 PROPOSAL을 저장하고 그 reply를 assistant 메시지로 남긴다 —
@@ -490,11 +532,12 @@ public class AiConversationService {
             List<UnavailableWindowSpec> unavailableWindows = structured.unavailableWindows() != null
                     ? structured.unavailableWindows() : List.of();
             return new ResolvedTurn(AiResponseType.PROPOSAL, originalReply, structured.proposalItems(),
-                    unavailableWindows, structured.periodStartDate(), null);
+                    unavailableWindows, structured.periodStartDate(), null, contextChanges);
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
             // 정보 부족은 정상적인 상담 흐름이다 — 실패(503)가 아니라 CHAT으로 정상 완료한다.
-            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null);
+            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null,
+                    contextChanges);
         }
         // decision == CHAT 또는 OFFER_PROPOSAL — CREATE_PROPOSAL에서는 계약 위반이다.
         log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 decision={}", structured.decision());

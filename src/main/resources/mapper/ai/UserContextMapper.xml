@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.UserContextMapper">
+
+    <resultMap id="userContextResultMap"
+               type="com.jungwoo.project.memo.ai.domain.UserContext">
+        <id     property="contextId"            column="context_id"/>
+        <result property="userId"               column="user_id"/>
+        <result property="content"              column="content"/>
+        <result property="status"               column="status"/>
+        <result property="sourceType"           column="source_type"/>
+        <result property="sourceMessageId"      column="source_message_id"/>
+        <result property="supersedesContextId"  column="supersedes_context_id"/>
+        <result property="confirmedAt"          column="confirmed_at"/>
+        <result property="createdAt"            column="created_at"/>
+        <result property="updatedAt"            column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="contextId">
+        INSERT INTO user_contexts (
+            user_id,
+            content,
+            status,
+            source_type,
+            source_message_id,
+            supersedes_context_id,
+            confirmed_at
+        ) VALUES (
+            #{userId},
+            #{content},
+            #{status},
+            #{sourceType},
+            #{sourceMessageId},
+            #{supersedesContextId},
+            #{confirmedAt}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+    </select>
+
+    <select id="findByIdAndUserIdForUpdate" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+        FOR UPDATE
+    </select>
+
+    <select id="findActiveAndStaleByUserId" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+        ORDER BY updated_at DESC
+        <if test="limit != null">
+            LIMIT #{limit}
+        </if>
+    </select>
+
+    <update id="updateStatusIfIn">
+        UPDATE user_contexts
+        SET status = #{toStatus}
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status IN
+        <foreach item="s" collection="fromStatuses" open="(" separator="," close=")">
+            #{s}
+        </foreach>
+    </update>
+
+    <update id="confirmIfStale">
+        UPDATE user_contexts
+        SET status       = 'ACTIVE',
+            confirmed_at = #{confirmedAt}
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status     = 'STALE'
+    </update>
+
+</mapper>

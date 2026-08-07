@@ -25,6 +25,14 @@ import java.util.List;
  * 오늘 날짜를, "내일"이면 내일 날짜를 그대로 담아야 한다 — 서버가 무조건 오늘로 고정하지
  * 않는다. decision=PROPOSAL_READY일 때만 값이 필요하며, proposalItems의 모든 날짜는 이 범위
  * 안에 있어야 한다(범위를 벗어나면 서버가 PROPOSAL 전체를 계약 위반으로 처리한다).
+ *
+ * contextChanges는 decision과 완전히 독립된 sidecar다 — 이 필드가 있다고 responseType이
+ * 바뀌지 않는다(CHAT/ASK_CLARIFICATION/OFFER_PROPOSAL/PROPOSAL_READY 어디에도 붙을 수 있다).
+ * AiModelDecision을 CONTEXT_CHANGE 같은 값으로 확장하지 않는다 — 장기 컨텍스트 변경 후보는
+ * 상담 결과에 붙는 별도 결과일 뿐이다. [요청 모드]가 CREATE_PROPOSAL이면 서버가 항상 빈
+ * 배열로 강제한다(AiConversationService.resolveTurn) — 계획 생성 버튼을 눌렀다고 이전 대화의
+ * Context 후보를 또 만들면 중복이 생기기 때문이다. 이 리스트에 담긴 값도 모델 출력을 그대로
+ * 신뢰하지 않는다 — ContextChangeSuggestionService가 연산별 계약과 소유권을 다시 검증한다.
  */
 public record AiTurnStructured(
         AiModelDecision decision,
@@ -34,6 +42,7 @@ public record AiTurnStructured(
         List<UnavailableWindowSpec> unavailableWindows,
         AiPlanScope planScope,
         LocalDate periodStartDate,
-        LocalDate periodEndDate
+        LocalDate periodEndDate,
+        List<ContextChangeSuggestion> contextChanges
 ) {
 }

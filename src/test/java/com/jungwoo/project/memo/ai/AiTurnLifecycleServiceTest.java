@@ -54,6 +54,7 @@ class AiTurnLifecycleServiceTest {
     @Mock private AiProposalService aiProposalService;
     @Mock private AiConsultationClient aiConsultationClient;
     @Mock private AiUsageLimitService aiUsageLimitService;
+    @Mock private ContextChangeSuggestionService contextChangeSuggestionService;
 
     @InjectMocks
     private AiTurnLifecycleService service;
@@ -233,7 +234,7 @@ class AiTurnLifecycleServiceTest {
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.PROPOSAL,
-                List.of(sampleItem()), LocalDate.now(), List.of());
+                List.of(sampleItem()), LocalDate.now(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNotNull();
         assertThat(result.proposalResponseOrNull().getProposalId()).isEqualTo(900L);
@@ -244,7 +245,7 @@ class AiTurnLifecycleServiceTest {
     @Test
     void completeTurnSuccess_doesNotCreateProposal_whenChat() {
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
-                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now(), List.of());
+                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNull();
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());

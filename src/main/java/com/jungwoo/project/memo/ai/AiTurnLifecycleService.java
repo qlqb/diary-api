@@ -7,6 +7,8 @@ import com.jungwoo.project.memo.ai.domain.MessageRole;
 import com.jungwoo.project.memo.ai.domain.MessageStatus;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
+import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
+import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
@@ -49,6 +51,7 @@ public class AiTurnLifecycleService {
     private final AiProposalService aiProposalService;
     private final AiConsultationClient aiConsultationClient;
     private final AiUsageLimitService aiUsageLimitService;
+    private final ContextChangeSuggestionService contextChangeSuggestionService;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초가 돼 stale 판정이 어긋난다.
@@ -144,13 +147,22 @@ public class AiTurnLifecycleService {
         conversation.setActiveRequestStartedAt(null);
     }
 
-    /** ASSISTANT 메시지 + (PROPOSAL이면) Proposal 저장 + USER 메시지 COMPLETED + 진행 표시 해제, 전부 한 트랜잭션. */
+    /**
+     * ASSISTANT 메시지 + (PROPOSAL이면) Proposal 저장 + (있으면) Context 변경 후보 저장 +
+     * USER 메시지 COMPLETED + 진행 표시 해제, 전부 한 트랜잭션.
+     *
+     * contextChangesIfAny는 responseType과 무관한 sidecar다 — CHAT/OFFER/PROPOSAL 어디에도
+     * 붙을 수 있다. ContextChangeSuggestionService.createFromSuggestions가 계약 위반을 찾으면
+     * 예외를 던지고, 이 트랜잭션 전체(ASSISTANT 메시지·Proposal 포함)가 함께 롤백된다 —
+     * "AI 응답 실패인데 후보만 저장되는" 또는 그 반대 상태가 생기지 않는다.
+     */
     @Transactional
     public TurnCompletionResult completeTurnSuccess(
             Long conversationId, Long userId, Long requestMessageId,
             String replyContent, AiResponseType responseType,
             List<ProposalItem> proposalItemsIfProposal, LocalDate targetDateIfProposal,
-            List<UnavailableWindowSpec> unavailableWindowsIfProposal
+            List<UnavailableWindowSpec> unavailableWindowsIfProposal,
+            List<ContextChangeSuggestion> contextChangesIfAny
     ) {
         AiMessage assistantMessage = AiMessage.builder()
                 .conversationId(conversationId)
@@ -170,11 +182,14 @@ public class AiTurnLifecycleService {
                     targetDateIfProposal, unavailableWindowsIfProposal);
         }
 
+        List<ContextSuggestionResponse> contextSuggestions = contextChangeSuggestionService.createFromSuggestions(
+                userId, conversationId, assistantMessage.getMessageId(), contextChangesIfAny);
+
         aiMessageMapper.updateStatusIfCurrent(requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
 
-        return new TurnCompletionResult(assistantMessage, proposalResponse);
+        return new TurnCompletionResult(assistantMessage, proposalResponse, contextSuggestions);
     }
 
     /**
@@ -206,6 +221,10 @@ public class AiTurnLifecycleService {
         }
     }
 
-    public record TurnCompletionResult(AiMessage assistantMessage, AiProposalResponse proposalResponseOrNull) {
+    public record TurnCompletionResult(
+            AiMessage assistantMessage,
+            AiProposalResponse proposalResponseOrNull,
+            List<ContextSuggestionResponse> contextSuggestions
+    ) {
     }
 }

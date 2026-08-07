@@ -100,6 +100,27 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 요청 범위를 넘어서는 단계나 요일별 항목을 임의로 만들지 않는다.
                 OFFER_PROPOSAL 단계에서는 planScope/periodStartDate/periodEndDate를 미리
                 확정하지 않는다 — 실제 기간은 PROPOSAL_READY에서만 정한다.
+            16. 사용자 메시지 앞에 [장기 컨텍스트]가 있으면, 그 안의 각 항목은 이전에 확정된
+                장기적 사실이다(번호는 #뒤의 context_id, 상태는 ACTIVE 또는 STALE). 이 정보를
+                무조건 영구적인 사실로 취급하지 않는다 — 사용자의 새 발언과 항상 비교한다.
+                새 정보가 기존 사실을 직접 대체하면 contextChanges에 operation=SUPERSEDE
+                후보를 만들고 targetContextId에 그 항목의 context_id를 그대로 적는다(새로
+                지어내지 않는다). 기존 정보의 전제가 바뀌어 지금도 맞는지 불확실하지만 새 값을
+                알 수 없다면 operation=MARK_STALE 후보를 만들 수 있다. 완전히 새로운 장기적
+                사실을 알게 됐으면 operation=ADD 후보를 만들 수 있다(targetContextId 없음).
+                지금 발언만으로 기존 항목이 틀렸다고 확신할 수 없으면 억지로 후보를 만들지
+                않는다. 사용자의 일회성 상황(오늘 하루만의 예외 등)은 장기 컨텍스트 후보로
+                만들지 않는다 — 반복되거나 앞으로도 계속될 사실만 대상이다. 예를 들어
+                "오늘 택시 타서 20분 걸렸어"는 후보가 아니지만, "이사해서 이제 알바에서 집까지
+                보통 20분이면 와"는 기존 이동시간 Context가 있다면 SUPERSEDE 후보가 될 수
+                있다. "이번 주만 알바가 10시에 끝나"는 평소 근무시간 Context를 대체하지
+                않지만, "알바를 옮겼고 이제 보통 10시에 끝나"는 SUPERSEDE 후보가 될 수 있다.
+                contextChanges는 네가 만든 후보일 뿐 실제 Context를 바꾸지 않는다 — 사용자가
+                화면에서 승인해야만 반영된다. 이 필드는 decision과 무관하게 항상 존재해야
+                하며(후보가 없으면 빈 배열), CHAT/ASK_CLARIFICATION/OFFER_PROPOSAL/
+                PROPOSAL_READY 어디에도 붙을 수 있다. 단, 사용자 메시지 뒤의 [요청 모드]가
+                CREATE_PROPOSAL이면 이 대화에서 이미 한 번 판단한 내용이므로 항상 빈 배열로
+                답한다. 한 응답에서 최대 5개까지만 만든다.
 
             응답 형식(반드시 그대로 지킨다):
             1) 사용자에게 보여줄 자연스러운 답변을 먼저 순수 텍스트로 적는다. 이 구간에는
@@ -147,7 +168,17 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   "endTime": "HH:mm",
                   "reason": "사용자가 말한 이유(예: 알바)"
                 }
-              ]
+              ],
+              "contextChanges": [
+                {
+                  "operation": "ADD" 또는 "SUPERSEDE" 또는 "MARK_STALE" 또는 "ARCHIVE" 또는 "CONFIRM",
+                  "targetContextId": [장기 컨텍스트]에 있던 항목의 번호(정수) 또는 null
+                    (ADD는 반드시 null, 그 외 연산은 반드시 채운다. 새 번호를 지어내지 않는다),
+                  "content": "새로 기억할 문장" 또는 null (ADD/SUPERSEDE만 채운다. 그 외 연산은
+                    반드시 null이다),
+                  "reason": "이 후보를 만든 이유(사용자가 무엇을 말했는지 근거로)"
+                }
+              ] (후보가 없으면 빈 배열. 최대 5개. [요청 모드]가 CREATE_PROPOSAL이면 항상 빈 배열)
             }
 
             - decision이 CHAT이면 clarifyingQuestion은 null, missingInformation은 빈 배열,
@@ -168,6 +199,10 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               반드시 periodStartDate~periodEndDate 범위 안에 있어야 한다. 벗어나면 서버가 이
               PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다 — 날짜가
               없는 항목(DATE_ONLY 등)은 periodStartDate를 기준으로 서버가 배치한다.
+            - contextChanges는 decision 값과 무관하게 원칙 16의 기준으로만 채운다(빈 배열이
+              기본값). ADD는 targetContextId=null 및 content 필수, SUPERSEDE는 targetContextId와
+              content 모두 필수, MARK_STALE/ARCHIVE/CONFIRM은 targetContextId 필수이고
+              content는 반드시 null이다. reason은 모든 후보에서 필수다.
             """;
 
     private final ChatClient chatClient;
