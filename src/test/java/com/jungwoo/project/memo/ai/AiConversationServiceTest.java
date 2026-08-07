@@ -45,11 +45,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -57,6 +56,10 @@ import static org.mockito.Mockito.when;
  * 대화방 잠금·idempotency·상태 전이 같은 안전 규칙 자체는 AiTurnLifecycleServiceTest에서
  * 검증하고, 여기서는 AiConversationService가 그 결과에 맞춰 정확히 한 번만 스트리밍하고
  * 재호출 없이 성공/실패를 마무리하는지를 검증한다.
+ *
+ * 계획 초안 생성 권한은 requestedAction=CREATE_PROPOSAL에만 있다. 모델의 decision은 화면
+ * 상태를 직접 정하지 않으므로, 아래 테스트는 "모델이 무엇을 반환했는가"와 "서버가 실제로
+ * 무엇을 저장/전송했는가"를 항상 구분해서 검증한다.
  */
 @ExtendWith(MockitoExtension.class)
 class AiConversationServiceTest {
@@ -64,6 +67,9 @@ class AiConversationServiceTest {
     private static final Long USER_ID = 1L;
     private static final Long CONVERSATION_ID = 10L;
     private static final Long REQUEST_MESSAGE_ID = 200L;
+
+    private static final String AUTO_OFFER_REPLY = "말해준 내용을 바탕으로 계획 초안을 만들어볼까요?";
+    private static final String DEFAULT_OFFER_LABEL = "이 내용으로 계획 초안 만들기";
 
     @Mock private AiConversationMapper aiConversationMapper;
     @Mock private AiMessageMapper aiMessageMapper;
@@ -86,11 +92,13 @@ class AiConversationServiceTest {
         ReflectionTestUtils.setField(service, "clock", FIXED_CLOCK);
     }
 
+    // ===== 기본 스트리밍/시간 블록 =====
+
     @Test
     void streamAndComplete_chat_singleAiCall_noProposal() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "안녕! 오늘은 어떤 얘기부터 해볼까?\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+                + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
@@ -108,9 +116,9 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void streamAndComplete_includesCurrentTimeBlock_inSystemPrompt_onceOnly() {
+    void streamAndComplete_includesCurrentTimeBlock_andAutoModeBlock() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
@@ -137,12 +145,16 @@ class AiConversationServiceTest {
         assertThat(userPrompt).doesNotContain("[현재 시간 정보]");
         assertThat(userPrompt).doesNotContain("사용자 시간대");
         assertThat(userPrompt).contains("오늘 뭐 해야 해?");
+        // AUTO 요청은 [요청 모드] 블록으로 PROPOSAL_READY가 금지돼 있음을 프롬프트에서부터 못박는다.
+        assertThat(userPrompt).contains("[요청 모드]");
+        assertThat(userPrompt).contains("AUTO");
+        assertThat(userPrompt).contains("PROPOSAL_READY");
     }
 
     @Test
     void streamAndComplete_generatesFreshTime_onEachNewRequest() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        String raw = "안녕!\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null));
@@ -168,646 +180,7 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void streamAndComplete_offer_singleAiCall_noProposal() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "계획 초안을 만들어볼까?\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"OFFER\",\"proposalItems\":[],"
-                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(202L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("다음 주까지 배포해야 해", "k2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        assertThat(sink.offerAction).isNotNull();
-        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
-    }
-
-    @Test
-    void streamAndComplete_proposal_singleAiCall_createsExactlyOneProposal() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "지금 상황에서 세 조각을 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"교재 6장 읽기\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(900L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(203L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 짜줘", "k3"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.completed.proposalId()).isEqualTo(900L);
-        assertThat(sink.proposalReady).isNotNull();
-        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
-    }
-
-    // ===== 서버 사이드 가드: needsClarification 계약, 직전 OFFER 기반 동의, 기간(periodStartDate/
-    // periodEndDate) 계약 =====
-
-    @Test
-    void streamAndComplete_autoProposalWithoutExplicitConsent_downgradesToOffer() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "알바 끝나는 시간이랑 이동 시간을 반영해서 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"proposalItems\":["
-                + "{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(210L), null));
-
-        // 정보만 제공했을 뿐 생성을 요청하지 않았다(시나리오 2) — AUTO 전송에서 모델이 곧장
-        // PROPOSAL을 만들어도 서버가 명시적 동의 없음을 감지해 OFFER로 낮춰야 한다.
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(),
-                request("알바는 밤 11시에 끝나고 집에는 12시쯤 도착해.", "k-consent-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        assertThat(sink.offerAction).isNotNull();
-        assertThat(sink.proposalReady).isNull();
-        // 시나리오 8: 기존 PROPOSAL의 reply("...만들어봤어.")가 그대로 노출되면 안 된다 —
-        // OFFER에 맞는 문장으로 교체돼야 한다.
-        assertThat(sink.completed.reply()).isEqualTo("말해준 내용을 바탕으로 계획 초안을 만들어볼까요?");
-        assertThat(sink.completed.proposalItems()).isEmpty();
-
-        ArgumentCaptor<AiResponseType> responseTypeCaptor = ArgumentCaptor.forClass(AiResponseType.class);
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<ProposalItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), responseTypeCaptor.capture(), itemsCaptor.capture(), any(), any());
-        assertThat(responseTypeCaptor.getValue()).isEqualTo(AiResponseType.OFFER);
-        // 시나리오 8: 기존 PROPOSAL의 proposalItems가 그대로 저장/노출되면 안 된다.
-        assertThat(itemsCaptor.getValue()).isEmpty();
-    }
-
-    @Test
-    void streamAndComplete_autoProposalWithExplicitRequestPhrase_staysProposal_regardlessOfLastAssistantType() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "오늘 남은 시간을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(920L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(211L), proposalResponse));
-
-        // 시나리오 3/7: "만들어줘"류의 직접 지시 문구는 직전 AI 응답이 무엇이었는지와 무관하게
-        // 동의로 인정된다 — findLastAssistantMessageByConversationIdAndUserId를 스텁하지 않아도
-        // (기본값 null) 그대로 PROPOSAL이 통과해야 한다.
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("응, 만들어줘.", "k-consent-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_negationBeforeGenerationVerb_doesNotCountAsConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // "계획은 만들지 말고"라는 거절 표현이 뒤의 "정리해줘"(대상 한정 생성 동작)보다 우선한다 —
-        // 부정 표현이 있으면 긍정 표현이 섞여 있어도 동의로 인정하지 않는다.
-        String raw = "고민을 정리해서 알려줄게.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"정리 메모\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(230L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(),
-                request("계획은 만들지 말고 내 고민만 정리해줘.", "k-negation-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isNotEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNull();
-        assertThat(sink.completed.proposalItems()).isEmpty();
-    }
-
-    @Test
-    void streamAndComplete_showVerbWithoutPlanTargetTerm_doesNotCountAsConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // "보여줘"는 "계획"/"일정"/"초안" 같은 대상 표현과 짝지어지지 않으면 조회 요청일 뿐
-        // 새 계획 생성 동의가 아니다.
-        String raw = "저장된 내용을 보여줄게.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"저장 내용 확인\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(231L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(),
-                request("현재 저장된 내용만 보여줘.", "k-negation-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isNotEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_todayPlanMakeItRequest_countsAsExplicitConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "오늘 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"운동\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(935L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(232L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 계획 만들어줘.", "k-request-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_scheduleOrganizeRequest_countsAsExplicitConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"회의 준비\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(936L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(233L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이 내용으로 일정 짜줘.", "k-request-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_shortAffirmation_afterPriorChat_doesNotCountAsConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 직전 AI 응답이 CHAT(예: "알바는 몇 시에 끝나나요?")이었다면 "응"은 정보 확인 답변일
-        // 뿐 생성 동의가 아니다(시나리오 1) — 모델이 착각해 PROPOSAL을 반환해도 OFFER로 낮춘다.
-        when(aiMessageMapper.findLastAssistantMessageByConversationIdAndUserId(CONVERSATION_ID, USER_ID))
-                .thenReturn(lastAssistantMessage(AiResponseType.CHAT));
-        String raw = "알바 끝나는 시간을 반영해서 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(214L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("응", "k-consent-3"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_shortAffirmation_afterPriorOffer_countsAsConsent() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 직전 AI 응답이 OFFER("초안을 만들어볼까요?")였다면 "응"은 그 제안에 대한 동의다
-        // (시나리오 2) — PROPOSAL이 그대로 통과해야 한다.
-        when(aiMessageMapper.findLastAssistantMessageByConversationIdAndUserId(CONVERSATION_ID, USER_ID))
-                .thenReturn(lastAssistantMessage(AiResponseType.OFFER));
-        String raw = "알바와 이동 시간을 반영해서 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(921L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(215L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("응", "k-consent-4"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_needsClarificationTrue_butResponseTypeProposal_downgradesToChat_andDropsItems() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 모델이 스스로 needsClarification=true(정보 부족)라고 판단했으면서도 responseType을
-        // PROPOSAL로 잘못 낸 모순 케이스 — 서버는 그 진위를 판단하지 않고 내적 일관성만 보고
-        // CHAT으로 되돌리며, proposalItems를 버리고 reply를 clarifyingQuestion으로 교체한다
-        // (시나리오 4).
-        String raw = "알바 끝나는 시간을 반영해서 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"needsClarification\":true,"
-                + "\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\",\"missingInformation\":[\"알바 종료 시각\"],"
-                + "\"proposalItems\":["
-                + "{\"title\":\"귀가 후 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(212L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(),
-                request("새벽 2시쯤 자고 싶고, 오후 5시에 알바가 있어. 4시에는 출발해야 해.", "k-info-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.completed.reply()).isEqualTo("알바는 몇 시에 끝나나요?");
-        assertThat(sink.offerAction).isNull();
-        assertThat(sink.proposalReady).isNull();
-        assertThat(sink.completed.proposalItems()).isEmpty();
-    }
-
-    @Test
-    void streamAndComplete_offerWithClarifyingQuestion_downgradesToChat() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // needsClarification=false여도 clarifyingQuestion이 채워져 있으면 명확화가 필요하다는
-        // 신호다 — OFFER를 그대로 통과시키지 않고 CHAT으로 강등한다(시나리오 7).
-        String raw = "계획 초안을 만들어볼까?\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"OFFER\",\"needsClarification\":false,"
-                + "\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\",\"missingInformation\":[],"
-                + "\"proposalItems\":[],"
-                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(240L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 짜줘", "k-clarify-offer-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.completed.reply()).isEqualTo("알바는 몇 시에 끝나나요?");
-        assertThat(sink.offerAction).isNull();
-        assertThat(sink.completed.offerAction()).isNull();
-        assertThat(sink.completed.proposalItems()).isEmpty();
-    }
-
-    @Test
-    void streamAndComplete_offerWithMissingInformation_downgradesToChat() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "계획 초안을 만들어볼까?\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"OFFER\",\"needsClarification\":false,"
-                + "\"clarifyingQuestion\":null,\"missingInformation\":[\"알바 종료 시각\"],"
-                + "\"proposalItems\":[],"
-                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(241L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 짜줘", "k-clarify-offer-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        // clarifyingQuestion이 없으면 기본 명확화 문구로 대체된다.
-        assertThat(sink.completed.reply()).isEqualTo("계획을 만들기 전에 확인이 조금 더 필요해요.");
-        assertThat(sink.offerAction).isNull();
-    }
-
-    @Test
-    void streamAndComplete_offerWithNoClarificationSignals_staysOffer() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // needsClarification=false, clarifyingQuestion=null, missingInformation=[] — 명확화 신호가
-        // 전혀 없으면 정상 OFFER를 그대로 유지해야 한다(시나리오 9).
-        String raw = "계획 초안을 만들어볼까?\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"OFFER\",\"needsClarification\":false,"
-                + "\"clarifyingQuestion\":null,\"missingInformation\":[],"
-                + "\"proposalItems\":[],"
-                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(242L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 짜줘", "k-clarify-offer-3"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        assertThat(sink.offerAction).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_proposalReplyContainsQuestionMark_butNeedsClarificationFalse_staysProposal() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 물음표 유무만으로 정보 충분성을 판단하지 않는다(수정사항 1) — needsClarification이
-        // false면 reply에 "?"가 있어도 CHAT으로 강등하지 않는다(시나리오 3).
-        String raw = "오전에 운동은 어때? 이렇게 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"needsClarification\":false,"
-                + "\"planScope\":\"DAY\",\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\","
-                + "\"proposalItems\":["
-                + "{\"title\":\"운동\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(925L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(216L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 짜줘", "k-qmark-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_dayScopeProposal_itemOutsidePeriod_violatesContract_notClamped() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // planScope=DAY, periodStartDate=periodEndDate=오늘인데 UNSCHEDULED 항목의 deadlineDate가
-        // 일주일 뒤다 — 예전처럼 오늘로 조용히 클램프하지 않고, PROPOSAL 전체를 계약 위반으로
-        // 처리해 CHAT으로 강등하고 항목을 버린다(시나리오 7).
-        String raw = "오늘 안에서만 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
-                + "{\"title\":\"이번 주 공부\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-12\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(213L), null));
-
-        // "계획"(대상 표현) + "정리해줘"(대상 한정 생성 동작)가 함께 있어 명시적 생성 요청으로
-        // 인정된다 — 이 테스트는 동의 판정이 아니라 기간 계약 위반을 검증하는 것이 목적이다.
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(),
-                request("오늘 알바 전에 공부할 계획만 정리해줘.", "k-scope-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-        assertThat(sink.completed.proposalItems()).isEmpty();
-
-        // 날짜를 상한(오늘)으로 조용히 옮기는 대신 항목 자체를 버렸는지 확인한다.
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<List<ProposalItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), any(), itemsCaptor.capture(), any(), any());
-        assertThat(itemsCaptor.getValue()).isEmpty();
-    }
-
-    @Test
-    void streamAndComplete_tomorrowDayRequest_keepsTomorrowAsTargetDate_notForcedToToday() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // "내일 계획 만들어줘"는 DAY 범위이지만 대상 날짜는 내일(2026-08-06)이어야 한다 —
-        // 서버가 LocalDate.now()(오늘, 2026-08-05)로 강제로 되돌리면 안 된다(시나리오 5).
-        String raw = "내일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-06\",\"periodEndDate\":\"2026-08-06\",\"proposalItems\":["
-                + "{\"title\":\"아침 스트레칭\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(931L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(217L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("내일 계획 만들어줘", "k-tomorrow-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-
-        ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
-        verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
-        assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 6));
-    }
-
-    @Test
-    void streamAndComplete_specificDateDayRequest_keepsThatDateAsTargetDate() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 6: 사용자가 특정 날짜를 말한 DAY 요청도 그 날짜를 그대로 유지해야 한다.
-        String raw = "8월 20일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-20\",\"periodEndDate\":\"2026-08-20\",\"proposalItems\":["
-                + "{\"title\":\"병원 예약\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"MUST\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(932L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(218L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("8월 20일 계획 만들어줘", "k-specific-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-
-        ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
-        verify(aiTurnLifecycleService).completeTurnSuccess(
-                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
-        assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 20));
-    }
-
-    @Test
-    void streamAndComplete_weekScope_withinSevenDays_succeeds() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 9: WEEK는 periodStartDate로부터 최대 7일 범위(경계값 6일 차이)까지 허용된다.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
-                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-11\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(933L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(219L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_weekScope_exceedsSevenDays_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // WEEK인데 periodEndDate가 periodStartDate로부터 8일 뒤(7일 범위 초과) — 계약 위반.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-13\",\"proposalItems\":["
-                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-13\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(220L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_monthScope_boundary31DaysInclusive_succeeds() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 10: 시작일부터 종료일까지 포함해 31일(=spanDays 30) — 경계값으로 통과해야 한다.
-        String raw = "이번 달 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"MONTH\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-09-04\",\"proposalItems\":["
-                + "{\"title\":\"월간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-09-04\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(934L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(221L), proposalResponse));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 달 공부계획 짜줘", "k-month-1"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.proposalReady).isNotNull();
-    }
-
-    @Test
-    void streamAndComplete_monthScope_boundary32DaysInclusive_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 11: 시작일부터 종료일까지 포함해 32일(=spanDays 31) — 경계값 하나 차이로 위반돼야
-        // 한다. ChronoUnit.DAYS.between은 차이값이라 spanDays>31이 아니라 spanDays>30으로 판정해야
-        // 이 케이스를 잡는다.
-        String raw = "이번 달 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"MONTH\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-09-05\",\"proposalItems\":["
-                + "{\"title\":\"월간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-09-05\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(222L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 달 공부계획 짜줘", "k-month-2"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_earliestStartDateAfterPeriodEndDate_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 12: earliestStartDate(8/20)가 periodEndDate(8/11)보다 이후 — 예전에는
-        // earliestStartDate가 periodStartDate보다 이른지만 봤기 때문에 이 방향은 통과할 수 있었다.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
-                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-20\",\"deadlineDate\":null}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(223L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-3"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_deadlineDateBeforePeriodStartDate_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 13: deadlineDate(8/1)가 periodStartDate(8/5)보다 이전 — 예전에는 deadlineDate가
-        // periodEndDate보다 늦는지만 봤기 때문에 이 방향은 통과할 수 있었다.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
-                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":null,\"deadlineDate\":\"2026-08-01\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(224L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-4"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_earliestStartDateAfterDeadlineDate_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 14: earliestStartDate(8/10)가 deadlineDate(8/7)보다 이후 — 둘 다 개별적으로는
-        // periodStartDate~periodEndDate(8/5~8/11) 범위 안이라 range 검사만으로는 못 잡는다.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
-                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
-                + "\"earliestStartDate\":\"2026-08-10\",\"deadlineDate\":\"2026-08-07\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(225L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-5"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_fixedEndAtAfterPeriodEndDate_violatesContract() {
-        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        // 시나리오 15: fixedEndAt(8/12) 날짜가 periodEndDate(8/11)보다 이후 — fixedStartAt은
-        // 범위 안(8/11)이라 fixedStartAt만 보면 통과할 뻔한 케이스다.
-        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"WEEK\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
-                + "{\"title\":\"자정 넘는 일정\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"TIME_FIXED\",\"startTime\":null,\"endTime\":null,"
-                + "\"fixedStartAt\":\"2026-08-11T23:30\",\"fixedEndAt\":\"2026-08-12T00:30\"}],\"offerAction\":null}";
-        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(226L), null));
-
-        RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 공부계획 짜줘", "k-week-6"), sink);
-        awaitTerminal(sink, d);
-
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.proposalReady).isNull();
-    }
-
-    @Test
-    void streamAndComplete_malformedStructuredJson_fallsBackToChat_withoutRecalling() {
+    void streamAndComplete_malformedStructuredJson_autoFallsBackToChat_withoutRecalling() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "음, 알겠어.\n<<<AI_STRUCTURED>>>\n{이건 유효한 JSON이 아님";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
@@ -819,11 +192,276 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo("음, 알겠어.");
         verify(aiConsultationClient, times(1)).streamTurn(any(), any());
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
     }
 
-    // ===== CREATE_PROPOSAL 응답 계약 (빈 CHAT으로 잘못 성공 처리되던 장애 수정) =====
+    // ===== AUTO 상태 전이(모델의 decision을 화면 상태로 그대로 쓰지 않는다) =====
+
+    @Test
+    void auto_decisionChat_resolvesToChat_noProposalSaved() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "천천히 얘기해보자.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
+                + "\"periodStartDate\":null,\"periodEndDate\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(300L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 많이 피곤해", "k-auto-chat"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo("천천히 얘기해보자.");
+        assertThat(sink.proposalReady).isNull();
+        assertThat(sink.offerAction).isNull();
+    }
+
+    @Test
+    void auto_decisionAskClarification_repliesWithClarifyingQuestion_asChat() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "언제 끝나는지부터 확인할게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
+                + "\"missingInformation\":[\"알바 종료 시각\"],\"proposalItems\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(301L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(),
+                request("새벽 2시쯤 자고 싶고, 오후 5시에 알바가 있어. 4시에는 출발해야 해.", "k-auto-ask"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo("알바는 몇 시에 끝나나요?");
+        assertThat(sink.proposalReady).isNull();
+        assertThat(sink.completed.proposalItems()).isEmpty();
+    }
+
+    @Test
+    void auto_decisionOfferProposal_resolvesToOffer_withServerBuiltOfferAction() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "정보는 충분해 보여.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
+                + "\"periodStartDate\":null,\"periodEndDate\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(302L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(),
+                request("알바는 밤 11시에 끝나고 집에는 12시쯤 도착해.", "k-auto-offer"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        // 서버가 고정 reply/OfferAction을 만든다 — 모델의 자연어 reply("정보는 충분해 보여.")를
+        // 그대로 노출하지 않는다.
+        assertThat(sink.completed.reply()).isEqualTo(AUTO_OFFER_REPLY);
+        assertThat(sink.offerAction).isNotNull();
+        assertThat(sink.offerAction.type()).isEqualTo("CREATE_PROPOSAL");
+        assertThat(sink.offerAction.label()).isEqualTo(DEFAULT_OFFER_LABEL);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void auto_decisionProposalReady_isModelContractViolation_downgradesToOffer_discardsProposalData() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // AUTO에서 모델이 계약을 어기고 PROPOSAL_READY를 반환해도 서버는 날짜 검증조차 하지
+        // 않고 즉시 OFFER로 강등하며 proposalItems/기간/unavailableWindows를 모두 버린다.
+        String raw = "이렇게 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"planScope\":\"DAY\",\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\","
+                + "\"proposalItems\":[{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,"
+                + "\"priority\":\"SHOULD\",\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
+                + "\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(303L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 계획 만들어줘", "k-auto-violation"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.completed.reply()).isEqualTo(AUTO_OFFER_REPLY);
+        assertThat(sink.completed.proposalItems()).isEmpty();
+        assertThat(sink.proposalReady).isNull();
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+
+        ArgumentCaptor<AiResponseType> responseTypeCaptor = ArgumentCaptor.forClass(AiResponseType.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), responseTypeCaptor.capture(), itemsCaptor.capture(), any(), any());
+        assertThat(responseTypeCaptor.getValue()).isEqualTo(AiResponseType.OFFER);
+        assertThat(itemsCaptor.getValue()).isEmpty();
+    }
+
+    @Test
+    void auto_shortAffirmation_neverCreatesProposal_andNeverLooksUpPriorAssistantMessage() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // "응"만으로는 무슨 판단이든 AUTO는 PROPOSAL을 만들 수 없다 — 설령 모델이 착각해서
+        // PROPOSAL_READY를 반환해도 마찬가지다. 이전 세션처럼 "직전 응답이 OFFER였는지"를
+        // 조회하는 로직 자체가 이제 존재하지 않는다 — aiMessageMapper가 이 흐름에서 전혀
+        // 호출되지 않는 것으로 그 사실을 구조적으로 확인한다.
+        String raw = "좋아, 만들어볼게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"planScope\":\"DAY\",\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\","
+                + "\"proposalItems\":[{\"title\":\"씻고 정리\",\"description\":null,\"expectedMinutes\":20,"
+                + "\"priority\":\"SHOULD\",\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
+                + "\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(304L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("응", "k-auto-short"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isNotEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.proposalReady).isNull();
+        verifyNoInteractions(aiMessageMapper);
+    }
+
+    @Test
+    void auto_negationSentence_modelDecisionChat_staysChat_noRegexInvolved() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // "계획은 만들지 말고..."라는 문장 자체를 서버가 정규식으로 해석하지 않는다 — 오직
+        // 모델의 decision만 본다. 모델이 CHAT이라고 판단했으면 그대로 CHAT이다.
+        String raw = "고민을 들어볼게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"proposalItems\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(305L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(),
+                request("계획은 만들지 말고 내 고민만 정리해줘.", "k-auto-negation"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void auto_decisionContractViolation_chatWithClarifyingQuestion_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // decision=CHAT인데 clarifyingQuestion이 채워져 있는 모순 — 조용히 고쳐 쓰지 않고
+        // 기존 실패 lifecycle로 처리한다(원칙 7의 일반 규칙, PROPOSAL_READY만 예외).
+        String raw = "음.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"clarifyingQuestion\":\"뭔가 이상한 질문\",\"missingInformation\":[],"
+                + "\"proposalItems\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("아무 말", "k-auto-contract-violation"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
+    }
+
+    // ===== 서버가 offerAction/responseType을 직접 만든다는 것을 확인 =====
+
+    @Test
+    void serverBuildsOfferAction_evenThoughModelJsonHasNoOfferActionField() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // 새 스키마에는 offerAction 필드 자체가 없다 — 모델이 절대 버튼을 구성할 수 없고,
+        // OFFER일 때 보여줄 버튼은 항상 서버가 만든다.
+        String raw = "좋아 보여.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(306L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("정보 다 줬어", "k-server-offer"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.offerAction).isNotNull();
+        assertThat(sink.offerAction.label()).isEqualTo(DEFAULT_OFFER_LABEL);
+    }
+
+    @Test
+    void savedResponseType_reflectsServerResolution_notRawModelDecisionName() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // decision=ASK_CLARIFICATION은 AiResponseType에 존재하지 않는 이름이다 — 저장되는
+        // responseType은 모델의 decision 문자열을 그대로 쓰는 게 아니라 서버(resolveTurn)가
+        // 새로 결정한 AiResponseType.CHAT이어야 한다.
+        String raw = "확인할게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"언제가 좋아요?\","
+                + "\"missingInformation\":[],\"proposalItems\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(307L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("계획 좀 도와줘", "k-server-resolve"), sink);
+        awaitTerminal(sink, d);
+
+        ArgumentCaptor<AiResponseType> responseTypeCaptor = ArgumentCaptor.forClass(AiResponseType.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), responseTypeCaptor.capture(), any(), any(), any());
+        assertThat(responseTypeCaptor.getValue()).isEqualTo(AiResponseType.CHAT);
+    }
+
+    // ===== CREATE_PROPOSAL 상태 전이/응답 계약 =====
+
+    @Test
+    void createProposal_decisionProposalReady_succeeds_andSavesProposal() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "세 조각을 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"planScope\":\"DAY\",\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\","
+                + "\"proposalItems\":[{\"title\":\"교재 6장 읽기\",\"description\":null,\"expectedMinutes\":30,"
+                + "\"priority\":\"SHOULD\",\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],"
+                + "\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(910L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(205L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp8"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNull();
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.completed.proposalId()).isEqualTo(910L);
+        assertThat(sink.proposalReady).isNotNull();
+        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
+        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+    }
+
+    @Test
+    void createProposal_decisionAskClarification_succeedsAsChat_notAFailure() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // 정보 부족은 정상적인 상담 흐름이다 — CREATE_PROPOSAL이라도 503이 아니라 CHAT으로
+        // 정상 완료돼야 한다.
+        String raw = "하나만 더 확인할게.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
+                + "\"missingInformation\":[\"알바 종료 시각\"],\"proposalItems\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(206L), null));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp9"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNull();
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo("알바는 몇 시에 끝나나요?");
+        assertThat(sink.proposalReady).isNull();
+        verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+    }
 
     @Test
     void createProposal_emptyResponse_fails() {
@@ -885,10 +523,10 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void createProposal_returnsChat_fails() {
+    void createProposal_decisionChat_fails() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "그냥 대화로만 답할게.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+                + "{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
 
         RecordingSink sink = new RecordingSink();
@@ -900,11 +538,11 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void createProposal_returnsOffer_fails() {
+    void createProposal_decisionOfferProposal_fails() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // 이미 사용자가 생성을 요청했다 — 다시 OFFER_PROPOSAL로 답하면 계약 위반이다.
         String raw = "먼저 물어볼게.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"OFFER\",\"proposalItems\":[],"
-                + "\"offerAction\":{\"type\":\"CREATE_PROPOSAL\",\"label\":\"이 내용으로 계획 초안 만들기\"}}";
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
 
         RecordingSink sink = new RecordingSink();
@@ -916,10 +554,11 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void createProposal_emptyProposalItems_fails() {
+    void createProposal_proposalReadyWithEmptyItems_fails() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
         String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"proposalItems\":[],\"offerAction\":null}";
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
 
         RecordingSink sink = new RecordingSink();
@@ -931,29 +570,290 @@ class AiConversationServiceTest {
     }
 
     @Test
-    void createProposal_validProposal_succeeds_andSavesProposal() {
+    void createProposal_proposalReadyWithoutPeriod_fails() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "세 조각을 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"PROPOSAL\",\"planScope\":\"DAY\","
-                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
+        String raw = "초안을 만들어봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":null,\"periodEndDate\":null,\"proposalItems\":["
                 + "{\"title\":\"교재 6장 읽기\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"SHOULD\","
-                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}],\"offerAction\":null}";
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
         when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
-        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(910L).items(List.of()).build();
-        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(205L), proposalResponse));
 
         RecordingSink sink = new RecordingSink();
-        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp8"), sink);
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp10"), sink);
         awaitTerminal(sink, d);
 
-        assertThat(sink.errorCode).isNull();
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
-        assertThat(sink.completed.proposalId()).isEqualTo(910L);
-        verify(aiConsultationClient, times(1)).streamTurn(any(), any());
-        verify(aiTurnLifecycleService, times(1)).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
-        verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
     }
+
+    @Test
+    void createProposal_askClarificationWithProposalItems_violatesContract_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // ASK_CLARIFICATION인데 proposalItems가 있는 모순 — 조용히 고쳐 쓰지 않고 실패시킨다.
+        String raw = "확인이 더 필요해.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"알바는 몇 시에 끝나나요?\","
+                + "\"missingInformation\":[],\"proposalItems\":["
+                + "{\"title\":\"귀가 후 정리\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("cp11"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ===== 계획 기간 계약(DAY/WEEK/MONTH, 양방향 날짜 검증) — CREATE_PROPOSAL + PROPOSAL_READY에서만 =====
+
+    @Test
+    void createProposal_tomorrowDayRequest_keepsTomorrowAsTargetDate_notForcedToToday() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // "내일 계획 만들어줘"는 DAY 범위이지만 대상 날짜는 내일(2026-08-06)이어야 한다 —
+        // 서버가 LocalDate.now()(오늘, 2026-08-05)로 강제로 되돌리면 안 된다.
+        String raw = "내일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":\"2026-08-06\",\"periodEndDate\":\"2026-08-06\",\"proposalItems\":["
+                + "{\"title\":\"아침 스트레칭\",\"description\":null,\"expectedMinutes\":20,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(931L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(217L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-tomorrow-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+
+        ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
+        assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 6));
+    }
+
+    @Test
+    void createProposal_specificDateDayRequest_keepsThatDateAsTargetDate() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "8월 20일 일정을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":\"2026-08-20\",\"periodEndDate\":\"2026-08-20\",\"proposalItems\":["
+                + "{\"title\":\"병원 예약\",\"description\":null,\"expectedMinutes\":30,\"priority\":\"MUST\","
+                + "\"placementType\":\"DATE_ONLY\",\"startTime\":null,\"endTime\":null}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(932L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(218L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-specific-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+
+        ArgumentCaptor<LocalDate> targetDateCaptor = ArgumentCaptor.forClass(LocalDate.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), targetDateCaptor.capture(), any());
+        assertThat(targetDateCaptor.getValue()).isEqualTo(LocalDate.of(2026, 8, 20));
+    }
+
+    @Test
+    void createProposal_dayScopeItemOutsidePeriod_violatesContract_notClamped() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // planScope=DAY, periodStartDate=periodEndDate=오늘인데 UNSCHEDULED 항목의 deadlineDate가
+        // 일주일 뒤다 — 오늘로 조용히 클램프하지 않고 계약 위반으로 실패시킨다.
+        String raw = "오늘 안에서만 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"DAY\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"proposalItems\":["
+                + "{\"title\":\"이번 주 공부\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-12\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-scope-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_weekScope_withinSevenDays_succeeds() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // WEEK는 periodStartDate로부터 최대 7일 범위(경계값 6일 차이)까지 허용된다.
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
+                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-11\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(933L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(219L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.proposalReady).isNotNull();
+    }
+
+    @Test
+    void createProposal_weekScope_exceedsSevenDays_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-13\",\"proposalItems\":["
+                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-08-13\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void createProposal_monthScope_boundary31DaysInclusive_succeeds() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // 시작일부터 종료일까지 포함해 31일(=spanDays 30) — 경계값으로 통과해야 한다.
+        String raw = "이번 달 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"MONTH\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-09-04\",\"proposalItems\":["
+                + "{\"title\":\"월간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-09-04\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(934L).items(List.of()).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(221L), proposalResponse));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-month-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.proposalReady).isNotNull();
+    }
+
+    @Test
+    void createProposal_monthScope_boundary32DaysInclusive_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // 시작일부터 종료일까지 포함해 32일(=spanDays 31) — 경계값 하나 차이로 위반돼야 한다.
+        // ChronoUnit.DAYS.between은 차이값이라 spanDays>31이 아니라 spanDays>30으로 판정해야
+        // 이 케이스를 잡는다.
+        String raw = "이번 달 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"MONTH\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-09-05\",\"proposalItems\":["
+                + "{\"title\":\"월간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-05\",\"deadlineDate\":\"2026-09-05\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-month-2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void createProposal_earliestStartDateAfterPeriodEndDate_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // earliestStartDate(8/20)가 periodEndDate(8/11)보다 이후 — 예전에는 earliestStartDate가
+        // periodStartDate보다 이른지만 봤기 때문에 이 방향은 통과할 수 있었다.
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
+                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-20\",\"deadlineDate\":null}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-3"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void createProposal_deadlineDateBeforePeriodStartDate_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // deadlineDate(8/1)가 periodStartDate(8/5)보다 이전 — 예전에는 deadlineDate가
+        // periodEndDate보다 늦는지만 봤기 때문에 이 방향은 통과할 수 있었다.
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
+                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":null,\"deadlineDate\":\"2026-08-01\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-4"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void createProposal_earliestStartDateAfterDeadlineDate_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // earliestStartDate(8/10)가 deadlineDate(8/7)보다 이후 — 둘 다 개별적으로는
+        // periodStartDate~periodEndDate(8/5~8/11) 범위 안이라 range 검사만으로는 못 잡는다.
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
+                + "{\"title\":\"주간 정리\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"UNSCHEDULED\",\"startTime\":null,\"endTime\":null,"
+                + "\"earliestStartDate\":\"2026-08-10\",\"deadlineDate\":\"2026-08-07\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-5"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void createProposal_fixedEndAtAfterPeriodEndDate_fails() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
+        // fixedEndAt(8/12) 날짜가 periodEndDate(8/11)보다 이후 — fixedStartAt은 범위 안(8/11)
+        // 이라 fixedStartAt만 보면 통과할 뻔한 케이스다.
+        String raw = "이번 주 계획을 이렇게 잡아봤어.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"PROPOSAL_READY\",\"planScope\":\"WEEK\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-11\",\"proposalItems\":["
+                + "{\"title\":\"자정 넘는 일정\",\"description\":null,\"expectedMinutes\":60,\"priority\":\"SHOULD\","
+                + "\"placementType\":\"TIME_FIXED\",\"startTime\":null,\"endTime\":null,"
+                + "\"fixedStartAt\":\"2026-08-11T23:30\",\"fixedEndAt\":\"2026-08-12T00:30\"}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-week-6"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    // ===== 토큰/오류/타임아웃(decision과 무관한 일반 실패 경로) =====
 
     @Test
     void tokenLimitReached_partialResponse_fails_evenForPlainAutoMessage() {
@@ -978,8 +878,7 @@ class AiConversationServiceTest {
         // finishReason=STOP(정상 종료)인데 우연히 outputTokens가 상한과 같은 값이어도 실패로
         // 몰지 않는다 — 보조 판정(outputTokens>=cap)은 finishReason을 못 얻었을 때만 쓴다.
         when(contextSnapshotService.buildContextBlock(any(), any(), any())).thenReturn("");
-        String raw = "정상적으로 잘 끝난 답변.\n<<<AI_STRUCTURED>>>\n"
-                + "{\"responseType\":\"CHAT\",\"proposalItems\":[],\"offerAction\":null}";
+        String raw = "정상적으로 잘 끝난 답변.\n<<<AI_STRUCTURED>>>\n{\"decision\":\"CHAT\",\"proposalItems\":[]}";
         when(aiConsultationClient.streamTurn(any(), any()))
                 .thenReturn(Flux.just(chatResponse(raw, "STOP", 1772, 6000)));
         when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any()))
@@ -1027,8 +926,10 @@ class AiConversationServiceTest {
         verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
     }
 
+    // ===== idempotency 재생(AiResponseType은 DB 저장값을 그대로 재생 — 이번 리팩터링과 무관) =====
+
     @Test
-    void replayStoredTurn_doesNotCallAiAtAll() {
+    void replayStoredTurn_repliesChat_doesNotCallAiAtAll() {
         AiMessage requestMessage = AiMessage.builder()
                 .messageId(300L).userId(USER_ID).conversationId(CONVERSATION_ID).build();
         AiMessage storedAssistantReply = AiMessage.builder()
@@ -1039,15 +940,61 @@ class AiConversationServiceTest {
 
         RecordingSink sink = new RecordingSink();
         AiConversation conversation = conversation();
-        AiTurnLifecycleService.PreparedTurn replay =
-                replayPreparedTurn(conversation, requestMessage);
+        AiTurnLifecycleService.PreparedTurn replay = replayPreparedTurn(conversation, requestMessage);
 
         service.replayStoredTurn(replay, sink);
 
         assertThat(sink.completed.reply()).isEqualTo("이미 답변했던 내용");
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
         verify(aiConsultationClient, never()).streamTurn(any(), any());
         verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any());
     }
+
+    @Test
+    void replayStoredTurn_repliesOffer_rebuildsOfferAction() {
+        AiMessage requestMessage = AiMessage.builder()
+                .messageId(310L).userId(USER_ID).conversationId(CONVERSATION_ID).build();
+        AiMessage storedAssistantReply = AiMessage.builder()
+                .messageId(311L).userId(USER_ID).role(MessageRole.ASSISTANT)
+                .content(AUTO_OFFER_REPLY).responseType(AiResponseType.OFFER)
+                .status(MessageStatus.COMPLETED).build();
+        when(aiMessageMapper.findByReplyToMessageIdAndUserId(310L, USER_ID)).thenReturn(storedAssistantReply);
+
+        RecordingSink sink = new RecordingSink();
+        AiTurnLifecycleService.PreparedTurn replay = replayPreparedTurn(conversation(), requestMessage);
+
+        service.replayStoredTurn(replay, sink);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.offerAction).isNotNull();
+        assertThat(sink.offerAction.label()).isEqualTo(DEFAULT_OFFER_LABEL);
+        verify(aiConsultationClient, never()).streamTurn(any(), any());
+    }
+
+    @Test
+    void replayStoredTurn_repliesProposal_reloadsSavedProposal() {
+        AiMessage requestMessage = AiMessage.builder()
+                .messageId(320L).userId(USER_ID).conversationId(CONVERSATION_ID).build();
+        AiMessage storedAssistantReply = AiMessage.builder()
+                .messageId(321L).userId(USER_ID).role(MessageRole.ASSISTANT)
+                .content("초안을 만들었어.").responseType(AiResponseType.PROPOSAL)
+                .status(MessageStatus.COMPLETED).build();
+        when(aiMessageMapper.findByReplyToMessageIdAndUserId(320L, USER_ID)).thenReturn(storedAssistantReply);
+        AiProposalResponse proposalResponse = AiProposalResponse.builder().proposalId(940L).items(List.of()).build();
+        when(aiProposalService.findBySourceMessageId(321L, USER_ID)).thenReturn(proposalResponse);
+
+        RecordingSink sink = new RecordingSink();
+        AiTurnLifecycleService.PreparedTurn replay = replayPreparedTurn(conversation(), requestMessage);
+
+        service.replayStoredTurn(replay, sink);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.completed.proposalId()).isEqualTo(940L);
+        assertThat(sink.proposalReady).isNotNull();
+        verify(aiConsultationClient, never()).streamTurn(any(), any());
+    }
+
+    // ===== 대화 조회/목록 =====
 
     @Test
     void getMessages_throwsNotFound_whenConversationNotOwned() {
@@ -1146,12 +1093,6 @@ class AiConversationServiceTest {
     private AiMessage assistantMessage(Long id) {
         return AiMessage.builder().messageId(id).userId(USER_ID).conversationId(CONVERSATION_ID)
                 .role(MessageRole.ASSISTANT).status(MessageStatus.COMPLETED).build();
-    }
-
-    /** findLastAssistantMessageByConversationIdAndUserId 스텁용 — 직전 AI 응답의 responseType만 있으면 된다. */
-    private AiMessage lastAssistantMessage(AiResponseType responseType) {
-        return AiMessage.builder().messageId(199L).userId(USER_ID).conversationId(CONVERSATION_ID)
-                .role(MessageRole.ASSISTANT).responseType(responseType).status(MessageStatus.COMPLETED).build();
     }
 
     private AiMessageRequest request(String message, String idempotencyKey) {

@@ -30,15 +30,6 @@ public interface AiMessageMapper {
                                                @Param("userId") Long userId);
 
     /**
-     * 이 대화방에서 가장 최근에 완료된 ASSISTANT 메시지 하나(없으면 null). 짧은 긍정 응답
-     * ("응"/"그래"/"좋아")이 방금 AI의 OFFER 질문에 대한 동의인지 판단하는 데 쓴다
-     * (AiConversationService.hasExplicitProposalConsent 참고) — 이번 턴의 USER 메시지는
-     * 이 조회 시점에 이미 저장돼 있지만 role=USER라 대상이 아니다.
-     */
-    AiMessage findLastAssistantMessageByConversationIdAndUserId(@Param("conversationId") Long conversationId,
-                                                                  @Param("userId") Long userId);
-
-    /**
      * from 상태일 때만 to로 바꾼다(가드된 전이). 이미 다른 경로로 종료 처리됐으면 0을 반환하고
      * 아무것도 바뀌지 않는다 — 완료·실패·취소 처리기가 두 번 실행돼도 중복 반영을 막는다.
      */
