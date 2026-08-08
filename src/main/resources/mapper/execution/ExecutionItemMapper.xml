@@ -9,6 +9,7 @@
         <id     property="executionItemId"       column="execution_item_id"/>
         <result property="userId"                column="user_id"/>
         <result property="planItemId"            column="plan_item_id"/>
+        <result property="topicId"               column="topic_id"/>
         <result property="sourceExecutionItemId" column="source_execution_item_id"/>
         <result property="title"                 column="title"/>
         <result property="description"           column="description"/>
@@ -171,6 +172,16 @@
           AND user_id           = #{userId}
           AND is_deleted        = 0
           AND version           = #{version}
+    </update>
+
+    <!-- Planning Agent가 제안을 적용한 뒤 생성된 실행 조각에 학습 topic을 연결한다.
+         version을 건드리지 않는다 — 이 필드는 사용자가 직접 편집하는 대상이 아니라
+         내부 연결 메타데이터라서 낙관적 락 대상에 포함하지 않는다. -->
+    <update id="updateTopicId">
+        UPDATE execution_items
+        SET topic_id = #{topicId}
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
     </update>
 
 </mapper>

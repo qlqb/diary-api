@@ -6,6 +6,7 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.ExecutionItemCompletedEvent;
 import com.jungwoo.project.memo.execution.domain.ExecutionOriginType;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.execution.domain.ExecutionRecordOutcome;
@@ -21,6 +22,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDate;
 
@@ -49,6 +51,9 @@ class ExecutionItemServiceTest {
 
     @Mock
     private ExecutionRecordMapper executionRecordMapper;
+
+    @Mock
+    private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
     private ExecutionItemService service;
@@ -93,6 +98,32 @@ class ExecutionItemServiceTest {
                 record.getExecutionItemId().equals(ITEM_ID)
                         && record.getOutcome() == ExecutionRecordOutcome.COMPLETED
                         && record.getCompletionPercent() == 100));
+    }
+
+    @Test
+    void complete_publishesLearningFeedbackEvent_whenItemLinkedToTopic() {
+        ExecutionItem item = plannedItem(0L);
+        item.setTopicId(77L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.completeWithVersion(ITEM_ID, USER_ID, 0L)).thenReturn(1);
+
+        service.complete(ITEM_ID, USER_ID, ExecutionItemCompleteRequest.builder().version(0L).build());
+
+        verify(eventPublisher).publishEvent(argThat((ExecutionItemCompletedEvent event) ->
+                event.executionItemId().equals(ITEM_ID)
+                        && event.userId().equals(USER_ID)
+                        && event.topicId().equals(77L)));
+    }
+
+    @Test
+    void complete_doesNotPublishLearningFeedbackEvent_whenItemHasNoTopic() {
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.completeWithVersion(ITEM_ID, USER_ID, 0L)).thenReturn(1);
+
+        service.complete(ITEM_ID, USER_ID, ExecutionItemCompleteRequest.builder().version(0L).build());
+
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test

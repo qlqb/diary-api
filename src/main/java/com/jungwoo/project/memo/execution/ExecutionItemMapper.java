@@ -96,4 +96,11 @@ public interface ExecutionItemMapper {
             @Param("userId") Long userId,
             @Param("version") Long version
     );
+
+    /** Planning Agent 제안 적용 직후 학습 topic을 연결한다. */
+    void updateTopicId(
+            @Param("executionItemId") Long executionItemId,
+            @Param("userId") Long userId,
+            @Param("topicId") Long topicId
+    );
 }

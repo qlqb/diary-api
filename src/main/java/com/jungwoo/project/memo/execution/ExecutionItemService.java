@@ -8,6 +8,7 @@ import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventActorType;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.ExecutionItemCompletedEvent;
 import com.jungwoo.project.memo.execution.domain.ExecutionItemEvent;
 import com.jungwoo.project.memo.execution.domain.ExecutionOriginType;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
@@ -25,6 +26,7 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResumeRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -50,6 +52,7 @@ public class ExecutionItemService {
     private final ExecutionItemMapper executionItemMapper;
     private final ExecutionItemEventMapper executionItemEventMapper;
     private final ExecutionRecordMapper executionRecordMapper;
+    private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     // ===== 조회 =====
@@ -142,6 +145,12 @@ public class ExecutionItemService {
         executionRecordMapper.insert(record);
 
         log.info("실행 조각 완료: executionItemId={}, userId={}", executionItemId, userId);
+
+        if (item.getTopicId() != null) {
+            // "완료 버튼을 눌렀다"는 사실만으로 학습 상태를 LEARNED로 단정하지 않는다 —
+            // 리스너(TopicService.recordExecutionCompleted)가 IN_PROGRESS/복습 여부만 갱신한다.
+            eventPublisher.publishEvent(new ExecutionItemCompletedEvent(executionItemId, userId, item.getTopicId()));
+        }
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }
@@ -394,6 +403,16 @@ public class ExecutionItemService {
                 ExecutionEventActorType.USER, "AI 제안 적용", null, toJson(afterState), null, item.getVersion());
 
         return item;
+    }
+
+    /**
+     * Planning Agent가 학습 추천을 제안으로 적용한 직후, 생성된 실행 조각에 학습 topic을
+     * 연결한다. AiProposalService.apply()가 이미 소유권을 검증한 뒤 만든 조각만 대상이 되므로
+     * 여기서는 존재 확인 없이 그대로 갱신한다(없으면 0행 갱신으로 조용히 끝난다).
+     */
+    @Transactional
+    public void linkTopic(Long executionItemId, Long userId, Long topicId) {
+        executionItemMapper.updateTopicId(executionItemId, userId, topicId);
     }
 
     // ===== 공통 =====
