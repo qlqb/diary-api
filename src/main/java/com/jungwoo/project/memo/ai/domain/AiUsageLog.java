@@ -24,6 +24,12 @@ public class AiUsageLog {
 
     private Long conversationId;
 
+    /** Orchestrator가 여러 Agent를 연쇄 호출하는 한 워크플로를 묶는 식별자(단일 호출이면 null). */
+    private String workflowId;
+
+    /** 이 Agent 호출 한 번의 식별자. */
+    private String agentRunId;
+
     /** 이 사용량이 발생한 요청(ai_messages의 USER 행). */
     private Long requestMessageId;
 
@@ -37,6 +43,8 @@ public class AiUsageLog {
     private Integer cachedTokens;
 
     private Integer outputTokens;
+
+    private Integer latencyMs;
 
     private UsageResultStatus resultStatus;
 

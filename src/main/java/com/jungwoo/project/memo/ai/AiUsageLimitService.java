@@ -50,20 +50,38 @@ public class AiUsageLimitService {
         }
     }
 
+    /** Today 상담 전용 — feature는 항상 AI_CONSULTATION으로 고정된다. 기존 호출부를 그대로 유지한다. */
     @Transactional
     public void record(Long userId, Long conversationId, Long requestMessageId, String model,
                         Integer inputTokens, Integer cachedTokens, Integer outputTokens,
                         UsageResultStatus resultStatus, String errorCode) {
+        record(userId, conversationId, requestMessageId, model, inputTokens, cachedTokens, outputTokens,
+                resultStatus, errorCode, FEATURE, null, null, null);
+    }
+
+    /**
+     * Material/Learning/Planning Agent처럼 feature를 구분해서 남겨야 하는 경우용 오버로드.
+     * workflowId/agentRunId는 Orchestrator가 여러 Agent를 연쇄 호출할 때 같은 워크플로임을
+     * 묶어 추적하기 위한 값이다(단일 호출이면 null로 둬도 된다).
+     */
+    @Transactional
+    public void record(Long userId, Long conversationId, Long requestMessageId, String model,
+                        Integer inputTokens, Integer cachedTokens, Integer outputTokens,
+                        UsageResultStatus resultStatus, String errorCode, String feature,
+                        String workflowId, String agentRunId, Integer latencyMs) {
         try {
             aiUsageLogMapper.insert(AiUsageLog.builder()
                     .userId(userId)
                     .conversationId(conversationId)
+                    .workflowId(workflowId)
+                    .agentRunId(agentRunId)
                     .requestMessageId(requestMessageId)
-                    .feature(FEATURE)
+                    .feature(feature != null ? feature : FEATURE)
                     .model(model)
                     .inputTokens(inputTokens)
                     .cachedTokens(cachedTokens)
                     .outputTokens(outputTokens)
+                    .latencyMs(latencyMs)
                     .resultStatus(resultStatus != null ? resultStatus : UsageResultStatus.SUCCESS)
                     .errorCode(errorCode)
                     // Spring AI 표준 API로는 provider request id를 안정적으로 얻을 수 없다 — 추측해 채우지 않는다.
