@@ -16,10 +16,16 @@ public interface AiMessageMapper {
     List<AiMessage> findByConversationIdAndUserId(@Param("conversationId") Long conversationId,
                                                    @Param("userId") Long userId);
 
-    /** 컨텍스트 스냅샷용 — 오래된 순으로 최근 limit개만 (DB에서 LIMIT, 전체를 메모리로 읽지 않는다). */
+    /**
+     * 컨텍스트 스냅샷용 — 오래된 순으로 최근 limit개만(DB에서 LIMIT, 전체를 메모리로 읽지
+     * 않는다). excludeMessageId가 있으면 그 메시지는 결과에서 제외한다(LIMIT 적용 전에
+     * 걸러낸다) — 현재 처리 중인 사용자 요청 메시지가 이미 PROCESSING으로 저장돼 있어도
+     * "최근 대화"에 자기 자신이 끼어들지 않게 하기 위함이다. null이면 아무것도 제외하지 않는다.
+     */
     List<AiMessage> findRecentByConversationIdAndUserId(@Param("conversationId") Long conversationId,
                                                           @Param("userId") Long userId,
-                                                          @Param("limit") int limit);
+                                                          @Param("limit") int limit,
+                                                          @Param("excludeMessageId") Long excludeMessageId);
 
     /** 동일 사용자의 동일 idempotencyKey 재전송 감지용. */
     AiMessage findByUserIdAndIdempotencyKey(@Param("userId") Long userId,

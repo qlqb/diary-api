@@ -22,7 +22,7 @@ import java.util.function.Function;
  * contextBudgetChars(호출부가 전체 입력 예산에서 현재 사용자 메시지 길이를 뺀 나머지)를
  * 이 서비스가 세 영역(최근 대화/장기 컨텍스트/이전 요약)에 배분하고 렌더링까지 전부 책임진다
  * — AiConversationService는 메시지·Context 내부 구조를 몰라도 된다. 배분·선택 방식은
- * {@link #buildContextBlock(Long, Long, String, int)} 문서 참고.
+ * {@link #buildContextBlock(Long, Long, String, int, Long)} 문서 참고.
  *
  * 장기 컨텍스트는 각 줄에 context_id를 함께 내려준다 — 모델이 SUPERSEDE/MARK_STALE/ARCHIVE/
  * CONFIRM 후보를 만들 때 그 id를 targetContextId로 그대로 참조하게 하기 위함이다. SUPERSEDED/
@@ -97,13 +97,21 @@ public class ContextSnapshotService {
      *      자를 수 있다(항상 유효한 범위의 substring만 사용해 예외 없이 안전하게).
      * 5) 담을 내용이 하나도 없는 영역은 헤더조차 출력하지 않는다.
      *
-     * @param contextBudgetChars 이 문자열 전체가 넘지 않아야 하는 최대 길이(0 이상). 0이면
-     *                           빈 문자열을 반환한다(예외 없음).
+     * @param contextBudgetChars     이 문자열 전체가 넘지 않아야 하는 최대 길이(0 이상). 0이면
+     *                               빈 문자열을 반환한다(예외 없음).
+     * @param currentRequestMessageId 이번 턴의 현재 사용자 요청 메시지 id. prepareTurn()이
+     *                               스트리밍을 시작하기 전에 이미 PROCESSING 상태로 ai_messages에
+     *                               저장해두므로, 이 id를 명시적으로 제외하지 않으면 "최근 대화"에
+     *                               현재 발언이 다시 섞여 사용자 상담 원문과 중복된다. null이면
+     *                               아무것도 제외하지 않는다(idempotency 재생 등 현재 요청 id가
+     *                               없는 경로용).
      */
     @Transactional(readOnly = true)
-    public String buildContextBlock(Long conversationId, Long userId, String summary, int contextBudgetChars) {
+    public String buildContextBlock(
+            Long conversationId, Long userId, String summary, int contextBudgetChars, Long currentRequestMessageId
+    ) {
         List<AiMessage> recent = aiMessageMapper.findRecentByConversationIdAndUserId(
-                conversationId, userId, recentMessageLimit);
+                conversationId, userId, recentMessageLimit, currentRequestMessageId);
         List<UserContext> longTermContexts = userContextMapper.findActiveAndStaleByUserId(userId, longTermLimit);
 
         List<String> recentLines = renderLines(recent, this::renderRecentLine);

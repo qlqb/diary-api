@@ -294,8 +294,10 @@ public class AiConversationService {
         int maxChars = maxInputTokens * 4;
         int currentMessageChars = request.getMessage() != null ? request.getMessage().length() : 0;
         int contextBudgetChars = Math.max(0, maxChars - currentMessageChars);
+        // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
+        // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
         String contextBlock = contextSnapshotService.buildContextBlock(
-                conversationId, userId, conversation.getSummary(), contextBudgetChars);
+                conversationId, userId, conversation.getSummary(), contextBudgetChars, requestMessageId);
         String userPrompt = buildUserPrompt(request, contextBlock, requestMoment.toLocalDate());
         String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT + buildCurrentTimeBlock(requestMoment, userZone);
 

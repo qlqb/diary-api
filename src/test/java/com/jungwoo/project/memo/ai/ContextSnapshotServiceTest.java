@@ -19,6 +19,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -68,7 +69,7 @@ class ContextSnapshotServiceTest {
                 + LONG_TERM_HEADER.length() + longTermLine(ctx).length()
                 + SUMMARY_HEADER.length() + summary.length();
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, summary, need + 100);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, summary, need + 100, null);
 
         assertThat(block).contains(recentLine(m1)).contains(recentLine(m2));
         assertThat(block).contains(longTermLine(ctx));
@@ -100,7 +101,7 @@ class ContextSnapshotServiceTest {
         // 실제로 가른다. 장기/요약은 자기 몫(35%/15%)을 넘지 않을 만큼 작게 유지한다.
         assertThat(recentNeed).isGreaterThan(total / 2);
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, summary, total + 2);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, summary, total + 2, null);
 
         for (AiMessage m : messages) {
             assertThat(block).contains(recentLine(m));
@@ -122,7 +123,7 @@ class ContextSnapshotServiceTest {
 
         int budgetForTwoNewest = recentHeader().length() + recentLineLen(middle) + recentLineLen(newest) + 2;
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budgetForTwoNewest);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budgetForTwoNewest, null);
 
         assertThat(block).doesNotContain(oldest.getContent());
         assertThat(block).contains(recentLine(middle));
@@ -142,7 +143,7 @@ class ContextSnapshotServiceTest {
         // fits는 정확히 들어가지만 tooLarge를 더하면 1글자라도 넘치도록 예산을 잡는다.
         int budget = recentHeader().length() + recentLineLen(fits) + (recentLineLen(tooLarge) - 1) + 2;
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budget);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budget, null);
 
         assertThat(block).contains(recentLine(fits));
         // 부분적으로라도 섞여 들어가면 안 된다 — 고유 표시 문자열 자체가 전혀 없어야 한다.
@@ -164,7 +165,7 @@ class ContextSnapshotServiceTest {
         int budgetForTwoNewest = LONG_TERM_HEADER.length()
                 + longTermLine(recentlyUpdated).length() + longTermLine(midUpdated).length() + 2;
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budgetForTwoNewest);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, budgetForTwoNewest, null);
 
         assertThat(block).contains(longTermLine(recentlyUpdated));
         assertThat(block).contains(longTermLine(midUpdated));
@@ -180,7 +181,7 @@ class ContextSnapshotServiceTest {
         stubLongTerm(huge);
         stubRecent();
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 50);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 50, null);
 
         assertThat(block).doesNotContain("고유표시_거대한컨텍스트");
         assertThat(block).doesNotContain("#40");
@@ -201,7 +202,7 @@ class ContextSnapshotServiceTest {
         int longTermNeed = LONG_TERM_HEADER.length() + longTermLine(ctx).length();
         int budget = recentNeed + longTermNeed + 200; // summary가 다 들어가기엔 한참 부족한 예산.
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, hugeSummary, budget);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, hugeSummary, budget, null);
 
         assertThat(block).contains(recentLine(m));
         assertThat(block).contains(longTermLine(ctx));
@@ -243,7 +244,7 @@ class ContextSnapshotServiceTest {
         String hugeSummary = "q".repeat(4000);
 
         int budget = 500;
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, hugeSummary, budget);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, hugeSummary, budget, null);
 
         assertThat(block.length()).isLessThanOrEqualTo(budget);
         // 우선순위: 최근 대화가 가장 먼저 예산을 받으므로 이렇게 넉넉한 줄 크기 차이에서는
@@ -264,7 +265,7 @@ class ContextSnapshotServiceTest {
         stubRecent(userMessage("아무 메시지"));
         stubLongTerm(context(1L, "아무 컨텍스트", UserContextStatus.ACTIVE));
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, "아무 요약", 0);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, "아무 요약", 0, null);
 
         assertThat(block).isEmpty();
     }
@@ -276,11 +277,42 @@ class ContextSnapshotServiceTest {
         stubRecent();
         when(userContextMapper.findActiveAndStaleByUserId(eq(USER_ID), eq(LONG_TERM_LIMIT))).thenReturn(List.of());
 
-        service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000);
+        service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, null);
 
         ArgumentCaptor<Integer> limitCaptor = ArgumentCaptor.forClass(Integer.class);
         verify(userContextMapper).findActiveAndStaleByUserId(eq(USER_ID), limitCaptor.capture());
         assertThat(limitCaptor.getValue()).isEqualTo(LONG_TERM_LIMIT);
+    }
+
+    // ===== 13. 현재 요청 메시지를 최근 대화 조회에서 명시적으로 제외 =====
+
+    /**
+     * prepareTurn()이 스트리밍을 시작하기 전에 현재 사용자 메시지를 이미 ai_messages에
+     * PROCESSING으로 저장해두므로, currentRequestMessageId를 그대로 전달하지 않으면 "최근
+     * 대화"에 방금 저장된 현재 발언이 다시 섞여 buildUserPrompt의 "사용자 상담 원문"과
+     * 중복된다. 실제 SQL이 이 id를 제외하는지는 AiMessageMapperTest(실제 DB)가 증명하고,
+     * 여기서는 ContextSnapshotService가 그 인자를 마퍼 호출에 정확히 전달하는지만 본다.
+     */
+    @Test
+    void buildContextBlock_forwardsCurrentRequestMessageId_toMapperAsExcludeParam() {
+        stubRecent();
+        stubLongTerm();
+
+        service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, 555L);
+
+        verify(aiMessageMapper).findRecentByConversationIdAndUserId(
+                eq(CONVERSATION_ID), eq(USER_ID), eq(RECENT_MESSAGE_LIMIT), eq(555L));
+    }
+
+    @Test
+    void buildContextBlock_nullCurrentRequestMessageId_excludesNothing() {
+        stubRecent();
+        stubLongTerm();
+
+        service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, null);
+
+        verify(aiMessageMapper).findRecentByConversationIdAndUserId(
+                eq(CONVERSATION_ID), eq(USER_ID), eq(RECENT_MESSAGE_LIMIT), isNull());
     }
 
     // ===== 11. ACTIVE/STALE 포함, context_id 노출 =====
@@ -292,7 +324,7 @@ class ContextSnapshotServiceTest {
         UserContext stale = context(13L, "현재 알바에서 집까지 약 50분 걸린다.", UserContextStatus.STALE);
         stubLongTerm(active, stale);
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, null);
 
         assertThat(block).contains("[장기 컨텍스트]");
         assertThat(block).contains("#12 [ACTIVE] 현재 알바는 보통 23시에 끝난다.");
@@ -308,7 +340,7 @@ class ContextSnapshotServiceTest {
         stubRecent(m);
         stubLongTerm();
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, null);
 
         assertThat(block).contains("사용자: " + tricky + "\n");
     }
@@ -318,7 +350,7 @@ class ContextSnapshotServiceTest {
         stubRecent();
         stubLongTerm();
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, null, 1000, null);
 
         assertThat(block).doesNotContain("[장기 컨텍스트]");
     }
@@ -328,7 +360,7 @@ class ContextSnapshotServiceTest {
         stubRecent(userMessage("오늘 뭐 하지"));
         stubLongTerm(context(20L, "학교에서 예전 집까지 약 40분 걸렸다.", UserContextStatus.STALE));
 
-        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, "지난 대화 요약", 1000);
+        String block = service.buildContextBlock(CONVERSATION_ID, USER_ID, "지난 대화 요약", 1000, null);
 
         assertThat(block).contains("[이전 대화 요약]").contains("지난 대화 요약");
         assertThat(block).contains("[최근 대화").contains("오늘 뭐 하지");
@@ -345,7 +377,7 @@ class ContextSnapshotServiceTest {
     private static final String SUMMARY_TRUNCATION_MARKER = "...(이하 생략)...";
 
     private void stubRecent(AiMessage... messages) {
-        when(aiMessageMapper.findRecentByConversationIdAndUserId(any(), any(), anyInt()))
+        when(aiMessageMapper.findRecentByConversationIdAndUserId(any(), any(), anyInt(), any()))
                 .thenReturn(List.of(messages));
     }
 

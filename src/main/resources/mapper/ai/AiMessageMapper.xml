@@ -54,6 +54,9 @@
             FROM ai_messages
             WHERE conversation_id = #{conversationId}
               AND user_id         = #{userId}
+            <if test="excludeMessageId != null">
+              AND message_id != #{excludeMessageId}
+            </if>
             ORDER BY message_id DESC
             LIMIT #{limit}
         ) recent
