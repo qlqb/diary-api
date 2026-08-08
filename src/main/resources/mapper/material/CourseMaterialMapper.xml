@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.CourseMaterialMapper">
+
+    <resultMap id="courseMaterialResultMap" type="com.jungwoo.project.memo.material.domain.CourseMaterial">
+        <id     property="materialId"       column="material_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="courseId"         column="course_id"/>
+        <result property="materialType"     column="material_type"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="storedFilename"   column="stored_filename"/>
+        <result property="contentType"      column="content_type"/>
+        <result property="sizeBytes"        column="size_bytes"/>
+        <result property="extractionStatus" column="extraction_status"/>
+        <result property="extractedText"    column="extracted_text"/>
+        <result property="extractionError"  column="extraction_error"/>
+        <result property="createdAt"        column="created_at"/>
+        <result property="updatedAt"        column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
+        INSERT INTO course_materials (
+            user_id, course_id, material_type, original_filename, stored_filename,
+            content_type, size_bytes, extraction_status, extracted_text, extraction_error
+        ) VALUES (
+            #{userId}, #{courseId}, #{materialType}, #{originalFilename}, #{storedFilename},
+            #{contentType}, #{sizeBytes}, #{extractionStatus}, #{extractedText}, #{extractionError}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials WHERE material_id = #{materialId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByCourseIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+        ORDER BY created_at DESC
+    </select>
+
+    <update id="updateExtractionResult">
+        UPDATE course_materials
+        SET extraction_status = #{extractionStatus},
+            extracted_text    = #{extractedText},
+            extraction_error  = #{extractionError}
+        WHERE material_id = #{materialId}
+    </update>
+
+</mapper>

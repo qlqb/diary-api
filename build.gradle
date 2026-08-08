@@ -47,6 +47,10 @@ dependencies {
     // 짧게(초 단위 termination) 동기 실행하는 용도로만 쓰고, 상시 SolverManager/데몬으로
     // 구동하지 않는다 — scheduling.solver.SchedulingSolverService 참고.
     implementation "ai.timefold.solver:timefold-solver-core:${timefoldVersion}"
+    // Material Agent 입력용 텍스트 추출. 스캔 이미지 PDF의 OCR은 이번 범위에 넣지 않는다
+    // (텍스트 레이어가 없으면 추출 실패로 명확히 처리한다).
+    implementation 'org.apache.pdfbox:pdfbox:3.0.3'
+    implementation 'org.apache.poi:poi-ooxml:5.3.0'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'

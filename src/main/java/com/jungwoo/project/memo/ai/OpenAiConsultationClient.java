@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
@@ -249,15 +250,20 @@ public class OpenAiConsultationClient implements AiConsultationClient {
     }
 
     @Override
-    public Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt) {
+    public Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens) {
         if (chatClient == null) {
             return Flux.error(new IllegalStateException("ChatClient가 설정되지 않았습니다"));
         }
 
-        return chatClient.prompt()
+        ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
                 .system(systemPrompt)
-                .user(userPrompt)
-                .stream()
+                .user(userPrompt);
+        if (maxCompletionTokens != null) {
+            spec = spec.options(OpenAiChatOptions.builder()
+                    .maxCompletionTokens(maxCompletionTokens));
+        }
+
+        return spec.stream()
                 .chatResponse()
                 .doOnError(e -> {
                     Throwable root = e;

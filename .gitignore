@@ -2,6 +2,10 @@ HELP.md
 src/main/resources/application-local.properties
 .gradle
 build/
+
+# 로컬 개발 환경에서 업로드된 학습 자료 원본(storage.materials.upload-dir). 메타데이터만 DB에 남고
+# 파일 자체는 커밋 대상이 아니다.
+/data/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

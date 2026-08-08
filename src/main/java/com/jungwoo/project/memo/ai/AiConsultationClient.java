@@ -20,6 +20,17 @@ public interface AiConsultationClient {
      * 마지막 청크에서 함께 와야 ai_usage_logs에 남길 수 있기 때문이다.
      * 응답 텍스트는 "자연어 reply" + 구분자(AiStreamParser.DELIMITER) + "구조화 JSON" 형식이다.
      * DB 트랜잭션 밖에서 구독해야 한다.
+     *
+     * 전역 기본(spring.ai.openai.chat.max-completion-tokens)을 그대로 쓴다. Today 상담
+     * 흐름(AiConversationService)은 이 오버로드만 쓴다 — 기존 동작을 그대로 유지한다.
      */
-    Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt);
+    default Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt) {
+        return streamTurn(systemPrompt, userPrompt, null);
+    }
+
+    /**
+     * Material/Learning/Planning Agent처럼 호출별로 다른 출력 토큰 예산이 필요한 경우용
+     * 오버로드. maxCompletionTokens가 null이면 전역 기본값을 쓴다(위 오버로드와 동일 동작).
+     */
+    Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens);
 }

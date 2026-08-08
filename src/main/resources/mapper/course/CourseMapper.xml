@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.CourseMapper">
+
+    <resultMap id="courseResultMap" type="com.jungwoo.project.memo.course.domain.Course">
+        <id     property="courseId"          column="course_id"/>
+        <result property="userId"            column="user_id"/>
+        <result property="title"             column="title"/>
+        <result property="textbookTitle"     column="textbook_title"/>
+        <result property="textbookAuthor"    column="textbook_author"/>
+        <result property="textbookPublisher" column="textbook_publisher"/>
+        <result property="textbookIsbn"      column="textbook_isbn"/>
+        <result property="status"            column="status"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="updatedAt"         column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="courseId">
+        INSERT INTO courses (
+            user_id, title, textbook_title, textbook_author, textbook_publisher, textbook_isbn, status
+        ) VALUES (
+            #{userId}, #{title}, #{textbookTitle}, #{textbookAuthor}, #{textbookPublisher}, #{textbookIsbn}, #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByUserId" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE user_id = #{userId} ORDER BY created_at DESC
+    </select>
+
+    <select id="countActiveTopicsByCourseId" resultType="int">
+        SELECT COUNT(*) FROM course_topics WHERE course_id = #{courseId} AND status = 'ACTIVE'
+    </select>
+
+    <update id="updateTextbookInfo">
+        UPDATE courses
+        SET textbook_title     = COALESCE(#{textbookTitle}, textbook_title),
+            textbook_author    = COALESCE(#{textbookAuthor}, textbook_author),
+            textbook_publisher = COALESCE(#{textbookPublisher}, textbook_publisher),
+            textbook_isbn      = COALESCE(#{textbookIsbn}, textbook_isbn)
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+</mapper>

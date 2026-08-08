@@ -28,6 +28,12 @@ public enum ErrorCode {
     TASK_MUST_NOT_HAVE_TIME(HttpStatus.BAD_REQUEST, "E400_011", "시간 미지정 작업은 시작/종료 시각을 가질 수 없습니다"),
     INVALID_PROPOSAL_ITEM_SELECTION(HttpStatus.BAD_REQUEST, "E400_012", "제안 항목 선택이 올바르지 않습니다"),
     EXECUTION_ITEM_NO_ACTUAL_CHANGE(HttpStatus.BAD_REQUEST, "E400_013", "변경된 내용이 없습니다"),
+    UNSUPPORTED_FILE_TYPE(HttpStatus.BAD_REQUEST, "E400_014", "지원하지 않는 파일 형식입니다"),
+    FILE_TOO_LARGE(HttpStatus.BAD_REQUEST, "E400_015", "파일 크기가 너무 큽니다"),
+    EMPTY_FILE(HttpStatus.BAD_REQUEST, "E400_016", "빈 파일입니다"),
+    MATERIAL_ANALYSIS_NOT_DRAFT(HttpStatus.BAD_REQUEST, "E400_017", "이미 처리된 분석 결과입니다"),
+    MATERIAL_EXTRACTION_NOT_READY(HttpStatus.BAD_REQUEST, "E400_018", "자료에서 텍스트를 추출하지 못해 분석할 수 없습니다"),
+    STUDY_RECOMMENDATION_NOT_SUGGESTED(HttpStatus.BAD_REQUEST, "E400_019", "이미 처리된 학습 추천입니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -50,6 +56,12 @@ public enum ErrorCode {
     PLAN_ITEM_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_008", "계획 항목을 찾을 수 없습니다"),
     AI_PROPOSAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_009", "AI 제안을 찾을 수 없습니다"),
     CONTEXT_SUGGESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_010", "컨텍스트 변경 후보를 찾을 수 없습니다"),
+    COURSE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_011", "과목을 찾을 수 없습니다"),
+    COURSE_MATERIAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_012", "학습 자료를 찾을 수 없습니다"),
+    MATERIAL_ANALYSIS_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_013", "자료 분석 결과를 찾을 수 없습니다"),
+    COURSE_TOPIC_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_014", "학습 항목을 찾을 수 없습니다"),
+    STUDY_RECOMMENDATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_015", "학습 추천을 찾을 수 없습니다"),
+    LEARNING_CONVERSATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_016", "학습 상담을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
