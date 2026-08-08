@@ -1,5 +1,62 @@
 # 99. Change Log
 
+## 2026-08-09 — 학습 자료 → Material/Learning/Planning 멀티에이전트 vertical flow
+
+강의계획서/교재 목차/교수자료를 올리면 AI가 학습 구조로 분석하고(Material Agent), 그 구조 위에서
+개인과외와 다음 학습 판단을 하고(Learning Agent), 그 판단을 기존 실행/스케줄링 파이프라인에
+배치하는(Planning Agent) vertical flow를 처음부터 끝까지 연결했다. 기존 ExecutionItem/
+scheduling/AiProposal 구조를 재사용했고, 동일한 의미의 실행 시스템을 병렬로 새로 만들지 않았다.
+
+- **새 패키지**: `course`(과목), `material`(자료 업로드+텍스트 추출+Material Agent),
+  `learning`(topic 트리/진행 상태+Learning Agent 개인과외/추천), `planning`(Planning Agent),
+  `orchestration`(Learning→Planning 연쇄 호출을 결정론적으로 통제하는 얇은 오케스트레이터,
+  워크플로당 최대 Agent 호출 횟수 제한).
+- **DB**: `docs/sql/2026-08-09-learning-agents.sql` — courses/course_materials/
+  course_material_analyses/course_topics/topic_progress/topic_learning_events/
+  study_recommendations 신규, `execution_items.topic_id`(학습↔실행 연결),
+  `study_recommendations.proposal_id`(추천↔계획 역참조), `ai_conversations.scope`에
+  MATERIAL/LEARNING/PLANNING 추가, `ai_usage_logs`에 workflow_id/agent_run_id/latency_ms 추가.
+- **AI 결과는 항상 승인 전 미반영이다.** Material 분석은 DRAFT로만 저장되고 apply() 전에는
+  course_topics/courses 교재 필드에 전혀 영향을 주지 않는다. Planning 계획 초안은 기존
+  AiProposal + SchedulePreviewService(Timefold)를 그대로 재사용하며 Apply 전에는 ExecutionItem이
+  생기지 않는다.
+- **source/AI_DERIVED provenance**를 모든 topic 노드에서 구분한다. 원문에 실제 있는 항목만
+  SOURCE로 표시하고, AI가 학습 편의를 위해 세분화한 항목은 AI_DERIVED로 남긴다. 목차 근거가
+  없으면 topics를 빈 배열로 두고 이유를 설명한다 — 목차를 지어내지 않는다. 학기 중 새 교수자료를
+  올리는 경우, 이미 확정된 topic 트리를 프롬프트에 함께 줘서 중복 제안을 피하고 새 내용만
+  보고하게 했다(제목에 상위 topic 맥락을 함께 적어 사용자가 review에서 관계를 알 수 있게 함 —
+  단, 확정 구조에 자동으로 자식으로 붙이는 트리 병합까지는 이번 범위에 없다).
+- **완료 = 완전 이해로 해석하지 않는다.** topic_progress는 NOT_STARTED/IN_PROGRESS/LEARNED
+  세 단계만 두고, 사용자가 topic 화면에서 직접 누른 액션만 상태를 바꾼다. ExecutionItem 완료는
+  `ExecutionItemCompletedEvent`를 발행해 `learning.ExecutionCompletionListener`가 받는 방식으로
+  연결했다(execution 패키지가 learning을 몰라도 되도록 이벤트로 분리) — LEARNED로 자동 승격하지
+  않고 IN_PROGRESS로 옮기거나(첫 학습) 복습 이력만 늘린다(이미 LEARNED).
+- **Agent별 usage/토큰 예산 분리**: `ai_usage_logs.feature`에 MATERIAL_ANALYSIS/LEARNING_CHAT/
+  LEARNING_RECOMMENDATION/PLANNING_CHAT 값을 남기고, `ai.material.*`/`ai.learning.*`/
+  `ai.planning.*` 프로퍼티로 Agent별 max-input-tokens/max-completion-tokens을 독립 조절한다.
+  `AiConsultationClient`에 `maxCompletionTokens` 오버로드를 추가했다(Today 상담은 기존 2-인자
+  오버로드를 그대로 쓴다 — 동작 변경 없음).
+- **버그 수정**: Spring Boot 4가 기본으로 Jackson 3(`tools.jackson`)를 쓰면서 이 프로젝트
+  코드 전반이 의존하는 클래식 `com.fasterxml.jackson.databind.ObjectMapper` 빈이 더 이상
+  자동 구성되지 않는 것을 발견했다(`spring.http.converters.preferred-json-mapper=jackson2`를
+  명시해야 `Jackson2HttpMessageConvertersConfiguration`이 매치됨). `common/config/JacksonConfig`에
+  `@ConditionalOnMissingBean`으로 명시적 빈을 추가해 해결했다 — 새 패키지가 없었어도 언젠가
+  터졌을 잠재 버그였다.
+- **문서화되지 않은 실제 제약**: PDF/PPTX 텍스트 기반 자료만 지원한다(PDFBox/POI 신규 의존성
+  추가). 스캔 이미지 등 텍스트 레이어가 없는 PDF는 OCR 없이 FAILED_NO_TEXT로 명확히 실패
+  처리한다. 파일은 로컬 디스크(`storage.materials.upload-dir`)에 저장하고 DB에는 메타데이터만
+  남긴다.
+- **알려진 한계**: `TimetableView.jsx`(주간 시간표)는 이미 이전부터 자체 mock 데이터를 쓰고
+  있었고, 이번 작업에서도 실제 ExecutionItem 데이터로 바꾸지 않았다(하드코딩된 학기/날짜 라벨을
+  포함한 더 큰 리팩터링이 필요해 범위 밖으로 남겼다) — Today 화면은 실제 데이터로 완전히
+  연결되어 검증했다. Material Agent가 새 자료의 topic을 기존 확정 topic의 자식으로 물리적으로
+  붙이는 트리 병합은 구현하지 않았다(프롬프트 컨텍스트로 중복 방지만 함).
+- **테스트**: 백엔드 신규 27건 모두 mock 기반(TextExtractionServiceTest만 실제 PDFBox/POI로
+  진짜 PDF/PPTX를 만들어 추출 검증), 기존 포함 전체 `./gradlew test` 통과. 프론트 신규 10건
+  포함 전체 `npm run test` 32건 통과. 로컬 dev 서버(실제 OpenAI 키)로 강의계획서 PDF 업로드→
+  분석→적용→topic 트리→개인과외 대화→추천→계획 초안→Apply→오늘 화면 반영→완료→다음 추천
+  반영→교수 PPT 추가까지 브라우저에서 전체 시나리오를 실행해 확인했다.
+
 ## 2026-08-08 — AI 상담의 성급한 계획 제안(OFFER) 판단 보완
 
 실사용 입력("프로젝트 더 수정할 건데 계획 짜줘, 오늘은 조금 늦게 자도 괜찮을 것 같아")에서
