@@ -1,5 +1,38 @@
 # 99. Change Log
 
+## 2026-08-08 — AI 상담의 성급한 계획 제안(OFFER) 판단 보완
+
+실사용 입력("프로젝트 더 수정할 건데 계획 짜줘, 오늘은 조금 늦게 자도 괜찮을 것 같아")에서
+AUTO 턴이 종료 시각·다음 날 고정 일정 같은 핵심 시간 정보 없이 바로 decision=OFFER_PROPOSAL을
+반환해, 근거 없는 취침/기상 가정 위에서 계획 생성 버튼이 뜨는 것을 확인했다(CASE-001).
+명시적 OFFER → 버튼 → CREATE_PROPOSAL 구조 자체나 AUTO가 Proposal을 직접 만들지 않는 안전
+장치는 문제가 없었다 — OFFER 이전 판단 기준이 문제였다.
+
+- **ASK 우선 규칙을 추가했다(REQ-AI-020).** 특정 문장 하드코딩이 아니라 "이 정보를 모르면
+  계획의 범위·분량·순서·날짜·고정 시각·현실성이 크게 달라지는가"라는 일반 기준으로,
+  핵심 정보가 부족하거나 현재 발언과 저장된 정보가 충돌하면 OFFER_PROPOSAL보다
+  ASK_CLARIFICATION을 우선하도록 `OpenAiConsultationClient.SYSTEM_PROMPT`(원칙 14)와
+  `AiConversationService.AUTO_MODE_BLOCK`을 보완했다. 영향이 작은 정보는 보수적으로 추정할
+  수 있고(그 값을 확정 사실처럼 취급하지 않음), 이미 최근 대화나 장기 컨텍스트에 있는
+  정보는 다시 묻지 않는다는 기준도 명시했다 — 정보 하나라도 없으면 무조건 ASK하는 설문이
+  되지 않도록 반대 방향(불필요한 질문 남발)도 함께 경계했다.
+- decision enum, structured JSON 계약, `resolveTurn`의 decision→responseType 변환,
+  AUTO에서 PROPOSAL을 직접 만들지 않는 서버 방어선은 전혀 바꾸지 않았다 — 이번 수정은
+  프롬프트의 판단 기준 텍스트만 보완했다.
+- CASE-001을 [09-ai-consultation-regression-cases.md](09-ai-consultation-regression-cases.md)에
+  기록했다. 정확한 문장을 고정하는 golden text 문서가 아니라 판단/행동 의미를 검증하는
+  회귀 기준이며, 반대 방향 회귀(단순 인사, 정보가 이미 충분한 요청, 컨텍스트에 이미 있는
+  정보 재질문 금지 등)도 함께 남겼다.
+- 테스트: `OpenAiConsultationClientTest`(신규, 프롬프트에 판단 기준 문구가 실제로 포함됐는지
+  계약 수준 확인 3건), `AiConversationServiceTest`에 CASE-001 서버 계약 회귀 테스트와
+  AUTO_MODE_BLOCK 새 문구 포함 검증을 추가했다. 실제 모델이 이 입력에 항상
+  ASK_CLARIFICATION을 고를 것이라는 것 자체는 Mockito로 증명할 수 없어, 모델이
+  ASK_CLARIFICATION을 반환했을 때 서버가 정확히 CHAT 계약으로 처리하고 OFFER/PROPOSAL을
+  만들지 않는다는 계약만 자동화했다. `./gradlew test`로 backend 전체 통과를 확인했다(207건).
+- 실제 OpenAI 환경에서의 수동 확인은 이번에는 진행하지 않았다 — 이 세션이 시작하지 않은
+  프로세스가 이미 로컬 8080 포트를 점유하고 있어(코드 버전을 확신할 수 없는 상태), 그
+  프로세스를 재시작하거나 새 서버를 올려 실제 비용이 드는 OpenAI 호출을 시도하지 않았다.
+
 ## 2026-08-07 — 계획 초안(CREATE_PROPOSAL) 빈 CHAT 오처리 수정
 
 장애 로그에서 CREATE_PROPOSAL 요청이 OpenAI 호출까지는 성공(input=1772, output=2400,

@@ -96,7 +96,10 @@ public class AiConversationService {
             사용자가 자연어로 "계획 만들어줘", "일정 짜줘", "응, 만들어줘"라고 말해도
             이번 요청에서는 실제 초안을 만들지 않는다.
 
-            계획 생성이 적절하면 decision=OFFER_PROPOSAL로 응답한다.
+            계획 결과를 크게 바꾸는 핵심 정보가 아직 없거나 현재 발언과 저장된 정보가
+            충돌하면 OFFER_PROPOSAL보다 ASK_CLARIFICATION을 먼저 고려한다(원칙 14 참고).
+            핵심 정보가 이미 충분하면(대화·컨텍스트로 알고 있거나 영향이 작아 보수적으로
+            추정 가능하면) decision=OFFER_PROPOSAL로 응답한다.
 
             """;
 

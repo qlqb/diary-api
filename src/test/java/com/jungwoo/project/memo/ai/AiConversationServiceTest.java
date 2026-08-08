@@ -155,6 +155,9 @@ class AiConversationServiceTest {
         assertThat(userPrompt).contains("[요청 모드]");
         assertThat(userPrompt).contains("AUTO");
         assertThat(userPrompt).contains("PROPOSAL_READY");
+        // 핵심 정보가 부족하면 OFFER보다 ASK_CLARIFICATION을 먼저 고려하라는 판단 기준도
+        // AUTO 모드 블록에서부터 강조된다(성급한 OFFER_PROPOSAL 회귀 방지).
+        assertThat(userPrompt).contains("ASK_CLARIFICATION을 먼저 고려한다");
     }
 
     @Test
@@ -307,6 +310,42 @@ class AiConversationServiceTest {
         assertThat(sink.completed.reply()).isEqualTo("알바는 몇 시에 끝나나요?");
         assertThat(sink.proposalReady).isNull();
         assertThat(sink.completed.proposalItems()).isEmpty();
+    }
+
+    /**
+     * docs/product/09-ai-consultation-regression-cases.md CASE-001 회귀 계약.
+     *
+     * 실제 모델이 이 자연어 입력에 대해 항상 ASK_CLARIFICATION을 고를 것이라는 것을 이
+     * Mockito 테스트로 "증명"할 수는 없다(그건 SYSTEM_PROMPT 판단 기준 + 실제 OpenAI
+     * 검증의 몫이다). 여기서 검증하는 것은: 모델이 ASK_CLARIFICATION을 반환했을 때 서버가
+     * 그 결과를 정확히 CHAT(clarifyingQuestion을 reply로) 계약으로 처리하고, OFFER 버튼도
+     * PROPOSAL_READY도 절대 만들지 않는다는 것이다 — 이전 회귀(성급한 OFFER_PROPOSAL)가
+     * 다시 나타나도 서버 계약 자체는 깨지지 않는다는 안전망.
+     */
+    @Test
+    void auto_regressionCase001_planIntentButMissingCoreTimingInfo_serverHandlesAskContract_notOffer() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "프로젝트 수정을 오늘 더 진행하려는 거네. 오늘 몇 시쯤까지 작업하고, "
+                + "몇 시쯤 잘 생각이야?\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":"
+                + "\"오늘 몇 시쯤까지 작업하고, 몇 시쯤 잘 생각이야?\","
+                + "\"missingInformation\":[\"작업 종료/취침 시각\"],\"proposalItems\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(304L), null, List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(),
+                request("안녕 지금부터 프로젝트 더 수정할 건데 계획 한번 짜줄래? "
+                        + "오늘은 조금 늦게 자도 괜찮을 것 같아", "k-case-001"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo("오늘 몇 시쯤까지 작업하고, 몇 시쯤 잘 생각이야?");
+        assertThat(sink.completed.proposalItems()).isEmpty();
+        // OFFER 버튼도 계획 초안도 만들어지지 않는다 — CASE-001의 실패 재현(성급한 OFFER) 방지.
+        assertThat(sink.offerAction).isNull();
+        assertThat(sink.proposalReady).isNull();
     }
 
     @Test
