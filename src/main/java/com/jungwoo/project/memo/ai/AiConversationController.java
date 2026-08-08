@@ -117,6 +117,12 @@ public class AiConversationController {
 
         Disposable subscription = aiConversationService.streamAndComplete(prepared, request, sink);
         subscriptionRef.set(subscription);
+        // 아주 짧은 순간에 연결 종료 콜백이 위 set()보다 먼저 실행되면 그때는 subscriptionRef가
+        // 비어 있어 dispose하지 못했을 수 있다 — set() 직후 다시 확인해 뒤늦게라도 정리한다.
+        // 이 순간 이후에 연결이 끊기면 onDisconnect가 이제 채워진 ref를 보고 그대로 dispose한다.
+        if (sink.isTerminated()) {
+            subscription.dispose();
+        }
 
         return emitter;
     }

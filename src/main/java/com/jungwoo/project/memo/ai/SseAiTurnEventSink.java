@@ -36,6 +36,17 @@ class SseAiTurnEventSink implements AiTurnEventSink {
         return terminated.compareAndSet(false, true);
     }
 
+    /**
+     * 컨트롤러가 streamAndComplete() 구독 Disposable을 subscriptionRef에 등록한 직후 이 값을
+     * 확인한다 — 등록 사이의 아주 짧은 순간에 연결 종료 콜백이 먼저 실행돼 markTerminatedOnce()
+     * 가 이미 true가 됐지만 그때는 subscriptionRef가 비어 있어 dispose()하지 못했을 수 있다.
+     * 그 경우 컨트롤러가 이 메서드로 뒤늦게라도 dispose해야 업스트림 OpenAI 스트림이 계속
+     * 살아 있다가 이미 종료 처리된 요청에 뒤늦은 성공 결과를 만드는 것을 막는다.
+     */
+    boolean isTerminated() {
+        return terminated.get();
+    }
+
     Long getRequestMessageId() {
         return requestMessageId;
     }

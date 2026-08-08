@@ -155,6 +155,61 @@ class AiTurnLifecycleServiceTest {
         verify(aiMessageMapper, never()).insert(any());
     }
 
+    /**
+     * requirement 1: 같은 idempotencyKey의 PROCESSING 메시지가 실제로 대화방의 active request와
+     * 묶여 있고 아직 stale이 아니면(방금 시작) 기존처럼 BUSY로 남아야 한다 — stale 회수가
+     * 먼저 실행돼도 아무것도 바꾸지 않는다.
+     */
+    @Test
+    void prepareTurn_idempotencyProcessing_notStale_staysBusy_reclaimDoesNotTouchIt() {
+        AiConversation active = freeConversation();
+        active.setActiveRequestMessageId(500L);
+        active.setActiveRequestStartedAt(LocalDateTime.now().minusSeconds(5)); // 방금 시작 — stale 아님
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(active);
+        AiMessage existing = AiMessage.builder().messageId(500L).userId(USER_ID)
+                .status(MessageStatus.PROCESSING).build();
+        when(aiMessageMapper.findByUserIdAndIdempotencyKey(USER_ID, "dup")).thenReturn(existing);
+
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, request("재요청", "dup")))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_CONVERSATION_BUSY));
+
+        verify(aiMessageMapper, never()).updateStatusIfCurrent(eq(500L), any(), any(), any());
+        verify(aiMessageMapper, never()).insert(any());
+    }
+
+    /**
+     * requirement 2: 같은 idempotencyKey의 PROCESSING 메시지가 실제로 stale이면, stale 회수가
+     * idempotencyKey 판정보다 먼저 반영돼 그 메시지가 FAILED로 바뀐 뒤 조회된다 — 무한 BUSY가
+     * 아니라 기존 FAILED 정책(AI_GENERATION_FAILED)으로 끝나고, 새 OpenAI 호출(= 새 메시지
+     * 삽입)은 일어나지 않는다.
+     */
+    @Test
+    void prepareTurn_idempotencyProcessing_stale_reclaimedFirst_thenFailedPolicy_noAutoRetry() {
+        ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 1);
+        ReflectionTestUtils.setField(service, "staleLockBufferSeconds", 1);
+
+        AiConversation stale = freeConversation();
+        stale.setActiveRequestMessageId(500L);
+        stale.setActiveRequestStartedAt(LocalDateTime.now().minusSeconds(30)); // 타임아웃+버퍼를 훨씬 넘김
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(stale);
+        // 같은 트랜잭션 안에서 reclaim이 먼저 FAILED로 바꾼 뒤 이 조회가 그 최신 상태를 그대로
+        // 읽는다고 가정한다(실제로는 방금 UPDATE한 값을 같은 트랜잭션의 SELECT가 그대로 본다).
+        AiMessage existing = AiMessage.builder().messageId(500L).userId(USER_ID)
+                .status(MessageStatus.FAILED).build();
+        when(aiMessageMapper.findByUserIdAndIdempotencyKey(USER_ID, "dup")).thenReturn(existing);
+
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, request("재요청", "dup")))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        // stale 회수가 idempotencyKey 판정보다 먼저 반영됐다.
+        verify(aiMessageMapper).updateStatusIfCurrent(500L, USER_ID, MessageStatus.PROCESSING, MessageStatus.FAILED);
+        verify(aiConversationMapper).releaseActiveRequest(CONVERSATION_ID, USER_ID, 500L);
+        // 무한 BUSY가 아니라 FAILED 정책으로 끝났다 — 자동 재호출(새 메시지 삽입) 없음.
+        verify(aiMessageMapper, never()).insert(any());
+    }
+
     @Test
     void prepareTurn_throwsBusy_whenAnotherRequestActivelyProcessing_recentlyStarted() {
         AiConversation busy = freeConversation();
@@ -229,6 +284,8 @@ class AiTurnLifecycleServiceTest {
 
     @Test
     void completeTurnSuccess_createsProposal_whenProposalType_andReleasesLock() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(1);
         when(aiProposalService.createFromItems(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(900L).items(List.of()).build());
 
@@ -244,11 +301,36 @@ class AiTurnLifecycleServiceTest {
 
     @Test
     void completeTurnSuccess_doesNotCreateProposal_whenChat() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(1);
+
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNull();
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * 늦은 성공 저장 차단(핵심 방어선). requestMessageId가 더 이상 PROCESSING이 아니면(연결
+     * 종료 등으로 이미 FAILED 처리됨) 가드된 선점(updateStatusIfCurrent)이 0행을 반환하고,
+     * ASSISTANT/Proposal/Context 무엇도 저장되지 않아야 한다.
+     */
+    @Test
+    void completeTurnSuccess_whenRequestNoLongerProcessing_throwsAndSkipsAllPersistence() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(0); // 이미 FAILED 등으로 바뀌어 선점 실패
+
+        assertThatThrownBy(() -> service.completeTurnSuccess(
+                CONVERSATION_ID, USER_ID, 501L, "뒤늦게 도착한 답변", AiResponseType.CHAT,
+                List.of(), LocalDate.now(), List.of(), List.of()))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(aiMessageMapper, never()).insert(any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+        verify(contextChangeSuggestionService, never()).createFromSuggestions(any(), any(), any(), any());
+        verify(aiConversationMapper, never()).releaseActiveRequest(any(), any(), any());
     }
 
     @Test

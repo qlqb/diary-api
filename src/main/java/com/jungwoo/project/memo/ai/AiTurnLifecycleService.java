@@ -69,6 +69,15 @@ public class AiTurnLifecycleService {
             throw new NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
         }
 
+        // stale 잠금 회수를 idempotencyKey 판정보다 먼저 반영한다. 이전에는 idempotencyKey
+        // 확인이 더 앞에 있어서, 서버 강제 종료 등으로 남은 요청이 이미 stale이어도 같은 키로
+        // 재요청하면 stale 회수 전에 PROCESSING을 보고 계속 BUSY가 됐다(사실상 무한 BUSY).
+        // 여기서 먼저 회수하면 그 메시지는 FAILED로 바뀌어 있으므로, 아래 idempotencyKey
+        // 조회가 최신 상태(FAILED)를 그대로 읽어 기존 FAILED 정책(AI_GENERATION_FAILED,
+        // 자동 재호출 없음)으로 정상 처리된다. 아직 stale이 아닌 정상 PROCESSING 요청은
+        // 이 호출이 아무것도 바꾸지 않으므로 기존처럼 BUSY로 남는다.
+        reclaimStaleLockIfAny(conversation, userId);
+
         String idempotencyKey = request.getIdempotencyKey();
         if (idempotencyKey != null && !idempotencyKey.isBlank()) {
             AiMessage existing = aiMessageMapper.findByUserIdAndIdempotencyKey(userId, idempotencyKey);
@@ -90,9 +99,9 @@ public class AiTurnLifecycleService {
         }
         aiUsageLimitService.checkLimit(userId);
 
-        reclaimStaleLockIfAny(conversation, userId);
         if (conversation.getActiveRequestMessageId() != null) {
-            // 이미 다른 요청이 진행 중이고 아직 오래되지 않았다 — OpenAI를 부르지 않고 막는다.
+            // 이미 다른 요청이 진행 중이고 아직 오래되지 않았다(위에서 이미 stale 회수를
+            // 시도했다) — OpenAI를 부르지 않고 막는다.
             throw new ConflictException(ErrorCode.AI_CONVERSATION_BUSY);
         }
 
@@ -148,12 +157,19 @@ public class AiTurnLifecycleService {
     }
 
     /**
-     * ASSISTANT 메시지 + (PROPOSAL이면) Proposal 저장 + (있으면) Context 변경 후보 저장 +
-     * USER 메시지 COMPLETED + 진행 표시 해제, 전부 한 트랜잭션.
+     * PROCESSING -> COMPLETED 선점(가드된 UPDATE) + ASSISTANT 메시지 + (PROPOSAL이면) Proposal
+     * 저장 + (있으면) Context 변경 후보 저장 + 진행 표시 해제, 전부 한 트랜잭션.
+     *
+     * 이 requestMessageId가 아직 PROCESSING일 때만 "성공 완료 권한"을 가장 먼저 확보한다 —
+     * SSE 연결 종료가 이 스트림 완료 콜백보다 먼저 처리돼 abortTurn()이 이미 FAILED로
+     * 바꿔놨다면, 여기서 막고 ASSISTANT/Proposal/Context 무엇도 저장하지 않는다("늦게 도착한
+     * 성공 결과가 이미 실패 처리된 요청 위에 덮어써지는" 상태를 막는다). 선점에 성공한 뒤
+     * 나머지 저장 중 하나라도 실패하면(@Transactional) 이 선점(COMPLETED 전이)까지 포함해
+     * 트랜잭션 전체가 롤백된다 — 바깥의 기존 실패 처리(completeTurnFailure)가 다시 정리한다.
      *
      * contextChangesIfAny는 responseType과 무관한 sidecar다 — CHAT/OFFER/PROPOSAL 어디에도
      * 붙을 수 있다. ContextChangeSuggestionService.createFromSuggestions가 계약 위반을 찾으면
-     * 예외를 던지고, 이 트랜잭션 전체(ASSISTANT 메시지·Proposal 포함)가 함께 롤백된다 —
+     * 예외를 던지고, 이 트랜잭션 전체(선점·ASSISTANT 메시지·Proposal 포함)가 함께 롤백된다 —
      * "AI 응답 실패인데 후보만 저장되는" 또는 그 반대 상태가 생기지 않는다.
      */
     @Transactional
@@ -164,6 +180,15 @@ public class AiTurnLifecycleService {
             List<UnavailableWindowSpec> unavailableWindowsIfProposal,
             List<ContextChangeSuggestion> contextChangesIfAny
     ) {
+        int claimed = aiMessageMapper.updateStatusIfCurrent(
+                requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
+        if (claimed != 1) {
+            log.warn("AI 턴 성공 처리 중단: requestMessageId={}가 더 이상 PROCESSING이 아님 "
+                            + "(연결 종료 등으로 먼저 종료됐을 수 있음) — 늦은 성공 결과를 저장하지 않는다",
+                    requestMessageId);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+
         AiMessage assistantMessage = AiMessage.builder()
                 .conversationId(conversationId)
                 .userId(userId)
@@ -185,7 +210,6 @@ public class AiTurnLifecycleService {
         List<ContextSuggestionResponse> contextSuggestions = contextChangeSuggestionService.createFromSuggestions(
                 userId, conversationId, assistantMessage.getMessageId(), contextChangesIfAny);
 
-        aiMessageMapper.updateStatusIfCurrent(requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
 
