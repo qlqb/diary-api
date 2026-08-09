@@ -246,6 +246,27 @@ class ExecutionItemServiceTest {
                         && event.getExecutionItemId().equals(ITEM_ID)));
     }
 
+    @Test
+    void getByDateRange_mapsMapperResultsToResponses_inRangeOrder() {
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByUserIdAndDateRange(USER_ID, DATE, DATE.plusDays(6)))
+                .thenReturn(java.util.List.of(item));
+
+        var result = service.getByDateRange(USER_ID, DATE, DATE.plusDays(6));
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getExecutionItemId()).isEqualTo(ITEM_ID);
+    }
+
+    @Test
+    void getByDateRange_rejectsEndDateBeforeStartDate() {
+        assertThatThrownBy(() -> service.getByDateRange(USER_ID, DATE, DATE.minusDays(1)))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
+
+        verify(executionItemMapper, never()).findByUserIdAndDateRange(any(), any(), any());
+    }
+
     private ExecutionItem plannedItem(Long version) {
         return ExecutionItem.builder()
                 .executionItemId(ITEM_ID)

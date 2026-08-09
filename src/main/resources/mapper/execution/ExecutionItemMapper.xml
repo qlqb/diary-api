@@ -89,6 +89,15 @@
         ORDER BY order_index ASC, scheduled_start_at ASC, execution_item_id ASC
     </select>
 
+    <select id="findByUserIdAndDateRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND scheduled_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY scheduled_date ASC, order_index ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
+
     <select id="findTimeFixedByUserIdAndDateRange" resultMap="executionItemResultMap">
         SELECT *
         FROM execution_items

@@ -25,6 +25,17 @@ public interface ExecutionItemMapper {
     );
 
     /**
+     * 날짜 범위 안의 실행 조각 전체(배치 종류·상태 무관). 주간 시간표처럼 여러 날짜를 한 번에
+     * 보여줘야 하는 화면에서 쓴다. findByUserIdAndDate와 동일하게 상태로 거르지 않는다 —
+     * 오늘 화면과 같은 원본을 같은 규칙으로 투영해야 하기 때문이다.
+     */
+    List<ExecutionItem> findByUserIdAndDateRange(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    /**
      * 날짜 범위 안의 TIME_FIXED 실행 조각. 7일 범위 일정 후보 배치에서 "이미 차지된 시간"으로
      * 쓴다. CANCELLED는 하지 않기로 결정한 시간이라 제외한다 — DONE/HOLD/PARTIAL/PLANNED는
      * 그 시간을 실제로 썼거나 여전히 그 자리를 차지하고 있으므로 포함한다.

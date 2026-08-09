@@ -65,6 +65,21 @@ public class ExecutionItemService {
                 .toList();
     }
 
+    /**
+     * 날짜 범위 조회. 주간 시간표에서 쓴다 — getByDate와 같은 원본(execution_items)을
+     * 같은 규칙(상태 필터 없음)으로 여러 날짜에 걸쳐 투영할 뿐, 별도 데이터를 만들지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<ExecutionItemResponse> getByDateRange(Long userId, LocalDate startDate, LocalDate endDate) {
+        if (endDate.isBefore(startDate)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        return executionItemMapper.findByUserIdAndDateRange(userId, startDate, endDate)
+                .stream()
+                .map(ExecutionItemResponse::from)
+                .toList();
+    }
+
     @Transactional(readOnly = true)
     public List<ExecutionItemResponse> getPending(Long userId, LocalDate beforeDate) {
         return executionItemMapper.findPendingBefore(userId, beforeDate)

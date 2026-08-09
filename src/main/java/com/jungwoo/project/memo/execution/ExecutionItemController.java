@@ -19,6 +19,7 @@ import java.util.List;
  * 실행 조각 컨트롤러.
  *
  * GET    /api/execution-items?date=            날짜별 조회
+ * GET    /api/execution-items/range?startDate=&endDate= 날짜 범위 조회 (주간 시간표용)
  * GET    /api/execution-items/pending?beforeDate= pending 조회
  * POST   /api/execution-items                   생성
  * DELETE /api/execution-items/{id}?version=      삭제 (soft delete)
@@ -39,6 +40,18 @@ public class ExecutionItemController {
         log.info("GET /api/execution-items - userId={}, date={}", principal.getUserId(), date);
 
         return ResponseEntity.ok(executionItemService.getByDate(principal.getUserId(), date));
+    }
+
+    @GetMapping("/range")
+    public ResponseEntity<List<ExecutionItemResponse>> getByDateRange(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
+    ) {
+        log.info("GET /api/execution-items/range - userId={}, startDate={}, endDate={}",
+                principal.getUserId(), startDate, endDate);
+
+        return ResponseEntity.ok(executionItemService.getByDateRange(principal.getUserId(), startDate, endDate));
     }
 
     @GetMapping("/pending")
