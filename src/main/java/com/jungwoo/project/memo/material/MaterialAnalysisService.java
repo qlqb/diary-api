@@ -10,8 +10,10 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
+import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.dto.CourseNoteDraft;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
@@ -47,6 +49,7 @@ public class MaterialAnalysisService {
     private final CourseService courseService;
     private final MaterialService materialService;
     private final TopicService topicService;
+    private final CourseNoteService courseNoteService;
     private final CourseMaterialAnalysisMapper analysisMapper;
     private final com.jungwoo.project.memo.course.CourseMapper courseMapper;
     private final AiConsultationClient aiConsultationClient;
@@ -76,6 +79,26 @@ public class MaterialAnalysisService {
             예를 들어 원문에 "3.2 단순 연결 리스트"까지만 있고 "노드/탐색/삽입/삭제"라는
             하위 항목이 원문에 없다면, 그 네 항목을 만들어도 되지만 반드시 sourceType을
             AI_DERIVED로 표시해야 한다. "원문에 있었다"고 거짓으로 SOURCE 표시하지 않는다.
+
+            두 번째로 중요한 원칙: topics에는 사용자가 실제로 "배우고 진도를 관리할" 지식/기술
+            항목만 담는다. 강의계획서에는 학습 내용이 아닌 정보도 함께 적혀 있는데, 이런 항목을
+            topics에 절대 넣지 않는다. 대신 courseNotes로 분리한다.
+
+            topics(학습 내용)에 들어가는 것 — 예: ADT, 알고리즘 복잡도, 재귀, 배열/포인터,
+            연결 리스트, 스택/큐, 트리, 그래프, 정렬, 탐색처럼 그 자체로 공부하고 이해해야 하는
+            개념/기법.
+
+            courseNotes로 분리하는 것 — topics에 넣지 않는다:
+            - category="COURSE_INFO": 교과목 소개, 담당교수 이름/연락처/면담 가능 시간,
+              수업 운영·성적평가·수업지원 방식 안내, 수업 시 사용 도구, 장애학생 수업지원 안내처럼
+              "그 과목이 어떻게 운영되는지"에 대한 정보.
+            - category="ASSESSMENT": 중간고사/기말고사/과제/평가 비율, 주차별 수업 일정처럼
+              "어떻게, 언제 평가받는지"에 대한 정보. 날짜가 뚜렷한 항목(시험일/제출마감 등)은
+              keyDates에 넣고 courseNotes에는 다시 넣지 않는다 — 평가 비율처럼 날짜가 아닌
+              사실만 여기 담는다.
+            courseNotes의 각 항목은 label(예: "담당교수", "평가 비율")과 detail(예: "홍길동 교수,
+            연락처: ...", "중간 30% · 기말 30% · 과제 20% · 출석 20%")로 원문 내용을 간결하게
+            정리한다. 원문에 해당 정보가 전혀 없으면 courseNotes를 빈 배열로 둔다 — 지어내지 않는다.
 
             목차/구조에 대한 근거가 원문에 전혀 없으면(예: 과목명/교재명만 언급되고 실제
             목차 내용이 없음) topics를 빈 배열로 두고 summary에 그 사실을 정확히 설명한다.
@@ -116,6 +139,9 @@ public class MaterialAnalysisService {
                 "textbookPublisher": "출판사 또는 null",
                 "textbookIsbn": "ISBN 또는 null"
               },
+              "courseNotes": [
+                {"category": "COURSE_INFO 또는 ASSESSMENT", "label": "예: 담당교수, 평가 비율", "detail": "원문 내용을 간결하게 정리"}
+              ],
               "keyDates": [
                 {"title": "예: 중간고사", "date": "YYYY-MM-DD 또는 null", "description": "원문 표현"}
               ],
@@ -237,6 +263,10 @@ public class MaterialAnalysisService {
         int createdCount = drafts.isEmpty() ? 0
                 : topicService.applyAnalyzedTopics(userId, analysis.getCourseId(), analysis.getMaterialId(), drafts);
 
+        List<CourseNoteDraft> noteDrafts = payload.courseNotes() == null ? List.of()
+                : payload.courseNotes().stream().map(this::toCourseNoteDraft).toList();
+        courseNoteService.saveAll(userId, analysis.getCourseId(), analysis.getMaterialId(), noteDrafts);
+
         LocalDateTime now = LocalDateTime.now();
         analysisMapper.updateStatus(analysisId, MaterialAnalysisStatus.APPLIED.name(), now);
         analysis.setStatus(MaterialAnalysisStatus.APPLIED);
@@ -272,6 +302,10 @@ public class MaterialAnalysisService {
         List<TopicDraft> children = node.children() == null ? List.of()
                 : node.children().stream().map(this::toTopicDraft).toList();
         return new TopicDraft(node.title(), node.sourceType(), node.sourceLocator(), children);
+    }
+
+    private CourseNoteDraft toCourseNoteDraft(MaterialAnalysisPayload.CourseNote note) {
+        return new CourseNoteDraft(note.category(), note.label(), note.detail());
     }
 
     private void requireDraft(CourseMaterialAnalysis analysis) {

@@ -7,8 +7,10 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.dto.CourseNoteDraft;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
@@ -55,6 +57,7 @@ class MaterialAnalysisServiceTest {
     @Mock private CourseService courseService;
     @Mock private MaterialService materialService;
     @Mock private TopicService topicService;
+    @Mock private CourseNoteService courseNoteService;
     @Mock private CourseMaterialAnalysisMapper analysisMapper;
     @Mock private CourseMapper courseMapper;
     @Mock private AiConsultationClient aiConsultationClient;
@@ -156,6 +159,63 @@ class MaterialAnalysisServiceTest {
         TopicDraft root = captor.getValue().get(0);
         assertThat(root.sourceType()).isEqualTo("SOURCE");
         assertThat(root.children().get(0).sourceType()).isEqualTo("AI_DERIVED");
+    }
+
+    @Test
+    void apply_separatesCourseNotesFromTopics_neverMixingNonLearningItemsIntoCourseTopics() {
+        String json = """
+                {"summary":"확인","courseFields":{"textbookTitle":null,"textbookAuthor":null,"textbookPublisher":null,"textbookIsbn":null},
+                 "courseNotes":[
+                    {"category":"COURSE_INFO","label":"담당교수","detail":"홍길동 교수, contact@school.ac.kr"},
+                    {"category":"ASSESSMENT","label":"평가 비율","detail":"중간 30% · 기말 30% · 과제 20% · 출석 20%"}
+                 ],
+                 "keyDates":[],
+                 "topics":[{"title":"연결 리스트","sourceType":"SOURCE","sourceLocator":"3장","children":[]}]}
+                """;
+        CourseMaterialAnalysis draft = CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.DRAFT)
+                .analysisJson(json)
+                .build();
+        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
+        when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(1);
+
+        service.apply(USER_ID, ANALYSIS_ID);
+
+        // 학습 topic에는 "연결 리스트" 하나만 넘어간다 — 과목 정보/평가 정보는 섞이지 않는다.
+        ArgumentCaptor<List<TopicDraft>> topicCaptor = ArgumentCaptor.forClass(List.class);
+        verify(topicService).applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), topicCaptor.capture());
+        assertThat(topicCaptor.getValue()).hasSize(1);
+        assertThat(topicCaptor.getValue().get(0).title()).isEqualTo("연결 리스트");
+
+        // 과목 정보/평가 정보는 course_notes로 따로 저장된다.
+        ArgumentCaptor<List<CourseNoteDraft>> noteCaptor = ArgumentCaptor.forClass(List.class);
+        verify(courseNoteService).saveAll(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), noteCaptor.capture());
+        assertThat(noteCaptor.getValue()).hasSize(2);
+        assertThat(noteCaptor.getValue().get(0).category()).isEqualTo("COURSE_INFO");
+        assertThat(noteCaptor.getValue().get(0).label()).isEqualTo("담당교수");
+        assertThat(noteCaptor.getValue().get(1).category()).isEqualTo("ASSESSMENT");
+    }
+
+    @Test
+    void apply_toleratesMissingCourseNotesField_treatingItAsEmpty() {
+        String json = """
+                {"summary":"확인","courseFields":{"textbookTitle":null,"textbookAuthor":null,"textbookPublisher":null,"textbookIsbn":null},"keyDates":[],
+                 "topics":[{"title":"연결 리스트","sourceType":"SOURCE","sourceLocator":"3장","children":[]}]}
+                """;
+        CourseMaterialAnalysis draft = CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.DRAFT)
+                .analysisJson(json)
+                .build();
+        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
+        when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(1);
+
+        service.apply(USER_ID, ANALYSIS_ID);
+
+        verify(courseNoteService).saveAll(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), eq(List.of()));
     }
 
     private ChatResponse chatResponse(String text) {

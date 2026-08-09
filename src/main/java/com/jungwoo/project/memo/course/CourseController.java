@@ -2,6 +2,7 @@ package com.jungwoo.project.memo.course;
 
 import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.course.dto.CourseCreateRequest;
+import com.jungwoo.project.memo.course.dto.CourseNoteResponse;
 import com.jungwoo.project.memo.course.dto.CourseResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -16,9 +17,10 @@ import java.util.List;
 /**
  * 과목 컨트롤러.
  *
- * GET  /api/courses          목록
- * GET  /api/courses/{id}     상세
- * POST /api/courses          생성
+ * GET  /api/courses               목록
+ * GET  /api/courses/{id}          상세
+ * POST /api/courses               생성
+ * GET  /api/courses/{id}/notes    학습 topic이 아닌 과목 정보/평가 정보
  */
 @Slf4j
 @RestController
@@ -27,6 +29,7 @@ import java.util.List;
 public class CourseController {
 
     private final CourseService courseService;
+    private final CourseNoteService courseNoteService;
 
     @GetMapping
     public ResponseEntity<List<CourseResponse>> list(@AuthenticationPrincipal UserPrincipal principal) {
@@ -39,6 +42,14 @@ public class CourseController {
             @PathVariable Long courseId
     ) {
         return ResponseEntity.ok(courseService.get(principal.getUserId(), courseId));
+    }
+
+    @GetMapping("/{courseId}/notes")
+    public ResponseEntity<List<CourseNoteResponse>> notes(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long courseId
+    ) {
+        return ResponseEntity.ok(courseNoteService.getByCourse(principal.getUserId(), courseId));
     }
 
     @PostMapping
