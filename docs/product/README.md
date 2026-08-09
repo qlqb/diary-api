@@ -17,9 +17,10 @@
 | 7 | 메모 | [07-ideas.md](07-ideas.md) | 아이디어 주차장 / 미확정 아이디어 기록 |
 | 8 | 설계 | [08-today-execution-loop.md](08-today-execution-loop.md) | Today 화면 중심 실행 루프, Todo/ScheduleBlock 역할, 1차-A 사용자 입력 범위 정리 |
 | 9 | 회귀 기록 | [09-ai-consultation-regression-cases.md](09-ai-consultation-regression-cases.md) | AI 상담(AUTO)에서 발견한 실제 판단 실패 사례와 기대 행동을 자연어로 보존하는 회귀 기준 |
-| 10 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
-| 11 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
-| 12 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
+| 10 | 제품 경험 | [10-core-experience.md](10-core-experience.md) | 자료·상태·AI 대화가 계획 초안과 실제 실행으로 이어지는 핵심 사용자 경험과 컨텍스트 경계 |
+| 11 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
+| 12 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
+| 13 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
 
 ---
 
@@ -38,5 +39,6 @@
 - 미확정 아이디어는 `07-ideas.md`에 기록한다.
 - Today 화면 중심 실행 루프와 Todo/ScheduleBlock 역할이 바뀌면 `08-today-execution-loop.md`를 수정한다.
 - AI 상담(AUTO)에서 실제로 판단이 틀린 사례를 발견하면 `09-ai-consultation-regression-cases.md`에 사례로 남긴다(정확한 문장을 고정하는 것이 아니라 기대 판단/행동을 기록한다).
+- 자료 공간, 컨텍스트, AI 초안, 사용자 승인, 일정/오늘/기록으로 이어지는 제품의 핵심 경험이 바뀌면 `10-core-experience.md`를 수정한다.
 - 아이디어가 확정되면 해당 문서와 `99-changelog.md`에 반영한다.
 - 중요한 결정은 확정 변경 이력인 `99-changelog.md`에 기록한다.
