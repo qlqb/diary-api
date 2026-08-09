@@ -1,5 +1,30 @@
 # 99. Change Log
 
+## 2026-08-09 (2차) — 학습 UX를 기능 데모에서 실제 학습 경험으로 재구성
+
+바로 위 항목(멀티에이전트 vertical flow)에서 남긴 "알려진 한계" 두 가지를 이번 작업에서
+정리했다. 새 Agent를 추가하거나 Material/Learning/Planning 백엔드 로직을 다시 만들지 않고,
+frontend(diary-ui)만 재구성했다. 백엔드는 시간표 조회에 필요한 범위 쿼리 엔드포인트 하나만
+추가했다.
+
+- **학습을 최상위 진입점으로 분리**: 계획 탭 안의 "자료·과목" 서브탭을 없애고 사이드바에
+  "학습"(오늘/학습/계획/실행/기록)을 추가했다.
+- **학습 지도**: 평평한 topic 카드 목록을 계층 트리(LearningMap)로 바꿨다. 선택한 topic
+  하나만 상세(TopicDetail)로 보여주고, 모든 행에 배지·버튼 4개를 반복하지 않는다.
+- **개인과외 전용 화면(TutorView)**: topic 아래 인라인 채팅이던 것을 화면 전체를 쓰는
+  전용 모드로 분리했다. 진입 시 course/topic context를 이미 갖고 있어 다시 묻지 않는다.
+  "학습 완료"는 사용자의 명시적 액션일 때만 topic을 LEARNED로 바꾼다.
+- **Material 분석 편집(MaterialReview)**: 기존 `PUT /api/material-analyses/{id}` 편집
+  API가 frontend에 연결되지 않아 적용/폐기만 가능했던 것을 고쳤다. topic 제목 수정·제거·
+  추가, 교재 필드 수정이 가능하고, 적용 시 항상 최신 편집 내용을 먼저 저장한다.
+- **주간 시간표 실데이터 연결**: `GET /api/execution-items/range?startDate=&endDate=`를
+  추가해(getByDate와 같은 원본, 같은 규칙) TimetableView가 자체 mock(EVENTS/TODAY_EVENTS)
+  대신 실제 ExecutionItem을 보여주게 했다.
+- **버그 수정**: 오늘 탭이 최초 1회만 조회하고 탭 재방문 시 다시 조회하지 않아, 학습 탭에서
+  계획을 적용해도 오늘 화면에 반영되지 않던 문제를 브라우저 검증 중 발견해 고쳤다.
+- 실 계정으로 강의계획서 업로드 → 분석 → 편집 → 적용 → 학습 지도 → 개인과외(실제 OpenAI
+  응답 확인) → 학습 완료 → 다음 추천 → 계획 적용 → 오늘/시간표 반영까지 end-to-end로 검증했다.
+
 ## 2026-08-09 — 학습 자료 → Material/Learning/Planning 멀티에이전트 vertical flow
 
 강의계획서/교재 목차/교수자료를 올리면 AI가 학습 구조로 분석하고(Material Agent), 그 구조 위에서
