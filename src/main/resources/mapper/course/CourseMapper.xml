@@ -8,6 +8,7 @@
         <id     property="courseId"          column="course_id"/>
         <result property="userId"            column="user_id"/>
         <result property="title"             column="title"/>
+        <result property="groupLabel"        column="group_label"/>
         <result property="textbookTitle"     column="textbook_title"/>
         <result property="textbookAuthor"    column="textbook_author"/>
         <result property="textbookPublisher" column="textbook_publisher"/>
@@ -19,9 +20,10 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="courseId">
         INSERT INTO courses (
-            user_id, title, textbook_title, textbook_author, textbook_publisher, textbook_isbn, status
+            user_id, title, group_label, textbook_title, textbook_author, textbook_publisher, textbook_isbn, status
         ) VALUES (
-            #{userId}, #{title}, #{textbookTitle}, #{textbookAuthor}, #{textbookPublisher}, #{textbookIsbn}, #{status}
+            #{userId}, #{title}, #{groupLabel}, #{textbookTitle}, #{textbookAuthor}, #{textbookPublisher},
+            #{textbookIsbn}, #{status}
         )
     </insert>
 
@@ -30,11 +32,35 @@
     </select>
 
     <select id="findByUserId" resultMap="courseResultMap">
-        SELECT * FROM courses WHERE user_id = #{userId} ORDER BY created_at DESC
+        SELECT * FROM courses WHERE user_id = #{userId} AND status = 'ACTIVE' ORDER BY created_at DESC
     </select>
 
-    <select id="countActiveTopicsByCourseId" resultType="int">
-        SELECT COUNT(*) FROM course_topics WHERE course_id = #{courseId} AND status = 'ACTIVE'
+    <!--
+      프로젝트 카드 요약. topic 트리 전체를 가져와 프론트에서 세지 않도록 서버가 한 번에
+      계산한다. 진행 중 주제는 order_index가 가장 앞선 것 하나만 고른다.
+    -->
+    <select id="findSummaryCounts" resultType="com.jungwoo.project.memo.course.dto.CourseSummaryCounts">
+        SELECT
+            c.course_id AS courseId,
+            (SELECT COUNT(*) FROM course_topics t
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE') AS topicCount,
+            (SELECT COUNT(*) FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'LEARNED') AS learnedTopicCount,
+            (SELECT COUNT(*) FROM course_materials m
+              WHERE m.course_id = c.course_id AND m.user_id = c.user_id) AS materialCount,
+            (SELECT t.title FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'IN_PROGRESS'
+              ORDER BY t.order_index ASC, t.topic_id ASC
+              LIMIT 1) AS currentTopicTitle
+        FROM courses c
+        WHERE c.user_id = #{userId}
+        <if test="courseId != null">
+            AND c.course_id = #{courseId}
+        </if>
     </select>
 
     <update id="updateTextbookInfo">
@@ -44,6 +70,17 @@
             textbook_publisher = COALESCE(#{textbookPublisher}, textbook_publisher),
             textbook_isbn      = COALESCE(#{textbookIsbn}, textbook_isbn)
         WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateBasics">
+        UPDATE courses
+        SET title       = COALESCE(#{title}, title),
+            group_label = #{groupLabel}
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE courses SET status = #{status} WHERE course_id = #{courseId} AND user_id = #{userId}
     </update>
 
 </mapper>
