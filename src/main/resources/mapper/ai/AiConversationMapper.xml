@@ -9,6 +9,7 @@
         <id     property="conversationId"        column="conversation_id"/>
         <result property="userId"                column="user_id"/>
         <result property="scope"                 column="scope"/>
+        <result property="courseId"              column="course_id"/>
         <result property="status"                column="status"/>
         <result property="summary"               column="summary"/>
         <result property="activeRequestMessageId" column="active_request_message_id"/>
@@ -21,10 +22,12 @@
         INSERT INTO ai_conversations (
             user_id,
             scope,
+            course_id,
             status
         ) VALUES (
             #{userId},
             #{scope},
+            #{courseId},
             #{status}
         )
     </insert>
@@ -40,6 +43,7 @@
                type="com.jungwoo.project.memo.ai.dto.AiConversationResponse">
         <id     property="conversationId"       column="conversation_id"/>
         <result property="scope"                column="scope"/>
+        <result property="courseId"             column="course_id"/>
         <result property="status"               column="status"/>
         <result property="createdAt"            column="created_at"/>
         <result property="updatedAt"            column="updated_at"/>
@@ -52,6 +56,7 @@
         SELECT
             c.conversation_id,
             c.scope,
+            c.course_id,
             c.status,
             c.created_at,
             c.updated_at,
@@ -70,6 +75,17 @@
                 AND p.status          = 'PROPOSED') AS pending_proposal_count
         FROM ai_conversations c
         WHERE c.user_id = #{userId}
+        <!--
+          courseId를 넘기면 그 프로젝트 대화만, 넘기지 않으면 전체.
+          onlyWithoutCourse=true면 프로젝트에 속하지 않은 대화만(오늘/일정/전체 상담 목록용) —
+          프로젝트 대화가 전역 목록에 섞여 나오지 않게 한다.
+        -->
+        <if test="courseId != null">
+            AND c.course_id = #{courseId}
+        </if>
+        <if test="onlyWithoutCourse">
+            AND c.course_id IS NULL
+        </if>
         HAVING last_message_at IS NOT NULL
         ORDER BY last_message_at DESC
     </select>

@@ -52,12 +52,20 @@ public class AiConversationController {
                 .body(aiConversationService.createConversation(principal.getUserId(), request));
     }
 
-    /** 로그인한 사용자의 대화 목록. 마지막 메시지 시각 내림차순, 본인 것만. */
+    /**
+     * 로그인한 사용자의 대화 목록. 마지막 메시지 시각 내림차순, 본인 것만.
+     *
+     * courseId를 주면 그 프로젝트에서 나눈 대화만 돌려준다(프로젝트를 다시 열었을 때 이어가기).
+     * courseId 없이 부르면 프로젝트에 속하지 않은 대화만 돌려준다 — 전역 상담 목록에 프로젝트
+     * 대화가 섞이면 "지금 어느 맥락에서 이야기하고 있는지"가 흐려지기 때문이다.
+     */
     @GetMapping
     public ResponseEntity<List<AiConversationResponse>> list(
-            @AuthenticationPrincipal UserPrincipal principal
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam(required = false) Long courseId
     ) {
-        return ResponseEntity.ok(aiConversationService.listConversations(principal.getUserId()));
+        return ResponseEntity.ok(aiConversationService.listConversations(
+                principal.getUserId(), courseId, courseId == null));
     }
 
     @GetMapping("/{conversationId}/messages")

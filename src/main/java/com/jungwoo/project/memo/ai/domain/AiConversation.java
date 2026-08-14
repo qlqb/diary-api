@@ -22,6 +22,13 @@ public class AiConversation {
 
     private AiProposalTargetScope scope;
 
+    /**
+     * 이 대화가 속한 프로젝트(courses). NULL이면 프로젝트에 속하지 않은 대화다(오늘/일정/전체).
+     * 프로젝트를 다시 열었을 때 하던 대화를 그대로 이어가고, 그 프로젝트의 자료·학습 상태를
+     * 컨텍스트로 실어 보내기 위한 연결이다.
+     */
+    private Long courseId;
+
     private ConversationStatus status;
 
     /** 오래된 메시지 요약. 이번 버전은 컬럼만 두고 요약 생성 로직은 만들지 않는다. */

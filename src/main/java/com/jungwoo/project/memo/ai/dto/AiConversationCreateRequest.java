@@ -12,6 +12,12 @@ import lombok.NoArgsConstructor;
 @Builder
 public class AiConversationCreateRequest {
 
-    /** 생략하면 TODAY로 시작한다 — 지금 화면은 오늘 상담뿐이다. */
+    /**
+     * 이 대화가 무엇을 참고할지. 생략하면 TODAY.
+     * TODAY=오늘 실행, EXECUTION=이번 주 일정, PLAN=프로젝트 안, MIXED=전체.
+     */
     private AiProposalTargetScope scope;
+
+    /** 프로젝트 안에서 시작한 대화면 그 프로젝트. 소유권은 서버가 검증한다. */
+    private Long courseId;
 }

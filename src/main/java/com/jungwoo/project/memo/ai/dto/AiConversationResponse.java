@@ -17,6 +17,8 @@ public class AiConversationResponse {
 
     private Long conversationId;
     private AiProposalTargetScope scope;
+    /** 프로젝트 대화면 그 프로젝트. 아니면 null. */
+    private Long courseId;
     private ConversationStatus status;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
