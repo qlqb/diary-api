@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
+import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
@@ -176,7 +177,8 @@ public class AiTurnLifecycleService {
     public TurnCompletionResult completeTurnSuccess(
             Long conversationId, Long userId, Long requestMessageId,
             String replyContent, AiResponseType responseType,
-            List<ProposalItem> proposalItemsIfProposal, LocalDate targetDateIfProposal,
+            List<ProposalItem> proposalItemsIfProposal, List<ProposalAdjustment> adjustmentsIfProposal,
+            LocalDate targetDateIfProposal,
             List<UnavailableWindowSpec> unavailableWindowsIfProposal,
             List<ContextChangeSuggestion> contextChangesIfAny
     ) {
@@ -204,7 +206,7 @@ public class AiTurnLifecycleService {
         if (responseType == AiResponseType.PROPOSAL) {
             proposalResponse = aiProposalService.createFromItems(
                     userId, conversationId, assistantMessage.getMessageId(), proposalItemsIfProposal,
-                    targetDateIfProposal, unavailableWindowsIfProposal);
+                    adjustmentsIfProposal, targetDateIfProposal, unavailableWindowsIfProposal);
         }
 
         List<ContextSuggestionResponse> contextSuggestions = contextChangeSuggestionService.createFromSuggestions(

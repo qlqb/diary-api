@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemPartialRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
@@ -79,6 +80,18 @@ public class ExecutionItemActionController {
 
         return ResponseEntity.ok(
                 executionItemService.reduce(executionItemId, principal.getUserId(), request));
+    }
+
+    @PostMapping("/{executionItemId}/partial")
+    public ResponseEntity<ExecutionItemResponse> partial(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionItemId,
+            @Valid @RequestBody ExecutionItemPartialRequest request
+    ) {
+        log.info("POST /api/execution-items/{}/partial - userId={}", executionItemId, principal.getUserId());
+
+        return ResponseEntity.ok(
+                executionItemService.recordPartial(executionItemId, principal.getUserId(), request));
     }
 
     @PostMapping("/{executionItemId}/hold")

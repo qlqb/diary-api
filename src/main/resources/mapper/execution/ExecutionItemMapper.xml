@@ -10,6 +10,7 @@
         <result property="userId"                column="user_id"/>
         <result property="planItemId"            column="plan_item_id"/>
         <result property="topicId"               column="topic_id"/>
+        <result property="courseId"              column="course_id"/>
         <result property="sourceExecutionItemId" column="source_execution_item_id"/>
         <result property="title"                 column="title"/>
         <result property="description"           column="description"/>
@@ -34,6 +35,8 @@
         INSERT INTO execution_items (
             user_id,
             plan_item_id,
+            topic_id,
+            course_id,
             source_execution_item_id,
             title,
             description,
@@ -53,6 +56,8 @@
         ) VALUES (
             #{userId},
             #{planItemId},
+            #{topicId},
+            #{courseId},
             #{sourceExecutionItemId},
             #{title},
             #{description},
@@ -192,5 +197,25 @@
         WHERE execution_item_id = #{executionItemId}
           AND user_id           = #{userId}
     </update>
+
+    <!-- 프로젝트 대화에서 만든 제안을 적용한 뒤 그 프로젝트를 연결한다. updateTopicId와 같은
+         이유로 version을 건드리지 않는다. -->
+    <update id="updateCourseId">
+        UPDATE execution_items
+        SET course_id = #{courseId}
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+    </update>
+
+    <!-- 프로젝트 화면의 "관련 실행". 날짜가 없는(UNSCHEDULED) 항목도 함께 보여준다. -->
+    <select id="findByUserIdAndCourseId" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND course_id  = #{courseId}
+          AND (scheduled_date IS NULL OR scheduled_date BETWEEN #{startDate} AND #{endDate})
+        ORDER BY scheduled_date ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
 
 </mapper>

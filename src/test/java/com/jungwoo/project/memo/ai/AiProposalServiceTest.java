@@ -8,6 +8,8 @@ import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
+import com.jungwoo.project.memo.ai.domain.ProposalOperation;
+import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
@@ -19,6 +21,9 @@ import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -63,6 +68,9 @@ class AiProposalServiceTest {
 
     @Mock
     private AiProposalItemMapper aiProposalItemMapper;
+
+    @Mock
+    private AiConversationMapper aiConversationMapper;
 
     @Mock
     private ExecutionItemService executionItemService;
@@ -450,6 +458,142 @@ class AiProposalServiceTest {
     private ProposalItem dateOnlyItem(String title, int expectedMinutes, String priority) {
         return new ProposalItem(title, "설명", expectedMinutes, priority, PlacementType.DATE_ONLY, null, null,
                 null, null, null, null);
+    }
+
+    // ===== 기존 조각을 바꾸는 제안(REDUCE/MOVE/DROP) =====
+
+    @Test
+    void createFromItems_adjustment_recordsTargetAndBaseVersion() {
+        ExecutionItem target = plannedItem(500L, 3L, "자료구조 복습", 30);
+        when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
+        when(persistenceService.save(any(), any(), any(), any(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.REDUCE, 20, null, null, "피곤해서")),
+                TARGET_DATE, List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        ProposalItemPayload payload = captor.getValue().get(0);
+        assertThat(payload.effectiveOperation()).isEqualTo(ProposalOperation.REDUCE);
+        assertThat(payload.targetExecutionItemId()).isEqualTo(500L);
+        // 제안을 만든 시점의 버전을 기록해야 사용자가 그 사이 직접 고쳤을 때 적용이 막힌다.
+        assertThat(payload.targetBaseVersion()).isEqualTo(3L);
+        assertThat(payload.beforeExpectedMinutes()).isEqualTo(30);
+        assertThat(payload.expectedMinutes()).isEqualTo(20);
+    }
+
+    @Test
+    void createFromItems_adjustment_dropsCandidate_whenTargetNotAdjustable() {
+        // 이미 끝났거나 없는 항목을 가리키면 그 후보만 버린다. 다른 후보가 있으면 제안은 살아남는다.
+        when(executionItemService.findOwnedForAdjustment(999L, USER_ID)).thenReturn(null);
+        when(persistenceService.save(any(), any(), any(), any(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
+                List.of(dateOnlyItem("새 항목", 30, "SHOULD")),
+                List.of(new ProposalAdjustment(999L, ProposalOperation.REDUCE, 10, null, null, "이유")),
+                TARGET_DATE, List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        assertThat(captor.getValue()).hasSize(1);
+        assertThat(captor.getValue().get(0).isAdjustment()).isFalse();
+    }
+
+    @Test
+    void createFromItems_fails_whenNothingLeftAfterDroppingInvalidAdjustments() {
+        when(executionItemService.findOwnedForAdjustment(999L, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
+                List.of(new ProposalAdjustment(999L, ProposalOperation.DROP, null, null, null, "이유")),
+                TARGET_DATE, List.of()))
+                .isInstanceOf(ServiceUnavailableException.class);
+
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_dropsMoveCandidate_whenTargetDateUnchanged() {
+        ExecutionItem target = plannedItem(500L, 0L, "자료구조 복습", 30);
+        when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.MOVE, null, null, TARGET_DATE, "이유")),
+                TARGET_DATE, List.of()))
+                .isInstanceOf(ServiceUnavailableException.class);
+    }
+
+    @Test
+    void apply_reduceAdjustment_callsDomainActionWithBaseVersion_andCreatesNoNewItem() {
+        String payload = adjustPayloadJson("REDUCE", 500L, 3L, 20, null);
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, payload)));
+
+        service.apply(PROPOSAL_ID, USER_ID, AiProposalApplyRequest.builder().build());
+
+        ArgumentCaptor<ExecutionItemReduceRequest> captor = ArgumentCaptor.forClass(ExecutionItemReduceRequest.class);
+        verify(executionItemService).reduce(eq(500L), eq(USER_ID), captor.capture());
+        assertThat(captor.getValue().getVersion()).isEqualTo(3L);
+        assertThat(captor.getValue().getExpectedMinutes()).isEqualTo(20);
+        // 조정 제안은 절대 새 실행 조각을 만들지 않는다.
+        verify(executionItemService, never()).createFromApprovedProposal(
+                any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
+    }
+
+    @Test
+    void apply_moveAdjustment_usesUserEditedDate() {
+        String payload = adjustPayloadJson("MOVE", 500L, 2L, 30, "2026-08-05");
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, payload)));
+
+        service.apply(PROPOSAL_ID, USER_ID, AiProposalApplyRequest.builder()
+                .editedItems(List.of(AiProposalApplyRequest.EditedProposalItem.builder()
+                        .proposalItemId(1L).scheduledDate(LocalDate.of(2026, 8, 7)).build()))
+                .build());
+
+        ArgumentCaptor<ExecutionItemMoveRequest> captor = ArgumentCaptor.forClass(ExecutionItemMoveRequest.class);
+        verify(executionItemService).move(eq(500L), eq(USER_ID), captor.capture());
+        assertThat(captor.getValue().getToDate()).isEqualTo(LocalDate.of(2026, 8, 7));
+    }
+
+    @Test
+    void apply_dropAdjustment_holdsInsteadOfDeleting() {
+        String payload = adjustPayloadJson("DROP", 500L, 1L, 30, null);
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, payload)));
+
+        service.apply(PROPOSAL_ID, USER_ID, AiProposalApplyRequest.builder().build());
+
+        verify(executionItemService).hold(eq(500L), eq(USER_ID), any(ExecutionItemHoldRequest.class));
+        verify(executionItemService, never()).delete(any(), any(), any());
+    }
+
+    private ExecutionItem plannedItem(Long id, Long version, String title, Integer minutes) {
+        return ExecutionItem.builder()
+                .executionItemId(id).userId(USER_ID).version(version)
+                .title(title).expectedMinutes(minutes)
+                .priority(ExecutionPriority.SHOULD)
+                .placementType(PlacementType.DATE_ONLY)
+                .scheduledDate(TARGET_DATE)
+                .build();
+    }
+
+    /** 조정 제안이 저장된 모습 그대로의 JSON. 예전 payload와 섞여도 읽히는지까지 이 문자열이 지킨다. */
+    private String adjustPayloadJson(String operation, Long targetId, Long baseVersion, Integer minutes, String targetDate) {
+        return "{\"title\":\"자료구조 복습\",\"description\":null,\"expectedMinutes\":" + minutes
+                + ",\"priority\":\"SHOULD\",\"targetDate\":\"" + (targetDate != null ? targetDate : TARGET_DATE)
+                + "\",\"placementType\":null,\"scheduledStartAt\":null,\"scheduledEndAt\":null,"
+                + "\"operation\":\"" + operation + "\",\"targetExecutionItemId\":" + targetId
+                + ",\"targetBaseVersion\":" + baseVersion
+                + ",\"beforeTitle\":\"자료구조 복습\",\"beforeExpectedMinutes\":30,"
+                + "\"beforeScheduledDate\":\"" + TARGET_DATE + "\",\"reason\":\"피곤해서\"}";
     }
 
     private AiProposal proposedProposal() {

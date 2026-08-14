@@ -20,10 +20,12 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCreateRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemPartialRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResumeRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -80,6 +82,15 @@ public class ExecutionItemService {
                 .toList();
     }
 
+    /** 기록 화면: 실제로 일어난 결과를 기간으로 조회한다. */
+    @Transactional(readOnly = true)
+    public List<ExecutionRecordResponse> getRecords(Long userId, LocalDate startDate, LocalDate endDate) {
+        if (endDate.isBefore(startDate)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        return executionRecordMapper.findByUserIdAndDateRange(userId, startDate, endDate);
+    }
+
     @Transactional(readOnly = true)
     public List<ExecutionItemResponse> getPending(Long userId, LocalDate beforeDate) {
         return executionItemMapper.findPendingBefore(userId, beforeDate)
@@ -100,6 +111,7 @@ public class ExecutionItemService {
         ExecutionItem item = ExecutionItem.builder()
                 .userId(userId)
                 .planItemId(request.getPlanItemId())
+                .courseId(request.getCourseId())
                 .title(request.getTitle())
                 .description(request.getDescription())
                 .placementType(placementType)
@@ -428,6 +440,131 @@ public class ExecutionItemService {
     @Transactional
     public void linkTopic(Long executionItemId, Long userId, Long topicId) {
         executionItemMapper.updateTopicId(executionItemId, userId, topicId);
+    }
+
+    /**
+     * 프로젝트 대화에서 만든 제안을 적용한 직후, 생성된 실행 조각에 그 프로젝트를 연결한다.
+     * linkTopic과 같은 이유로 존재 확인 없이 갱신한다.
+     */
+    @Transactional
+    public void linkCourse(Long executionItemId, Long userId, Long courseId) {
+        executionItemMapper.updateCourseId(executionItemId, userId, courseId);
+    }
+
+    /**
+     * AI 조정 후보(줄이기/옮기기/빼기)가 가리킨 실행 조각이 실제로 조정 가능한지 확인한다.
+     * 없거나 이미 결론이 난(PLANNED가 아닌) 항목이면 null을 반환한다 — 예외를 던지지 않는
+     * 이유는 모델이 잘못 짚은 후보 하나 때문에 사용자의 요청 전체를 실패시키지 않기 위해서다.
+     */
+    @Transactional(readOnly = true)
+    public ExecutionItem findOwnedForAdjustment(Long executionItemId, Long userId) {
+        ExecutionItem item = executionItemMapper.findByIdAndUserId(executionItemId, userId);
+        if (item == null || item.getStatus() != ExecutionStatus.PLANNED) {
+            return null;
+        }
+        return item;
+    }
+
+    /** 프로젝트 화면의 "관련 실행". 지난 7일 ~ 앞으로 14일 + 날짜 미정 항목. */
+    @Transactional(readOnly = true)
+    public List<ExecutionItemResponse> getByCourse(Long userId, Long courseId, LocalDate today) {
+        return executionItemMapper
+                .findByUserIdAndCourseId(userId, courseId, today.minusDays(7), today.plusDays(14))
+                .stream()
+                .map(ExecutionItemResponse::from)
+                .toList();
+    }
+
+    // ===== 일부 수행 =====
+
+    /**
+     * "일부만 했다"를 그대로 기록한다. 완료(DONE)로 올림하지도, 아무 일 없었던 것으로
+     * 내림하지도 않는다 — 실제로 한 만큼이 PARTIAL 결과로 남는다.
+     *
+     * 남은 분량은 새 실행 조각으로 분리한다. execution_records는 원래부터 이 모양을 전제로
+     * 설계돼 있다(chk_execution_records_remaining: PARTIAL이면 remaining_execution_item_id가
+     * 반드시 있어야 한다) — "한 만큼"과 "남은 것"을 한 행에 뭉뚱그리지 않고, 남은 것은 다시
+     * 옮기거나 줄일 수 있는 독립된 조각으로 둔다는 뜻이다.
+     *
+     * 남은 조각은 같은 날짜에 두고 시각은 비운다 — 언제 다시 할지는 사용자(또는 사용자가
+     * 승인한 AI 제안)가 정할 일이므로 서버가 임의의 시각을 잡지 않는다.
+     */
+    @Transactional
+    public ExecutionItemResponse recordPartial(Long executionItemId, Long userId, ExecutionItemPartialRequest request) {
+        ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
+        requireVersion(item, request.getVersion());
+        requireStatusIn(item, ExecutionStatus.PLANNED);
+
+        int percent = request.getCompletionPercent() != null ? request.getCompletionPercent() : 50;
+        if (percent < 1 || percent > 99) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        ExecutionItem remaining = createRemainderItem(item, userId, percent);
+
+        executionRecordMapper.insert(ExecutionRecord.builder()
+                .userId(userId)
+                .executionItemId(executionItemId)
+                .outcome(ExecutionRecordOutcome.PARTIAL)
+                .actualMinutes(request.getActualMinutes())
+                .completionPercent(percent)
+                .note(request.getNote())
+                .remainingExecutionItemId(remaining.getExecutionItemId())
+                .build());
+
+        // 이 조각에 대한 이번 시도는 끝났다 — 남은 분량은 위에서 만든 새 조각이 들고 있다.
+        int updated = executionItemMapper.updateStatusWithVersion(
+                executionItemId, userId, request.getVersion(), ExecutionStatus.DONE);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.VERSION_CONFLICT);
+        }
+        insertEvent(executionItemId, userId, ExecutionEventType.REDUCED, ExecutionEventActorType.USER,
+                "일부 수행: " + percent + "%",
+                toJson(Map.of("status", item.getStatus())),
+                toJson(Map.of("status", ExecutionStatus.DONE, "remainingExecutionItemId", remaining.getExecutionItemId())),
+                item.getVersion(), item.getVersion() + 1);
+
+        log.info("실행 조각 일부 수행 기록: executionItemId={}, userId={}, percent={}, remainingItemId={}",
+                executionItemId, userId, percent, remaining.getExecutionItemId());
+
+        return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
+    }
+
+    /** 남은 분량을 담은 새 조각. 원본과 같은 프로젝트/주제를 그대로 잇는다. */
+    private ExecutionItem createRemainderItem(ExecutionItem source, Long userId, int donePercent) {
+        Integer sourceMinutes = source.getExpectedMinutes();
+        Integer remainingMinutes = sourceMinutes != null
+                ? Math.max(5, (int) Math.round(sourceMinutes * (100 - donePercent) / 100.0))
+                : null;
+
+        ExecutionItem remaining = ExecutionItem.builder()
+                .userId(userId)
+                .planItemId(source.getPlanItemId())
+                .topicId(source.getTopicId())
+                .courseId(source.getCourseId())
+                .sourceExecutionItemId(source.getExecutionItemId())
+                .title(source.getTitle() + " (남은 분량)")
+                .description(source.getDescription())
+                .placementType(PlacementType.DATE_ONLY)
+                .scheduledDate(source.getScheduledDate())
+                .expectedMinutes(remainingMinutes)
+                .status(ExecutionStatus.PLANNED)
+                .priority(source.getPriority())
+                .orderIndex(nextOrderIndexStart(userId, source.getScheduledDate()))
+                .originType(ExecutionOriginType.MANUAL)
+                .modifiedAfterCreation(false)
+                .version(0L)
+                .isDeleted(false)
+                .build();
+        executionItemMapper.insert(remaining);
+
+        insertEvent(remaining.getExecutionItemId(), userId, ExecutionEventType.CREATED,
+                ExecutionEventActorType.USER, "일부 수행 후 남은 분량", null,
+                toJson(Map.of("title", remaining.getTitle(), "expectedMinutes",
+                        remainingMinutes != null ? remainingMinutes : 0)),
+                null, remaining.getVersion());
+
+        return remaining;
     }
 
     // ===== 공통 =====

@@ -1,14 +1,17 @@
 package com.jungwoo.project.memo.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiProposal;
 import com.jungwoo.project.memo.ai.domain.AiProposalItem;
 import com.jungwoo.project.memo.ai.domain.AiProposalItemStatus;
 import com.jungwoo.project.memo.ai.domain.AiProposalItemType;
 import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
+import com.jungwoo.project.memo.ai.domain.ProposalOperation;
 import com.jungwoo.project.memo.ai.dto.AiProposalApplyRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalItemResponse;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
+import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.ProposalItemPayload;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
@@ -21,6 +24,9 @@ import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -50,7 +56,7 @@ import java.util.Set;
 public class AiProposalService {
 
     private static final Set<String> VALID_PRIORITIES = Set.of("MUST", "SHOULD", "OPTIONAL");
-    private static final int MIN_ITEMS = 1;
+    /** 새 후보 + 조정 후보를 합친 한 묶음의 상한. 한 번에 검토할 수 있는 양을 넘기지 않는다. */
     private static final int MAX_ITEMS = 5;
     private static final int MIN_EXPECTED_MINUTES = 5;
     private static final int MAX_EXPECTED_MINUTES = 120;
@@ -58,6 +64,7 @@ public class AiProposalService {
     private final AiProposalPersistenceService persistenceService;
     private final AiProposalMapper aiProposalMapper;
     private final AiProposalItemMapper aiProposalItemMapper;
+    private final AiConversationMapper aiConversationMapper;
     private final ExecutionItemService executionItemService;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -71,12 +78,134 @@ public class AiProposalService {
             Long userId, Long conversationId, Long sourceMessageId,
             List<ProposalItem> items, LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows
     ) {
-        List<ProposalItemPayload> validated = validateAndNormalize(items, targetDate);
-        return persistenceService.save(userId, conversationId, sourceMessageId, validated, unavailableWindows);
+        return createFromItems(userId, conversationId, sourceMessageId, items, List.of(), targetDate, unavailableWindows);
+    }
+
+    /**
+     * 새 후보(items)와 기존 조각 조정 후보(adjustments)를 하나의 제안 묶음으로 저장한다.
+     * 둘 중 하나만 있어도 된다 — "줄이기만 하는 제안"도 유효한 제안이다. 다만 둘 다 비어 있으면
+     * 보여줄 것이 없으므로 실패로 본다.
+     */
+    public AiProposalResponse createFromItems(
+            Long userId, Long conversationId, Long sourceMessageId,
+            List<ProposalItem> items, List<ProposalAdjustment> adjustments,
+            LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows
+    ) {
+        List<ProposalItemPayload> payloads = new ArrayList<>(validateAndNormalize(items, targetDate));
+        payloads.addAll(normalizeAdjustments(userId, adjustments, targetDate));
+
+        if (payloads.isEmpty()) {
+            log.warn("AI 제안 구조 검증 실패: 새 후보도 조정 후보도 없음");
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (payloads.size() > MAX_ITEMS) {
+            log.warn("AI 제안 구조 검증 실패: 후보 총 개수가 상한({})을 넘음: {}", MAX_ITEMS, payloads.size());
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        return persistenceService.save(userId, conversationId, sourceMessageId, payloads, unavailableWindows);
+    }
+
+    /**
+     * 조정 후보를 검증해 payload로 바꾼다.
+     *
+     * 모델이 존재하지 않는 id를 가리키거나 이미 끝난 항목을 조정하려 하면 그 후보만 조용히
+     * 버린다 — 턴 전체를 실패시키지 않는다("파싱 실패 시 AI 자동 재호출 금지"와 같은 이유로,
+     * 사용자 요청 하나를 모델의 사소한 실수로 통째로 날리지 않는다). 대신 유효한 후보가 하나도
+     * 남지 않고 새 후보도 없으면 호출부가 실패로 처리한다.
+     */
+    private List<ProposalItemPayload> normalizeAdjustments(
+            Long userId, List<ProposalAdjustment> adjustments, LocalDate targetDate
+    ) {
+        if (adjustments == null || adjustments.isEmpty()) {
+            return List.of();
+        }
+
+        List<ProposalItemPayload> result = new ArrayList<>();
+        Set<Long> seenTargets = new HashSet<>();
+
+        for (ProposalAdjustment adjustment : adjustments) {
+            if (adjustment.executionItemId() == null || adjustment.operation() == null
+                    || adjustment.operation() == ProposalOperation.CREATE) {
+                log.warn("AI 조정 후보 무시: executionItemId 또는 operation이 유효하지 않음");
+                continue;
+            }
+            if (!seenTargets.add(adjustment.executionItemId())) {
+                log.warn("AI 조정 후보 무시: 같은 실행 조각(#{})에 대한 조정이 중복됨", adjustment.executionItemId());
+                continue;
+            }
+
+            ExecutionItem target = executionItemService.findOwnedForAdjustment(adjustment.executionItemId(), userId);
+            if (target == null) {
+                log.warn("AI 조정 후보 무시: 실행 조각 #{}을 찾을 수 없거나 조정할 수 있는 상태가 아님",
+                        adjustment.executionItemId());
+                continue;
+            }
+
+            ProposalItemPayload payload = switch (adjustment.operation()) {
+                case REDUCE -> toReducePayload(adjustment, target);
+                case MOVE -> toMovePayload(adjustment, target);
+                case DROP -> ProposalItemPayload.adjust(ProposalOperation.DROP, target.getExecutionItemId(),
+                        target.getVersion(), target.getTitle(), target.getExpectedMinutes(),
+                        priorityName(target), target.getScheduledDate(),
+                        target.getTitle(), target.getExpectedMinutes(), target.getScheduledDate(),
+                        adjustment.reason());
+                case CREATE -> null;
+            };
+
+            if (payload != null) {
+                result.add(payload);
+            }
+        }
+        return result;
+    }
+
+    private ProposalItemPayload toReducePayload(ProposalAdjustment adjustment, ExecutionItem target) {
+        Integer newMinutes = adjustment.expectedMinutes();
+        String newTitle = adjustment.title() != null && !adjustment.title().isBlank()
+                ? adjustment.title() : target.getTitle();
+
+        boolean minutesChanged = newMinutes != null && !Objects.equals(newMinutes, target.getExpectedMinutes());
+        boolean titleChanged = !Objects.equals(newTitle, target.getTitle());
+        if (!minutesChanged && !titleChanged) {
+            log.warn("AI 조정 후보 무시: REDUCE인데 실제로 달라지는 값이 없음 (#{})", target.getExecutionItemId());
+            return null;
+        }
+        if (newMinutes != null && newMinutes <= 0) {
+            log.warn("AI 조정 후보 무시: REDUCE 분량이 0 이하 (#{})", target.getExecutionItemId());
+            return null;
+        }
+
+        return ProposalItemPayload.adjust(ProposalOperation.REDUCE, target.getExecutionItemId(), target.getVersion(),
+                newTitle, newMinutes != null ? newMinutes : target.getExpectedMinutes(), priorityName(target),
+                target.getScheduledDate(),
+                target.getTitle(), target.getExpectedMinutes(), target.getScheduledDate(), adjustment.reason());
+    }
+
+    private ProposalItemPayload toMovePayload(ProposalAdjustment adjustment, ExecutionItem target) {
+        LocalDate toDate = adjustment.toDate();
+        if (toDate == null || toDate.equals(target.getScheduledDate())) {
+            log.warn("AI 조정 후보 무시: MOVE 대상 날짜가 없거나 지금과 같음 (#{})", target.getExecutionItemId());
+            return null;
+        }
+        if (target.getPlacementType() == PlacementType.UNSCHEDULED) {
+            log.warn("AI 조정 후보 무시: 날짜 미정 조각은 MOVE할 수 없음 (#{})", target.getExecutionItemId());
+            return null;
+        }
+
+        return ProposalItemPayload.adjust(ProposalOperation.MOVE, target.getExecutionItemId(), target.getVersion(),
+                target.getTitle(), target.getExpectedMinutes(), priorityName(target), toDate,
+                target.getTitle(), target.getExpectedMinutes(), target.getScheduledDate(), adjustment.reason());
+    }
+
+    private String priorityName(ExecutionItem item) {
+        return item.getPriority() != null ? item.getPriority().name() : "SHOULD";
     }
 
     private List<ProposalItemPayload> validateAndNormalize(List<ProposalItem> items, LocalDate targetDate) {
-        if (items == null || items.size() < MIN_ITEMS || items.size() > MAX_ITEMS) {
+        if (items == null || items.isEmpty()) {
+            return List.of();
+        }
+        if (items.size() > MAX_ITEMS) {
             log.warn("AI 제안 구조 검증 실패: 항목 개수가 범위를 벗어남");
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
@@ -153,7 +282,7 @@ public class AiProposalService {
                 }
             }
 
-            result.add(new ProposalItemPayload(
+            result.add(ProposalItemPayload.create(
                     item.title(), item.description(), item.expectedMinutes(), item.priority(), itemTargetDate,
                     placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate));
         }
@@ -228,6 +357,8 @@ public class AiProposalService {
         // 흐름은 items가 전부 같은 날짜이므로 동작이 그대로다.
         Map<LocalDate, Integer> nextOrderIndexByDate = new HashMap<>();
 
+        Long proposalCourseId = resolveCourseId(proposal, userId);
+
         boolean anyModified = false;
         List<AiProposalItemResponse> responses = new ArrayList<>();
         LocalDateTime respondedAt = LocalDateTime.now();
@@ -243,6 +374,16 @@ public class AiProposalService {
 
             ProposalItemPayload original = fromJson(item.getOriginalPayload());
             AiProposalApplyRequest.EditedProposalItem edit = editedById.get(item.getProposalItemId());
+
+            // 기존 조각을 바꾸는 제안은 새 조각을 만들지 않는다 — 대상 항목에 실제 도메인
+            // 액션(줄이기/이동/보류)을 건다. 아래 CREATE 경로와 완전히 분리해 두어야, 조정
+            // 제안이 실수로 "새 항목 추가"가 되는 일이 생기지 않는다.
+            if (original.isAdjustment()) {
+                AiProposalItemResponse adjusted = applyAdjustment(userId, item, original, edit, respondedAt);
+                anyModified = anyModified || Boolean.TRUE.equals(adjusted.getModified());
+                responses.add(adjusted);
+                continue;
+            }
 
             String title = original.title();
             String description = original.description();
@@ -321,11 +462,17 @@ public class AiProposalService {
                     expectedMinutes, ExecutionPriority.valueOf(priority), orderIndex, modified,
                     placementType, scheduledStartAt, scheduledEndAt);
 
+            // 프로젝트 안에서 나눈 대화에서 나온 제안이면 그 프로젝트를 새 조각에 연결한다 —
+            // 이래야 프로젝트 화면의 "관련 실행"과 오늘 화면의 프로젝트 표시가 성립한다.
+            if (proposalCourseId != null) {
+                executionItemService.linkCourse(createdItem.getExecutionItemId(), userId, proposalCourseId);
+            }
+
             AiProposalItemStatus newStatus = modified
                     ? AiProposalItemStatus.MODIFIED_APPLIED
                     : AiProposalItemStatus.APPLIED;
             String editedJson = modified
-                    ? toJson(new ProposalItemPayload(title, description, expectedMinutes, priority,
+                    ? toJson(ProposalItemPayload.create(title, description, expectedMinutes, priority,
                             scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null))
                     : null;
 
@@ -365,6 +512,99 @@ public class AiProposalService {
                 .build();
     }
 
+    /**
+     * 기존 실행 조각을 바꾸는 제안 하나를 실제로 적용한다.
+     *
+     * 새 조각을 만들지 않고 execution_items의 기존 도메인 액션(reduce/move/hold)을 그대로
+     * 호출한다 — 이벤트 로그·낙관적 락·상태 전이 규칙을 우회하는 별도 경로를 만들지 않기 위해서다.
+     * 제안을 만든 뒤 사용자가 그 조각을 직접 고쳤다면 base_version이 어긋나 409로 막힌다.
+     *
+     * 사용자가 미리보기에서 값을 고쳤으면(edit) 그 값을 우선한다 — REDUCE는 분량/제목,
+     * MOVE는 날짜를 고칠 수 있다.
+     */
+    private AiProposalItemResponse applyAdjustment(
+            Long userId, AiProposalItem item, ProposalItemPayload original,
+            AiProposalApplyRequest.EditedProposalItem edit, LocalDateTime respondedAt
+    ) {
+        ProposalOperation operation = original.effectiveOperation();
+        Long targetId = original.targetExecutionItemId();
+        Long baseVersion = original.targetBaseVersion();
+        if (targetId == null || baseVersion == null) {
+            throw new BadRequestException(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION);
+        }
+
+        String title = edit != null && edit.getTitle() != null ? edit.getTitle() : original.title();
+        Integer expectedMinutes = edit != null && edit.getExpectedMinutes() != null
+                ? edit.getExpectedMinutes() : original.expectedMinutes();
+        LocalDate targetDate = edit != null && edit.getScheduledDate() != null
+                ? edit.getScheduledDate() : original.targetDate();
+
+        boolean modified = !Objects.equals(title, original.title())
+                || !Objects.equals(expectedMinutes, original.expectedMinutes())
+                || !Objects.equals(targetDate, original.targetDate());
+
+        switch (operation) {
+            case REDUCE -> executionItemService.reduce(targetId, userId, ExecutionItemReduceRequest.builder()
+                    .reducedTitle(Objects.equals(title, original.beforeTitle()) ? null : title)
+                    .expectedMinutes(expectedMinutes)
+                    .reason("AI 제안 적용" + (original.reason() != null ? ": " + original.reason() : ""))
+                    .version(baseVersion)
+                    .build());
+            case MOVE -> executionItemService.move(targetId, userId, ExecutionItemMoveRequest.builder()
+                    .toDate(targetDate)
+                    .version(baseVersion)
+                    .reason("AI 제안 적용" + (original.reason() != null ? ": " + original.reason() : ""))
+                    .build());
+            case DROP -> executionItemService.hold(targetId, userId, ExecutionItemHoldRequest.builder()
+                    .version(baseVersion)
+                    .reason("AI 제안 적용" + (original.reason() != null ? ": " + original.reason() : ""))
+                    .build());
+            case CREATE -> throw new IllegalStateException("CREATE는 조정 경로로 오지 않는다");
+        }
+
+        AiProposalItemStatus newStatus = modified
+                ? AiProposalItemStatus.MODIFIED_APPLIED : AiProposalItemStatus.APPLIED;
+        String editedJson = modified
+                ? toJson(ProposalItemPayload.adjust(operation, targetId, baseVersion, title, expectedMinutes,
+                        original.priority(), targetDate, original.beforeTitle(), original.beforeExpectedMinutes(),
+                        original.beforeScheduledDate(), original.reason()))
+                : null;
+
+        // created_item_id에는 "이 제안이 만든 새 항목"이 아니라 "바뀐 대상 항목"을 남긴다 —
+        // 어느 실행 조각이 이 제안으로 변경됐는지 추적할 수 있어야 하기 때문이다.
+        aiProposalItemMapper.updateAfterApply(item.getProposalItemId(), userId, newStatus, editedJson,
+                AiProposalItemType.EXECUTION_ITEM.name(), targetId, respondedAt);
+
+        log.info("AI 조정 제안 적용: proposalItemId={}, operation={}, targetExecutionItemId={}",
+                item.getProposalItemId(), operation, targetId);
+
+        return AiProposalItemResponse.builder()
+                .proposalItemId(item.getProposalItemId())
+                .status(newStatus)
+                .title(title)
+                .expectedMinutes(expectedMinutes)
+                .priority(original.priority())
+                .targetDate(targetDate)
+                .modified(modified)
+                .createdItemId(targetId)
+                .operation(operation)
+                .targetExecutionItemId(targetId)
+                .beforeTitle(original.beforeTitle())
+                .beforeExpectedMinutes(original.beforeExpectedMinutes())
+                .beforeScheduledDate(original.beforeScheduledDate())
+                .reason(original.reason())
+                .build();
+    }
+
+    /** 이 제안을 만든 대화가 프로젝트에 속해 있으면 그 프로젝트. 아니면 null. */
+    private Long resolveCourseId(AiProposal proposal, Long userId) {
+        if (proposal.getConversationId() == null) {
+            return null;
+        }
+        AiConversation conversation = aiConversationMapper.findByIdAndUserId(proposal.getConversationId(), userId);
+        return conversation != null ? conversation.getCourseId() : null;
+    }
+
     private void validateExcludedIds(Set<Long> excludedIds, List<AiProposalItem> items) {
         if (excludedIds.isEmpty()) {
             return;
@@ -395,6 +635,12 @@ public class AiProposalService {
                 .scheduledEndAt(payload.scheduledEndAt())
                 .modified(false)
                 .createdItemId(null)
+                .operation(payload.effectiveOperation())
+                .targetExecutionItemId(payload.targetExecutionItemId())
+                .beforeTitle(payload.beforeTitle())
+                .beforeExpectedMinutes(payload.beforeExpectedMinutes())
+                .beforeScheduledDate(payload.beforeScheduledDate())
+                .reason(payload.reason())
                 .build();
     }
 
@@ -442,6 +688,12 @@ public class AiProposalService {
                 .scheduledEndAt(effective.scheduledEndAt())
                 .modified(item.getEditedPayload() != null)
                 .createdItemId(item.getCreatedItemId())
+                .operation(effective.effectiveOperation())
+                .targetExecutionItemId(effective.targetExecutionItemId())
+                .beforeTitle(effective.beforeTitle())
+                .beforeExpectedMinutes(effective.beforeExpectedMinutes())
+                .beforeScheduledDate(effective.beforeScheduledDate())
+                .reason(effective.reason())
                 .build();
     }
 

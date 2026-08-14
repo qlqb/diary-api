@@ -21,9 +21,11 @@ import com.jungwoo.project.memo.ai.dto.AiTurnStructured;
 import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
+import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
+import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
@@ -135,6 +137,8 @@ public class AiConversationService {
     private final AiMessageMapper aiMessageMapper;
     private final AiTurnLifecycleService aiTurnLifecycleService;
     private final ContextSnapshotService contextSnapshotService;
+    private final AiWorkspaceContextBuilder aiWorkspaceContextBuilder;
+    private final CourseService courseService;
     private final AiConsultationClient aiConsultationClient;
     private final AiProposalService aiProposalService;
     private final AiUsageLimitService aiUsageLimitService;
@@ -172,10 +176,16 @@ public class AiConversationService {
     public AiConversationResponse createConversation(Long userId, AiConversationCreateRequest request) {
         AiProposalTargetScope scope = request != null && request.getScope() != null
                 ? request.getScope() : AiProposalTargetScope.TODAY;
+        Long courseId = request != null ? request.getCourseId() : null;
+        if (courseId != null) {
+            // 남의 프로젝트에 대화를 붙이지 못하게 여기서 소유권을 확인한다(없으면 404).
+            courseService.getOwned(userId, courseId);
+        }
 
         AiConversation conversation = AiConversation.builder()
                 .userId(userId)
                 .scope(scope)
+                .courseId(courseId)
                 .status(ConversationStatus.ACTIVE)
                 .build();
         aiConversationMapper.insert(conversation);
@@ -206,9 +216,14 @@ public class AiConversationService {
      * 않은(메시지가 0개인) 대화는 애초에 쿼리에서 제외된다 — "+ 새 대화"를 누르기만 하고
      * 아무것도 보내지 않은 빈 대화가 쌓이지 않는다.
      */
+    /**
+     * @param courseId          지정하면 그 프로젝트의 대화만
+     * @param onlyWithoutCourse true면 프로젝트에 속하지 않은 대화만(오늘/일정/전체 목록)
+     */
     @Transactional(readOnly = true)
-    public List<AiConversationResponse> listConversations(Long userId) {
-        List<AiConversationResponse> summaries = aiConversationMapper.findSummariesByUserId(userId);
+    public List<AiConversationResponse> listConversations(Long userId, Long courseId, boolean onlyWithoutCourse) {
+        List<AiConversationResponse> summaries =
+                aiConversationMapper.findSummariesByUserId(userId, courseId, onlyWithoutCourse);
         for (AiConversationResponse summary : summaries) {
             summary.setTitle(buildConversationTitle(summary.getTitle()));
         }
@@ -296,12 +311,17 @@ public class AiConversationService {
         // ContextSnapshotService가 최근 대화/장기 컨텍스트/이전 요약 세 영역에 배분한다.
         int maxChars = maxInputTokens * 4;
         int currentMessageChars = request.getMessage() != null ? request.getMessage().length() : 0;
-        int contextBudgetChars = Math.max(0, maxChars - currentMessageChars);
+
+        // 지금 화면의 실제 상태(오늘 실행/이번 주 일정/프로젝트 자료)를 가장 먼저 확보하고 그
+        // 길이만큼 예산에서 뺀다 — 이 블록이 없으면 "오늘 줄여줘" 같은 요청의 근거 자체가 없다.
+        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDate());
+        int contextBudgetChars = Math.max(0, maxChars - currentMessageChars - workspaceBlock.length());
+
         // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
         // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
         String contextBlock = contextSnapshotService.buildContextBlock(
                 conversationId, userId, conversation.getSummary(), contextBudgetChars, requestMessageId);
-        String userPrompt = buildUserPrompt(request, contextBlock, requestMoment.toLocalDate());
+        String userPrompt = buildUserPrompt(request, workspaceBlock, contextBlock, requestMoment.toLocalDate());
         String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT + buildCurrentTimeBlock(requestMoment, userZone);
 
         sink.onStarted(requestMessageId);
@@ -393,8 +413,8 @@ public class AiConversationService {
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
-                resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.targetDate(),
-                resolved.unavailableWindows(), resolved.contextChanges());
+                resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.adjustments(),
+                resolved.targetDate(), resolved.unavailableWindows(), resolved.contextChanges());
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -450,11 +470,20 @@ public class AiConversationService {
             AiResponseType responseType,
             String reply,
             List<ProposalItem> proposalItems,
+            List<ProposalAdjustment> adjustments,
             List<UnavailableWindowSpec> unavailableWindows,
             LocalDate targetDate,
             OfferAction offerAction,
             List<ContextChangeSuggestion> contextChanges
     ) {
+        /** 새 후보도 조정 후보도 만들지 않는 턴(CHAT/OFFER 등)에서 쓰는 축약 생성자. */
+        static ResolvedTurn withoutProposal(
+                AiResponseType responseType, String reply, LocalDate targetDate,
+                OfferAction offerAction, List<ContextChangeSuggestion> contextChanges
+        ) {
+            return new ResolvedTurn(responseType, reply, List.of(), List.of(), List.of(),
+                    targetDate, offerAction, contextChanges);
+        }
     }
 
     /**
@@ -482,7 +511,7 @@ public class AiConversationService {
     ) {
         if (structured == null || structured.decision() == null) {
             if (requestedAction == RequestedAction.AUTO) {
-                return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null, List.of());
+                return ResolvedTurn.withoutProposal(AiResponseType.CHAT, originalReply, todayDate, null, List.of());
             }
             log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 구조화 데이터가 없거나 decision이 없음");
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
@@ -498,7 +527,7 @@ public class AiConversationService {
         if (requestedAction == RequestedAction.AUTO && structured.decision() == AiModelDecision.PROPOSAL_READY) {
             log.warn("AI 응답 강등: AUTO 요청인데 decision=PROPOSAL_READY - OFFER로 대체 "
                     + "(계획 초안 생성 권한은 CREATE_PROPOSAL 요청에만 있음)");
-            return new ResolvedTurn(AiResponseType.OFFER, AUTO_OFFER_REPLY, List.of(), List.of(), todayDate,
+            return ResolvedTurn.withoutProposal(AiResponseType.OFFER, AUTO_OFFER_REPLY, todayDate,
                     OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
         }
 
@@ -513,14 +542,14 @@ public class AiConversationService {
             AiTurnStructured structured, String originalReply, LocalDate todayDate, List<ContextChangeSuggestion> contextChanges
     ) {
         if (structured.decision() == AiModelDecision.CHAT) {
-            return new ResolvedTurn(AiResponseType.CHAT, originalReply, List.of(), List.of(), todayDate, null, contextChanges);
+            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, originalReply, todayDate, null, contextChanges);
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
-            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null,
+            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, structured.clarifyingQuestion(), todayDate, null,
                     contextChanges);
         }
         // decision == OFFER_PROPOSAL (PROPOSAL_READY는 resolveTurn에서 이미 처리됐다).
-        return new ResolvedTurn(AiResponseType.OFFER, AUTO_OFFER_REPLY, List.of(), List.of(), todayDate,
+        return ResolvedTurn.withoutProposal(AiResponseType.OFFER, AUTO_OFFER_REPLY, todayDate,
                 OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
     }
 
@@ -536,19 +565,23 @@ public class AiConversationService {
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
             String violation = periodViolationReason(structured.planScope(), structured.periodStartDate(),
-                    structured.periodEndDate(), structured.proposalItems());
+                    structured.periodEndDate(), structured.proposalItems(), structured.adjustments());
             if (violation != null) {
                 log.warn("AI 턴 실패 처리: CREATE_PROPOSAL+PROPOSAL_READY 기간 계약 위반: {}", violation);
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
             List<UnavailableWindowSpec> unavailableWindows = structured.unavailableWindows() != null
                     ? structured.unavailableWindows() : List.of();
-            return new ResolvedTurn(AiResponseType.PROPOSAL, originalReply, structured.proposalItems(),
+            List<ProposalItem> proposalItems = structured.proposalItems() != null
+                    ? structured.proposalItems() : List.of();
+            List<ProposalAdjustment> adjustments = structured.adjustments() != null
+                    ? structured.adjustments() : List.of();
+            return new ResolvedTurn(AiResponseType.PROPOSAL, originalReply, proposalItems, adjustments,
                     unavailableWindows, structured.periodStartDate(), null, contextChanges);
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
             // 정보 부족은 정상적인 상담 흐름이다 — 실패(503)가 아니라 CHAT으로 정상 완료한다.
-            return new ResolvedTurn(AiResponseType.CHAT, structured.clarifyingQuestion(), List.of(), List.of(), todayDate, null,
+            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, structured.clarifyingQuestion(), todayDate, null,
                     contextChanges);
         }
         // decision == CHAT 또는 OFFER_PROPOSAL — CREATE_PROPOSAL에서는 계약 위반이다.
@@ -570,31 +603,38 @@ public class AiConversationService {
                 ? structured.missingInformation() : List.of();
         List<ProposalItem> proposalItems = structured.proposalItems() != null
                 ? structured.proposalItems() : List.of();
+        List<ProposalAdjustment> adjustments = structured.adjustments() != null
+                ? structured.adjustments() : List.of();
         List<UnavailableWindowSpec> unavailableWindows = structured.unavailableWindows() != null
                 ? structured.unavailableWindows() : List.of();
         boolean hasPlanScope = structured.planScope() != null;
         boolean hasPeriod = structured.periodStartDate() != null || structured.periodEndDate() != null;
         boolean hasUnavailableWindows = !unavailableWindows.isEmpty();
+        boolean hasAdjustments = !adjustments.isEmpty();
 
         boolean violated = switch (structured.decision()) {
             case CHAT -> hasClarifyingQuestion || !missingInformation.isEmpty() || !proposalItems.isEmpty()
-                    || hasUnavailableWindows || hasPlanScope || hasPeriod;
+                    || hasAdjustments || hasUnavailableWindows || hasPlanScope || hasPeriod;
             // missingInformation은 선택 정보라 비어 있어도 위반이 아니다.
             case ASK_CLARIFICATION -> !hasClarifyingQuestion || !proposalItems.isEmpty()
-                    || hasUnavailableWindows || hasPlanScope || hasPeriod;
+                    || hasAdjustments || hasUnavailableWindows || hasPlanScope || hasPeriod;
             case OFFER_PROPOSAL -> hasClarifyingQuestion || !missingInformation.isEmpty()
-                    || !proposalItems.isEmpty() || hasUnavailableWindows || hasPlanScope || hasPeriod;
+                    || !proposalItems.isEmpty() || hasAdjustments || hasUnavailableWindows
+                    || hasPlanScope || hasPeriod;
             // unavailableWindows는 PROPOSAL_READY에서 있어도 없어도 된다 — 검사하지 않는다.
-            case PROPOSAL_READY -> hasClarifyingQuestion || !missingInformation.isEmpty() || proposalItems.isEmpty()
+            // 새 후보와 조정 후보 중 적어도 하나는 있어야 한다 — 조정만 있는 제안도 유효하다
+            // ("오늘 피곤해, 줄여줘"는 새로 만들 것이 없고 줄이기만 있다).
+            case PROPOSAL_READY -> hasClarifyingQuestion || !missingInformation.isEmpty()
+                    || (proposalItems.isEmpty() && !hasAdjustments)
                     || !hasPlanScope || structured.periodStartDate() == null || structured.periodEndDate() == null;
         };
 
         if (violated) {
             log.warn("AI 턴 실패 처리: decision({})과 나머지 필드가 모순됨 "
                             + "(clarifyingQuestion={}, missingInformation={}개, proposalItems={}개, "
-                            + "planScope존재={}, 기간존재={}, unavailableWindows존재={})",
+                            + "adjustments={}개, planScope존재={}, 기간존재={}, unavailableWindows존재={})",
                     structured.decision(), hasClarifyingQuestion, missingInformation.size(), proposalItems.size(),
-                    hasPlanScope, hasPeriod, hasUnavailableWindows);
+                    adjustments.size(), hasPlanScope, hasPeriod, hasUnavailableWindows);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
     }
@@ -615,7 +655,8 @@ public class AiConversationService {
      * ChronoUnit.DAYS.between(start, end)는 두 날짜의 차이이지 포함 일수가 아니다 — 시작·종료를
      * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH는 최대 31일(spanDays<=30)까지만 허용한다.
      */
-    private String periodViolationReason(AiPlanScope planScope, LocalDate start, LocalDate end, List<ProposalItem> items) {
+    private String periodViolationReason(AiPlanScope planScope, LocalDate start, LocalDate end,
+                                          List<ProposalItem> items, List<ProposalAdjustment> adjustments) {
         if (planScope == null) {
             return "planScope가 비어 있음";
         }
@@ -641,6 +682,16 @@ public class AiConversationService {
             String violation = itemPeriodViolationReason(item, start, end);
             if (violation != null) {
                 return violation;
+            }
+        }
+
+        // MOVE 조정의 목적지도 요청 범위 안이어야 한다 — "오늘 계획을 줄여줘"라고 했는데
+        // 다음 달로 옮기는 제안이 조용히 통과하면 안 된다.
+        for (ProposalAdjustment adjustment : adjustments != null ? adjustments : List.<ProposalAdjustment>of()) {
+            LocalDate toDate = adjustment.toDate();
+            if (toDate != null && (toDate.isBefore(start) || toDate.isAfter(end))) {
+                return "조정 후보(#" + adjustment.executionItemId() + ")의 이동 날짜(" + toDate
+                        + ")가 요청 범위(" + start + "~" + end + ")를 벗어남";
             }
         }
         return null;
@@ -730,11 +781,15 @@ public class AiConversationService {
      * PROPOSAL_READY를 낼 수 있다는 것을 프롬프트 단계에서부터 못박는다(서버도 resolveTurn에서
      * 독립적으로 강제한다).
      */
-    private String buildUserPrompt(AiMessageRequest request, String contextBlock, LocalDate todayDate) {
+    private String buildUserPrompt(AiMessageRequest request, String workspaceBlock, String contextBlock, LocalDate todayDate) {
         StringBuilder sb = new StringBuilder();
         // 이 값은 참고용 "오늘"일 뿐이다 — 실제 계획 대상 날짜(오늘/내일/특정 날짜)는 네가
         // periodStartDate/periodEndDate로 직접 판단해 채운다. 서버가 무조건 이 값으로 덮어쓰지 않는다.
         sb.append("오늘 날짜(참고용, 상대 표현 계산에만 쓴다): ").append(todayDate).append("\n\n");
+        // 화면 상태를 대화 기록보다 먼저 둔다 — 지금 무엇이 잡혀 있는지가 판단의 기준이다.
+        if (!workspaceBlock.isEmpty()) {
+            sb.append(workspaceBlock).append('\n');
+        }
         if (!contextBlock.isEmpty()) {
             sb.append(contextBlock).append('\n');
         }
@@ -847,6 +902,7 @@ public class AiConversationService {
         return AiConversationResponse.builder()
                 .conversationId(conversation.getConversationId())
                 .scope(conversation.getScope())
+                .courseId(conversation.getCourseId())
                 .status(conversation.getStatus())
                 .createdAt(conversation.getCreatedAt())
                 .updatedAt(conversation.getUpdatedAt())

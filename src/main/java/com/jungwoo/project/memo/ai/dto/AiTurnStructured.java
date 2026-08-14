@@ -39,6 +39,12 @@ public record AiTurnStructured(
         String clarifyingQuestion,
         List<String> missingInformation,
         List<ProposalItem> proposalItems,
+        /**
+         * 기존 실행 조각을 줄이거나 옮기거나 빼는 후보. proposalItems와 같은 제안 묶음에 함께
+         * 담기며 decision=PROPOSAL_READY에서만 값을 가질 수 있다. 새 항목 없이 조정만 있는
+         * 제안도 유효하다("오늘 너무 피곤해, 줄여줘" -> 새로 만들 것은 없고 줄이기만 있다).
+         */
+        List<ProposalAdjustment> adjustments,
         List<UnavailableWindowSpec> unavailableWindows,
         AiPlanScope planScope,
         LocalDate periodStartDate,

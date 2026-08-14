@@ -29,6 +29,13 @@ public class ExecutionItem {
     /** Planning Agent가 학습 추천을 배치해 만든 경우 그 학습 topic. 학습과 무관하면 null. */
     private Long topicId;
 
+    /**
+     * 이 조각이 속한 프로젝트(courses). topicId와 다른 축이다 — topic은 자료 구조 분석을
+     * 적용해야만 생기지만, 프로젝트는 만들자마자 존재하므로 자료가 없는 프로젝트의 실행도
+     * 여기로 연결된다. 프로젝트와 무관한 조각은 null.
+     */
+    private Long courseId;
+
     /** 분할 등으로 생겨난 조각의 원본. */
     private Long sourceExecutionItemId;
 

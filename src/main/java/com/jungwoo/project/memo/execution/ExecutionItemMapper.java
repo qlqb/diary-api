@@ -114,4 +114,22 @@ public interface ExecutionItemMapper {
             @Param("userId") Long userId,
             @Param("topicId") Long topicId
     );
+
+    /** 프로젝트 대화에서 만든 제안을 적용한 직후 그 프로젝트를 연결한다. */
+    void updateCourseId(
+            @Param("executionItemId") Long executionItemId,
+            @Param("userId") Long userId,
+            @Param("courseId") Long courseId
+    );
+
+    /**
+     * 프로젝트에 속한 실행 조각. 날짜 범위 밖이더라도 UNSCHEDULED(날짜 미정) 항목은 포함한다 —
+     * 프로젝트 화면에서 "아직 언제 할지 안 정한 것"이 사라지면 안 되기 때문이다.
+     */
+    List<ExecutionItem> findByUserIdAndCourseId(
+            @Param("userId") Long userId,
+            @Param("courseId") Long courseId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
 }

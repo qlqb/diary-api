@@ -286,12 +286,12 @@ class AiTurnLifecycleServiceTest {
     void completeTurnSuccess_createsProposal_whenProposalType_andReleasesLock() {
         when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
                 .thenReturn(1);
-        when(aiProposalService.createFromItems(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any(), any()))
+        when(aiProposalService.createFromItems(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(900L).items(List.of()).build());
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.PROPOSAL,
-                List.of(sampleItem()), LocalDate.now(), List.of(), List.of());
+                List.of(sampleItem()), List.of(), LocalDate.now(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNotNull();
         assertThat(result.proposalResponseOrNull().getProposalId()).isEqualTo(900L);
@@ -305,10 +305,10 @@ class AiTurnLifecycleServiceTest {
                 .thenReturn(1);
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
-                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), LocalDate.now(), List.of(), List.of());
+                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), List.of(), LocalDate.now(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNull();
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any(), any());
     }
 
     /**
@@ -323,12 +323,12 @@ class AiTurnLifecycleServiceTest {
 
         assertThatThrownBy(() -> service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "뒤늦게 도착한 답변", AiResponseType.CHAT,
-                List.of(), LocalDate.now(), List.of(), List.of()))
+                List.of(), List.of(), LocalDate.now(), List.of(), List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 
         verify(aiMessageMapper, never()).insert(any());
-        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any(), any());
         verify(contextChangeSuggestionService, never()).createFromSuggestions(any(), any(), any(), any());
         verify(aiConversationMapper, never()).releaseActiveRequest(any(), any(), any());
     }

@@ -44,4 +44,25 @@
         )
     </insert>
 
+    <select id="findByUserIdAndDateRange" resultType="com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse">
+        SELECT
+            r.execution_record_id AS executionRecordId,
+            r.execution_item_id   AS executionItemId,
+            i.title               AS title,
+            i.scheduled_date      AS scheduledDate,
+            i.course_id           AS courseId,
+            r.outcome             AS outcome,
+            r.actual_minutes      AS actualMinutes,
+            r.completion_percent  AS completionPercent,
+            r.note                AS note,
+            r.recorded_at         AS recordedAt
+        FROM execution_records r
+        LEFT JOIN execution_items i
+               ON i.execution_item_id = r.execution_item_id
+              AND i.user_id           = r.user_id
+        WHERE r.user_id = #{userId}
+          AND DATE(r.recorded_at) BETWEEN #{startDate} AND #{endDate}
+        ORDER BY r.recorded_at DESC, r.execution_record_id DESC
+    </select>
+
 </mapper>

@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.execution;
 import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCreateRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
+import com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +22,8 @@ import java.util.List;
  * GET    /api/execution-items?date=            날짜별 조회
  * GET    /api/execution-items/range?startDate=&endDate= 날짜 범위 조회 (주간 시간표용)
  * GET    /api/execution-items/pending?beforeDate= pending 조회
+ * GET    /api/execution-items/by-course/{courseId} 프로젝트의 관련 실행
+ * GET    /api/execution-items/records?startDate=&endDate= 실제로 일어난 결과(기록 화면)
  * POST   /api/execution-items                   생성
  * DELETE /api/execution-items/{id}?version=      삭제 (soft delete)
  */
@@ -63,6 +66,25 @@ public class ExecutionItemController {
                 principal.getUserId(), beforeDate);
 
         return ResponseEntity.ok(executionItemService.getPending(principal.getUserId(), beforeDate));
+    }
+
+    @GetMapping("/by-course/{courseId}")
+    public ResponseEntity<List<ExecutionItemResponse>> getByCourse(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long courseId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate today
+    ) {
+        LocalDate base = today != null ? today : LocalDate.now();
+        return ResponseEntity.ok(executionItemService.getByCourse(principal.getUserId(), courseId, base));
+    }
+
+    @GetMapping("/records")
+    public ResponseEntity<List<ExecutionRecordResponse>> getRecords(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
+    ) {
+        return ResponseEntity.ok(executionItemService.getRecords(principal.getUserId(), startDate, endDate));
     }
 
     @PostMapping

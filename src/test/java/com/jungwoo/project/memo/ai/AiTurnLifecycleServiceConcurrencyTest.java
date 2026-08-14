@@ -152,7 +152,7 @@ class AiTurnLifecycleServiceConcurrencyTest {
 
         assertThatThrownBy(() -> service.completeTurnSuccess(
                 conversationId, TEST_USER_ID, userMessage.getMessageId(), "뒤늦게 도착한 답변",
-                AiResponseType.CHAT, List.of(), null, List.of(), List.of()))
+                AiResponseType.CHAT, List.of(), List.of(), null, List.of(), List.of()))
                 .isInstanceOf(ServiceUnavailableException.class);
 
         assertThat(aiMessageMapper.findByReplyToMessageIdAndUserId(userMessage.getMessageId(), TEST_USER_ID)).isNull();
@@ -172,7 +172,7 @@ class AiTurnLifecycleServiceConcurrencyTest {
 
         assertThatThrownBy(() -> service.completeTurnSuccess(
                 conversationId, TEST_USER_ID, userMessage.getMessageId(), "초안이에요",
-                AiResponseType.PROPOSAL, List.of(), LocalDate.now(), List.of(), List.of()))
+                AiResponseType.PROPOSAL, List.of(), List.of(), LocalDate.now(), List.of(), List.of()))
                 .isInstanceOf(ServiceUnavailableException.class);
 
         AiMessage reloaded = aiMessageMapper.findByConversationIdAndUserId(conversationId, TEST_USER_ID).stream()

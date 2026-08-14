@@ -53,11 +53,16 @@ public class AiProposalPersistenceService {
         for (ProposalItemPayload payload : items) {
             String json = toJson(payload);
 
+            // 조정 후보는 어느 실행 조각을 바꾸려는지(target_item_id)와 그 당시 버전
+            // (base_version)을 기존 컬럼에 그대로 기록한다. base_version 덕분에 사용자가
+            // 제안을 받은 뒤 그 조각을 직접 고쳤다면 적용이 409로 막힌다.
             AiProposalItem item = AiProposalItem.builder()
                     .proposalId(proposal.getProposalId())
                     .userId(userId)
                     .itemType(AiProposalItemType.EXECUTION_ITEM)
                     .originalPayload(json)
+                    .targetItemId(payload.targetExecutionItemId())
+                    .baseVersion(payload.targetBaseVersion())
                     .status(AiProposalItemStatus.PROPOSED)
                     .build();
             aiProposalItemMapper.insert(item);
@@ -74,6 +79,12 @@ public class AiProposalPersistenceService {
                     .scheduledStartAt(payload.scheduledStartAt())
                     .scheduledEndAt(payload.scheduledEndAt())
                     .modified(false)
+                    .operation(payload.effectiveOperation())
+                    .targetExecutionItemId(payload.targetExecutionItemId())
+                    .beforeTitle(payload.beforeTitle())
+                    .beforeExpectedMinutes(payload.beforeExpectedMinutes())
+                    .beforeScheduledDate(payload.beforeScheduledDate())
+                    .reason(payload.reason())
                     .build());
         }
 
