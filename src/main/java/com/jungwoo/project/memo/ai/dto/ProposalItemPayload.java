@@ -69,8 +69,23 @@ public record ProposalItemPayload(
             String title, Integer expectedMinutes, String priority, LocalDate targetDate,
             String beforeTitle, Integer beforeExpectedMinutes, LocalDate beforeScheduledDate, String reason
     ) {
+        return adjust(operation, targetExecutionItemId, targetBaseVersion, title, expectedMinutes, priority,
+                targetDate, null, null, beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason);
+    }
+
+    /**
+     * 시각까지 함께 옮기는 조정 후보(MOVE). scheduledStartAt/scheduledEndAt은 "옮긴 뒤"의
+     * 시각이며, 시각이 정해진(TIME_FIXED) 대상에만 채워진다 — 그 외에는 null이고 이때 payload는
+     * 위 축약 생성자와 동일하다.
+     */
+    public static ProposalItemPayload adjust(
+            ProposalOperation operation, Long targetExecutionItemId, Long targetBaseVersion,
+            String title, Integer expectedMinutes, String priority, LocalDate targetDate,
+            LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            String beforeTitle, Integer beforeExpectedMinutes, LocalDate beforeScheduledDate, String reason
+    ) {
         return new ProposalItemPayload(title, null, expectedMinutes, priority, targetDate,
-                null, null, null, null, null,
+                null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
                 beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason);
     }

@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.List;
@@ -72,11 +73,14 @@ public class AiWorkspaceContextBuilder {
     private final ExecutionItemMapper executionItemMapper;
 
     /**
-     * @param today 이 턴의 "오늘"(사용자 시간대 기준). 스트리밍 도중 다시 계산하지 않도록
-     *              호출부가 이미 확정한 값을 그대로 받는다.
+     * @param now 이 턴의 "지금"(사용자 시간대 기준). 스트리밍 도중 다시 계산하지 않도록
+     *            호출부가 이미 확정한 값을 그대로 받는다. 날짜뿐 아니라 시각까지 받는 이유는
+     *            "예정 시간이 이미 지난 항목"을 컨텍스트에 표시해야 하기 때문이다 — 이게 없으면
+     *            AI는 오전 계획이 밀렸다는 사실을 사용자가 말해줘야만 알 수 있다.
      */
     @Transactional(readOnly = true)
-    public String build(AiConversation conversation, Long userId, LocalDate today) {
+    public String build(AiConversation conversation, Long userId, LocalDateTime now) {
+        LocalDate today = now.toLocalDate();
         StringBuilder sb = new StringBuilder();
         AiProposalTargetScope scope = conversation.getScope() != null
                 ? conversation.getScope() : AiProposalTargetScope.TODAY;
@@ -89,7 +93,7 @@ public class AiWorkspaceContextBuilder {
         // 오늘 상태는 프로젝트 대화에서도 함께 싣는다 — 프로젝트 안에서 "오늘 30분 하고 싶어"라고
         // 말했을 때 오늘 남은 시간을 모른 채 제안하면 안 되기 때문이다.
         if (scope != AiProposalTargetScope.EXECUTION) {
-            appendTodayBlock(sb, userId, today);
+            appendTodayBlock(sb, userId, now);
         }
         if (scope == AiProposalTargetScope.EXECUTION || scope == AiProposalTargetScope.MIXED) {
             appendWeekBlock(sb, userId, today);
@@ -181,20 +185,41 @@ public class AiWorkspaceContextBuilder {
 
     // ===== 실행 상태 =====
 
-    private void appendTodayBlock(StringBuilder sb, Long userId, LocalDate today) {
+    private void appendTodayBlock(StringBuilder sb, Long userId, LocalDateTime now) {
+        LocalDate today = now.toLocalDate();
         List<ExecutionItem> items = executionItemMapper.findByUserIdAndDate(userId, today);
         Map<Long, String> projectTitles = projectTitlesOf(userId, items);
 
         sb.append("[오늘 실행 상태] ").append(today.format(DATE_FMT)).append(' ')
-                .append(today.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN)).append('\n');
+                .append(today.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN))
+                .append(" 현재 시각 ").append(now.format(TIME_FMT)).append('\n');
         if (items.isEmpty()) {
             sb.append("오늘 잡힌 항목이 없다.\n");
         } else {
+            long overdueCount = items.stream().filter(item -> isOverdue(item, now)).count();
             for (ExecutionItem item : items) {
-                sb.append(renderExecutionLine(item, projectTitles));
+                sb.append(renderExecutionLine(item, projectTitles, now));
+            }
+            if (overdueCount > 0) {
+                sb.append("예정 시간이 이미 지났는데 아직 결론이 나지 않은 항목이 ").append(overdueCount)
+                        .append("개 있다(위 줄의 '예정 시간 지남' 표시). 이건 실패가 아니라 조정할 거리다.\n");
             }
         }
         sb.append('\n');
+    }
+
+    /**
+     * 예정 시간이 이미 지났는데 아직 PLANNED로 남아 있는 항목인지.
+     *
+     * 시각이 정해진(TIME_FIXED) 항목만 대상이다 — 시각을 정하지 않은 항목은 "오후가 됐다"는
+     * 이유만으로 밀린 것이 아니다. DONE/HOLD/CANCELLED/PARTIAL은 이미 사용자가 결론을 낸
+     * 상태이므로 대상이 아니다.
+     */
+    static boolean isOverdue(ExecutionItem item, LocalDateTime now) {
+        return item.getStatus() == ExecutionStatus.PLANNED
+                && item.getPlacementType() == PlacementType.TIME_FIXED
+                && item.getScheduledEndAt() != null
+                && !item.getScheduledEndAt().isAfter(now);
     }
 
     private void appendWeekBlock(StringBuilder sb, Long userId, LocalDate today) {
@@ -220,6 +245,10 @@ public class AiWorkspaceContextBuilder {
      * 판단 근거이기 때문이다(대신 상태를 명시한다).
      */
     private String renderExecutionLine(ExecutionItem item, Map<Long, String> projectTitles) {
+        return renderExecutionLine(item, projectTitles, null);
+    }
+
+    private String renderExecutionLine(ExecutionItem item, Map<Long, String> projectTitles, LocalDateTime now) {
         StringBuilder line = new StringBuilder();
         line.append("- #").append(item.getExecutionItemId()).append(' ');
         if (item.getScheduledDate() != null) {
@@ -238,6 +267,9 @@ public class AiWorkspaceContextBuilder {
         line.append(" [").append(item.getStatus()).append(", ").append(item.getPriority());
         if (item.getExpectedMinutes() != null) {
             line.append(", ").append(item.getExpectedMinutes()).append("분");
+        }
+        if (now != null && isOverdue(item, now)) {
+            line.append(", 예정 시간 지남");
         }
         String projectTitle = projectTitles != null && item.getCourseId() != null
                 ? projectTitles.get(item.getCourseId()) : null;

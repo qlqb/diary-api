@@ -25,6 +25,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -215,6 +216,91 @@ class ExecutionItemServiceTest {
         verify(executionItemEventMapper).insert(argThat(event ->
                 event.getEventType() == ExecutionEventType.MOVED
                         && event.getExecutionItemId().equals(ITEM_ID)));
+    }
+
+    @Test
+    void move_shiftsTimeWithinSameDay_andStillWritesMovedEvent() {
+        // "오늘 뒤로" — 밀린 항목을 같은 날 남은 시간대로 옮긴다. 날짜는 그대로여도 "언제 할지"가
+        // 바뀌었으므로 이동이고, 새 이벤트 타입을 만들지 않고 MOVED로 남는다.
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)))).thenReturn(1);
+
+        service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE)
+                .startTime(LocalTime.of(16, 0))
+                .endTime(LocalTime.of(16, 30))
+                .version(0L)
+                .build());
+
+        verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)));
+        verify(executionItemEventMapper).insert(argThat(event ->
+                event.getEventType() == ExecutionEventType.MOVED
+                        && event.getExecutionItemId().equals(ITEM_ID)));
+    }
+
+    @Test
+    void move_rejectsRequest_whenNeitherDateNorTimeChanges() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE)
+                .startTime(LocalTime.of(9, 0))
+                .endTime(LocalTime.of(9, 30))
+                .version(0L)
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MOVE_TARGET_DATE_INVALID));
+
+        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void move_rejectsTimeShift_forItemWithoutFixedTime() {
+        // 시각 없는 항목에 시각을 붙이는 것은 이동이 아니라 배치 형식 변경이다.
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE)
+                .startTime(LocalTime.of(16, 0))
+                .endTime(LocalTime.of(16, 30))
+                .version(0L)
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.TASK_MUST_NOT_HAVE_TIME));
+
+        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void move_rejectsRequest_whenOnlyOneSideOfTimeRangeIsGiven() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE).startTime(LocalTime.of(16, 0)).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.PARTIAL_TIME_RANGE));
+    }
+
+    @Test
+    void move_toAnotherDate_withoutTimes_keepsShiftingTimeByDayDifference() {
+        // 기존 동작 회귀 방지: 시각을 주지 않으면 예전처럼 날짜 차이만큼 평행 이동한다.
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE.plusDays(1)), eq(DATE.plusDays(1).atTime(9, 0)),
+                eq(DATE.plusDays(1).atTime(9, 30)))).thenReturn(1);
+
+        service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE.plusDays(1)).version(0L).build());
+
+        verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE.plusDays(1)), eq(DATE.plusDays(1).atTime(9, 0)), eq(DATE.plusDays(1).atTime(9, 30)));
     }
 
     @Test

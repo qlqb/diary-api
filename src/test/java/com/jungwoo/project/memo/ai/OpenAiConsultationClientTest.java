@@ -42,4 +42,29 @@ class OpenAiConsultationClientTest {
         // 항목 나열식 설문 문구를 피하라는 지시 자체가 프롬프트에 있어야 한다.
         assertThat(prompt).contains("설문");
     }
+
+    /**
+     * "늦게 일어나서 오전 계획을 다 못했어" 같은 입력에서 지켜야 하는 것: 실패로 규정하지 않고,
+     * 이미 아는 것을 다시 묻지 않고, AUTO에서 곧바로 초안을 만들지 않고, 오늘 범위를 넘지 않는다.
+     * 실제 모델이 그렇게 판단하는지는 Mockito로 증명할 수 없으므로 지시가 전달되는지만 확인한다.
+     */
+    @Test
+    void systemPrompt_treatsBrokenPlanAsAdjustment_notFailure() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("예정 시간 지남");
+        assertThat(prompt).contains("실패가 아니라");
+        assertThat(prompt).contains("남은 오늘을 다시 잡아볼까?");
+        // 오늘 계획이 틀어졌다는 말을 주간/월간/새 목표로 넓히지 않는다.
+        assertThat(prompt).contains("주간 계획·월간 계획·새 목표");
+    }
+
+    @Test
+    void systemPrompt_allowsSameDayTimeMove_forOverdueItems() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        // "오늘 뒤로"(같은 날 시각만 이동)도 MOVE 하나로 표현한다 — 별도 operation을 만들지 않는다.
+        assertThat(prompt).contains("같은 날 안에서 시각만 뒤로 미는");
+        assertThat(prompt).contains("\"startTime\"");
+    }
 }

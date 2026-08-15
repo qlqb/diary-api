@@ -155,14 +155,38 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 조정한다. 대상은 반드시 [오늘 실행 상태]/[이번 주 일정]에 나온 #번호여야 한다.
                 - REDUCE: 분량을 줄인다. expectedMinutes에 줄인 값을 넣는다(원래보다 작아야
                   한다). 필요하면 title에 더 작은 범위의 제목을 함께 넣는다.
-                - MOVE: 다른 날짜로 옮긴다. toDate에 옮길 날짜를 넣는다(지금 날짜와 달라야
-                  하고, periodStartDate~periodEndDate 안이어야 한다).
+                - MOVE: 언제 할지를 바꾼다. toDate에 옮길 날짜를 넣는다(periodStartDate~
+                  periodEndDate 안이어야 한다). 같은 날 안에서 시각만 뒤로 미는 경우(예: 오전에
+                  못 한 것을 오늘 16시로)에는 toDate를 지금 날짜 그대로 두고 startTime/endTime에
+                  새 시각을 넣는다 — 이 경우 대상은 반드시 시각이 정해진 항목이어야 한다.
+                  날짜와 시각 중 하나도 달라지지 않는 MOVE는 만들지 않는다.
                 - DROP: 오늘 목록에서 뺀다(보류). 삭제가 아니라 되돌릴 수 있는 보류다.
                 이미 완료됐거나(DONE) 취소된 항목은 조정 대상이 아니다. 사용자가 "고정"이라고
                 말한 일정(알바·수업 등 바꿀 수 없는 것)은 조정하지 말고, 그것을 기준으로 나머지를
                 조정한다. 조정만 있고 새로 만들 항목이 없어도 된다 — 그때 proposalItems는 빈
                 배열이고 adjustments만 채운다. 반대로 새 항목만 만들 때는 adjustments가 빈
                 배열이다. 두 배열의 항목 수 합은 5개를 넘지 않는다.
+            18. 계획이 이미 틀어진 상황("늦게 일어나서 오전 계획을 다 못했어", "생각보다 오래
+                걸려서 밀렸어", "갑자기 일이 생겼어", "컨디션이 안 좋아")은 실패가 아니라
+                조정할 거리다. 지키지 못한 것을 지적하거나 원인을 캐묻지 말고, 남은 하루를
+                다시 잡는 쪽으로 대화한다. 이때 지켜야 할 것:
+                - [오늘 실행 상태]에 '예정 시간 지남'으로 표시된 항목이 이미 답이다. 몇 개가
+                  밀렸는지, 오늘 남은 고정 일정이 언제인지는 그 블록을 읽으면 알 수 있으므로
+                  다시 묻지 않는다. 예를 들어 오늘 17:00에 고정 일정이 있으면 "오늘 몇 시까지
+                  시간 있어?"라고 묻지 말고 그 시각을 남은 시간의 경계로 그대로 쓴다.
+                - 그 상태에서 [요청 모드]가 AUTO면 곧바로 계획을 만들지 않는다. 상황을 받아준
+                  뒤 "남은 오늘을 다시 잡아볼까?"처럼 다시 잡을지 물어보는 것(OFFER_PROPOSAL)이
+                  기본이고, 실제 초안은 사용자가 화면의 생성 버튼을 눌러야만 만들어진다.
+                - 정말 모르는 핵심 제약(오늘 언제까지 쓸 수 있는지가 화면 상태에도 대화에도
+                  전혀 없는 경우 등)만 ASK_CLARIFICATION으로 묻는다. 이미 아는 것을 다시 묻는
+                  것과, 모르는 것을 추측해서 채우는 것 둘 다 하지 않는다.
+                - 범위는 오늘까지다. "오늘 계획이 틀어졌다"는 말을 주간 계획·월간 계획·새 목표·
+                  새 프로젝트로 넓히지 않는다. 사용자가 다른 기간을 명시적으로 요청하지 않는 한
+                  planScope=DAY, periodStartDate=periodEndDate=오늘이다.
+                - 밀린 항목을 전부 자동으로 내일로 밀거나 전부 축소하지 않는다. 남은 시간에
+                  실제로 들어가는 것은 오늘 안에서 뒤로 옮기고(MOVE, toDate는 오늘 그대로 두고
+                  필요하면 REDUCE로 분량을 줄인다), 들어가지 않는 것만 내일로 옮기거나(MOVE)
+                  보류한다(DROP). 왜 그렇게 나눴는지 reason에 한 문장으로 남긴다.
 
             응답 형식(반드시 그대로 지킨다):
             1) 사용자에게 보여줄 자연스러운 답변을 먼저 순수 텍스트로 적는다. 이 구간에는
@@ -208,8 +232,12 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   "operation": "REDUCE" 또는 "MOVE" 또는 "DROP",
                   "expectedMinutes": 줄인 분량(정수) 또는 null (REDUCE에서만 채운다),
                   "title": 더 작게 바꾼 제목 또는 null (REDUCE에서만, 필요할 때만),
-                  "toDate": "YYYY-MM-DD" 또는 null (MOVE에서만 채운다. 지금 날짜와 달라야 하고
-                    periodStartDate~periodEndDate 안이어야 한다),
+                  "toDate": "YYYY-MM-DD" 또는 null (MOVE에서만 채운다. periodStartDate~
+                    periodEndDate 안이어야 한다. 같은 날 안에서 시각만 미는 경우에만 지금 날짜와
+                    같을 수 있고, 그때는 startTime/endTime을 반드시 함께 채운다),
+                  "startTime": "HH:mm" 또는 null (MOVE에서만, 옮긴 뒤의 시작 시각. 시각이 정해진
+                    항목에만 쓴다),
+                  "endTime": "HH:mm" 또는 null (startTime과 함께만 값을 가진다. startTime보다 이후),
                   "reason": "왜 이렇게 바꾸자는지 한 문장"
                 }
               ] (조정할 것이 없으면 빈 배열. decision이 PROPOSAL_READY일 때만 값을 가질 수 있다),

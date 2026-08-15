@@ -470,7 +470,7 @@ class AiProposalServiceTest {
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
-                List.of(new ProposalAdjustment(500L, ProposalOperation.REDUCE, 20, null, null, "피곤해서")),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.REDUCE, 20, null, null, null, null, "피곤해서")),
                 TARGET_DATE, List.of());
 
         @SuppressWarnings("unchecked")
@@ -494,7 +494,7 @@ class AiProposalServiceTest {
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
                 List.of(dateOnlyItem("새 항목", 30, "SHOULD")),
-                List.of(new ProposalAdjustment(999L, ProposalOperation.REDUCE, 10, null, null, "이유")),
+                List.of(new ProposalAdjustment(999L, ProposalOperation.REDUCE, 10, null, null, null, null, "이유")),
                 TARGET_DATE, List.of());
 
         @SuppressWarnings("unchecked")
@@ -509,7 +509,7 @@ class AiProposalServiceTest {
         when(executionItemService.findOwnedForAdjustment(999L, USER_ID)).thenReturn(null);
 
         assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
-                List.of(new ProposalAdjustment(999L, ProposalOperation.DROP, null, null, null, "이유")),
+                List.of(new ProposalAdjustment(999L, ProposalOperation.DROP, null, null, null, null, null, "이유")),
                 TARGET_DATE, List.of()))
                 .isInstanceOf(ServiceUnavailableException.class);
 
@@ -522,9 +522,63 @@ class AiProposalServiceTest {
         when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
 
         assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
-                List.of(new ProposalAdjustment(500L, ProposalOperation.MOVE, null, null, TARGET_DATE, "이유")),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.MOVE, null, null, TARGET_DATE, null, null, "이유")),
                 TARGET_DATE, List.of()))
                 .isInstanceOf(ServiceUnavailableException.class);
+    }
+
+    @Test
+    void createFromItems_keepsMoveCandidate_whenSameDayButTimeMovesLater() {
+        // "오전에 못 한 것을 오늘 16시로" — 날짜는 그대로지만 언제 할지가 달라졌으므로 유효한 이동이다.
+        ExecutionItem target = timeFixedItem(500L, 1L, 10, 0, 10, 30);
+        when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
+        when(persistenceService.save(any(), any(), any(), any(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.MOVE, null, null, TARGET_DATE,
+                        LocalTime.of(16, 0), LocalTime.of(16, 30), "남은 시간에 맞춰 뒤로")),
+                TARGET_DATE, List.of());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        ProposalItemPayload payload = captor.getValue().get(0);
+        assertThat(payload.effectiveOperation()).isEqualTo(ProposalOperation.MOVE);
+        assertThat(payload.targetDate()).isEqualTo(TARGET_DATE);
+        assertThat(payload.scheduledStartAt()).isEqualTo(TARGET_DATE.atTime(16, 0));
+        assertThat(payload.scheduledEndAt()).isEqualTo(TARGET_DATE.atTime(16, 30));
+    }
+
+    @Test
+    void createFromItems_dropsMoveCandidate_whenTimeGivenForItemWithoutFixedTime() {
+        // 시각 없는 항목에 시각을 붙이는 것은 이동이 아니라 배치 형식 변경이다 — 조용히 버린다.
+        ExecutionItem target = plannedItem(500L, 0L, "자료구조 복습", 30);
+        when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
+                List.of(new ProposalAdjustment(500L, ProposalOperation.MOVE, null, null, TARGET_DATE,
+                        LocalTime.of(16, 0), LocalTime.of(16, 30), "이유")),
+                TARGET_DATE, List.of()))
+                .isInstanceOf(ServiceUnavailableException.class);
+    }
+
+    @Test
+    void apply_moveAdjustment_passesTimesToDomainAction_forSameDayReschedule() {
+        String payload = adjustPayloadJson("MOVE", 500L, 2L, 30, null,
+                TARGET_DATE + "T16:00:00", TARGET_DATE + "T16:30:00");
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, payload)));
+
+        service.apply(PROPOSAL_ID, USER_ID, AiProposalApplyRequest.builder().build());
+
+        ArgumentCaptor<ExecutionItemMoveRequest> captor = ArgumentCaptor.forClass(ExecutionItemMoveRequest.class);
+        verify(executionItemService).move(eq(500L), eq(USER_ID), captor.capture());
+        assertThat(captor.getValue().getToDate()).isEqualTo(TARGET_DATE);
+        assertThat(captor.getValue().getStartTime()).isEqualTo(LocalTime.of(16, 0));
+        assertThat(captor.getValue().getEndTime()).isEqualTo(LocalTime.of(16, 30));
+        assertThat(captor.getValue().getVersion()).isEqualTo(2L);
     }
 
     @Test
@@ -585,11 +639,26 @@ class AiProposalServiceTest {
                 .build();
     }
 
+    private ExecutionItem timeFixedItem(Long id, Long version, int startHour, int startMinute, int endHour, int endMinute) {
+        ExecutionItem item = plannedItem(id, version, "자료구조 복습", 30);
+        item.setPlacementType(PlacementType.TIME_FIXED);
+        item.setScheduledStartAt(TARGET_DATE.atTime(startHour, startMinute));
+        item.setScheduledEndAt(TARGET_DATE.atTime(endHour, endMinute));
+        return item;
+    }
+
     /** 조정 제안이 저장된 모습 그대로의 JSON. 예전 payload와 섞여도 읽히는지까지 이 문자열이 지킨다. */
     private String adjustPayloadJson(String operation, Long targetId, Long baseVersion, Integer minutes, String targetDate) {
+        return adjustPayloadJson(operation, targetId, baseVersion, minutes, targetDate, null, null);
+    }
+
+    private String adjustPayloadJson(String operation, Long targetId, Long baseVersion, Integer minutes,
+                                     String targetDate, String startAt, String endAt) {
         return "{\"title\":\"자료구조 복습\",\"description\":null,\"expectedMinutes\":" + minutes
                 + ",\"priority\":\"SHOULD\",\"targetDate\":\"" + (targetDate != null ? targetDate : TARGET_DATE)
-                + "\",\"placementType\":null,\"scheduledStartAt\":null,\"scheduledEndAt\":null,"
+                + "\",\"placementType\":null,"
+                + "\"scheduledStartAt\":" + (startAt != null ? "\"" + startAt + "\"" : "null") + ","
+                + "\"scheduledEndAt\":" + (endAt != null ? "\"" + endAt + "\"" : "null") + ","
                 + "\"operation\":\"" + operation + "\",\"targetExecutionItemId\":" + targetId
                 + ",\"targetBaseVersion\":" + baseVersion
                 + ",\"beforeTitle\":\"자료구조 복습\",\"beforeExpectedMinutes\":30,"

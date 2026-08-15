@@ -209,6 +209,13 @@ public class ExecutionItemService {
 
     // ===== 이동 =====
 
+    /**
+     * 이동 = "언제 할지"를 바꾼다. 다른 날짜로 옮기는 것과, 같은 날 안에서 시각만 뒤로 미는
+     * 것("오늘 뒤로")이 모두 이 액션이고 둘 다 MOVED 이벤트 하나로 남는다 — 같은 날 시각 이동을
+     * 위해 새 액션/새 이벤트 타입을 만들지 않는다.
+     *
+     * 날짜도 시각도 실제로 달라지지 않으면 이동이 아니므로 막는다(MOVE_TARGET_DATE_INVALID).
+     */
     @Transactional
     public ExecutionItemResponse move(Long executionItemId, Long userId, ExecutionItemMoveRequest request) {
         ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
@@ -221,16 +228,38 @@ public class ExecutionItemService {
 
         LocalDate fromDate = item.getScheduledDate();
         LocalDate toDate = request.getToDate();
-        if (toDate.equals(fromDate)) {
-            throw new BadRequestException(ErrorCode.MOVE_TARGET_DATE_INVALID);
+        boolean timeGiven = request.getStartTime() != null || request.getEndTime() != null;
+        if (timeGiven) {
+            if (request.getStartTime() == null || request.getEndTime() == null) {
+                throw new BadRequestException(ErrorCode.PARTIAL_TIME_RANGE);
+            }
+            if (!request.getEndTime().isAfter(request.getStartTime())) {
+                throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
+            }
+            // 시각 없는 항목에 시각을 붙이는 것은 이동이 아니라 배치 형식 변경이다 — 여기서 하지 않는다.
+            if (!PlacementType.TIME_FIXED.equals(item.getPlacementType())) {
+                throw new BadRequestException(ErrorCode.TASK_MUST_NOT_HAVE_TIME);
+            }
         }
 
-        var newStart = item.getScheduledStartAt();
-        var newEnd = item.getScheduledEndAt();
+        LocalDateTime newStart = item.getScheduledStartAt();
+        LocalDateTime newEnd = item.getScheduledEndAt();
         if (PlacementType.TIME_FIXED.equals(item.getPlacementType())) {
-            long dayDiff = java.time.temporal.ChronoUnit.DAYS.between(fromDate, toDate);
-            newStart = item.getScheduledStartAt().plusDays(dayDiff);
-            newEnd = item.getScheduledEndAt().plusDays(dayDiff);
+            if (timeGiven) {
+                newStart = LocalDateTime.of(toDate, request.getStartTime());
+                newEnd = LocalDateTime.of(toDate, request.getEndTime());
+            } else {
+                long dayDiff = java.time.temporal.ChronoUnit.DAYS.between(fromDate, toDate);
+                newStart = item.getScheduledStartAt().plusDays(dayDiff);
+                newEnd = item.getScheduledEndAt().plusDays(dayDiff);
+            }
+        }
+
+        boolean dateChanged = !toDate.equals(fromDate);
+        boolean timeChanged = !Objects.equals(newStart, item.getScheduledStartAt())
+                || !Objects.equals(newEnd, item.getScheduledEndAt());
+        if (!dateChanged && !timeChanged) {
+            throw new BadRequestException(ErrorCode.MOVE_TARGET_DATE_INVALID);
         }
 
         int updated = executionItemMapper.updateForMove(
@@ -241,13 +270,23 @@ public class ExecutionItemService {
 
         insertEvent(executionItemId, userId, ExecutionEventType.MOVED, ExecutionEventActorType.USER,
                 request.getReason(),
-                toJson(Map.of("scheduledDate", fromDate)),
-                toJson(Map.of("scheduledDate", toDate)),
+                toJson(moveState(fromDate, item.getScheduledStartAt(), item.getScheduledEndAt())),
+                toJson(moveState(toDate, newStart, newEnd)),
                 item.getVersion(), item.getVersion() + 1);
 
-        log.info("실행 조각 이동: executionItemId={}, {} -> {}", executionItemId, fromDate, toDate);
+        log.info("실행 조각 이동: executionItemId={}, {} {} -> {} {}",
+                executionItemId, fromDate, item.getScheduledStartAt(), toDate, newStart);
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
+    }
+
+    /** MOVED 이벤트의 before/after. 같은 날 시각 이동도 무엇이 달라졌는지 남아야 한다. */
+    private Map<String, Object> moveState(LocalDate date, LocalDateTime start, LocalDateTime end) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("scheduledDate", date);
+        state.put("scheduledStartAt", start);
+        state.put("scheduledEndAt", end);
+        return state;
     }
 
     // ===== 축소 =====

@@ -181,10 +181,15 @@ public class AiProposalService {
                 target.getTitle(), target.getExpectedMinutes(), target.getScheduledDate(), adjustment.reason());
     }
 
+    /**
+     * MOVE는 "언제 할지 변경"이다 — 다른 날짜로 옮기는 것과 같은 날 안에서 시각만 뒤로 미는 것
+     * ("오전에 못 한 것을 오늘 16시로") 둘 다 포함한다. 후자는 시각이 정해진 항목에만 가능하고,
+     * 이때만 toDate가 지금 날짜와 같아도 된다.
+     */
     private ProposalItemPayload toMovePayload(ProposalAdjustment adjustment, ExecutionItem target) {
         LocalDate toDate = adjustment.toDate();
-        if (toDate == null || toDate.equals(target.getScheduledDate())) {
-            log.warn("AI 조정 후보 무시: MOVE 대상 날짜가 없거나 지금과 같음 (#{})", target.getExecutionItemId());
+        if (toDate == null) {
+            log.warn("AI 조정 후보 무시: MOVE 대상 날짜가 없음 (#{})", target.getExecutionItemId());
             return null;
         }
         if (target.getPlacementType() == PlacementType.UNSCHEDULED) {
@@ -192,8 +197,32 @@ public class AiProposalService {
             return null;
         }
 
+        LocalDateTime newStart = null;
+        LocalDateTime newEnd = null;
+        if (adjustment.startTime() != null || adjustment.endTime() != null) {
+            if (adjustment.startTime() == null || adjustment.endTime() == null
+                    || !adjustment.endTime().isAfter(adjustment.startTime())) {
+                log.warn("AI 조정 후보 무시: MOVE 시각이 올바르지 않음 (#{})", target.getExecutionItemId());
+                return null;
+            }
+            if (target.getPlacementType() != PlacementType.TIME_FIXED) {
+                log.warn("AI 조정 후보 무시: 시각 미정 조각에 MOVE 시각을 붙일 수 없음 (#{})",
+                        target.getExecutionItemId());
+                return null;
+            }
+            newStart = LocalDateTime.of(toDate, adjustment.startTime());
+            newEnd = LocalDateTime.of(toDate, adjustment.endTime());
+        }
+
+        boolean dateChanged = !toDate.equals(target.getScheduledDate());
+        boolean timeChanged = newStart != null && !Objects.equals(newStart, target.getScheduledStartAt());
+        if (!dateChanged && !timeChanged) {
+            log.warn("AI 조정 후보 무시: MOVE인데 날짜도 시각도 달라지지 않음 (#{})", target.getExecutionItemId());
+            return null;
+        }
+
         return ProposalItemPayload.adjust(ProposalOperation.MOVE, target.getExecutionItemId(), target.getVersion(),
-                target.getTitle(), target.getExpectedMinutes(), priorityName(target), toDate,
+                target.getTitle(), target.getExpectedMinutes(), priorityName(target), toDate, newStart, newEnd,
                 target.getTitle(), target.getExpectedMinutes(), target.getScheduledDate(), adjustment.reason());
     }
 
@@ -538,10 +567,18 @@ public class AiProposalService {
                 ? edit.getExpectedMinutes() : original.expectedMinutes();
         LocalDate targetDate = edit != null && edit.getScheduledDate() != null
                 ? edit.getScheduledDate() : original.targetDate();
+        // 사용자가 미리보기에서 시각을 직접 고쳤으면 그 값을, 아니면 제안이 담고 있던 시각을 쓴다.
+        // 둘 다 없으면 null이고, 그때 move는 예전처럼 날짜만 옮긴다.
+        LocalDateTime startAt = edit != null && edit.getScheduledStartAt() != null
+                ? edit.getScheduledStartAt() : original.scheduledStartAt();
+        LocalDateTime endAt = edit != null && edit.getScheduledEndAt() != null
+                ? edit.getScheduledEndAt() : original.scheduledEndAt();
 
         boolean modified = !Objects.equals(title, original.title())
                 || !Objects.equals(expectedMinutes, original.expectedMinutes())
-                || !Objects.equals(targetDate, original.targetDate());
+                || !Objects.equals(targetDate, original.targetDate())
+                || !Objects.equals(startAt, original.scheduledStartAt())
+                || !Objects.equals(endAt, original.scheduledEndAt());
 
         switch (operation) {
             case REDUCE -> executionItemService.reduce(targetId, userId, ExecutionItemReduceRequest.builder()
@@ -552,6 +589,8 @@ public class AiProposalService {
                     .build());
             case MOVE -> executionItemService.move(targetId, userId, ExecutionItemMoveRequest.builder()
                     .toDate(targetDate)
+                    .startTime(startAt != null ? startAt.toLocalTime() : null)
+                    .endTime(endAt != null ? endAt.toLocalTime() : null)
                     .version(baseVersion)
                     .reason("AI 제안 적용" + (original.reason() != null ? ": " + original.reason() : ""))
                     .build());
@@ -566,8 +605,8 @@ public class AiProposalService {
                 ? AiProposalItemStatus.MODIFIED_APPLIED : AiProposalItemStatus.APPLIED;
         String editedJson = modified
                 ? toJson(ProposalItemPayload.adjust(operation, targetId, baseVersion, title, expectedMinutes,
-                        original.priority(), targetDate, original.beforeTitle(), original.beforeExpectedMinutes(),
-                        original.beforeScheduledDate(), original.reason()))
+                        original.priority(), targetDate, startAt, endAt, original.beforeTitle(),
+                        original.beforeExpectedMinutes(), original.beforeScheduledDate(), original.reason()))
                 : null;
 
         // created_item_id에는 "이 제안이 만든 새 항목"이 아니라 "바뀐 대상 항목"을 남긴다 —
@@ -585,6 +624,8 @@ public class AiProposalService {
                 .expectedMinutes(expectedMinutes)
                 .priority(original.priority())
                 .targetDate(targetDate)
+                .scheduledStartAt(startAt)
+                .scheduledEndAt(endAt)
                 .modified(modified)
                 .createdItemId(targetId)
                 .operation(operation)

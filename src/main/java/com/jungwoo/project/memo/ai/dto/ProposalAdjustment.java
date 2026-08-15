@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai.dto;
 import com.jungwoo.project.memo.ai.domain.ProposalOperation;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 
 /**
  * 모델이 만든 "기존 실행 조각을 이렇게 바꾸자"는 후보 하나.
@@ -21,8 +22,15 @@ public record ProposalAdjustment(
         Integer expectedMinutes,
         /** REDUCE: 더 작게 바꾼 제목(선택). */
         String title,
-        /** MOVE: 옮길 날짜. */
+        /** MOVE: 옮길 날짜. 같은 날 안에서 시각만 뒤로 미는 경우에는 지금 날짜와 같을 수 있다. */
         LocalDate toDate,
+        /**
+         * MOVE: 옮긴 뒤의 시작 시각(선택). 시각이 정해진(TIME_FIXED) 항목에만 쓸 수 있다.
+         * "오전에 못 한 것을 오늘 16시로 미루기"처럼 날짜는 그대로 두고 시각만 바꾸는 조정에 쓴다.
+         */
+        LocalTime startTime,
+        /** MOVE: 옮긴 뒤의 종료 시각(선택). startTime과 함께만 값을 가진다. */
+        LocalTime endTime,
         String reason
 ) {
 }

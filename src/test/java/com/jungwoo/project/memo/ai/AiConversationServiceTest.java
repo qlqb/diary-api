@@ -371,12 +371,36 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        // 서버가 고정 reply/OfferAction을 만든다 — 모델의 자연어 reply("정보는 충분해 보여.")를
-        // 그대로 노출하지 않는다.
-        assertThat(sink.completed.reply()).isEqualTo(AUTO_OFFER_REPLY);
+        // reply는 모델의 자연어 문장을 그대로 쓴다 — 지금 상황을 짚는 제안("오전 일정 3개가
+        // 밀렸네, 다시 잡아볼까?")이 매번 같은 고정 문장으로 뭉개지면 안 되고, 스트리밍 중에
+        // 이미 보여준 문장이 완료 시점에 다른 문장으로 바뀌어서도 안 된다.
+        assertThat(sink.completed.reply()).isEqualTo("정보는 충분해 보여.");
+        // 반면 버튼은 여전히 서버가 만든다 — 모델은 화면 상태나 버튼을 정하지 않는다.
         assertThat(sink.offerAction).isNotNull();
         assertThat(sink.offerAction.type()).isEqualTo("CREATE_PROPOSAL");
         assertThat(sink.offerAction.label()).isEqualTo(DEFAULT_OFFER_LABEL);
+        assertThat(sink.proposalReady).isNull();
+    }
+
+    @Test
+    void auto_decisionOfferProposal_fallsBackToFixedReply_whenModelReplyIsEmpty() {
+        // 모델이 자연어 문장을 비워 보내면 빈 말풍선을 남기지 않고 서버 문장으로 대체한다.
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"clarifyingQuestion\":null,\"missingInformation\":[],"
+                + "\"proposalItems\":[],\"unavailableWindows\":[],\"planScope\":null,"
+                + "\"periodStartDate\":null,\"periodEndDate\":null}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(303L), null, List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(),
+                request("늦게 일어나서 오전 계획을 다 못했어", "k-auto-offer-empty"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.completed.reply()).isEqualTo(AUTO_OFFER_REPLY);
         assertThat(sink.proposalReady).isNull();
     }
 

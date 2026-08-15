@@ -314,7 +314,7 @@ public class AiConversationService {
 
         // 지금 화면의 실제 상태(오늘 실행/이번 주 일정/프로젝트 자료)를 가장 먼저 확보하고 그
         // 길이만큼 예산에서 뺀다 — 이 블록이 없으면 "오늘 줄여줘" 같은 요청의 근거 자체가 없다.
-        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDate());
+        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime());
         int contextBudgetChars = Math.max(0, maxChars - currentMessageChars - workspaceBlock.length());
 
         // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
@@ -549,7 +549,15 @@ public class AiConversationService {
                     contextChanges);
         }
         // decision == OFFER_PROPOSAL (PROPOSAL_READY는 resolveTurn에서 이미 처리됐다).
-        return ResolvedTurn.withoutProposal(AiResponseType.OFFER, AUTO_OFFER_REPLY, todayDate,
+        //
+        // reply는 모델의 자연어 문장을 그대로 쓴다. 고정 문장으로 덮어쓰면 "오전 일정 3개가
+        // 밀렸네. 17시 일정 전까지 남은 시간에 맞춰 다시 잡아볼까?"처럼 지금 상황을 짚는 제안이
+        // 매번 같은 문장으로 뭉개지고, 스트리밍 중에 이미 보여준 문장이 완료 시점에 다른
+        // 문장으로 바뀌어 보이기까지 한다. 버튼(OfferAction)은 여전히 서버가 만든다 — 모델은
+        // 화면 상태나 버튼을 정하지 않는다는 원칙은 그대로다. 모델이 문장을 비워 보냈을 때만
+        // 고정 문장으로 대체한다.
+        return ResolvedTurn.withoutProposal(AiResponseType.OFFER,
+                hasText(originalReply) ? originalReply : AUTO_OFFER_REPLY, todayDate,
                 OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
     }
 
