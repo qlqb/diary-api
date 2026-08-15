@@ -36,8 +36,11 @@
         WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
     </select>
 
-    <select id="findByIdAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
-        SELECT * FROM course_materials WHERE material_id = #{materialId} AND user_id = #{userId}
+    <select id="findByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
     </select>
 
     <!--

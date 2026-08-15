@@ -22,6 +22,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -191,14 +192,21 @@ public class MaterialService {
         return material;
     }
 
-    /** DELETED도 반환한다. provenance 표시("원본 삭제됨 · 파일명") 전용 — 그 외 경로에서 쓰지 않는다. */
+    /**
+     * DELETED도 포함해 자료를 찾는다. provenance 표시 전용 — 그 외 경로에서 쓰지 않는다.
+     *
+     * 삭제된 자료도 반환하는 유일한 경로다. 원본을 지워도 course_topics.source_material_id는
+     * 그대로 남기 때문에, "이 학습 항목이 어디서 왔는지"를 계속 말해줄 수 있어야 한다.
+     * 파일 내용에는 접근하지 않는다 — 이름과 삭제 여부만 쓴다.
+     */
     @Transactional(readOnly = true)
-    public CourseMaterial getOwnedIncludingDeleted(Long userId, Long materialId) {
-        CourseMaterial material = courseMaterialMapper.findByIdAndUserIdIncludingDeleted(materialId, userId);
-        if (material == null) {
-            throw new NotFoundException(ErrorCode.COURSE_MATERIAL_NOT_FOUND);
+    public Map<Long, CourseMaterial> findForProvenance(Long userId, List<Long> materialIds) {
+        List<Long> ids = materialIds.stream().filter(Objects::nonNull).distinct().toList();
+        if (ids.isEmpty()) {
+            return Map.of();
         }
-        return material;
+        return courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(ids, userId).stream()
+                .collect(Collectors.toMap(CourseMaterial::getMaterialId, m -> m, (a, b) -> a));
     }
 
     /**

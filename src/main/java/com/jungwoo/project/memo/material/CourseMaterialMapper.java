@@ -14,8 +14,14 @@ public interface CourseMaterialMapper {
     /** ACTIVE 자료만. 목록·상세·업로드 후속·분석·AI 컨텍스트 등 기본 경로 전부 이걸 쓴다. */
     CourseMaterial findByIdAndUserId(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
-    /** DELETED도 반환한다. provenance 표시("원본 삭제됨 · 파일명") 전용. */
-    CourseMaterial findByIdAndUserIdIncludingDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
+    /**
+     * DELETED도 반환한다. provenance 표시("원본 삭제됨 · 파일명") 전용.
+     *
+     * topic 트리는 자료 하나당 여러 항목이 달리므로 항상 여러 건을 한 번에 묻는다 —
+     * 단건 조회를 반복하면 트리 크기만큼 쿼리가 늘어난다.
+     */
+    List<CourseMaterial> findByIdsAndUserIdIncludingDeleted(@Param("materialIds") List<Long> materialIds,
+                                                              @Param("userId") Long userId);
 
     /** ACTIVE 자료만. material_links로 그 프로젝트에 연결된 자료를 가져온다. */
     List<CourseMaterial> findByCourseIdAndUserId(@Param("courseId") Long courseId, @Param("userId") Long userId);

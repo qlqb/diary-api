@@ -12,6 +12,8 @@ import com.jungwoo.project.memo.learning.domain.TopicSourceType;
 import com.jungwoo.project.memo.learning.domain.TopicStatus;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.material.MaterialService;
+import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -37,6 +39,7 @@ import java.util.stream.Collectors;
 public class TopicService {
 
     private final CourseService courseService;
+    private final MaterialService materialService;
     private final CourseTopicMapper courseTopicMapper;
     private final TopicProgressMapper topicProgressMapper;
     private final TopicLearningEventMapper topicLearningEventMapper;
@@ -102,6 +105,11 @@ public class TopicService {
         Map<Long, TopicProgress> progressByTopic = topicProgressMapper.findByUserIdAndTopicIds(userId, topicIds)
                 .stream().collect(Collectors.toMap(TopicProgress::getTopicId, p -> p));
 
+        // 원본이 삭제된 자료도 포함해서 찾는다 — 확정된 학습 내용은 남으므로 그 출처도
+        // 계속 말해줄 수 있어야 한다. 이름과 삭제 여부만 쓰고 파일 내용은 건드리지 않는다.
+        Map<Long, CourseMaterial> materialsById = materialService.findForProvenance(
+                userId, all.stream().map(CourseTopic::getSourceMaterialId).toList());
+
         Map<Long, List<CourseTopic>> childrenByParent = all.stream()
                 .filter(t -> t.getParentTopicId() != null)
                 .collect(Collectors.groupingBy(CourseTopic::getParentTopicId));
@@ -111,19 +119,23 @@ public class TopicService {
                 .sorted(Comparator.comparing(CourseTopic::getOrderIndex))
                 .toList();
 
-        return roots.stream().map(root -> buildResponse(root, childrenByParent, progressByTopic)).toList();
+        return roots.stream()
+                .map(root -> buildResponse(root, childrenByParent, progressByTopic, materialsById))
+                .toList();
     }
 
     private TopicResponse buildResponse(CourseTopic topic, Map<Long, List<CourseTopic>> childrenByParent,
-                                         Map<Long, TopicProgress> progressByTopic) {
+                                         Map<Long, TopicProgress> progressByTopic,
+                                         Map<Long, CourseMaterial> materialsById) {
         List<CourseTopic> childTopics = childrenByParent.getOrDefault(topic.getTopicId(), List.of()).stream()
                 .sorted(Comparator.comparing(CourseTopic::getOrderIndex))
                 .toList();
         List<TopicResponse> children = new ArrayList<>();
         for (CourseTopic child : childTopics) {
-            children.add(buildResponse(child, childrenByParent, progressByTopic));
+            children.add(buildResponse(child, childrenByParent, progressByTopic, materialsById));
         }
-        return TopicResponse.of(topic, progressByTopic.get(topic.getTopicId()), children);
+        return TopicResponse.of(topic, progressByTopic.get(topic.getTopicId()), children,
+                topic.getSourceMaterialId() == null ? null : materialsById.get(topic.getSourceMaterialId()));
     }
 
     @Transactional(readOnly = true)
