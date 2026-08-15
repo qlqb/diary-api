@@ -1367,6 +1367,48 @@ class AiConversationServiceTest {
         verify(aiMessageMapper, never()).findByConversationIdAndUserId(any(), any());
     }
 
+    // ===== 대화 삭제 =====
+
+    @Test
+    void deleteConversation_marksArchived_withoutTouchingMessagesOrProposals() {
+        // 화면에서는 "삭제"지만 내부는 soft delete다 — 메시지·제안·이미 반영된 장기 컨텍스트가
+        // 이 대화를 참조하고 있어서 행을 지우면 그 관계가 끊어진다.
+        when(aiConversationMapper.findByIdAndUserId(CONVERSATION_ID, USER_ID))
+                .thenReturn(AiConversation.builder()
+                        .conversationId(CONVERSATION_ID).userId(USER_ID)
+                        .status(ConversationStatus.ACTIVE).build());
+
+        service.deleteConversation(CONVERSATION_ID, USER_ID);
+
+        verify(aiConversationMapper).updateStatus(CONVERSATION_ID, USER_ID, "ARCHIVED");
+        verify(aiMessageMapper, never()).findByConversationIdAndUserId(any(), any());
+        verifyNoInteractions(aiProposalService, contextChangeSuggestionService);
+    }
+
+    @Test
+    void deleteConversation_throwsNotFound_whenConversationNotOwned() {
+        when(aiConversationMapper.findByIdAndUserId(CONVERSATION_ID, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.deleteConversation(CONVERSATION_ID, USER_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ENTITY_NOT_FOUND));
+
+        verify(aiConversationMapper, never()).updateStatus(any(), any(), any());
+    }
+
+    @Test
+    void deleteConversation_isIdempotent_whenAlreadyDeleted() {
+        // 두 화면에서 같은 대화를 지우는 흔한 경우를 오류로 만들지 않는다.
+        when(aiConversationMapper.findByIdAndUserId(CONVERSATION_ID, USER_ID))
+                .thenReturn(AiConversation.builder()
+                        .conversationId(CONVERSATION_ID).userId(USER_ID)
+                        .status(ConversationStatus.ARCHIVED).build());
+
+        service.deleteConversation(CONVERSATION_ID, USER_ID);
+
+        verify(aiConversationMapper).updateStatus(CONVERSATION_ID, USER_ID, "ARCHIVED");
+    }
+
     @Test
     void listConversations_queriesByUserId_andCleansUpTitles() {
         AiConversationResponse raw = AiConversationResponse.builder()

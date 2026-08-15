@@ -75,6 +75,9 @@
                 AND p.status          = 'PROPOSED') AS pending_proposal_count
         FROM ai_conversations c
         WHERE c.user_id = #{userId}
+          <!-- 사용자가 삭제한 대화는 목록에 다시 나타나지 않는다. 행은 남아 있으므로
+               메시지·제안·이미 반영된 장기 컨텍스트는 그대로다. -->
+          AND c.status  = 'ACTIVE'
         <!--
           courseId를 넘기면 그 프로젝트 대화만, 넘기지 않으면 전체.
           onlyWithoutCourse=true면 프로젝트에 속하지 않은 대화만(오늘/일정/전체 상담 목록용) —
@@ -97,6 +100,13 @@
           AND user_id         = #{userId}
         FOR UPDATE
     </select>
+
+    <update id="updateStatus">
+        UPDATE ai_conversations
+        SET status = #{status}
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+    </update>
 
     <update id="touchUpdatedAt">
         UPDATE ai_conversations

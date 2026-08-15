@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai;
 import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiMessage;
 import com.jungwoo.project.memo.ai.domain.AiResponseType;
+import com.jungwoo.project.memo.ai.domain.ConversationStatus;
 import com.jungwoo.project.memo.ai.domain.MessageRole;
 import com.jungwoo.project.memo.ai.domain.MessageStatus;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
@@ -67,6 +68,11 @@ public class AiTurnLifecycleService {
     public PreparedTurn prepareTurn(Long conversationId, Long userId, AiMessageRequest request) {
         AiConversation conversation = aiConversationMapper.findByIdAndUserIdForUpdate(conversationId, userId);
         if (conversation == null) {
+            throw new NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
+        }
+        // 사용자가 지운 대화는 없는 것으로 취급한다 — 다른 탭에 열려 있던 화면이 뒤늦게
+        // 메시지를 보내 지운 대화를 되살리지 못하게 한다.
+        if (conversation.getStatus() == ConversationStatus.ARCHIVED) {
             throw new NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
         }
 

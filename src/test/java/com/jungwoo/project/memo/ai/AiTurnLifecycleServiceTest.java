@@ -70,6 +70,20 @@ class AiTurnLifecycleServiceTest {
     }
 
     @Test
+    void prepareTurn_throwsNotFound_whenConversationWasDeletedByUser() {
+        // 다른 탭에 열려 있던 화면이 뒤늦게 메시지를 보내 지운 대화를 되살리면 안 된다.
+        AiConversation deleted = freeConversation();
+        deleted.setStatus(ConversationStatus.ARCHIVED);
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(deleted);
+
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, request("안녕", "k1")))
+                .isInstanceOf(NotFoundException.class);
+
+        verify(aiMessageMapper, never()).insert(any());
+        verify(aiConversationMapper, never()).acquireActiveRequest(any(), any(), any());
+    }
+
+    @Test
     void prepareTurn_throwsNotConfigured_beforeAnyDbWrite() {
         when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());
         when(aiConsultationClient.isConfigured()).thenReturn(false);

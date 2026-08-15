@@ -68,6 +68,20 @@ public class AiConversationController {
                 principal.getUserId(), courseId, courseId == null));
     }
 
+    /**
+     * 대화 삭제. 목록에서 사라지지만 메시지·제안·이미 반영된 장기 컨텍스트는 지우지 않는다
+     * (AiConversationService.deleteConversation 참고).
+     */
+    @DeleteMapping("/{conversationId}")
+    public ResponseEntity<Void> delete(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long conversationId
+    ) {
+        log.info("DELETE /api/ai/conversations/{} - userId={}", conversationId, principal.getUserId());
+        aiConversationService.deleteConversation(conversationId, principal.getUserId());
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/{conversationId}/messages")
     public ResponseEntity<List<AiMessageResponse>> getMessages(
             @AuthenticationPrincipal UserPrincipal principal,

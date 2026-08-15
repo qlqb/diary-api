@@ -230,6 +230,22 @@ public class AiConversationService {
         return summaries;
     }
 
+    /**
+     * 사용자가 대화를 삭제한다. 화면에서는 "삭제"지만 내부적으로는 status=ARCHIVED로 내리는
+     * soft delete다 — ai_messages/ai_proposals/이미 승인된 장기 컨텍스트가 이 대화를 참조하고
+     * 있어서 행을 지우면 그 관계가 끊어진다. 사용자가 원한 것은 "목록에서 치우는 것"이고,
+     * 그건 목록 조회에서 ACTIVE만 보는 것으로 충분하다.
+     *
+     * 이미 삭제된 대화를 다시 삭제해도 성공으로 본다(멱등) — 두 화면에서 같은 대화를 지우는
+     * 흔한 경우를 오류로 만들지 않는다.
+     */
+    @Transactional
+    public void deleteConversation(Long conversationId, Long userId) {
+        requireOwnedConversation(conversationId, userId);
+        aiConversationMapper.updateStatus(conversationId, userId, ConversationStatus.ARCHIVED.name());
+        log.info("AI 상담 대화 삭제: conversationId={}, userId={}", conversationId, userId);
+    }
+
     // ===== 메시지 처리 =====
 
     /**
