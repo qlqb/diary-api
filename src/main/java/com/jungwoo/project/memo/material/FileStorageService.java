@@ -99,6 +99,31 @@ public class FileStorageService {
         return new StoredFile(storedFilename, storagePath, extension, fileHash);
     }
 
+    /**
+     * 디스크 파일을 지운다. 실패해도 예외를 던지지 않는다.
+     *
+     * 이 메서드는 반드시 DB 트랜잭션이 커밋된 뒤에 호출한다. 사용자 관점에서 삭제는 그
+     * 시점에 이미 끝났다 — 목록에서 사라졌고 AI도 읽을 수 없다. 남은 것은 앱이 더 이상
+     * 참조하지 않는 디스크 바이트뿐이라, 여기서 실패를 올려 DB를 롤백하면 오히려
+     * "status=ACTIVE인데 사용자는 지웠다고 아는" 더 나쁜 상태가 된다.
+     *
+     * 대신 materialId와 경로를 ERROR로 남긴다 — 고아 파일 정리의 근거가 된다.
+     * (정리 배치나 재시도 큐는 만들지 않는다.)
+     */
+    public void deleteQuietly(Long materialId, String storagePath) {
+        if (storagePath == null) {
+            return;
+        }
+        try {
+            boolean removed = Files.deleteIfExists(resolve(storagePath));
+            if (!removed) {
+                log.warn("삭제할 파일이 이미 없음: materialId={}, storagePath={}", materialId, storagePath);
+            }
+        } catch (Exception e) {
+            log.error("파일 삭제 실패(고아 파일로 남음): materialId={}, storagePath={}", materialId, storagePath, e);
+        }
+    }
+
     /** storagePath는 DB에 저장된 값을 그대로 넘긴다 — 호출부가 경로를 조립하지 않는다. */
     public Path resolve(String storagePath) {
         Path root = Path.of(uploadDir).normalize();

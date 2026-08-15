@@ -18,6 +18,12 @@ public interface CourseMapper {
     List<Course> findByUserId(@Param("userId") Long userId);
 
     /**
+     * 여러 프로젝트를 한 번에. 보관한 프로젝트도 포함한다 — 자료에 붙은 연결의 제목을
+     * 채울 때 쓰는데, 보관했다고 그 연결이 사라지지는 않기 때문이다.
+     */
+    List<Course> findByIdsAndUserId(@Param("courseIds") List<Long> courseIds, @Param("userId") Long userId);
+
+    /**
      * 프로젝트 카드 요약(자료 수/학습 구조 수/완료 수/진행 중 주제)을 한 번에 계산한다.
      * courseId가 null이면 그 사용자의 모든 프로젝트를 반환한다.
      */

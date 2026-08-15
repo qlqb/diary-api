@@ -1,5 +1,7 @@
 package com.jungwoo.project.memo.material;
 
+import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
@@ -40,6 +42,34 @@ public class MaterialTxService {
                     .materialType(materialType)
                     .build());
         }
+        return material;
+    }
+
+    /**
+     * 자료를 DELETED로 내리고 모든 연결을 끊는다. 디스크 파일은 여기서 지우지 않는다 —
+     * 호출자가 이 메서드가 커밋된 뒤에 지운다.
+     *
+     * 남기는 것: 행 자체, original_filename, size_bytes, created_at, file_hash, storage_path.
+     *   course_topics.source_material_id가 이 id를 참조하므로 provenance 표시에 쓰이고,
+     *   storage_path는 파일 삭제가 실패했을 때 고아 파일을 다시 찾는 유일한 단서다.
+     * 지우는 것: extracted_text (남겨두면 AI가 계속 읽을 수 있다 — 삭제가 삭제여야 한다),
+     *   모든 material_links.
+     * 건드리지 않는 것: course_topics / course_notes / course_material_analyses.
+     *   이미 apply된 것은 사용자가 확정한 프로젝트 상태고, 미적용 draft는 링크가 사라지면서
+     *   apply 게이트에 의해 자동으로 적용 불가가 된다.
+     *
+     * @return 삭제 표시 직전의 자료. 호출자가 storagePath를 꺼내 파일을 지운다.
+     */
+    @Transactional
+    public CourseMaterial markDeleted(Long userId, Long materialId) {
+        CourseMaterial material = courseMaterialMapper.findByIdAndUserId(materialId, userId);
+        if (material == null) {
+            throw new NotFoundException(ErrorCode.COURSE_MATERIAL_NOT_FOUND);
+        }
+        materialLinkMapper.deleteAllByMaterialId(materialId, userId);
+        courseMaterialMapper.markDeleted(materialId, userId);
+        log.info("자료 삭제 표시: userId={}, materialId={}, storagePath={}",
+                userId, materialId, material.getStoragePath());
         return material;
     }
 }

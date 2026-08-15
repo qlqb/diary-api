@@ -72,6 +72,7 @@ public enum ErrorCode {
     AI_PROPOSAL_ALREADY_RESPONDED(HttpStatus.CONFLICT, "E409_005", "이미 처리된 제안입니다"),
     AI_CONVERSATION_BUSY(HttpStatus.CONFLICT, "E409_006", "다른 상담 요청이 진행 중입니다"),
     CONTEXT_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_007", "이미 처리된 컨텍스트 변경 후보입니다"),
+    MATERIAL_ALREADY_LINKED_TO_COURSE(HttpStatus.CONFLICT, "E409_009", "이미 이 프로젝트에 연결된 자료입니다"),
     CONTEXT_APPLY_CONFLICT(HttpStatus.CONFLICT, "E409_008", "컨텍스트 상태가 그 사이 바뀌어 적용할 수 없습니다"),
 
     // ===== 429 Too Many Requests =====

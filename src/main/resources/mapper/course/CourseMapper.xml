@@ -35,6 +35,13 @@
         SELECT * FROM courses WHERE user_id = #{userId} AND status = 'ACTIVE' ORDER BY created_at DESC
     </select>
 
+    <select id="findByIdsAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses
+        WHERE user_id = #{userId}
+        AND course_id IN
+        <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
     <!--
       프로젝트 카드 요약. topic 트리 전체를 가져와 프론트에서 세지 않도록 서버가 한 번에
       계산한다. 진행 중 주제는 order_index가 가장 앞선 것 하나만 고른다.

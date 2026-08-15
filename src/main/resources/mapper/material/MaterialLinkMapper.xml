@@ -28,4 +28,23 @@
         WHERE course_id = #{courseId} AND user_id = #{userId}
     </select>
 
+    <select id="findByMaterialIdAndUserId" resultMap="materialLinkResultMap">
+        SELECT * FROM material_links
+        WHERE material_id = #{materialId} AND user_id = #{userId}
+        ORDER BY linked_at ASC
+    </select>
+
+    <select id="findByUserId" resultMap="materialLinkResultMap">
+        SELECT * FROM material_links WHERE user_id = #{userId} ORDER BY linked_at ASC
+    </select>
+
+    <delete id="delete">
+        DELETE FROM material_links
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+    </delete>
+
+    <delete id="deleteAllByMaterialId">
+        DELETE FROM material_links WHERE material_id = #{materialId} AND user_id = #{userId}
+    </delete>
+
 </mapper>
