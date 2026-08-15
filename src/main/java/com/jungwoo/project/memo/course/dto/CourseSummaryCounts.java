@@ -18,6 +18,5 @@ public class CourseSummaryCounts {
     private Long courseId;
     private int topicCount;
     private int learnedTopicCount;
-    private int materialCount;
     private String currentTopicTitle;
 }

@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.CourseNoteService;
@@ -17,6 +18,7 @@ import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import com.jungwoo.project.memo.material.domain.ExtractionStatus;
 import com.jungwoo.project.memo.material.domain.MaterialAnalysisStatus;
+import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisResponse;
 import org.junit.jupiter.api.Test;
@@ -71,19 +73,26 @@ class MaterialAnalysisServiceTest {
 
     private CourseMaterial extractedMaterial() {
         return CourseMaterial.builder()
-                .materialId(MATERIAL_ID).userId(USER_ID).courseId(COURSE_ID)
-                .materialType(MaterialType.TEXTBOOK_TOC)
+                .materialId(MATERIAL_ID).userId(USER_ID)
                 .originalFilename("toc.pdf")
                 .extractionStatus(ExtractionStatus.SUCCESS)
                 .extractedText("3.2 단순 연결 리스트\n3.3 원형 연결 리스트")
                 .build();
     }
 
+    /** 자료 성격은 이제 자료가 아니라 이 프로젝트의 링크가 갖는다. */
+    private MaterialLink link(MaterialType type) {
+        return MaterialLink.builder()
+                .userId(USER_ID).materialId(MATERIAL_ID).courseId(COURSE_ID)
+                .materialType(type)
+                .build();
+    }
+
     @Test
     void analyze_throwsMaterialExtractionNotReady_whenTextNotExtracted() {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
-        when(materialService.getOwned(USER_ID, MATERIAL_ID)).thenReturn(
-                CourseMaterial.builder().materialId(MATERIAL_ID).courseId(COURSE_ID)
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(
+                CourseMaterial.builder().materialId(MATERIAL_ID)
                         .extractionStatus(ExtractionStatus.FAILED_NO_TEXT).build());
 
         assertThatThrownBy(() -> service.analyze(USER_ID, COURSE_ID, MATERIAL_ID))
@@ -94,9 +103,26 @@ class MaterialAnalysisServiceTest {
     }
 
     @Test
+    void analyze_throwsMaterialNotLinked_whenMaterialIsNotConnectedToThisCourse() {
+        when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenThrow(new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        // 자료를 소유하고 있어도, 이 프로젝트에 연결하지 않았다면 그 맥락에서 분석할 수 없다.
+        assertThatThrownBy(() -> service.analyze(USER_ID, COURSE_ID, MATERIAL_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        verify(analysisMapper, never()).insert(any());
+    }
+
+    @Test
     void analyze_savesDraftOnly_neverTouchesCourseTopics() {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
-        when(materialService.getOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenReturn(link(MaterialType.TEXTBOOK_TOC));
         when(aiConsultationClient.isConfigured()).thenReturn(true);
 
         String json = """
@@ -128,6 +154,27 @@ class MaterialAnalysisServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_ANALYSIS_NOT_DRAFT));
 
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
+    }
+
+    @Test
+    void apply_rejectsWhenLinkWasRemoved_leavingAnalysisRecordIntact() {
+        CourseMaterialAnalysis draft = CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.DRAFT)
+                .analysisJson("{}")
+                .build();
+        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenThrow(new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        // 연결을 끊은 뒤에는 그 draft를 적용할 수 없다. 분석 레코드 자체는 지우지 않고
+        // (조회는 계속 되고 다시 연결하면 되살아난다) 적용만 막는다.
+        assertThatThrownBy(() -> service.apply(USER_ID, ANALYSIS_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
+        verify(analysisMapper, never()).updateStatus(any(), any(), any());
     }
 
     @Test

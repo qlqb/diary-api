@@ -7,45 +7,61 @@
     <resultMap id="courseMaterialResultMap" type="com.jungwoo.project.memo.material.domain.CourseMaterial">
         <id     property="materialId"       column="material_id"/>
         <result property="userId"           column="user_id"/>
-        <result property="courseId"         column="course_id"/>
-        <result property="materialType"     column="material_type"/>
         <result property="originalFilename" column="original_filename"/>
         <result property="storedFilename"   column="stored_filename"/>
+        <result property="storagePath"      column="storage_path"/>
         <result property="contentType"      column="content_type"/>
         <result property="sizeBytes"        column="size_bytes"/>
+        <result property="fileHash"         column="file_hash"/>
         <result property="extractionStatus" column="extraction_status"/>
         <result property="extractedText"    column="extracted_text"/>
         <result property="extractionError"  column="extraction_error"/>
+        <result property="status"           column="status"/>
         <result property="createdAt"        column="created_at"/>
         <result property="updatedAt"        column="updated_at"/>
     </resultMap>
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
         INSERT INTO course_materials (
-            user_id, course_id, material_type, original_filename, stored_filename,
-            content_type, size_bytes, extraction_status, extracted_text, extraction_error
+            user_id, original_filename, stored_filename, storage_path,
+            content_type, size_bytes, file_hash, extraction_status, extracted_text, extraction_error
         ) VALUES (
-            #{userId}, #{courseId}, #{materialType}, #{originalFilename}, #{storedFilename},
-            #{contentType}, #{sizeBytes}, #{extractionStatus}, #{extractedText}, #{extractionError}
+            #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
+            #{contentType}, #{sizeBytes}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
         )
     </insert>
 
     <select id="findByIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </select>
+
+    <select id="findByIdAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
         SELECT * FROM course_materials WHERE material_id = #{materialId} AND user_id = #{userId}
     </select>
 
+    <!--
+      §4 호환: statement id와 시그니처(courseId, userId)는 그대로 둔다 — 단계 3의 "기존 API
+      겉보기 무변화" 게이트가 이 이름에 걸려 있다. 내부만 course_id 직접 참조에서
+      material_links JOIN으로 바뀐다.
+    -->
     <select id="findByCourseIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        JOIN material_links l ON l.material_id = cm.material_id AND l.course_id = #{courseId}
+        WHERE cm.user_id = #{userId} AND cm.status = 'ACTIVE'
+        ORDER BY cm.created_at DESC
+    </select>
+
+    <select id="findAllByUserId" resultMap="courseMaterialResultMap">
         SELECT * FROM course_materials
-        WHERE course_id = #{courseId} AND user_id = #{userId}
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
         ORDER BY created_at DESC
     </select>
 
-    <update id="updateExtractionResult">
+    <update id="markDeleted">
         UPDATE course_materials
-        SET extraction_status = #{extractionStatus},
-            extracted_text    = #{extractedText},
-            extraction_error  = #{extractionError}
-        WHERE material_id = #{materialId}
+        SET status = 'DELETED', extracted_text = NULL
+        WHERE material_id = #{materialId} AND user_id = #{userId}
     </update>
 
 </mapper>

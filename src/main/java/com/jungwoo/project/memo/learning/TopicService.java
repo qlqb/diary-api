@@ -45,12 +45,18 @@ public class TopicService {
      * Material Agent 분석 결과(수정본 포함)를 course_topics로 확정 삽입한다.
      * source_type이 SOURCE/AI_DERIVED가 아니면(모델이 스키마를 어겼거나 사용자 수정이 잘못된 경우)
      * AI_DERIVED로 보수적으로 처리한다 — "원문에 있었다"고 잘못 표시하는 쪽보다 안전하다.
+     *
+     * 이 메서드는 append-only다 — 기존 topic을 지우거나 병합하지 않는다. 그래서 루트
+     * order_index를 0부터 다시 매기면 두 번째 자료를 apply한 순간 기존 목차와 순서가 섞인다
+     * (트리 정렬 기준이 order_index 하나뿐이다). 기존 최대값 다음부터 이어 붙인다.
+     * 자식은 부모마다 새 카운터를 쓰고 부모 자체가 새로 생기므로 겹칠 대상이 없다.
      */
     @Transactional
     public int applyAnalyzedTopics(Long userId, Long courseId, Long materialId, List<TopicDraft> drafts) {
         courseService.getOwned(userId, courseId);
         int[] count = {0};
-        int[] orderIndex = {0};
+        Integer maxRootOrder = courseTopicMapper.findMaxRootOrderIndex(courseId, userId);
+        int[] orderIndex = {maxRootOrder == null ? 0 : maxRootOrder + 1};
         for (TopicDraft draft : drafts) {
             insertTopicTree(userId, courseId, materialId, null, draft, orderIndex, count);
         }

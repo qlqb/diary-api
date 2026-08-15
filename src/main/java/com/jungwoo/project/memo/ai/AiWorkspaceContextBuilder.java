@@ -13,8 +13,11 @@ import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.material.CourseMaterialMapper;
+import com.jungwoo.project.memo.material.MaterialLinkMapper;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.ExtractionStatus;
+import com.jungwoo.project.memo.material.domain.MaterialLink;
+import com.jungwoo.project.memo.material.domain.MaterialType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -70,6 +73,7 @@ public class AiWorkspaceContextBuilder {
     private final CourseNoteService courseNoteService;
     private final TopicService topicService;
     private final CourseMaterialMapper courseMaterialMapper;
+    private final MaterialLinkMapper materialLinkMapper;
     private final ExecutionItemMapper executionItemMapper;
 
     /**
@@ -135,9 +139,15 @@ public class AiWorkspaceContextBuilder {
         if (materials.isEmpty()) {
             sb.append("올린 자료: 없음 (자료가 없어도 정상이다. 자료가 없다는 이유로 상담을 미루지 마라)\n");
         } else {
+            // 자료 성격은 자료가 아니라 이 프로젝트의 링크가 갖는다 — 같은 파일이라도
+            // 프로젝트마다 다른 성격일 수 있다.
+            Map<Long, MaterialType> typeByMaterialId = materialLinkMapper.findByCourseIdAndUserId(courseId, userId)
+                    .stream()
+                    .collect(Collectors.toMap(MaterialLink::getMaterialId, MaterialLink::getMaterialType,
+                            (a, b) -> a));
             sb.append("올린 자료 ").append(materials.size()).append("개: ");
             sb.append(materials.stream()
-                    .map(m -> m.getOriginalFilename() + "(" + m.getMaterialType() + ")")
+                    .map(m -> m.getOriginalFilename() + "(" + typeByMaterialId.get(m.getMaterialId()) + ")")
                     .collect(Collectors.joining(", ")));
             sb.append('\n');
         }

@@ -46,4 +46,13 @@
         <foreach collection="topicIds" item="id" open="(" separator="," close=")">#{id}</foreach>
     </select>
 
+    <!--
+      ARCHIVED까지 포함해서 센다. 보관된 항목도 order_index를 점유하고 있어서, 그걸 빼고
+      세면 새 루트가 기존 번호와 겹친다.
+    -->
+    <select id="findMaxRootOrderIndex" resultType="java.lang.Integer">
+        SELECT MAX(order_index) FROM course_topics
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND parent_topic_id IS NULL
+    </select>
+
 </mapper>

@@ -48,8 +48,6 @@
                JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
               WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
                 AND p.status = 'LEARNED') AS learnedTopicCount,
-            (SELECT COUNT(*) FROM course_materials m
-              WHERE m.course_id = c.course_id AND m.user_id = c.user_id) AS materialCount,
             (SELECT t.title FROM course_topics t
                JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
               WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'

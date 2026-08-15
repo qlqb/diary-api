@@ -62,6 +62,7 @@ public enum ErrorCode {
     COURSE_TOPIC_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_014", "학습 항목을 찾을 수 없습니다"),
     STUDY_RECOMMENDATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_015", "학습 추천을 찾을 수 없습니다"),
     LEARNING_CONVERSATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_016", "학습 상담을 찾을 수 없습니다"),
+    MATERIAL_NOT_LINKED_TO_COURSE(HttpStatus.NOT_FOUND, "E404_017", "이 프로젝트에 연결되지 않은 자료입니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
