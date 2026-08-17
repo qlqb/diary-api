@@ -6,6 +6,7 @@ import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.ExtractionStatus;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
@@ -166,6 +167,23 @@ class MaterialServiceTest {
         verify(materialLinkMapper).insert(captor.capture());
         assertThat(captor.getValue().getMaterialType()).isEqualTo(MaterialType.OTHER);
         assertThat(response.getCourseTitle()).isEqualTo("자료구조");
+    }
+
+    @Test
+    void addLink_rejectsWhenCourseIsArchived() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID))
+                .thenReturn(CourseMaterial.builder().materialId(MATERIAL_ID).build());
+        when(courseService.getOwned(USER_ID, COURSE_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).status(CourseStatus.ARCHIVED).build());
+
+        // 후보 목록(GET /courses)은 이미 ACTIVE만 돌려주지만, courseId를 직접 지정해 호출하는
+        // 경로까지 막아야 "보관한 프로젝트에는 새로 연결할 수 없다"가 실제로 지켜진다.
+        assertThatThrownBy(() -> service.addLink(USER_ID, MATERIAL_ID, COURSE_ID, MaterialType.OTHER))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COURSE_ARCHIVED));
+
+        verify(materialLinkMapper, never()).findByMaterialIdAndCourseIdAndUserId(any(), any(), any());
+        verify(materialLinkMapper, never()).insert(any());
     }
 
     @Test

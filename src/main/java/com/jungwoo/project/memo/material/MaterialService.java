@@ -6,6 +6,7 @@ import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialStatus;
@@ -141,11 +142,20 @@ public class MaterialService {
         fileStorageService.deleteQuietly(materialId, material.getStoragePath());
     }
 
-    /** 자료를 프로젝트에 연결한다. materialType은 업로드가 아니라 이 시점에 정해진다. */
+    /**
+     * 자료를 프로젝트에 연결한다. materialType은 업로드가 아니라 이 시점에 정해진다.
+     *
+     * 보관(ARCHIVED)된 프로젝트는 연결 후보 목록에서부터 빠지지만(GET /courses가 ACTIVE만
+     * 돌려준다), 그건 UI 편의일 뿐이고 여기서도 다시 막는다 — courseId를 직접 지정해 호출하는
+     * 경로까지 막아야 "보관한 프로젝트에 새로 연결할 수 없다"는 규칙이 실제로 지켜진다.
+     */
     @Transactional
     public MaterialLinkResponse addLink(Long userId, Long materialId, Long courseId, MaterialType materialType) {
         getActiveOwned(userId, materialId);
         Course course = courseService.getOwned(userId, courseId);
+        if (course.getStatus() == CourseStatus.ARCHIVED) {
+            throw new ConflictException(ErrorCode.COURSE_ARCHIVED);
+        }
         if (materialLinkMapper.findByMaterialIdAndCourseIdAndUserId(materialId, courseId, userId) != null) {
             throw new ConflictException(ErrorCode.MATERIAL_ALREADY_LINKED_TO_COURSE);
         }

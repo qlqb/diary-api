@@ -74,6 +74,7 @@ public enum ErrorCode {
     CONTEXT_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_007", "이미 처리된 컨텍스트 변경 후보입니다"),
     MATERIAL_ALREADY_LINKED_TO_COURSE(HttpStatus.CONFLICT, "E409_009", "이미 이 프로젝트에 연결된 자료입니다"),
     CONTEXT_APPLY_CONFLICT(HttpStatus.CONFLICT, "E409_008", "컨텍스트 상태가 그 사이 바뀌어 적용할 수 없습니다"),
+    COURSE_ARCHIVED(HttpStatus.CONFLICT, "E409_010", "보관된 프로젝트에는 새로 연결할 수 없습니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

@@ -18,10 +18,16 @@ public interface MaterialLinkMapper {
     /** 그 프로젝트에 연결된 링크 전부. materialId -> materialType 매핑을 만들 때 쓴다. */
     List<MaterialLink> findByCourseIdAndUserId(@Param("courseId") Long courseId, @Param("userId") Long userId);
 
-    /** 이 자료가 걸려 있는 연결 전부. 자료 상세의 "연결된 프로젝트"에 쓴다. */
+    /**
+     * 이 자료가 걸려 있는 연결 중 ACTIVE 프로젝트로의 연결만. 자료 상세의 "연결된 프로젝트"에 쓴다.
+     * 보관된 프로젝트로의 연결은 행이 남아있어도(보관 해제 시 복원) 여기서는 보이지 않는다.
+     */
     List<MaterialLink> findByMaterialIdAndUserId(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
-    /** 사용자의 모든 링크. 전역 자료 목록에서 자료별 연결을 한 번에 채울 때 쓴다. */
+    /**
+     * 사용자의 링크 중 ACTIVE 프로젝트로의 연결만. 전역 자료 목록에서 자료별 연결을 한 번에
+     * 채울 때 쓴다 — 이래야 "ARCHIVED 링크만 남은 자료"가 연결 안 된 자료처럼 보인다.
+     */
     List<MaterialLink> findByUserId(@Param("userId") Long userId);
 
     /** 연결 해제. 자료 원본·분석 이력·확정된 topic/note는 건드리지 않는다. */
