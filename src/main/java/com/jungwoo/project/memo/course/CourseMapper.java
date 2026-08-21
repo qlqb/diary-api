@@ -14,8 +14,11 @@ public interface CourseMapper {
 
     Course findByIdAndUserId(@Param("courseId") Long courseId, @Param("userId") Long userId);
 
-    /** ACTIVE 프로젝트만. 보관(ARCHIVED)한 프로젝트는 목록에 나타나지 않는다. */
-    List<Course> findByUserId(@Param("userId") Long userId);
+    /**
+     * 그 상태의 프로젝트만. 기본 목록은 ACTIVE로 부르고, 보관함은 ARCHIVED로 부른다 —
+     * 보관은 숨김이지 삭제가 아니므로 행은 항상 그대로 있고 어느 쪽으로 읽느냐만 달라진다.
+     */
+    List<Course> findByUserIdAndStatus(@Param("userId") Long userId, @Param("status") String status);
 
     /**
      * 여러 프로젝트를 한 번에. 보관한 프로젝트도 포함한다 — 자료에 붙은 연결의 제목을
@@ -43,6 +46,7 @@ public interface CourseMapper {
                        @Param("title") String title,
                        @Param("groupLabel") String groupLabel);
 
+    /** 보관/복원 공용. 행을 지우거나 되살리는 것이 아니라 status만 오간다. */
     void updateStatus(@Param("courseId") Long courseId,
                        @Param("userId") Long userId,
                        @Param("status") String status);

@@ -202,6 +202,59 @@ class MaterialServiceTest {
     }
 
     @Test
+    void updateLinkType_changesOnlyTheLinkNotTheMaterial() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID))
+                .thenReturn(CourseMaterial.builder().materialId(MATERIAL_ID).build());
+        when(courseService.getOwned(USER_ID, COURSE_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).title("자료구조").status(CourseStatus.ACTIVE).build());
+        when(materialLinkMapper.findByMaterialIdAndCourseIdAndUserId(MATERIAL_ID, COURSE_ID, USER_ID))
+                .thenReturn(MaterialLink.builder().materialId(MATERIAL_ID).courseId(COURSE_ID)
+                        .materialType(MaterialType.OTHER).build());
+
+        var response = service.updateLinkType(USER_ID, MATERIAL_ID, COURSE_ID, MaterialType.SYLLABUS);
+
+        // 역할은 링크의 속성이다. 같은 파일이 다른 프로젝트에서 갖는 역할은 그대로 있어야 하므로
+        // 자료 본체(course_materials)는 건드리지 않는다.
+        verify(materialLinkMapper).updateMaterialType(MATERIAL_ID, COURSE_ID, USER_ID, MaterialType.SYLLABUS);
+        verify(materialLinkMapper, never()).delete(any(), any(), any());
+        verify(materialLinkMapper, never()).insert(any());
+        assertThat(response.getMaterialType()).isEqualTo(MaterialType.SYLLABUS);
+        assertThat(response.getCourseTitle()).isEqualTo("자료구조");
+    }
+
+    @Test
+    void updateLinkType_rejectsWhenCourseIsArchived() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID))
+                .thenReturn(CourseMaterial.builder().materialId(MATERIAL_ID).build());
+        when(courseService.getOwned(USER_ID, COURSE_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).status(CourseStatus.ARCHIVED).build());
+
+        // addLink가 이미 ARCHIVED로의 신규 연결을 막고 있다. 역할 변경만 열어두면
+        // "보관된 프로젝트는 읽기 전용"이 반쪽이 된다.
+        assertThatThrownBy(() -> service.updateLinkType(USER_ID, MATERIAL_ID, COURSE_ID, MaterialType.SYLLABUS))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COURSE_ARCHIVED));
+
+        verify(materialLinkMapper, never()).updateMaterialType(any(), any(), any(), any());
+    }
+
+    @Test
+    void updateLinkType_throwsWhenNotLinked() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID))
+                .thenReturn(CourseMaterial.builder().materialId(MATERIAL_ID).build());
+        when(courseService.getOwned(USER_ID, COURSE_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).status(CourseStatus.ACTIVE).build());
+        when(materialLinkMapper.findByMaterialIdAndCourseIdAndUserId(MATERIAL_ID, COURSE_ID, USER_ID))
+                .thenReturn(null);
+
+        assertThatThrownBy(() -> service.updateLinkType(USER_ID, MATERIAL_ID, COURSE_ID, MaterialType.SYLLABUS))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        verify(materialLinkMapper, never()).updateMaterialType(any(), any(), any(), any());
+    }
+
+    @Test
     void getActiveOwned_doesNotReturnDeletedMaterial() {
         when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(null);
 

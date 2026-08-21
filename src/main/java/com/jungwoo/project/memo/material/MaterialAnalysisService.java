@@ -34,7 +34,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 /**
  * Material Agent: 업로드된 자료(강의계획서/교재목차/교수자료)에서 실제로 무엇이 적혀 있는지
@@ -222,12 +224,52 @@ public class MaterialAnalysisService {
         return toResponse(getOwned(userId, analysisId), null);
     }
 
+    /**
+     * 전역 자료 상세의 분석 이력: 이 자료가 지금까지 어느 프로젝트에서 어떻게 해석됐는지 전부.
+     *
+     * 프로젝트 경로와 정반대로 맥락을 좁히지 않는다 — 대신 각 행에 courseId/courseTitle을 붙여
+     * 어느 맥락의 해석인지 화면에서 바로 읽히게 한다. 프로젝트명이 없으면 "분석 3건"만 보이고
+     * 프로젝트 화면에서 없앤 혼란이 여기서 그대로 재발한다.
+     */
     @Transactional(readOnly = true)
     public List<MaterialAnalysisResponse> listByMaterial(Long userId, Long materialId) {
         materialService.getActiveOwned(userId, materialId);
-        return analysisMapper.findByMaterialIdAndUserId(materialId, userId).stream()
-                .map(a -> toResponse(a, null))
+        List<CourseMaterialAnalysis> analyses = analysisMapper.findByMaterialIdAndUserId(materialId, userId);
+        Map<Long, String> titleByCourseId = courseTitles(userId, analyses);
+        return analyses.stream()
+                .map(a -> toResponse(a, null, titleByCourseId.get(a.getCourseId())))
                 .toList();
+    }
+
+    /**
+     * 프로젝트 화면의 분석 이력: 지금 이 프로젝트 맥락에서 만들어진 것만.
+     *
+     * courseId로 WHERE만 좁히지 않고 analyze()와 같은 검증 순서를 밟는다. 필터만 걸면
+     * 연결되지 않은 자료를 조회했을 때 빈 배열이 200으로 나가는데, 그건 "분석이 없다"로
+     * 읽히지만 실제로는 "이 자료는 이 프로젝트 것이 아니다"이기 때문이다.
+     */
+    @Transactional(readOnly = true)
+    public List<MaterialAnalysisResponse> listByMaterialInCourse(Long userId, Long courseId, Long materialId) {
+        Course course = courseService.getOwned(userId, courseId);
+        materialService.getActiveOwned(userId, materialId);
+        materialService.getRequiredLink(userId, materialId, courseId);
+        return analysisMapper.findByMaterialIdAndCourseIdAndUserId(materialId, courseId, userId).stream()
+                .map(a -> toResponse(a, null, course.getTitle()))
+                .toList();
+    }
+
+    /** 분석에 붙일 프로젝트명. DB에 중복 저장하지 않고 응답 조립 시에만 채운다. */
+    private Map<Long, String> courseTitles(Long userId, List<CourseMaterialAnalysis> analyses) {
+        List<Long> courseIds = analyses.stream()
+                .map(CourseMaterialAnalysis::getCourseId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+        if (courseIds.isEmpty()) {
+            return Map.of();
+        }
+        return courseMapper.findByIdsAndUserId(courseIds, userId).stream()
+                .collect(Collectors.toMap(Course::getCourseId, Course::getTitle, (a, b) -> a));
     }
 
     @Transactional
@@ -285,6 +327,7 @@ public class MaterialAnalysisService {
         return MaterialAnalysisResponse.builder()
                 .analysisId(response.getAnalysisId())
                 .courseId(response.getCourseId())
+                .courseTitle(course.getTitle())
                 .materialId(response.getMaterialId())
                 .status(response.getStatus())
                 .payload(response.getPayload())
@@ -424,6 +467,12 @@ public class MaterialAnalysisService {
     }
 
     private MaterialAnalysisResponse toResponse(CourseMaterialAnalysis analysis, MaterialAnalysisPayload payloadOverride) {
+        return toResponse(analysis, payloadOverride, null);
+    }
+
+    private MaterialAnalysisResponse toResponse(CourseMaterialAnalysis analysis,
+                                                 MaterialAnalysisPayload payloadOverride,
+                                                 String courseTitle) {
         MaterialAnalysisPayload payload = payloadOverride;
         if (payload == null) {
             String json = analysis.getEditedJson() != null ? analysis.getEditedJson() : analysis.getAnalysisJson();
@@ -432,6 +481,7 @@ public class MaterialAnalysisService {
         return MaterialAnalysisResponse.builder()
                 .analysisId(analysis.getAnalysisId())
                 .courseId(analysis.getCourseId())
+                .courseTitle(courseTitle)
                 .materialId(analysis.getMaterialId())
                 .status(analysis.getStatus())
                 .payload(payload)

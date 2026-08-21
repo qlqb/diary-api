@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.material.dto.MaterialDetailResponse;
 import com.jungwoo.project.memo.material.dto.MaterialLinkCreateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialLinkResponse;
+import com.jungwoo.project.memo.material.dto.MaterialLinkTypeUpdateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import com.jungwoo.project.memo.material.dto.MaterialStoreItemResponse;
 import jakarta.validation.Valid;
@@ -25,6 +26,7 @@ import java.util.List;
  * GET    /api/materials/{id}                   단건 + 연결 목록 + 분석 이력
  * DELETE /api/materials/{id}                   자료 삭제 (원본 파일까지)
  * POST   /api/materials/{id}/links             프로젝트에 연결. 이때 materialType이 정해진다
+ * PATCH  /api/materials/{id}/links/{courseId}   그 프로젝트에서의 역할(materialType)만 변경
  * DELETE /api/materials/{id}/links/{courseId}  연결 해제만 (자료는 남는다)
  *
  * 프로젝트 화면의 업로드/목록은 기존 /api/courses/{courseId}/materials가 그대로 담당한다.
@@ -92,6 +94,23 @@ public class MaterialStoreController {
     ) {
         return ResponseEntity.status(HttpStatus.CREATED).body(materialService.addLink(
                 principal.getUserId(), materialId, request.getCourseId(), request.getMaterialType()));
+    }
+
+    /**
+     * 이 프로젝트에서 이 자료가 맡는 역할을 바꾼다.
+     *
+     * 이 경로가 없으면 역할을 고치는 유일한 방법이 "연결 해제 후 재연결"이 되는데, 그건
+     * linked_at을 잃고 잠깐이지만 연결이 끊긴 상태를 만든다. 성격 변경은 별도 액션이다.
+     */
+    @PatchMapping("/{materialId}/links/{courseId}")
+    public ResponseEntity<MaterialLinkResponse> updateLinkType(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long materialId,
+            @PathVariable Long courseId,
+            @Valid @RequestBody MaterialLinkTypeUpdateRequest request
+    ) {
+        return ResponseEntity.ok(materialService.updateLinkType(
+                principal.getUserId(), materialId, courseId, request.getMaterialType()));
     }
 
     /** 연결만 끊는다. 자료도, 다른 프로젝트 연결도, 이미 적용한 학습 내용도 그대로 남는다. */

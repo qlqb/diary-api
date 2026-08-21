@@ -48,6 +48,12 @@
         ORDER BY ml.linked_at ASC
     </select>
 
+    <update id="updateMaterialType">
+        UPDATE material_links
+        SET material_type = #{materialType}
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
     <delete id="delete">
         DELETE FROM material_links
         WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}

@@ -31,8 +31,8 @@
         SELECT * FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
     </select>
 
-    <select id="findByUserId" resultMap="courseResultMap">
-        SELECT * FROM courses WHERE user_id = #{userId} AND status = 'ACTIVE' ORDER BY created_at DESC
+    <select id="findByUserIdAndStatus" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE user_id = #{userId} AND status = #{status} ORDER BY created_at DESC
     </select>
 
     <select id="findByIdsAndUserId" resultMap="courseResultMap">

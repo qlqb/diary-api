@@ -52,7 +52,12 @@ public class CourseService {
         return get(userId, courseId);
     }
 
-    /** 보관. 삭제하지 않는다 — 지금까지 쌓인 자료·대화·실행 기록을 잃지 않기 위해서다. */
+    /**
+     * 보관. 삭제하지 않는다 — 지금까지 쌓인 자료·대화·실행 기록을 잃지 않기 위해서다.
+     *
+     * status 한 칸만 내린다. course_topics·material_links·course_material_analyses는 전부
+     * 그대로 두고, 조회하는 쪽에서만 걸러낸다. 그래서 복원도 status를 되돌리는 것으로 끝난다.
+     */
     @Transactional
     public void archive(Long userId, Long courseId) {
         getOwned(userId, courseId);
@@ -60,11 +65,23 @@ public class CourseService {
         log.info("프로젝트 보관: userId={}, courseId={}", userId, courseId);
     }
 
+    /**
+     * 보관 해제. 자료 연결을 되살리는 별도 복구 로직은 없다 — material_links 행을 애초에
+     * 지우지 않고 조회에서만 숨겼기 때문에, ACTIVE로 되돌리는 순간 연결이 저절로 다시 보인다.
+     */
+    @Transactional
+    public void restore(Long userId, Long courseId) {
+        getOwned(userId, courseId);
+        courseMapper.updateStatus(courseId, userId, CourseStatus.ACTIVE.name());
+        log.info("프로젝트 복원: userId={}, courseId={}", userId, courseId);
+    }
+
+    /** 기본은 ACTIVE 목록. 보관함 화면만 ARCHIVED를 넘겨 같은 경로로 읽는다. */
     @Transactional(readOnly = true)
-    public List<CourseResponse> list(Long userId) {
+    public List<CourseResponse> list(Long userId, CourseStatus status) {
         Map<Long, CourseSummaryCounts> countsById = courseMapper.findSummaryCounts(userId, null).stream()
                 .collect(Collectors.toMap(CourseSummaryCounts::getCourseId, Function.identity()));
-        return courseMapper.findByUserId(userId).stream()
+        return courseMapper.findByUserIdAndStatus(userId, status.name()).stream()
                 .map(course -> CourseResponse.of(course, countsById.get(course.getCourseId())))
                 .toList();
     }

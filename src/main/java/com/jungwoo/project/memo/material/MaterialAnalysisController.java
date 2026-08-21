@@ -16,7 +16,7 @@ import java.util.List;
  * Material Agent 분석 draft/review/apply 컨트롤러.
  *
  * POST /api/courses/{courseId}/materials/{materialId}/analyses          분석 실행(draft 생성)
- * GET  /api/courses/{courseId}/materials/{materialId}/analyses          해당 자료의 분석 이력
+ * GET  /api/courses/{courseId}/materials/{materialId}/analyses          이 프로젝트 맥락의 분석 이력
  * GET  /api/material-analyses/{analysisId}                              단건 조회
  * PUT  /api/material-analyses/{analysisId}                              사용자 검토/수정 저장
  * POST /api/material-analyses/{analysisId}/apply                        확정 반영
@@ -40,13 +40,18 @@ public class MaterialAnalysisController {
                 .body(materialAnalysisService.analyze(principal.getUserId(), courseId, materialId));
     }
 
+    /**
+     * 이 프로젝트 맥락의 분석만 돌려준다. 같은 자료가 다른 프로젝트에도 걸려 있으면 그쪽
+     * 해석은 여기 나오지 않는다 — 전체 이력은 전역 자료 상세(GET /api/materials/{id})가 맡는다.
+     */
     @GetMapping("/api/courses/{courseId}/materials/{materialId}/analyses")
     public ResponseEntity<List<MaterialAnalysisResponse>> listByMaterial(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable Long courseId,
             @PathVariable Long materialId
     ) {
-        return ResponseEntity.ok(materialAnalysisService.listByMaterial(principal.getUserId(), materialId));
+        return ResponseEntity.ok(
+                materialAnalysisService.listByMaterialInCourse(principal.getUserId(), courseId, materialId));
     }
 
     @GetMapping("/api/material-analyses/{analysisId}")

@@ -36,6 +36,16 @@
         ORDER BY created_at DESC
     </select>
 
+    <!--
+      프로젝트 맥락 조회. WHERE에 course_id를 더하는 것만으로는 부족해서 서비스에서 링크
+      검증을 먼저 한다 — 연결되지 않은 자료면 빈 배열이 아니라 MATERIAL_NOT_LINKED_TO_COURSE다.
+    -->
+    <select id="findByMaterialIdAndCourseIdAndUserId" resultMap="analysisResultMap">
+        SELECT * FROM course_material_analyses
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+        ORDER BY created_at DESC
+    </select>
+
     <update id="updateEditedJson">
         UPDATE course_material_analyses SET edited_json = #{editedJson} WHERE analysis_id = #{analysisId}
     </update>

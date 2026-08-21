@@ -88,6 +88,14 @@ class MaterialAnalysisServiceTest {
                 .build();
     }
 
+    private CourseMaterialAnalysis analysis(Long courseId) {
+        return CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(courseId).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.APPLIED)
+                .analysisJson("{}")
+                .build();
+    }
+
     @Test
     void analyze_throwsMaterialExtractionNotReady_whenTextNotExtracted() {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
@@ -138,6 +146,60 @@ class MaterialAnalysisServiceTest {
         // DRAFT 저장만 하고, 확정 topic 트리에는 전혀 손대지 않는다.
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
         verify(courseMapper, never()).updateTextbookInfo(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void listByMaterialInCourse_throwsMaterialNotLinked_ratherThanReturningEmptyList() {
+        when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenThrow(new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        // 빈 배열 200은 "분석이 없다"로 읽힌다. 실제로는 "이 자료는 이 프로젝트 것이 아니다"이므로
+        // analyze()/apply()와 같은 검증 순서를 밟아 같은 에러로 막는다.
+        assertThatThrownBy(() -> service.listByMaterialInCourse(USER_ID, COURSE_ID, MATERIAL_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
+
+        verify(analysisMapper, never()).findByMaterialIdAndCourseIdAndUserId(any(), any(), any());
+        verify(analysisMapper, never()).findByMaterialIdAndUserId(any(), any());
+    }
+
+    @Test
+    void listByMaterialInCourse_readsOnlyThisCourseContext() {
+        when(courseService.getOwned(USER_ID, COURSE_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).title("자료구조").build());
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenReturn(link(MaterialType.SYLLABUS));
+        when(analysisMapper.findByMaterialIdAndCourseIdAndUserId(MATERIAL_ID, COURSE_ID, USER_ID))
+                .thenReturn(List.of(analysis(COURSE_ID)));
+
+        List<MaterialAnalysisResponse> result = service.listByMaterialInCourse(USER_ID, COURSE_ID, MATERIAL_ID);
+
+        // 같은 자료가 다른 프로젝트에도 걸려 있어도 그쪽 해석은 섞이지 않는다.
+        assertThat(result).singleElement()
+                .satisfies(r -> assertThat(r.getCourseId()).isEqualTo(COURSE_ID));
+        verify(analysisMapper, never()).findByMaterialIdAndUserId(any(), any());
+    }
+
+    @Test
+    void listByMaterial_returnsEveryContextWithProjectTitleAttached() {
+        Long otherCourseId = 11L;
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(analysisMapper.findByMaterialIdAndUserId(MATERIAL_ID, USER_ID))
+                .thenReturn(List.of(analysis(COURSE_ID), analysis(otherCourseId)));
+        when(courseMapper.findByIdsAndUserId(List.of(COURSE_ID, otherCourseId), USER_ID))
+                .thenReturn(List.of(
+                        Course.builder().courseId(COURSE_ID).title("자료구조").build(),
+                        Course.builder().courseId(otherCourseId).title("빅데이터분석").build()));
+
+        List<MaterialAnalysisResponse> result = service.listByMaterial(USER_ID, MATERIAL_ID);
+
+        // 전역 상세는 맥락을 좁히지 않는 대신 각 행이 어느 프로젝트의 해석인지 말해야 한다 —
+        // 프로젝트명이 없으면 "분석 2건"만 보이고 없앤 혼란이 여기서 재발한다.
+        assertThat(result).extracting(MaterialAnalysisResponse::getCourseTitle)
+                .containsExactly("자료구조", "빅데이터분석");
     }
 
     @Test

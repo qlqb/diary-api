@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.course.dto.CourseNoteResponse;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
@@ -295,7 +296,7 @@ public class AiWorkspaceContextBuilder {
         if (!anyCourse) {
             return Map.of();
         }
-        return courseService.list(userId).stream()
+        return courseService.list(userId, CourseStatus.ACTIVE).stream()
                 .collect(Collectors.toMap(c -> c.getCourseId(), c -> c.getTitle(), (a, b) -> a));
     }
 

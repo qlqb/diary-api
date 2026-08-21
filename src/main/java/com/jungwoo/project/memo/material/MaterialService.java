@@ -170,6 +170,29 @@ public class MaterialService {
     }
 
     /**
+     * 링크의 역할(materialType)만 바꾼다. addLink와 같은 규칙을 따른다 — 자료 ACTIVE,
+     * 프로젝트 ACTIVE, 링크 존재.
+     *
+     * 보관된 프로젝트를 여기서도 막는 이유: addLink가 이미 ARCHIVED 프로젝트로의 신규 연결을
+     * 409로 막고 있는데 역할 변경만 열어두면 "보관된 프로젝트는 읽기 전용"이라는 규칙이
+     * 반쪽이 된다. 다시 꺼낸(복원한) 뒤에는 그대로 바꿀 수 있다.
+     */
+    @Transactional
+    public MaterialLinkResponse updateLinkType(Long userId, Long materialId, Long courseId, MaterialType materialType) {
+        getActiveOwned(userId, materialId);
+        Course course = courseService.getOwned(userId, courseId);
+        if (course.getStatus() == CourseStatus.ARCHIVED) {
+            throw new ConflictException(ErrorCode.COURSE_ARCHIVED);
+        }
+        MaterialLink link = getRequiredLink(userId, materialId, courseId);
+        materialLinkMapper.updateMaterialType(materialId, courseId, userId, materialType);
+        link.setMaterialType(materialType);
+        log.info("자료 역할 변경: userId={}, materialId={}, courseId={}, type={}",
+                userId, materialId, courseId, materialType);
+        return MaterialLinkResponse.of(link, course.getTitle());
+    }
+
+    /**
      * 연결 해제. 이 프로젝트에서 더 이상 이 자료를 참고하지 않겠다는 뜻일 뿐이다.
      *
      * 자료 원본도, 다른 프로젝트 연결도, 분석 이력도, 이미 apply된 course_topics /
