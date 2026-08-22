@@ -73,11 +73,26 @@ public class ExecutionItemService {
      */
     @Transactional(readOnly = true)
     public List<ExecutionItemResponse> getByDateRange(Long userId, LocalDate startDate, LocalDate endDate) {
+        return getByDateRange(userId, startDate, endDate, false);
+    }
+
+    /**
+     * includeUnscheduled=true면 아직 날짜를 정하지 않은 조각도 함께 돌려준다 — 그 조각의
+     * planning_start/end_date가 조회 범위와 겹치는 경우다.
+     *
+     * 기본값을 false로 두는 것은 주간 시간표 때문이다. 그 화면은 날짜 칸에 그리므로 날짜 없는
+     * 조각이 섞이면 놓을 자리가 없다. 계획 화면만 true로 부른다.
+     */
+    @Transactional(readOnly = true)
+    public List<ExecutionItemResponse> getByDateRange(
+            Long userId, LocalDate startDate, LocalDate endDate, boolean includeUnscheduled) {
         if (endDate.isBefore(startDate)) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
-        return executionItemMapper.findByUserIdAndDateRange(userId, startDate, endDate)
-                .stream()
+        List<ExecutionItem> items = includeUnscheduled
+                ? executionItemMapper.findByUserIdAndPlanningRange(userId, startDate, endDate)
+                : executionItemMapper.findByUserIdAndDateRange(userId, startDate, endDate);
+        return items.stream()
                 .map(ExecutionItemResponse::from)
                 .toList();
     }

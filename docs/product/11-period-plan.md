@@ -342,9 +342,35 @@ executionItemId가 없는 항목    회고에서 대조할 키가 없어 영원�
 화면이 있다.
 
 ```text
-GET /api/execution-items/range?startDate=&endDate=                          기존
-GET /api/execution-items/range?startDate=&endDate=&includeUnscheduled=true  신규
+GET /api/execution-items/range?startDate=&endDate=                          기존(기본값 false)
+GET /api/execution-items/range?startDate=&endDate=&includeUnscheduled=true  계획 화면
 ```
+
+### 4-1. 겹침 판정은 네 가지 모양을 다 잡아야 한다
+
+```text
+planning_start <= endDate AND planning_end >= startDate
+```
+
+"계획 기간이 조회 범위 안에 들어온다"가 아니라 **"두 구간이 조금이라도 만난다"**이다.
+조회 범위를 2026-08-24~30이라 할 때:
+
+| 모양 | 계획 기간 | 잡혀야 하나 |
+|---|---|---|
+| 안에 들어옴 | 08/26~08/28 | 예 |
+| 범위를 완전히 포함 | 08/01~08/31 | 예 ← 놓치기 쉽다 |
+| 앞쪽만 걸침 | 08/20~08/25 | 예 |
+| 뒤쪽만 걸침 | 08/29~09/05 | 예 |
+| 하루만 닿음 | 08/10~**08/24** | 예 |
+| 하루 차이로 빗나감 | 08/10~08/23 | 아니오 |
+| planning_* 없음 | — | 아니오 (§2-5 (나) 미분류) |
+
+두 번째를 놓치면 "8월 한 달 계획"이 이번 주 화면에서 통째로 사라진다. 조건을 범위 포함으로
+잘못 쓰면 정확히 그 케이스만 빠지고 나머지는 다 맞게 동작해서, 눈으로는 한참 못 찾는다.
+
+`ExecutionItemPlanningRangeMapperTest`가 위 일곱 줄을 그대로 검증하고, **같은 행을 기존
+질의에 물어 안 잡히는 것까지 확인한다.** 신규 질의가 잡는 것만 보면 주간 시간표에 날짜 없는
+조각이 흘러드는 회귀를 못 잡는다.
 
 ---
 

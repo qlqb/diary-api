@@ -20,7 +20,9 @@ import java.util.List;
  * 실행 조각 컨트롤러.
  *
  * GET    /api/execution-items?date=            날짜별 조회
- * GET    /api/execution-items/range?startDate=&endDate= 날짜 범위 조회 (주간 시간표용)
+ * GET    /api/execution-items/range?startDate=&endDate=[&includeUnscheduled=] 날짜 범위 조회
+ *        includeUnscheduled=false(기본): 배치된 항목만 — 주간 시간표
+ *        includeUnscheduled=true : 계획 기간이 겹치는 미배치 항목도 포함 — 계획 화면
  * GET    /api/execution-items/pending?beforeDate= pending 조회
  * GET    /api/execution-items/by-course/{courseId} 프로젝트의 관련 실행
  * GET    /api/execution-items/records?startDate=&endDate= 실제로 일어난 결과(기록 화면)
@@ -49,12 +51,14 @@ public class ExecutionItemController {
     public ResponseEntity<List<ExecutionItemResponse>> getByDateRange(
             @AuthenticationPrincipal UserPrincipal principal,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
-            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,
+            @RequestParam(defaultValue = "false") boolean includeUnscheduled
     ) {
-        log.info("GET /api/execution-items/range - userId={}, startDate={}, endDate={}",
-                principal.getUserId(), startDate, endDate);
+        log.info("GET /api/execution-items/range - userId={}, startDate={}, endDate={}, includeUnscheduled={}",
+                principal.getUserId(), startDate, endDate, includeUnscheduled);
 
-        return ResponseEntity.ok(executionItemService.getByDateRange(principal.getUserId(), startDate, endDate));
+        return ResponseEntity.ok(executionItemService.getByDateRange(
+                principal.getUserId(), startDate, endDate, includeUnscheduled));
     }
 
     @GetMapping("/pending")

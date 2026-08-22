@@ -36,6 +36,24 @@ public interface ExecutionItemMapper {
     );
 
     /**
+     * 날짜 범위 + 계획 기간 조회. findByUserIdAndDateRange와 달리 아직 날짜를 정하지 않은
+     * (UNSCHEDULED) 조각도 함께 잡는다 — 그 조각의 planning_start/end_date가 조회 범위와
+     * 조금이라도 겹치면 포함한다.
+     *
+     * 둘을 하나로 합치지 않는 이유: 주간 시간표는 "그 칸에 놓인 것"만 그려야 하므로 날짜 없는
+     * 조각이 섞이면 그릴 자리가 없다. 계획 화면은 반대로 "이 기간에 하기로 한 것"을 전부
+     * 보여줘야 한다. 같은 테이블을 다른 질문으로 읽는 것이라 질의를 나눈다.
+     *
+     * 정렬은 배치된 항목이 먼저다(scheduled_date IS NULL이 0 → 1 순). 날짜가 정해진 것이
+     * 먼저 눈에 들어와야 "언제 할지 아직 안 정한 것"이 남은 일감으로 읽힌다.
+     */
+    List<ExecutionItem> findByUserIdAndPlanningRange(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    /**
      * 날짜 범위 안의 TIME_FIXED 실행 조각. 7일 범위 일정 후보 배치에서 "이미 차지된 시간"으로
      * 쓴다. CANCELLED는 하지 않기로 결정한 시간이라 제외한다 — DONE/HOLD/PARTIAL/PLANNED는
      * 그 시간을 실제로 썼거나 여전히 그 자리를 차지하고 있으므로 포함한다.

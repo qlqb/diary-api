@@ -107,6 +107,33 @@
         ORDER BY scheduled_date ASC, order_index ASC, scheduled_start_at ASC, execution_item_id ASC
     </select>
 
+    <!--
+      계획 화면용. 배치된 항목은 scheduled_date로, 미배치 항목은 planning_* 기간이
+      조회 범위와 겹치는지로 잡는다.
+
+      겹침 판정은 planning_start <= endDate AND planning_end >= startDate 다.
+      "계획 기간이 조회 범위 안에 들어온다"가 아니라 "두 구간이 조금이라도 만난다"이므로,
+      계획이 범위를 완전히 포함하는 경우와 앞뒤로 한쪽만 걸치는 경우도 모두 잡힌다.
+      전자를 놓치면 "8월 한 달 계획"이 이번 주 화면에서 통째로 사라진다.
+
+      OR로 두 조건을 묶어도 행이 중복되지 않는다 — chk_execution_items_planning_range가
+      scheduled_date와 planning_* 의 동시 존재를 막으므로 한 행은 둘 중 하나에만 걸린다.
+    -->
+    <select id="findByUserIdAndPlanningRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL,
+                 scheduled_date ASC, order_index ASC, execution_item_id ASC
+    </select>
+
     <select id="findTimeFixedByUserIdAndDateRange" resultMap="executionItemResultMap">
         SELECT *
         FROM execution_items
