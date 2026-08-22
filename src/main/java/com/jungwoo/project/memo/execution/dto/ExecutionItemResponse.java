@@ -21,7 +21,6 @@ public class ExecutionItemResponse {
 
     private Long executionItemId;
     private Long userId;
-    private Long planItemId;
     private Long topicId;
     /** 이 조각이 속한 프로젝트. 화면에서 프로젝트 이름표를 붙이는 데 쓴다. */
     private Long courseId;
@@ -47,7 +46,6 @@ public class ExecutionItemResponse {
         return ExecutionItemResponse.builder()
                 .executionItemId(item.getExecutionItemId())
                 .userId(item.getUserId())
-                .planItemId(item.getPlanItemId())
                 .topicId(item.getTopicId())
                 .courseId(item.getCourseId())
                 .sourceExecutionItemId(item.getSourceExecutionItemId())

@@ -24,8 +24,6 @@ import java.time.LocalDateTime;
 @Builder
 public class ExecutionItemCreateRequest {
 
-    private Long planItemId;
-
     /** 프로젝트 화면에서 직접 만든 경우 그 프로젝트. 소유권은 서버가 검증한다. */
     private Long courseId;
 

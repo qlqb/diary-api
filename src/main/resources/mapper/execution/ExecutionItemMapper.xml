@@ -8,7 +8,6 @@
                type="com.jungwoo.project.memo.execution.domain.ExecutionItem">
         <id     property="executionItemId"       column="execution_item_id"/>
         <result property="userId"                column="user_id"/>
-        <result property="planItemId"            column="plan_item_id"/>
         <result property="topicId"               column="topic_id"/>
         <result property="courseId"              column="course_id"/>
         <result property="sourceExecutionItemId" column="source_execution_item_id"/>
@@ -34,7 +33,6 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="executionItemId">
         INSERT INTO execution_items (
             user_id,
-            plan_item_id,
             topic_id,
             course_id,
             source_execution_item_id,
@@ -55,7 +53,6 @@
             is_deleted
         ) VALUES (
             #{userId},
-            #{planItemId},
             #{topicId},
             #{courseId},
             #{sourceExecutionItemId},

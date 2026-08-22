@@ -110,7 +110,6 @@ public class ExecutionItemService {
 
         ExecutionItem item = ExecutionItem.builder()
                 .userId(userId)
-                .planItemId(request.getPlanItemId())
                 .courseId(request.getCourseId())
                 .title(request.getTitle())
                 .description(request.getDescription())
@@ -578,7 +577,6 @@ public class ExecutionItemService {
 
         ExecutionItem remaining = ExecutionItem.builder()
                 .userId(userId)
-                .planItemId(source.getPlanItemId())
                 .topicId(source.getTopicId())
                 .courseId(source.getCourseId())
                 .sourceExecutionItemId(source.getExecutionItemId())

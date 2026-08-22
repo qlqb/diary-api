@@ -23,9 +23,6 @@ public class ExecutionItem {
 
     private Long userId;
 
-    /** 어떤 계획 항목을 실행하는 조각인지. 계획 없이 만든 항목은 null. */
-    private Long planItemId;
-
     /** Planning Agent가 학습 추천을 배치해 만든 경우 그 학습 topic. 학습과 무관하면 null. */
     private Long topicId;
 

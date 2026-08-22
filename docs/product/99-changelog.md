@@ -1,5 +1,32 @@
 # 99. Change Log
 
+## 2026-08-23 — 대체 완료된 레거시 실행 모델을 지웠다
+
+`todos` / `schedule_blocks` / `plan_items` 계열 / `daily_plans`를 코드와 DB에서 제거했다.
+새 기능이 아니라 **2026-08-03에 끝난 이관의 뒷정리**다. 미이관 0건(schedule_blocks 16/16,
+todos 3/3)을 확인하고 지웠다.
+
+- **왜 지금.** 곧 들어올 `plan_versions` 작업이 `PlanVersionMapper` / `/api/plans`를 만드는데,
+  참조 0건인 `plan/` DTO 패키지와 `plan_items` / `plan_item_events` 테이블이 그대로 있었다.
+  `plan`으로 grep이 안 되는 상태에서 새 계획 코드를 쓰면 나중에 더 비싸진다.
+- **레거시 판정 근거.** 엔드포인트는 열려 있었지만 UI에서 `scheduleBlockAPI` / `todoAPI`를
+  import하는 컴포넌트가 0개였고, 마지막 쓰기가 2026-07-09였다(현행 `execution_items`는
+  2026-08-15까지 활동). CORS는 localhost 전용이고 배포 설정·외부 클라이언트가 없어
+  끊어질 소비자가 없음을 확인했다.
+- **`daily_plans`는 개명이 아니라 삭제했다.** 인수인계 v3 §2는 `day_settings`로 승격시키려
+  했지만, 유일한 호출자였던 `ScheduleBlockActionService`가 사라지면 쓰는 코드가 없어진다.
+  1행짜리 빈 테이블에 새 이름만 붙이면 "이름은 새것인데 아무도 안 쓰는" 상태가 굳는다.
+  하루 설정이 실제로 필요해질 때 `day_settings`로 새로 만든다.
+- **`execution_items.plan_item_id`를 제거했다.** 전 행 NULL이었고 `plan_items`를 가리키는
+  유일한 살아있는 FK였다. 공개 API의 요청·응답 필드와 UI 정규화 코드에서도 함께 뺐다.
+  그 역할은 `plan_versions.items_snapshot`이 맡는다.
+- **`legacy_execution_item_map`(19행)은 남겼다.** 원본이 사라져도 "이 실행 조각이 어디서
+  왔는가"는 정보다. 참조 무결성이 아니라 이력으로 남긴다.
+- **되돌릴 수 있게 두었다.** `docs/sql/backup/2026-08-23-legacy-tables.sql`에 6개 테이블의
+  스키마·데이터·FK를 덤프하고, 별도 DB에 복원해 행 수 일치를 확인한 뒤 DROP했다.
+- 문서: `api-spec.md`의 Todos/ScheduleBlocks 절, `openapi.yaml`의 경로 6개·스키마 8개,
+  README의 엔드포인트 표를 함께 지웠다. `03/04/05` 설계 문서는 당시 기록이므로 두었다.
+
 ## 2026-08-15 (2차) — 막다른 골목 세 곳에 삭제와 다시 시작을 붙였다
 
 만들 수는 있는데 되돌리거나 치울 수는 없는 자리가 세 곳 있었다. 보류한 실행 항목은 액션이
