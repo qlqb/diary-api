@@ -83,6 +83,7 @@ tasks.named('test') {
         filter {
             excludeTestsMatching 'com.jungwoo.project.memo.ai.AiMessageMapperTest'
             excludeTestsMatching 'com.jungwoo.project.memo.ai.AiTurnLifecycleServiceConcurrencyTest'
+            excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanVersionMapperTest'
         }
     }
 }

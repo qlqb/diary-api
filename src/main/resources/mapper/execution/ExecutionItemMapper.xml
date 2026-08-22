@@ -10,11 +10,14 @@
         <result property="userId"                column="user_id"/>
         <result property="topicId"               column="topic_id"/>
         <result property="courseId"              column="course_id"/>
+        <result property="planVersionId"         column="plan_version_id"/>
         <result property="sourceExecutionItemId" column="source_execution_item_id"/>
         <result property="title"                 column="title"/>
         <result property="description"           column="description"/>
         <result property="placementType"         column="placement_type"/>
         <result property="scheduledDate"         column="scheduled_date"/>
+        <result property="planningStartDate"     column="planning_start_date"/>
+        <result property="planningEndDate"       column="planning_end_date"/>
         <result property="scheduledStartAt"      column="scheduled_start_at"/>
         <result property="scheduledEndAt"        column="scheduled_end_at"/>
         <result property="expectedMinutes"       column="expected_minutes"/>
@@ -40,6 +43,8 @@
             description,
             placement_type,
             scheduled_date,
+            planning_start_date,
+            planning_end_date,
             scheduled_start_at,
             scheduled_end_at,
             expected_minutes,
@@ -60,6 +65,8 @@
             #{description},
             #{placementType},
             #{scheduledDate},
+            #{planningStartDate},
+            #{planningEndDate},
             #{scheduledStartAt},
             #{scheduledEndAt},
             #{expectedMinutes},

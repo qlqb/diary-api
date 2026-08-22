@@ -255,7 +255,36 @@ findByPlanKeyAndUserId(planKey, userId)
 **`update`와 `delete`를 만들지 않는다.** 불변성을 문서가 아니라 Mapper에 그 메서드가 없다는
 사실로 강제한다.
 
-`findCoveringDate`는 **기간이 짧은 순, 같으면 최근 확정 순**으로 정렬해 반환한다.
+`findCoveringDate`는 **기간이 짧은 순, 같으면 최근 확정 순**으로 정렬해 반환한다. 동률일 때
+`plan_version_id DESC`로 한 번 더 끊는다 — 확정 시각이 같은 두 계획이 호출할 때마다 다른
+순서로 나오면 프로젝트 화면의 대표 계획이 깜빡인다.
+
+### 3-1-1. `courseId` 필터는 SQL이 아니라 서비스에 둔다
+
+`PlanVersionService.findCoveringDate(userId, date, courseId)`가 SQL 결과를 걸러낸다.
+
+조건이 JSON 배열 안 원소의 속성이라 어차피 인덱스를 타지 못하고, MariaDB의 JSON 함수로
+배열 원소를 비교하려면 질의가 읽기 어려워진다. 한 사용자의 특정 날짜를 덮는 계획은 많아야
+서너 개이므로 SQL이 좁힌 뒤 걸러도 충분하다. `filter`는 순서를 보존하므로 대표 계획 선택
+규칙은 그대로다 — 이 점은 테스트로 고정했다(`PlanVersionServiceTest`).
+
+그 프로젝트의 계획이 하나도 없으면 **빈 목록**을 돌려준다. 다른 프로젝트 계획으로 대신
+채우지 않는다.
+
+### 3-1-2. 스냅샷 검증은 `PlanSnapshotCodec`이 한다
+
+스냅샷은 한 번 쓰면 고칠 수 없으므로(update가 없다) 잘못된 값은 나중에 바로잡는 것이 아니라
+애초에 저장되지 않아야 한다. `toJson`이 세 가지를 거부한다.
+
+```text
+executionItemId가 없는 항목    회고에서 대조할 키가 없어 영원히 판정 불가가 된다
+같은 executionItemId 중복      회고에서 한 항목이 두 줄로 잡힌다
+빈 스냅샷                      회고가 전부 "계획 밖에서 한 일"이 된다
+```
+
+`fromJson`은 모르는 필드를 무시한다(`@JsonIgnoreProperties(ignoreUnknown = true)`).
+스냅샷은 몇 달 뒤에도 읽혀야 하고, 필드가 늘어난 뒤 저장된 JSON 때문에 과거 계획의 회고가
+통째로 막히면 안 된다. 같은 이유로 `priority`는 enum이 아니라 String으로 담는다.
 
 ### 3-2. `items_snapshot` JSON
 
@@ -571,3 +600,35 @@ work_items                          쪼개기가 실제로 불편해진 뒤
 course_id / material_type DROP      롤백 여지로 남겨둔다
 CI의 -PexcludeDbTests               DROP 후 스키마 덤프를 넣고 제거한다
 ```
+
+### 9-1. 조건부 유보 — 착수 조건을 함께 적는다
+
+아래 둘은 "언젠가 하면 좋은 일"이 아니라 **조건이 충족되면 하는 일**이다. 조건 없이
+적어두면 영원히 안 한다. 자료함 전환에서 폴더 구조를 조건부로 미룬 것과 같은 방식이다.
+
+**`execution_records` ↔ `execution_items` 상태 정합 감사**
+
+```text
+조건   REOPENED로 설명되지 않는 불일치가 2건 이상 나오면
+```
+
+지금 알려진 불일치는 item 19 하나뿐이고, `REOPENED` 이벤트로 완전히 설명된다
+(완료 → 3초 뒤 재열기, `reopen()`이 기록을 지우지 않는 설계). 즉 현재로선 버그가 아니라
+정상 동작의 흔적이므로 감사 도구를 만들 이유가 없다. **§5-4의 status 우선 규칙이 이
+불일치를 이미 안전하게 처리한다.**
+
+두 건째가 나오는 순간 의미가 달라진다 — 설명되지 않는 불일치가 복수라면 완료 처리나
+기록 생성 경로 어딘가에 실제 결함이 있다는 뜻이고, 그때는 규칙으로 덮지 말고 원인을
+찾아야 한다. 판단 기준: 해당 `execution_item_id`의 `execution_item_events`에 `REOPENED`가
+없는데 `status`와 최신 `outcome`이 어긋나 있는 경우.
+
+**`legacy_execution_item_map` 정리**
+
+```text
+조건   execution_items가 200행을 넘거나, 2027-02-23(이관 후 6개월)이 지나면
+```
+
+지금은 19행이고 `execution_items`가 44행이라 이관 출처를 되짚는 일이 실제로 가능하다.
+데이터가 충분히 쌓이거나 시간이 지나면 "2026-07 이전 schedule_block에서 온 조각"을
+되짚을 일이 사라지고, 그때는 이력이 아니라 잔여물이 된다. 조건 충족 시 테이블을 지우되,
+`docs/sql/backup/`에 덤프를 남기는 방식은 2026-08-23과 동일하게 한다.
