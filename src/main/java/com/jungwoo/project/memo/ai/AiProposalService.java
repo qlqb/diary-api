@@ -56,8 +56,14 @@ import java.util.Set;
 public class AiProposalService {
 
     private static final Set<String> VALID_PRIORITIES = Set.of("MUST", "SHOULD", "OPTIONAL");
-    /** 새 후보 + 조정 후보를 합친 한 묶음의 상한. 한 번에 검토할 수 있는 양을 넘기지 않는다. */
-    private static final int MAX_ITEMS = 5;
+    /**
+     * Today 상담 제안 한 묶음의 상한. 한 번에 검토할 수 있는 양을 넘기지 않는다.
+     *
+     * 기간 계획은 이 값을 쓰지 않는다 — 계획의 주 제약은 개수가 아니라 시간 예산이고
+     * (11-period-plan.md §5-1-1), 개수는 "확실히 뭔가 잘못됐다"는 폭주 방지선으로만
+     * 훨씬 느슨하게 둔다. 그래서 상한은 상수가 아니라 호출자가 넘기는 값이다.
+     */
+    private static final int DEFAULT_MAX_ITEMS = 5;
     private static final int MIN_EXPECTED_MINUTES = 5;
     private static final int MAX_EXPECTED_MINUTES = 120;
 
@@ -78,7 +84,8 @@ public class AiProposalService {
             Long userId, Long conversationId, Long sourceMessageId,
             List<ProposalItem> items, LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows
     ) {
-        return createFromItems(userId, conversationId, sourceMessageId, items, List.of(), targetDate, unavailableWindows);
+        return createFromItems(userId, conversationId, sourceMessageId, items, List.of(), targetDate,
+                unavailableWindows, DEFAULT_MAX_ITEMS);
     }
 
     /**
@@ -91,15 +98,31 @@ public class AiProposalService {
             List<ProposalItem> items, List<ProposalAdjustment> adjustments,
             LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows
     ) {
-        List<ProposalItemPayload> payloads = new ArrayList<>(validateAndNormalize(items, targetDate));
+        return createFromItems(userId, conversationId, sourceMessageId, items, adjustments, targetDate,
+                unavailableWindows, DEFAULT_MAX_ITEMS);
+    }
+
+    /**
+     * 항목 수 상한을 호출자가 정하는 형태. 기간 계획 전용 경로가 쓴다(≤7일 15개 / 8~31일 30개).
+     *
+     * ★ 상한 검사는 두 곳에서 일어난다 — validateAndNormalize의 새 후보 검사와, 새 후보 +
+     * 조정 후보를 합친 뒤의 총계 검사다. 둘 중 하나만 파라미터화하면 한쪽은 통과하고 다른
+     * 쪽에서 거절되는(또는 그 반대) 상태가 되므로 반드시 같은 값을 함께 넘긴다.
+     */
+    public AiProposalResponse createFromItems(
+            Long userId, Long conversationId, Long sourceMessageId,
+            List<ProposalItem> items, List<ProposalAdjustment> adjustments,
+            LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows, int maxItems
+    ) {
+        List<ProposalItemPayload> payloads = new ArrayList<>(validateAndNormalize(items, targetDate, maxItems));
         payloads.addAll(normalizeAdjustments(userId, adjustments, targetDate));
 
         if (payloads.isEmpty()) {
             log.warn("AI 제안 구조 검증 실패: 새 후보도 조정 후보도 없음");
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
-        if (payloads.size() > MAX_ITEMS) {
-            log.warn("AI 제안 구조 검증 실패: 후보 총 개수가 상한({})을 넘음: {}", MAX_ITEMS, payloads.size());
+        if (payloads.size() > maxItems) {
+            log.warn("AI 제안 구조 검증 실패: 후보 총 개수가 상한({})을 넘음: {}", maxItems, payloads.size());
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
         return persistenceService.save(userId, conversationId, sourceMessageId, payloads, unavailableWindows);
@@ -230,12 +253,13 @@ public class AiProposalService {
         return item.getPriority() != null ? item.getPriority().name() : "SHOULD";
     }
 
-    private List<ProposalItemPayload> validateAndNormalize(List<ProposalItem> items, LocalDate targetDate) {
+    private List<ProposalItemPayload> validateAndNormalize(
+            List<ProposalItem> items, LocalDate targetDate, int maxItems) {
         if (items == null || items.isEmpty()) {
             return List.of();
         }
-        if (items.size() > MAX_ITEMS) {
-            log.warn("AI 제안 구조 검증 실패: 항목 개수가 범위를 벗어남");
+        if (items.size() > maxItems) {
+            log.warn("AI 제안 구조 검증 실패: 항목 개수가 상한({})을 넘음: {}", maxItems, items.size());
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
@@ -313,7 +337,8 @@ public class AiProposalService {
 
             result.add(ProposalItemPayload.create(
                     item.title(), item.description(), item.expectedMinutes(), item.priority(), itemTargetDate,
-                    placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate));
+                    placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
+                    item.courseId()));
         }
         return result;
     }
@@ -493,8 +518,12 @@ public class AiProposalService {
 
             // 프로젝트 안에서 나눈 대화에서 나온 제안이면 그 프로젝트를 새 조각에 연결한다 —
             // 이래야 프로젝트 화면의 "관련 실행"과 오늘 화면의 프로젝트 표시가 성립한다.
-            if (proposalCourseId != null) {
-                executionItemService.linkCourse(createdItem.getExecutionItemId(), userId, proposalCourseId);
+            // 항목이 스스로 프로젝트를 아는 경우(기간 계획)는 그것을 쓰고, 아니면 기존처럼
+            // 제안이 달린 대화의 프로젝트를 따른다. 한 제안에 여러 프로젝트가 섞이는 것은
+            // 계획 경로에서만 생기므로 기존 흐름의 동작은 바뀌지 않는다.
+            Long itemCourseId = original.courseId() != null ? original.courseId() : proposalCourseId;
+            if (itemCourseId != null) {
+                executionItemService.linkCourse(createdItem.getExecutionItemId(), userId, itemCourseId);
             }
 
             AiProposalItemStatus newStatus = modified
@@ -502,7 +531,8 @@ public class AiProposalService {
                     : AiProposalItemStatus.APPLIED;
             String editedJson = modified
                     ? toJson(ProposalItemPayload.create(title, description, expectedMinutes, priority,
-                            scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null))
+                            scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null,
+                            original.courseId()))
                     : null;
 
             aiProposalItemMapper.updateAfterApply(

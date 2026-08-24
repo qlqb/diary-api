@@ -5,6 +5,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
+
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
@@ -41,6 +44,24 @@ public class AiProposal {
      * 재사용한다 — schedule-preview 재계산마다 다시 반영하기 위해 원본 그대로 보존한다.
      */
     private String unavailableWindows;
+
+    /**
+     * 계획 경로로 만들어진 제안의 기간·강도·목표 시간. 확정(confirm)이 이 값을 읽어
+     * plan_versions에 복사하므로, 클라이언트가 확정 시점에 기간이나 강도를 다시 보낼 필요가
+     * 없다 — 다시 보내게 하면 초안과 다른 값으로 확정될 수 있다.
+     *
+     * 계획 경로가 아닌 제안(Today 상담, 단건 추천)은 네 값이 모두 NULL이고, 그런 제안에
+     * 계획 확정을 호출하면 400으로 거절한다.
+     *
+     * planTargetMinutes는 프리셋 기준선이 아니라 AI가 상황을 보고 조정한 최종값이다.
+     */
+    private LocalDate planStartDate;
+
+    private LocalDate planEndDate;
+
+    private PlanIntensity planIntensity;
+
+    private Integer planTargetMinutes;
 
     private AiProposalStatus status;
 

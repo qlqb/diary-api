@@ -381,6 +381,6 @@ class AiTurnLifecycleServiceTest {
     private ProposalItem sampleItem() {
         return new ProposalItem("제목", "설명", 30, "SHOULD",
                 com.jungwoo.project.memo.execution.domain.PlacementType.DATE_ONLY, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 }

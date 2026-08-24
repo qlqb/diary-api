@@ -148,7 +148,7 @@ class AiProposalServiceTest {
     void createFromItems_doesNotSave_whenTimeFixedMissingTimes() {
         List<ProposalItem> items = List.of(new ProposalItem(
                 "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, null, null,
-                null, null, null, null));
+                null, null, null, null, null));
 
         assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
@@ -161,7 +161,7 @@ class AiProposalServiceTest {
     void createFromItems_doesNotSave_whenDateOnlyHasTimes() {
         List<ProposalItem> items = List.of(new ProposalItem(
                 "제목", "설명", 30, "SHOULD", PlacementType.DATE_ONLY, LocalTime.of(9, 0), null,
-                null, null, null, null));
+                null, null, null, null, null));
 
         assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
@@ -174,7 +174,7 @@ class AiProposalServiceTest {
     void createFromItems_saves_whenTimeFixedValid() {
         List<ProposalItem> items = List.of(new ProposalItem(
                 "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, LocalTime.of(9, 0), LocalTime.of(9, 30),
-                null, null, null, null));
+                null, null, null, null, null));
         when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
@@ -192,7 +192,7 @@ class AiProposalServiceTest {
         LocalDateTime fixedEnd = LocalDateTime.of(2026, 8, 10, 9, 30);
         ProposalItem fixedItem = new ProposalItem(
                 "고정 일정", "설명", 30, "MUST", null, null, null,
-                null, null, fixedStart, fixedEnd);
+                null, null, fixedStart, fixedEnd, null);
         ProposalItem dateOnly = dateOnlyItem("날짜만 있는 항목", 20, "SHOULD");
 
         @SuppressWarnings("unchecked")
@@ -218,7 +218,7 @@ class AiProposalServiceTest {
         LocalDateTime fixedEnd = LocalDateTime.of(2026, 8, 10, 9, 30);
         ProposalItem fixedItem = new ProposalItem(
                 "고정 일정", "설명", 30, "MUST", null, null, null,
-                null, null, fixedStart, fixedEnd);
+                null, null, fixedStart, fixedEnd, null);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
@@ -457,7 +457,7 @@ class AiProposalServiceTest {
 
     private ProposalItem dateOnlyItem(String title, int expectedMinutes, String priority) {
         return new ProposalItem(title, "설명", expectedMinutes, priority, PlacementType.DATE_ONLY, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     // ===== 기존 조각을 바꾸는 제안(REDUCE/MOVE/DROP) =====

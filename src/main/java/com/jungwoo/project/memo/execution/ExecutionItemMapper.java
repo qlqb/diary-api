@@ -54,6 +54,58 @@ public interface ExecutionItemMapper {
     );
 
     /**
+     * 회고 전용 조회. ★ is_deleted를 거르지 않는다 — 회고는 "계획에서 뺐어요"를 분류해야
+     * 하므로 삭제된 항목도 보여야 한다. 다른 조회에 이 성질이 새면 삭제가 무의미해지므로
+     * 회고 경로에서만 쓴다.
+     */
+    List<ExecutionItem> findByIdsForReview(
+            @Param("userId") Long userId,
+            @Param("executionItemIds") List<Long> executionItemIds
+    );
+
+    /**
+     * 그 계획 기간에 존재하는 항목 전체(회고의 "계획 밖에서 한 일" 판정용).
+     * 여기도 is_deleted를 거르지 않는다.
+     */
+    List<ExecutionItem> findInPeriodForReview(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    /** 확정 시점에 미배치 항목의 목표 기간을 채운다. */
+    int assignPlanningRange(
+            @Param("userId") Long userId,
+            @Param("executionItemId") Long executionItemId,
+            @Param("planningStartDate") LocalDate planningStartDate,
+            @Param("planningEndDate") LocalDate planningEndDate
+    );
+
+    /** 확정 트랜잭션이 생성 출처를 한 번만 기록한다. plan_version_id IS NULL 조건이 그 강제다. */
+    int assignPlanVersionId(
+            @Param("userId") Long userId,
+            @Param("executionItemIds") List<Long> executionItemIds,
+            @Param("planVersionId") Long planVersionId
+    );
+
+    /** 롤링 배치: 시각을 확정하고 planning_* 를 비운다(전이 규칙 §2-5). */
+    int applyTimeFixedPlacement(
+            @Param("userId") Long userId,
+            @Param("executionItemId") Long executionItemId,
+            @Param("scheduledDate") LocalDate scheduledDate,
+            @Param("scheduledStartAt") java.time.LocalDateTime scheduledStartAt,
+            @Param("scheduledEndAt") java.time.LocalDateTime scheduledEndAt
+    );
+
+    /** 그 계획이 만들어낸 조각 중 아직 날짜를 정하지 않은 것들. 롤링 배치의 대상 집합. */
+    List<ExecutionItem> findUnscheduledByPlanVersion(
+            @Param("userId") Long userId,
+            @Param("planVersionId") Long planVersionId,
+            @Param("windowStart") LocalDate windowStart,
+            @Param("windowEnd") LocalDate windowEnd
+    );
+
+    /**
      * 날짜 범위 안의 TIME_FIXED 실행 조각. 7일 범위 일정 후보 배치에서 "이미 차지된 시간"으로
      * 쓴다. CANCELLED는 하지 않기로 결정한 시간이라 제외한다 — DONE/HOLD/PARTIAL/PLANNED는
      * 그 시간을 실제로 썼거나 여전히 그 자리를 차지하고 있으므로 포함한다.

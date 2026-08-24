@@ -144,7 +144,7 @@ public class PlanningAgentService {
                 PlacementType.UNSCHEDULED,
                 null, null,
                 horizonStart, horizonEnd,
-                null, null
+                null, null, null
         );
 
         AiProposalResponse proposal = aiProposalService.createFromItems(

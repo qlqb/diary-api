@@ -30,6 +30,11 @@ public record ProposalItem(
         LocalDate earliestStartDate,
         LocalDate deadlineDate,
         LocalDateTime fixedStartAt,
-        LocalDateTime fixedEndAt
+        LocalDateTime fixedEndAt,
+        /**
+         * 이 후보가 속한 프로젝트. 기간 계획처럼 여러 프로젝트를 한 제안에 담는 경로에서만
+         * 값이 있다. null이면 기존처럼 제안이 달린 대화의 프로젝트를 따른다.
+         */
+        Long courseId
 ) {
 }

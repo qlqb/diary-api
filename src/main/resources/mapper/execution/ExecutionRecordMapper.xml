@@ -65,4 +65,21 @@
         ORDER BY r.recorded_at DESC, r.execution_record_id DESC
     </select>
 
+
+    <!--
+      회고용. 항목별 최신 1건 선택과 건수 집계는 서비스가 한다 — 계획 하나 분량(최대 30개
+      항목)이라 SQL에서 윈도우 함수로 1건만 뽑는 복잡도를 들일 이유가 없고, "몇 건이었는지"도
+      응답에 실어야 하므로 어차피 전량이 필요하다.
+    -->
+    <select id="findByExecutionItemIds" resultMap="executionRecordResultMap">
+        SELECT *
+        FROM execution_records
+        WHERE user_id = #{userId}
+          AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY execution_item_id ASC, recorded_at DESC
+    </select>
+
 </mapper>

@@ -49,7 +49,12 @@ public record ProposalItemPayload(
         String beforeTitle,
         Integer beforeExpectedMinutes,
         LocalDate beforeScheduledDate,
-        String reason
+        String reason,
+        /**
+         * 이 항목이 속한 프로젝트. 기간 계획 경로에서만 값이 있고, 없으면(=이 필드가 생기기
+         * 전에 저장된 JSON 포함) 적용 시 제안이 달린 대화의 프로젝트를 따른다.
+         */
+        Long courseId
 ) {
 
     /** 새 실행 조각을 만드는(기존 흐름 그대로인) 후보. */
@@ -58,9 +63,19 @@ public record ProposalItemPayload(
             PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
             LocalDate earliestStartDate, LocalDate deadlineDate
     ) {
+        return create(title, description, expectedMinutes, priority, targetDate,
+                placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, null);
+    }
+
+    /** 프로젝트가 지정된 새 후보(기간 계획 경로). */
+    public static ProposalItemPayload create(
+            String title, String description, Integer expectedMinutes, String priority, LocalDate targetDate,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId
+    ) {
         return new ProposalItemPayload(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                ProposalOperation.CREATE, null, null, null, null, null, null);
+                ProposalOperation.CREATE, null, null, null, null, null, null, courseId);
     }
 
     /** 기존 조각을 조정하는 후보. */
@@ -87,7 +102,7 @@ public record ProposalItemPayload(
         return new ProposalItemPayload(title, null, expectedMinutes, priority, targetDate,
                 null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
-                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason);
+                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null);
     }
 
     /**

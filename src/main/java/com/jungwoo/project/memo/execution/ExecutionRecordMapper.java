@@ -21,4 +21,14 @@ public interface ExecutionRecordMapper {
     List<ExecutionRecordResponse> findByUserIdAndDateRange(@Param("userId") Long userId,
                                                             @Param("startDate") LocalDate startDate,
                                                             @Param("endDate") LocalDate endDate);
+
+    /**
+     * 주어진 실행 조각들의 기록 전체. 회고가 항목별로 recorded_at DESC 최신 1건을 고르고
+     * 건수(recordCount)도 함께 내려주기 위해 전량을 가져온다 — 항목 수가 계획 하나 분량
+     * (최대 30개)이므로 SQL에서 윈도우 함수로 1건만 뽑는 복잡도를 들일 이유가 없다.
+     */
+    List<ExecutionRecord> findByExecutionItemIds(
+            @Param("userId") Long userId,
+            @Param("executionItemIds") List<Long> executionItemIds
+    );
 }

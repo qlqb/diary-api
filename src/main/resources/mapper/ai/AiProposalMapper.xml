@@ -12,6 +12,10 @@
         <result property="sourceMessageId" column="source_message_id"/>
         <result property="targetScope"     column="target_scope"/>
         <result property="unavailableWindows" column="unavailable_windows"/>
+        <result property="planStartDate"      column="plan_start_date"/>
+        <result property="planEndDate"        column="plan_end_date"/>
+        <result property="planIntensity"      column="plan_intensity"/>
+        <result property="planTargetMinutes"  column="plan_target_minutes"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -68,5 +72,23 @@
           AND user_id           = #{userId}
         LIMIT 1
     </select>
+
+
+    <!--
+      계획 초안 생성 직후 기간·강도·목표 시간을 붙인다.
+
+      insert에 넣지 않고 별도 UPDATE로 두는 이유: insert는 Today 상담 흐름과 공유하는
+      경로이고, 그쪽은 계획 메타가 없다. 공유 경로에 계획 전용 컬럼을 끼워 넣으면
+      "이 제안이 계획인가"를 insert 호출부마다 판단해야 한다.
+    -->
+    <update id="updatePlanMetadata">
+        UPDATE ai_proposals
+           SET plan_start_date     = #{planStartDate},
+               plan_end_date       = #{planEndDate},
+               plan_intensity      = #{planIntensity},
+               plan_target_minutes = #{planTargetMinutes}
+         WHERE proposal_id = #{proposalId}
+           AND user_id     = #{userId}
+    </update>
 
 </mapper>

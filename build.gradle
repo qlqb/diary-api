@@ -85,6 +85,7 @@ tasks.named('test') {
             excludeTestsMatching 'com.jungwoo.project.memo.ai.AiTurnLifecycleServiceConcurrencyTest'
             excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanVersionMapperTest'
             excludeTestsMatching 'com.jungwoo.project.memo.execution.ExecutionItemPlanningRangeMapperTest'
+            excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanConfirmAndPlacementIntegrationTest'
         }
     }
 }

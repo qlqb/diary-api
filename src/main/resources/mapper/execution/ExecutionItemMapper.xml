@@ -249,4 +249,105 @@
         ORDER BY scheduled_date ASC, scheduled_start_at ASC, execution_item_id ASC
     </select>
 
+
+    <!--
+      ===== 계획 회고 / 확정 / 롤링 배치 전용 =====
+    -->
+
+    <!--
+      ★ is_deleted를 거르지 않는다. 회고는 "계획에서 뺐어요"를 분류해야 하므로 삭제된
+      항목도 보여야 한다. 이 성질이 다른 조회로 새면 soft delete가 무의미해지므로
+      이름에 ForReview를 박아 용도를 못 헷갈리게 한다.
+    -->
+    <select id="findByIdsForReview" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id = #{userId}
+          AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY scheduled_date IS NULL, scheduled_date ASC, execution_item_id ASC
+    </select>
+
+    <!-- 회고의 "계획 밖에서 한 일" 판정용. 여기도 is_deleted를 거르지 않는다. -->
+    <select id="findInPeriodForReview" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id = #{userId}
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL, scheduled_date ASC, execution_item_id ASC
+    </select>
+
+    <!-- 확정: 미배치 항목의 목표 기간을 계획 기간으로 채운다. -->
+    <update id="assignPlanningRange">
+        UPDATE execution_items
+           SET planning_start_date = #{planningStartDate},
+               planning_end_date   = #{planningEndDate}
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND placement_type    = 'UNSCHEDULED'
+    </update>
+
+    <!--
+      확정: 생성 출처를 기록한다.
+
+      ★ plan_version_id IS NULL 조건이 "출처는 한 번만 기록된다"의 강제 지점이다.
+      호출자는 영향 행 수가 기대와 다르면 예외를 던져 트랜잭션 전체를 되돌린다 —
+      이미 출처가 박힌 조각이 섞였다는 뜻이고, 그대로 커밋하면 스냅샷과 실제가 어긋난다.
+    -->
+    <update id="assignPlanVersionId">
+        UPDATE execution_items
+           SET plan_version_id = #{planVersionId}
+         WHERE user_id = #{userId}
+           AND plan_version_id IS NULL
+           AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </update>
+
+    <!--
+      롤링 배치: 시각을 확정하고 planning_* 를 비운다.
+
+      전이 규칙(11-period-plan.md §2-5)이다. 두 곳에 기간이 남으면 "이 항목의 기간은
+      언제인가"에 답이 둘이 되고, chk_execution_items_planning_range가 그것을 막는다 —
+      즉 planning_* 를 비우지 않으면 이 UPDATE 자체가 실패한다.
+    -->
+    <update id="applyTimeFixedPlacement">
+        UPDATE execution_items
+           SET placement_type      = 'TIME_FIXED',
+               scheduled_date      = #{scheduledDate},
+               scheduled_start_at  = #{scheduledStartAt},
+               scheduled_end_at    = #{scheduledEndAt},
+               planning_start_date = NULL,
+               planning_end_date   = NULL
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND is_deleted        = 0
+           AND placement_type    = 'UNSCHEDULED'
+    </update>
+
+    <!--
+      롤링 배치 대상: 그 계획이 만들어낸 조각 중 아직 날짜가 없고 목표 기간이 창과 겹치는 것.
+      상태로도 거른다 — 이미 끝냈거나 보류·취소한 것에 시각을 새로 박지 않는다.
+    -->
+    <select id="findUnscheduledByPlanVersion" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id         = #{userId}
+          AND plan_version_id = #{planVersionId}
+          AND is_deleted      = 0
+          AND placement_type  = 'UNSCHEDULED'
+          AND status          = 'PLANNED'
+          AND planning_start_date &lt;= #{windowEnd}
+          AND planning_end_date   &gt;= #{windowStart}
+        ORDER BY priority = 'MUST' DESC, order_index ASC, execution_item_id ASC
+    </select>
+
 </mapper>
