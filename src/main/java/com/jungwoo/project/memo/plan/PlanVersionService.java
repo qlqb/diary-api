@@ -2,6 +2,7 @@ package com.jungwoo.project.memo.plan;
 
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,33 @@ public class PlanVersionService {
         return covering.stream()
                 .filter(plan -> snapshotCodec.containsCourse(plan.getItemsSnapshot(), courseId))
                 .toList();
+    }
+
+    /**
+     * 초안 요청이 강도를 주지 않았을 때 쓸 값을 정한다(11-period-plan.md §5-1-2).
+     *
+     * ```
+     * 1. 가장 최근 확정한 plan_version의 intensity
+     * 2. 그것도 없으면 NORMAL
+     * ```
+     *
+     * 사용자 설정 컬럼도 설정 화면도 만들지 않는다. 사용자가 강도를 바꾸면 그것이 자동으로
+     * 다음 기본값이 되므로, 따로 고치러 갈 곳이 없는 편이 낫다.
+     *
+     * 확정 이력은 있는데 그 계획에 강도가 없는 경우(강도 도입 전에 만든 계획)도 NORMAL로
+     * 떨어진다 — 더 과거로 거슬러 올라가며 강도가 있는 계획을 찾지는 않는다. "직전 계획을
+     * 이어받는다"는 규칙이 "언젠가 쓴 적 있는 강도를 되살린다"가 되면 예측할 수 없다.
+     */
+    @Transactional(readOnly = true)
+    public PlanIntensity resolveIntensity(Long userId, PlanIntensity requested) {
+        if (requested != null) {
+            return requested;
+        }
+        PlanVersion latest = planVersionMapper.findLatestConfirmed(userId);
+        if (latest == null || latest.getIntensity() == null) {
+            return PlanIntensity.DEFAULT;
+        }
+        return latest.getIntensity();
     }
 
     @Transactional(readOnly = true)

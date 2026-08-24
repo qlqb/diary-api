@@ -48,6 +48,21 @@ public class PlanVersion {
     /** 이 기간에 무엇을 이루려 했는가. 없으면 null. */
     private String goalSummary;
 
+    /**
+     * 확정 당시의 계획 강도. 회고에서 "집중으로 잡았는데 절반만 했다"를 판단하는 근거이고,
+     * 다음 계획의 기본 강도를 여기서 이어받는다(11-period-plan.md §5-1-2).
+     * 강도 없이 만든 계획이 있을 수 있으므로 null 허용이다.
+     */
+    private PlanIntensity intensity;
+
+    /**
+     * 확정 당시 AI에게 준 목표 학습 시간(분).
+     *
+     * intensity에서 매번 다시 계산하지 않고 값을 저장한다 — 프리셋 숫자는 실사용 후
+     * 조정할 예정이고, 그때 과거 계획의 근거가 소급 변조되면 안 된다.
+     */
+    private Integer targetMinutes;
+
     /** PlanSnapshotItem 배열의 JSON. 현재 execution_items와 동기화하지 않는다. */
     private String itemsSnapshot;
 

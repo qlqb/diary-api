@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.plan;
 
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -124,6 +125,59 @@ class PlanVersionMapperTest {
         assertThat(planVersionMapper.findCoveringDate(TEST_USER_ID, LocalDate.of(2026, 8, 25))).isEmpty();
     }
 
+    // ===== 강도 (§5-1-1, §5-1-2) =====
+
+    @Test
+    void insert_roundTripsIntensityAndTargetMinutes() {
+        PlanVersion saved = insertPlan(TEST_USER_ID, "집중 계획",
+                LocalDate.of(2026, 8, 24), LocalDate.of(2026, 8, 30),
+                PlanIntensity.FOCUSED, 1080);
+
+        PlanVersion found = planVersionMapper.findByIdAndUserId(saved.getPlanVersionId(), TEST_USER_ID);
+
+        assertThat(found.getIntensity()).isEqualTo(PlanIntensity.FOCUSED);
+        assertThat(found.getTargetMinutes()).isEqualTo(1080);
+    }
+
+    @Test
+    void insert_allowsNullIntensity() {
+        PlanVersion saved = insertPlan(TEST_USER_ID, "강도 없는 계획",
+                LocalDate.of(2026, 8, 24), LocalDate.of(2026, 8, 30), null, null);
+
+        PlanVersion found = planVersionMapper.findByIdAndUserId(saved.getPlanVersionId(), TEST_USER_ID);
+
+        assertThat(found.getIntensity()).isNull();
+        assertThat(found.getTargetMinutes()).isNull();
+    }
+
+    @Test
+    void findLatestConfirmed_returnsMostRecentlyConfirmedPlan() {
+        PlanVersion older = insertPlan(TEST_USER_ID, "먼저",
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 7), PlanIntensity.LIGHT, 240);
+        PlanVersion newer = insertPlan(TEST_USER_ID, "나중",
+                LocalDate.of(2026, 8, 8), LocalDate.of(2026, 8, 14), PlanIntensity.FOCUSED, 1080);
+        setConfirmedAt(older.getPlanVersionId(), LocalDateTime.of(2026, 8, 1, 9, 0));
+        setConfirmedAt(newer.getPlanVersionId(), LocalDateTime.of(2026, 8, 8, 9, 0));
+
+        PlanVersion latest = planVersionMapper.findLatestConfirmed(TEST_USER_ID);
+
+        assertThat(latest.getTitle()).isEqualTo("나중");
+        assertThat(latest.getIntensity()).isEqualTo(PlanIntensity.FOCUSED);
+    }
+
+    @Test
+    void findLatestConfirmed_noHistory_returnsNull() {
+        assertThat(planVersionMapper.findLatestConfirmed(TEST_USER_ID)).isNull();
+    }
+
+    @Test
+    void findLatestConfirmed_ignoresOtherUsers() {
+        insertPlan(OTHER_USER_ID, "남의 계획",
+                LocalDate.of(2026, 8, 24), LocalDate.of(2026, 8, 30), PlanIntensity.FOCUSED, 1080);
+
+        assertThat(planVersionMapper.findLatestConfirmed(TEST_USER_ID)).isNull();
+    }
+
     @Test
     void findByPlanKeyAndUserId_returnsOnlyThatPlanKey() {
         PlanVersion target = insertPlan(TEST_USER_ID, "대상",
@@ -136,6 +190,11 @@ class PlanVersionMapperTest {
     }
 
     private PlanVersion insertPlan(Long userId, String title, LocalDate start, LocalDate end) {
+        return insertPlan(userId, title, start, end, PlanIntensity.NORMAL, 600);
+    }
+
+    private PlanVersion insertPlan(Long userId, String title, LocalDate start, LocalDate end,
+                                   PlanIntensity intensity, Integer targetMinutes) {
         PlanVersion plan = PlanVersion.builder()
                 .userId(userId)
                 .planKey(UUID.randomUUID().toString())
@@ -143,6 +202,8 @@ class PlanVersionMapperTest {
                 .startDate(start)
                 .endDate(end)
                 .title(title)
+                .intensity(intensity)
+                .targetMinutes(targetMinutes)
                 .itemsSnapshot("[{\"executionItemId\":1,\"title\":\"" + title + " 항목\",\"courseId\":6}]")
                 .build();
         planVersionMapper.insert(plan);

@@ -39,6 +39,12 @@ public interface PlanVersionMapper {
             @Param("date") LocalDate date
     );
 
+    /**
+     * 가장 최근 확정한 계획 한 건. 강도 기본값을 여기서 이어받는다(§5-1-2).
+     * 확정 이력이 없으면 null.
+     */
+    PlanVersion findLatestConfirmed(@Param("userId") Long userId);
+
     /** 같은 plan_key의 모든 판. 지금은 항상 한 건이다(version = 1 고정). */
     List<PlanVersion> findByPlanKeyAndUserId(
             @Param("planKey") String planKey,

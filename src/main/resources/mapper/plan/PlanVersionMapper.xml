@@ -17,6 +17,8 @@
         <result property="endDate"          column="end_date"/>
         <result property="title"            column="title"/>
         <result property="goalSummary"      column="goal_summary"/>
+        <result property="intensity"        column="intensity"/>
+        <result property="targetMinutes"    column="target_minutes"/>
         <result property="itemsSnapshot"    column="items_snapshot"/>
         <result property="sourceProposalId" column="source_proposal_id"/>
         <result property="confirmedAt"      column="confirmed_at"/>
@@ -31,6 +33,8 @@
             end_date,
             title,
             goal_summary,
+            intensity,
+            target_minutes,
             items_snapshot,
             source_proposal_id
         ) VALUES (
@@ -41,6 +45,8 @@
             #{endDate},
             #{title},
             #{goalSummary},
+            #{intensity},
+            #{targetMinutes},
             #{itemsSnapshot},
             #{sourceProposalId}
         )
@@ -72,6 +78,19 @@
         ORDER BY DATEDIFF(end_date, start_date) ASC,
                  confirmed_at DESC,
                  plan_version_id DESC
+    </select>
+
+    <!--
+      강도 기본값 승계용(11-period-plan.md §5-1-2). 가장 최근 확정한 계획 한 건.
+      사용자 설정 테이블을 따로 만들지 않고 여기서 읽는다 — 사용자가 강도를 바꾸면
+      그것이 자동으로 다음 기본값이 되므로 설정을 고치러 갈 일이 없다.
+    -->
+    <select id="findLatestConfirmed" resultMap="planVersionResultMap">
+        SELECT *
+        FROM plan_versions
+        WHERE user_id = #{userId}
+        ORDER BY confirmed_at DESC, plan_version_id DESC
+        LIMIT 1
     </select>
 
     <select id="findByPlanKeyAndUserId" resultMap="planVersionResultMap">

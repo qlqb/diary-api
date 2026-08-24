@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.plan;
 
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -14,6 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -82,6 +84,41 @@ class PlanVersionServiceTest {
         assertThat(service().findCoveringDate(USER_ID, DATE, 6L)).isEmpty();
     }
 
+    // ===== 강도 기본값 승계 (§5-1-2) =====
+
+    @Test
+    void resolveIntensity_requestedValueWins_withoutTouchingHistory() {
+        assertThat(service().resolveIntensity(USER_ID, PlanIntensity.LIGHT))
+                .isEqualTo(PlanIntensity.LIGHT);
+        // 요청에 값이 있으면 직전 계획을 읽을 필요조차 없다.
+        verifyNoInteractions(planVersionMapper);
+    }
+
+    @Test
+    void resolveIntensity_noRequest_inheritsFromLatestConfirmedPlan() {
+        when(planVersionMapper.findLatestConfirmed(USER_ID))
+                .thenReturn(planWithIntensity(PlanIntensity.FOCUSED));
+
+        assertThat(service().resolveIntensity(USER_ID, null)).isEqualTo(PlanIntensity.FOCUSED);
+    }
+
+    @Test
+    void resolveIntensity_noHistory_fallsBackToNormal() {
+        when(planVersionMapper.findLatestConfirmed(USER_ID)).thenReturn(null);
+
+        assertThat(service().resolveIntensity(USER_ID, null)).isEqualTo(PlanIntensity.NORMAL);
+    }
+
+    @Test
+    void resolveIntensity_latestPlanHasNoIntensity_fallsBackToNormal() {
+        // 강도 도입 전에 만든 계획. 더 과거로 거슬러 올라가지 않는다 — "직전 계획을
+        // 이어받는다"가 "언젠가 쓴 강도를 되살린다"가 되면 예측할 수 없다.
+        when(planVersionMapper.findLatestConfirmed(USER_ID))
+                .thenReturn(planWithIntensity(null));
+
+        assertThat(service().resolveIntensity(USER_ID, null)).isEqualTo(PlanIntensity.NORMAL);
+    }
+
     @Test
     void getOwned_missingPlan_throwsNotFound() {
         when(planVersionMapper.findByIdAndUserId(anyLong(), anyLong())).thenReturn(null);
@@ -96,6 +133,14 @@ class PlanVersionServiceTest {
 
         assertThatThrownBy(() -> service().findByPlanKey(USER_ID, "없는-키"))
                 .isInstanceOf(NotFoundException.class);
+    }
+
+    private PlanVersion planWithIntensity(PlanIntensity intensity) {
+        return PlanVersion.builder()
+                .planVersionId(1L).userId(USER_ID).title("직전 계획")
+                .intensity(intensity)
+                .itemsSnapshot("[]")
+                .build();
     }
 
     private PlanVersion plan(String title, Long courseId) {
