@@ -76,6 +76,7 @@ public class AiProposalPersistenceService {
                     .priority(payload.priority())
                     .targetDate(payload.targetDate())
                     .placementType(payload.placementType())
+                    .courseId(payload.courseId())
                     .scheduledStartAt(payload.scheduledStartAt())
                     .scheduledEndAt(payload.scheduledEndAt())
                     .modified(false)

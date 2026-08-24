@@ -31,6 +31,12 @@ public class AiProposalItemResponse {
     private String priority;
     private LocalDate targetDate;
     private PlacementType placementType;
+    /**
+     * 이 항목이 속한 프로젝트. 기간 계획처럼 한 제안에 여러 프로젝트가 섞이는 경로에서
+     * 초안 검토 화면이 프로젝트별로 묶는 데 쓴다. 이 값이 없으면 그룹핑이 전부 한 덩어리가
+     * 된다. 계획 경로가 아닌 제안은 null이다.
+     */
+    private Long courseId;
     private LocalDateTime scheduledStartAt;
     private LocalDateTime scheduledEndAt;
     private Boolean modified;

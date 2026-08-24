@@ -8,6 +8,7 @@ import com.jungwoo.project.memo.ai.AiUsageLimitService;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
@@ -88,7 +89,9 @@ class PlanDraftServiceTest {
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
-        when(courseMapper.findByUserIdAndStatus(anyLong(), any())).thenReturn(List.of());
+        when(courseMapper.findByUserIdAndStatus(anyLong(), any()))
+                .thenReturn(List.of(Course.builder().courseId(6L).title("자료구조").build(),
+                        Course.builder().courseId(7L).title("빅데이터분석").build()));
         when(executionItemMapper.findByUserIdAndPlanningRange(anyLong(), any(), any())).thenReturn(List.of());
         when(planReviewService.summarizeLatestForPrompt(anyLong())).thenReturn(null);
         when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt()))
@@ -209,6 +212,43 @@ class PlanDraftServiceTest {
                 .isEqualTo(6L);
     }
 
+    @Test
+    void courseIdNotAmongTargets_isDiscarded() {
+        // 모델이 존재하지 않는 id를 만들어내면 그 항목이 남의 프로젝트에 붙는다.
+        givenAiResponse(BASELINE, null, 999L);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnlyNulls();
+    }
+
+    @Test
+    void singleTargetCourse_fillsInNullCourseId() {
+        // 후보가 하나뿐이면 추측이 아니라 유일한 답이다. 비워두면 초안 화면이 전부 "기타"가 된다.
+        when(courseMapper.findByUserIdAndStatus(anyLong(), any()))
+                .thenReturn(List.of(Course.builder().courseId(6L).title("자료구조").build()));
+        givenAiResponse(BASELINE, null, null);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnly(6L);
+    }
+
+    @Test
+    void multipleTargetCourses_doesNotGuess() {
+        givenAiResponse(BASELINE, null, null);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnlyNulls();
+    }
+
     // ===== fixture =====
 
     private PlanDraftRequest request(String instruction) {
@@ -217,6 +257,10 @@ class PlanDraftServiceTest {
     }
 
     private void givenAiResponse(Integer targetMinutes, String reason) {
+        givenAiResponse(targetMinutes, reason, 6L);
+    }
+
+    private void givenAiResponse(Integer targetMinutes, String reason, Long courseId) {
         String json = """
                 {
                   "title": "이번 주 계획",
@@ -224,15 +268,17 @@ class PlanDraftServiceTest {
                   "targetMinutes": %s,
                   "targetMinutesReason": %s,
                   "items": [
-                    {"title":"연결 리스트 구현","expectedMinutes":40,"priority":"MUST","courseId":6,
+                    {"title":"연결 리스트 구현","expectedMinutes":40,"priority":"MUST","courseId":%s,
                      "scheduledDate":null,"reason":"포인터를 이미 아니까"},
-                    {"title":"과제 2번","expectedMinutes":60,"priority":"SHOULD","courseId":6,
+                    {"title":"과제 2번","expectedMinutes":60,"priority":"SHOULD","courseId":%s,
                      "scheduledDate":"2026-08-26","reason":"마감이 있어서"}
                   ]
                 }
                 """.formatted(
                 targetMinutes == null ? "null" : targetMinutes.toString(),
-                reason == null ? "null" : "\"" + reason + "\"");
+                reason == null ? "null" : "\"" + reason + "\"",
+                courseId == null ? "null" : courseId.toString(),
+                courseId == null ? "null" : courseId.toString());
         when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
                 .thenReturn(Flux.just(chatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + json)));
     }

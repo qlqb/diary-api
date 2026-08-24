@@ -117,7 +117,7 @@ public class PlanDraftService {
         int targetMinutes = adjusted ? aiTarget : baseline;
         String reason = adjusted ? blankToNull(ai.targetMinutesReason()) : null;
 
-        List<ProposalItem> items = toProposalItems(ai, start, end);
+        List<ProposalItem> items = toProposalItems(ai, start, end, resolveCourses(userId, request.getCourseIds()));
         if (items.isEmpty()) {
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
@@ -306,8 +306,20 @@ public class PlanDraftService {
      * 날짜를 정한 항목은 DATE_ONLY로, 나머지는 UNSCHEDULED로 만든다. 확정 시점에는 솔버를
      * 돌리지 않으므로(§5-2) TIME_FIXED는 여기서 만들지 않는다 — 시각 배치는 롤링 배치가
      * 전담한다. 계획 기간 밖 날짜는 조용히 버리고 UNSCHEDULED로 떨어뜨린다.
+     *
+     * courseId는 모델 출력을 그대로 믿지 않는다. 대상 프로젝트 목록에 없는 id는 버린다 —
+     * 모델이 존재하지 않는 id를 만들어내면 그 항목이 어느 프로젝트에도 안 잡히거나
+     * 남의 프로젝트에 붙는다.
+     *
+     * 대상이 정확히 하나일 때는 모델이 null을 줘도 그 프로젝트로 채운다. 후보가 하나뿐이면
+     * 추측이 아니라 유일한 답이고, 비워두면 초안 검토 화면에서 전부 "기타"로 묶여 그룹핑이
+     * 의미를 잃는다. 대상이 여럿이면 추측하지 않고 null로 둔다.
      */
-    private List<ProposalItem> toProposalItems(PlanDraftAiResult ai, LocalDate start, LocalDate end) {
+    private List<ProposalItem> toProposalItems(
+            PlanDraftAiResult ai, LocalDate start, LocalDate end, List<Course> targetCourses) {
+        java.util.Set<Long> allowedCourseIds = targetCourses.stream()
+                .map(Course::getCourseId).collect(java.util.stream.Collectors.toSet());
+        Long soleCourseId = targetCourses.size() == 1 ? targetCourses.get(0).getCourseId() : null;
         List<ProposalItem> items = new ArrayList<>();
         if (ai.items() == null) {
             return items;
@@ -327,10 +339,17 @@ public class PlanDraftService {
                     scheduled != null ? scheduled : start,
                     scheduled != null ? scheduled : end,
                     null, null,
-                    raw.courseId()
+                    resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId)
             ));
         }
         return items;
+    }
+
+    private Long resolveItemCourseId(Long raw, java.util.Set<Long> allowed, Long soleCourseId) {
+        if (raw != null && allowed.contains(raw)) {
+            return raw;
+        }
+        return soleCourseId;
     }
 
     private LocalDate parseDateInRange(String raw, LocalDate start, LocalDate end) {
