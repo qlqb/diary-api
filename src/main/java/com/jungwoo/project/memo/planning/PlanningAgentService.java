@@ -73,19 +73,19 @@ public class PlanningAgentService {
     private final Clock clock;
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName;
+    private String modelName = "gpt-5-mini";
 
     @Value("${ai.planning.max-completion-tokens:2000}")
-    private int maxCompletionTokens;
+    private int maxCompletionTokens = 2000;
 
     @Value("${ai.request.timeout-seconds:90}")
-    private int requestTimeoutSeconds;
+    private int requestTimeoutSeconds = 90;
 
     @Value("${scheduling.horizon.max-days:7}")
-    private int maxHorizonDays;
+    private int maxHorizonDays = 7;
 
     @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
-    private String defaultTimeZoneId;
+    private String defaultTimeZoneId = "Asia/Seoul";
 
     private static final String SYSTEM_PROMPT = """
             너는 Planning Agent다. 학생이 이미 정해진 학습 추천(무엇을 공부할지)을 언제

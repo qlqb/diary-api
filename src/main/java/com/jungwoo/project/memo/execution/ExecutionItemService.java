@@ -227,9 +227,17 @@ public class ExecutionItemService {
     /**
      * 롤링 배치가 정한 시각을 실제로 적용한다. UNSCHEDULED → TIME_FIXED.
      *
-     * ★ 영향 행 수를 검사한다. 0이면 그 사이에 누군가 이 조각을 옮겼거나 지웠거나 이미
-     * 배치했다는 뜻이고, 그대로 넘어가면 응답에는 "배치했다"고 적히는데 DB는 안 바뀐
-     * 상태가 된다 — 사용자가 화면에서 보는 것과 실제가 갈라진다.
+     * ★ version과 status='PLANNED'를 조건으로 걸고 영향 행 수를 검사한다. 0이면 대상
+     * 조회와 이 UPDATE 사이에 누군가 이 조각을 옮겼거나 보류했거나 지웠다는 뜻이고,
+     * 그대로 넘어가면 응답에는 "배치했다"고 적히는데 DB는 안 바뀐 상태가 된다.
+     *
+     * status 조건이 특히 중요하다 — 없으면 사용자가 HOLD로 바꾼 항목을 솔버가 시간표에
+     * 앉힌다. "잠시 멈춰뒀다"고 한 것이 다시 일정에 나타나면 안 된다.
+     *
+     * ★ execution_items.version은 올린다. plan_versions.version을 올리지 않는 것과 혼동
+     * 하면 안 된다 — 저쪽은 불변 스냅샷의 세대라 배치가 건드릴 대상이 아니고, 이쪽은 행
+     * 낙관적 락 카운터라 행을 바꿨으면 반드시 올려야 한다. 안 올리면 배치 직후 다른
+     * 요청이 낡은 version으로도 같은 행을 또 고칠 수 있다.
      *
      * 이벤트는 MOVED로 남긴다. 배치는 이동과 다른 사건이지만 event_type이 CHECK로
      * 고정돼 있어 새 값을 넣으려면 마이그레이션이 필요하고, "언제 할지가 바뀌었다"는
@@ -248,7 +256,8 @@ public class ExecutionItemService {
         ExecutionItem before = findOwnedOrThrow(executionItemId, userId);
 
         int updated = executionItemMapper.applyTimeFixedPlacement(
-                userId, executionItemId, scheduledDate, scheduledStartAt, scheduledEndAt);
+                userId, executionItemId, before.getVersion(),
+                scheduledDate, scheduledStartAt, scheduledEndAt);
         if (updated != 1) {
             throw new ConflictException(ErrorCode.VERSION_CONFLICT);
         }
@@ -262,7 +271,7 @@ public class ExecutionItemService {
                         "scheduledDate", String.valueOf(scheduledDate),
                         "scheduledStartAt", String.valueOf(scheduledStartAt),
                         "scheduledEndAt", String.valueOf(scheduledEndAt))),
-                before.getVersion(), before.getVersion());
+                before.getVersion(), before.getVersion() + 1);
     }
 
     /**

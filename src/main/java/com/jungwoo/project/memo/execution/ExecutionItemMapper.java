@@ -100,10 +100,16 @@ public interface ExecutionItemMapper {
             @Param("planningEndDate") LocalDate planningEndDate
     );
 
-    /** 롤링 배치: 시각을 확정하고 planning_* 를 비운다(전이 규칙 §2-5). */
+    /**
+     * 롤링 배치: 시각을 확정하고 planning_* 를 비운다(전이 규칙 §2-5).
+     *
+     * version과 status='PLANNED'를 조건에 넣는다 — 대상 조회와 이 UPDATE 사이에 항목이
+     * 바뀌었으면(옮겼거나 보류했거나 지웠거나) 0행이 되어 호출자가 409로 돌린다.
+     */
     int applyTimeFixedPlacement(
             @Param("userId") Long userId,
             @Param("executionItemId") Long executionItemId,
+            @Param("version") Long version,
             @Param("scheduledDate") LocalDate scheduledDate,
             @Param("scheduledStartAt") java.time.LocalDateTime scheduledStartAt,
             @Param("scheduledEndAt") java.time.LocalDateTime scheduledEndAt

@@ -313,19 +313,15 @@
     </update>
 
     <!--
-      롤링 배치: 시각을 확정하고 planning_* 를 비운다.
+      배치 해제. 배치의 역방향이다.
 
-      전이 규칙(11-period-plan.md §2-5)이다. 두 곳에 기간이 남으면 "이 항목의 기간은
-      언제인가"에 답이 둘이 되고, chk_execution_items_planning_range가 그것을 막는다 —
-      즉 planning_* 를 비우지 않으면 이 UPDATE 자체가 실패한다.
-    -->
-    <!--
-      배치 해제. planning_* 를 함께 세팅해야 한다 — 날짜를 비우면서 기간도 비우면
-      그 항목은 기간 조회에서 사라진다(§2-5의 (나) 미분류). 호출자가 기간을 주면
+      planning_* 를 함께 세팅해야 한다 — 날짜를 비우면서 기간도 비우면 그 항목은 기간
+      조회에서 사라진다(11-period-plan.md 2-5의 (나) 미분류). 호출자가 기간을 주면
       (가) 계획 안에 남기고, 안 주면 (나)가 된다.
 
-      version을 조건에 넣어 낙관적 락을 건다. 영향 행 수 0은 그 사이 누군가 이 조각을
-      바꿨다는 뜻이므로 호출자가 409로 돌린다.
+      applyTimeFixedPlacement와 같은 형태로 version을 조건에 넣고 올린다. 그리고
+      placement_type이 이미 UNSCHEDULED인 행은 조건에서 걸러 0행이 되게 한다 —
+      "뗄 날짜가 없는데 뗀다"는 요청을 성공으로 응답하지 않는다.
     -->
     <update id="clearPlacement">
         UPDATE execution_items
@@ -338,10 +334,30 @@
                version             = version + 1
          WHERE execution_item_id = #{executionItemId}
            AND user_id           = #{userId}
-           AND version           = #{version}
            AND is_deleted        = 0
+           AND placement_type   &lt;&gt; 'UNSCHEDULED'
+           AND version           = #{version}
     </update>
 
+    <!--
+      롤링 배치: 시각을 확정하고 planning_* 를 비운다.
+
+      전이 규칙(11-period-plan.md 2-5)이다. 두 곳에 기간이 남으면 "이 항목의 기간은
+      언제인가"에 답이 둘이 되고, chk_execution_items_planning_range가 그것을 막는다 —
+      즉 planning_* 를 비우지 않으면 이 UPDATE 자체가 실패한다.
+
+      ★ version을 조건에 넣고 올린다. plan_versions.version을 올리지 않는 것과는 전혀
+      다른 문제다:
+        plan_versions.version   불변 스냅샷의 세대. 배치는 확정 시점의 사실을 바꾸지
+                                않으므로 건드리면 안 된다
+        execution_items.version 행 낙관적 락 카운터. 행을 바꿨으면 반드시 올려야 한다.
+                                안 올리면 배치 직후 다른 요청이 낡은 version으로도
+                                이 행을 또 고칠 수 있다
+
+      ★ status = 'PLANNED' 조건이 핵심이다. 없으면 배치 대상 조회와 이 UPDATE 사이에
+      사용자가 HOLD로 바꾼 항목을 솔버가 시간표에 앉힌다 — "잠시 멈춰뒀다"고 한 것이
+      다시 일정에 나타난다.
+    -->
     <update id="applyTimeFixedPlacement">
         UPDATE execution_items
            SET placement_type      = 'TIME_FIXED',
@@ -349,11 +365,14 @@
                scheduled_start_at  = #{scheduledStartAt},
                scheduled_end_at    = #{scheduledEndAt},
                planning_start_date = NULL,
-               planning_end_date   = NULL
+               planning_end_date   = NULL,
+               version             = version + 1
          WHERE execution_item_id = #{executionItemId}
            AND user_id           = #{userId}
            AND is_deleted        = 0
            AND placement_type    = 'UNSCHEDULED'
+           AND status            = 'PLANNED'
+           AND version           = #{version}
     </update>
 
     <!--

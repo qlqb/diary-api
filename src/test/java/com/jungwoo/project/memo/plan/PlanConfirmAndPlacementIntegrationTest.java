@@ -391,6 +391,103 @@ class PlanConfirmAndPlacementIntegrationTest {
         assertThat(result.getWindowEnd()).isEqualTo(end);
     }
 
+    // ===== 배치의 낙관적 락 =====
+
+    @Test
+    void placement_onAnItemHeldInTheMeantime_isRejected() {
+        // 배치 대상 조회와 UPDATE 사이에 사용자가 보류로 바꾼 경우. status 조건이 없으면
+        // "잠시 멈춰뒀다"고 한 항목을 솔버가 시간표에 앉힌다.
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 1);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "보류 경합").build());
+        Long itemId = planVersionService.findItems(userId(), plan.getPlanVersionId())
+                .get(0).getExecutionItemId();
+        setStatus(itemId, "HOLD");
+
+        assertThatThrownBy(() -> executionItemService.applyRollingPlacement(
+                userId(), itemId, start, start.atTime(19, 0), start.atTime(19, 40)))
+                .isInstanceOf(ConflictException.class);
+
+        ExecutionItem after = executionItemMapper.findByIdsForReview(userId(), List.of(itemId)).get(0);
+        assertThat(after.getPlacementType()).isEqualTo(PlacementType.UNSCHEDULED);
+        assertThat(after.getScheduledDate()).isNull();
+    }
+
+    @Test
+    void placement_onAStaleVersion_isRejected() {
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 1);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "버전 경합").build());
+        ExecutionItem item = planVersionService.findItems(userId(), plan.getPlanVersionId()).get(0);
+
+        // 첫 배치는 성공하고 version이 올라간다.
+        executionItemService.applyRollingPlacement(userId(), item.getExecutionItemId(),
+                start, start.atTime(19, 0), start.atTime(19, 40));
+
+        ExecutionItem placed = executionItemMapper.findByIdsForReview(
+                userId(), List.of(item.getExecutionItemId())).get(0);
+        assertThat(placed.getVersion())
+                .as("행을 바꿨으면 낙관적 락 카운터가 올라야 한다")
+                .isEqualTo(item.getVersion() + 1);
+
+        // 이미 TIME_FIXED이므로 두 번째 시도는 placement_type 조건에서도 막힌다.
+        assertThatThrownBy(() -> executionItemService.applyRollingPlacement(
+                userId(), item.getExecutionItemId(), start, start.atTime(20, 0), start.atTime(20, 40)))
+                .isInstanceOf(ConflictException.class);
+    }
+
+    @Test
+    void placementEvent_versionChainIsContinuous() {
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 1);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "버전 체인").build());
+        ExecutionItem item = planVersionService.findItems(userId(), plan.getPlanVersionId()).get(0);
+
+        executionItemService.applyRollingPlacement(userId(), item.getExecutionItemId(),
+                start, start.atTime(19, 0), start.atTime(19, 40));
+
+        // 이벤트의 afterVersion은 beforeVersion + 1이어야 한다 — 이력만 보고 행의 version을
+        // 되짚을 수 있어야 한다.
+        assertThat(countRows("execution_item_events",
+                "execution_item_id = " + item.getExecutionItemId()
+                        + " AND event_type = 'MOVED' AND actor_type = 'SYSTEM'"
+                        + " AND after_version = before_version + 1"))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void unschedule_onAStaleVersion_isRejected() {
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 1);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "해제 경합").build());
+        PlanPlacementResponse placed = planPlacementService.place(userId(), plan.getPlanVersionId(), start);
+        Long itemId = placed.getPlaced().get(0).getExecutionItemId();
+
+        // 배치로 version이 이미 올라갔으므로 0은 낡은 값이다.
+        assertThatThrownBy(() -> executionItemService.unschedule(itemId, userId(),
+                ExecutionItemUnscheduleRequest.builder()
+                        .planningStartDate(plan.getStartDate())
+                        .planningEndDate(plan.getEndDate())
+                        .version(0L).build()))
+                .isInstanceOf(ConflictException.class);
+    }
+
+    private void setStatus(Long executionItemId, String status) {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE execution_items SET status = ? WHERE execution_item_id = ?")) {
+            ps.setString(1, status);
+            ps.setLong(2, executionItemId);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new IllegalStateException("테스트 준비 실패", e);
+        }
+    }
+
     // ===== fixture =====
 
     private Long givenPlanProposal(LocalDate start, LocalDate end, int itemCount) {

@@ -49,13 +49,13 @@ public class LearningRecommendationService {
     private final ObjectMapper objectMapper;
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName;
+    private String modelName = "gpt-5-mini";
 
     @Value("${ai.learning.max-completion-tokens:2000}")
-    private int maxCompletionTokens;
+    private int maxCompletionTokens = 2000;
 
     @Value("${ai.request.timeout-seconds:90}")
-    private int requestTimeoutSeconds;
+    private int requestTimeoutSeconds = 90;
 
     private static final String SYSTEM_PROMPT = """
             너는 Learning Agent다. [학습 컨텍스트]를 보고 이 학생이 지금 다음으로 무엇을

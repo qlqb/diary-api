@@ -12,7 +12,9 @@ import com.jungwoo.project.memo.learning.domain.RecommendationPriority;
 import com.jungwoo.project.memo.learning.domain.TopicProgress;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.dto.StudyRecommendationResponse;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -53,6 +55,24 @@ class LearningRecommendationServiceTest {
 
     @InjectMocks
     private LearningRecommendationService service;
+
+    /**
+     * ★ @InjectMocks는 @Value 필드를 주입하지 않는다. 그래서 Java 기본값이 없는 필드는
+     * 0/null이 되고, requestTimeoutSeconds = 0이면 Duration.ofSeconds(0)이라 Flux가
+     * 즉시 타임아웃한다 — 목이 얼마나 빨리 emit하는지에 따라 통과/실패가 갈리는
+     * flaky 테스트가 된다(단독 실행은 통과, 전체 실행은 실패).
+     *
+     * 지금은 서비스의 @Value 필드가 애노테이션의 프로퍼티 기본값을 Java 초기값으로도
+     * 미러링하므로 이 세팅이 없어도 동작한다. 그래도 여기서 명시하는 이유는, 이 테스트가
+     * 타임아웃 값에 의존한다는 사실을 보이게 두고 나중에 미러링이 지워져도 여기서
+     * 막히게 하려는 것이다.
+     */
+    @BeforeEach
+    void setUpValueFields() {
+        ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 90);
+        ReflectionTestUtils.setField(service, "maxCompletionTokens", 2000);
+        ReflectionTestUtils.setField(service, "modelName", "test-model");
+    }
 
     @Test
     void recommend_throwsServiceUnavailable_whenAiNotConfigured() {

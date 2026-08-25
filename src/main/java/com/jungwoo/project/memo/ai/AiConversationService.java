@@ -147,10 +147,10 @@ public class AiConversationService {
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName;
+    private String modelName = "gpt-5-mini";
 
     @Value("${ai.context.max-input-tokens:6000}")
-    private int maxInputTokens;
+    private int maxInputTokens = 6000;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않는다. 사용자별 저장된 시간대는 아직 없다(User 엔티티에 컬럼

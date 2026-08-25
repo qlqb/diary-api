@@ -28,10 +28,10 @@ public class AiUsageLimitService {
     private final AiUsageLogMapper aiUsageLogMapper;
 
     @Value("${ai.usage.daily-limit:50}")
-    private int dailyLimit;
+    private int dailyLimit = 50;
 
     @Value("${ai.usage.monthly-limit:1000}")
-    private int monthlyLimit;
+    private int monthlyLimit = 1000;
 
     @Transactional(readOnly = true)
     public void checkLimit(Long userId) {

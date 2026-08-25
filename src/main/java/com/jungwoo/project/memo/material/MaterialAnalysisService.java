@@ -61,16 +61,16 @@ public class MaterialAnalysisService {
     private final ObjectMapper objectMapper;
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName;
+    private String modelName = "gpt-5-mini";
 
     @Value("${ai.material.max-input-tokens:12000}")
-    private int maxInputTokens;
+    private int maxInputTokens = 12000;
 
     @Value("${ai.material.max-completion-tokens:4000}")
-    private int maxCompletionTokens;
+    private int maxCompletionTokens = 4000;
 
     @Value("${ai.request.timeout-seconds:90}")
-    private int requestTimeoutSeconds;
+    private int requestTimeoutSeconds = 90;
 
     private static final String SYSTEM_PROMPT = """
             너는 학생이 업로드한 학습 자료(강의계획서/교재 목차/교수 PPT·PDF)를 읽고

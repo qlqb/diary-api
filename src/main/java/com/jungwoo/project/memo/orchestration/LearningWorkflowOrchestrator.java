@@ -30,7 +30,7 @@ public class LearningWorkflowOrchestrator {
     private final PlanningAgentService planningAgentService;
 
     @Value("${workflow.max-agent-calls:4}")
-    private int maxAgentCalls;
+    private int maxAgentCalls = 4;
 
     public record RecommendAndPlanResult(StudyRecommendationResponse recommendation, PlanningDraftResponse plan) {
     }

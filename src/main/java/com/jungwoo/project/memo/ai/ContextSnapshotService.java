@@ -63,11 +63,11 @@ public class ContextSnapshotService {
     private final UserContextMapper userContextMapper;
 
     @Value("${ai.context.recent-message-limit:6}")
-    private int recentMessageLimit;
+    private int recentMessageLimit = 6;
 
     /** 장기 컨텍스트가 토큰 예산을 잡아먹지 않도록 최근 갱신 순으로 이 개수까지만 프롬프트에 담는다. */
     @Value("${ai.context.long-term-limit:30}")
-    private int longTermLimit;
+    private int longTermLimit = 30;
 
     /**
      * 세 영역(최근 대화/장기 컨텍스트/이전 요약)을 contextBudgetChars 안에서 조립한다.

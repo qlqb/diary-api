@@ -36,11 +36,11 @@ public class AiConversationController {
     private final AiConversationService aiConversationService;
 
     @Value("${ai.request.timeout-seconds:90}")
-    private int requestTimeoutSeconds;
+    private int requestTimeoutSeconds = 90;
 
     /** Flux 타임아웃이 항상 먼저 걸리도록 SseEmitter 자체 타임아웃(백스톱)에 여유를 더 둔다. */
     @Value("${ai.sse.timeout-buffer-seconds:30}")
-    private int sseTimeoutBufferSeconds;
+    private int sseTimeoutBufferSeconds = 30;
 
     @PostMapping
     public ResponseEntity<AiConversationResponse> create(

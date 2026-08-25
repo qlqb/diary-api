@@ -50,13 +50,13 @@ public class LearningConversationService {
     private final AiUsageLimitService aiUsageLimitService;
 
     @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName;
+    private String modelName = "gpt-5-mini";
 
     @Value("${ai.learning.max-completion-tokens:2000}")
-    private int maxCompletionTokens;
+    private int maxCompletionTokens = 2000;
 
     @Value("${ai.request.timeout-seconds:90}")
-    private int requestTimeoutSeconds;
+    private int requestTimeoutSeconds = 90;
 
     private static final String SYSTEM_PROMPT = """
             너는 학생 한 명을 맡은 개인과외 선생님(Learning Agent)이다. 일반적인 챗봇처럼
