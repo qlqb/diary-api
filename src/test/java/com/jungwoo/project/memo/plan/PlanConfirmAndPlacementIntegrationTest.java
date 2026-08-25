@@ -6,6 +6,8 @@ import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.ExecutionItemService;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemUnscheduleRequest;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionOriginType;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
@@ -58,6 +60,10 @@ class PlanConfirmAndPlacementIntegrationTest {
     private PlanConfirmService planConfirmService;
     @Autowired
     private PlanPlacementService planPlacementService;
+    @Autowired
+    private PlanVersionService planVersionService;
+    @Autowired
+    private ExecutionItemService executionItemService;
     @Autowired
     private PlanVersionMapper planVersionMapper;
     @Autowired
@@ -243,6 +249,133 @@ class PlanConfirmAndPlacementIntegrationTest {
                     assertThat(item.getPlacementType()).isEqualTo(PlacementType.UNSCHEDULED);
                     assertThat(item.getPlanningStartDate()).isEqualTo(start);
                 });
+    }
+
+    // ===== 같은 기간의 두 계획이 서로를 보지 않는다 =====
+
+    @Test
+    void twoPlansInTheSamePeriod_eachSeesOnlyItsOwnItems() {
+        LocalDate start = today().plusDays(7);
+        LocalDate end = start.plusDays(13);
+
+        Long proposalA = givenPlanProposal(start, end, 3);
+        PlanVersion planA = planConfirmService.confirm(userId(), proposalA,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "계획 A").build());
+        Long proposalB = givenPlanProposal(start, end, 4);
+        PlanVersion planB = planConfirmService.confirm(userId(), proposalB,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "계획 B").build());
+
+        assertThat(planA.getStartDate()).isEqualTo(planB.getStartDate());
+
+        List<ExecutionItem> itemsA = planVersionService.findItems(userId(), planA.getPlanVersionId());
+        List<ExecutionItem> itemsB = planVersionService.findItems(userId(), planB.getPlanVersionId());
+
+        assertThat(itemsA).hasSize(3);
+        assertThat(itemsB).hasSize(4);
+        assertThat(itemsA).allSatisfy(i ->
+                assertThat(i.getPlanVersionId()).isEqualTo(planA.getPlanVersionId()));
+        assertThat(itemsB).allSatisfy(i ->
+                assertThat(i.getPlanVersionId()).isEqualTo(planB.getPlanVersionId()));
+
+        // 날짜만 보는 조회는 둘을 합쳐 본다 — 그래서 계획 화면이 그것을 쓰면 안 된다.
+        assertThat(executionItemMapper.findByUserIdAndPlanningRange(userId(), start, end))
+                .as("기간 조회는 두 계획을 합쳐서 본다")
+                .hasSizeGreaterThanOrEqualTo(7);
+    }
+
+    @Test
+    void placement_onlyTouchesItsOwnPlan() {
+        LocalDate start = today().plusDays(7);
+        LocalDate end = start.plusDays(13);
+        Long proposalA = givenPlanProposal(start, end, 2);
+        PlanVersion planA = planConfirmService.confirm(userId(), proposalA,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "배치 대상").build());
+        Long proposalB = givenPlanProposal(start, end, 2);
+        PlanVersion planB = planConfirmService.confirm(userId(), proposalB,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "건드리면 안 됨").build());
+
+        planPlacementService.place(userId(), planA.getPlanVersionId(), start);
+
+        assertThat(planVersionService.findItems(userId(), planB.getPlanVersionId()))
+                .as("다른 계획의 항목은 미배치로 남아야 한다")
+                .allSatisfy(i -> assertThat(i.getPlacementType()).isEqualTo(PlacementType.UNSCHEDULED));
+    }
+
+    // ===== 배치 → 해제 왕복 =====
+
+    @Test
+    void unschedule_returnsThePlacedItemToTheUnplacedSection() {
+        LocalDate start = today().plusDays(7);
+        LocalDate end = start.plusDays(13);
+        Long proposalId = givenPlanProposal(start, end, 2);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "왕복").build());
+
+        PlanPlacementResponse placed = planPlacementService.place(userId(), plan.getPlanVersionId(), start);
+        assertThat(placed.getPlaced()).isNotEmpty();
+        Long itemId = placed.getPlaced().get(0).getExecutionItemId();
+
+        ExecutionItem afterPlace = executionItemMapper.findByIdsForReview(userId(), List.of(itemId)).get(0);
+        assertThat(afterPlace.getPlacementType()).isEqualTo(PlacementType.TIME_FIXED);
+        assertThat(afterPlace.getPlanningStartDate()).isNull();
+
+        executionItemService.unschedule(itemId, userId(), ExecutionItemUnscheduleRequest.builder()
+                .planningStartDate(plan.getStartDate())
+                .planningEndDate(plan.getEndDate())
+                .version(afterPlace.getVersion())
+                .reason("되돌리기")
+                .build());
+
+        ExecutionItem after = executionItemMapper.findByIdsForReview(userId(), List.of(itemId)).get(0);
+        assertThat(after.getPlacementType()).isEqualTo(PlacementType.UNSCHEDULED);
+        assertThat(after.getScheduledDate()).isNull();
+        assertThat(after.getScheduledStartAt()).isNull();
+        // 계획 안에 남아야 한다 — 기간까지 비우면 화면에서 증발한다.
+        assertThat(after.getPlanningStartDate()).isEqualTo(plan.getStartDate());
+        assertThat(after.getPlanningEndDate()).isEqualTo(plan.getEndDate());
+
+        // 그래서 다시 배치 대상이 된다.
+        assertThat(planPlacementService.place(userId(), plan.getPlanVersionId(), start).getPlaced())
+                .extracting(PlanPlacementResponse.PlacedItem::getExecutionItemId)
+                .contains(itemId);
+    }
+
+    @Test
+    void unschedule_withoutPlanningRange_leavesThePlan() {
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 2);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "미분류로").build());
+        PlanPlacementResponse placed = planPlacementService.place(userId(), plan.getPlanVersionId(), start);
+        Long itemId = placed.getPlaced().get(0).getExecutionItemId();
+        Long version = executionItemMapper.findByIdsForReview(userId(), List.of(itemId)).get(0).getVersion();
+
+        executionItemService.unschedule(itemId, userId(), ExecutionItemUnscheduleRequest.builder()
+                .version(version).build());
+
+        ExecutionItem after = executionItemMapper.findByIdsForReview(userId(), List.of(itemId)).get(0);
+        assertThat(after.getPlanningStartDate()).isNull();
+        assertThat(planVersionService.findItems(userId(), plan.getPlanVersionId()))
+                .as("미분류로 나가면 계획 화면에서 사라진다")
+                .extracting(ExecutionItem::getExecutionItemId).doesNotContain(itemId);
+    }
+
+    @Test
+    void placement_recordsAnEventForEachPlacedItem() {
+        LocalDate start = today().plusDays(7);
+        Long proposalId = givenPlanProposal(start, start.plusDays(6), 2);
+        PlanVersion plan = planConfirmService.confirm(userId(), proposalId,
+                PlanConfirmRequest.builder().title(TITLE_PREFIX + "이벤트").build());
+
+        PlanPlacementResponse placed = planPlacementService.place(userId(), plan.getPlanVersionId(), start);
+
+        for (PlanPlacementResponse.PlacedItem item : placed.getPlaced()) {
+            assertThat(countRows("execution_item_events",
+                    "execution_item_id = " + item.getExecutionItemId()
+                            + " AND event_type = 'MOVED' AND actor_type = 'SYSTEM'"))
+                    .as("배치는 이력을 남긴다")
+                    .isEqualTo(1);
+        }
     }
 
     @Test

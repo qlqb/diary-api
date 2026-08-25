@@ -20,6 +20,7 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCreateRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemUnscheduleRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemPartialRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
@@ -217,6 +218,102 @@ public class ExecutionItemService {
                 item.getVersion(), item.getVersion() + 1);
 
         log.info("실행 조각 재열기: executionItemId={}, userId={}", executionItemId, userId);
+
+        return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
+    }
+
+    // ===== 배치 / 배치 해제 =====
+
+    /**
+     * 롤링 배치가 정한 시각을 실제로 적용한다. UNSCHEDULED → TIME_FIXED.
+     *
+     * ★ 영향 행 수를 검사한다. 0이면 그 사이에 누군가 이 조각을 옮겼거나 지웠거나 이미
+     * 배치했다는 뜻이고, 그대로 넘어가면 응답에는 "배치했다"고 적히는데 DB는 안 바뀐
+     * 상태가 된다 — 사용자가 화면에서 보는 것과 실제가 갈라진다.
+     *
+     * 이벤트는 MOVED로 남긴다. 배치는 이동과 다른 사건이지만 event_type이 CHECK로
+     * 고정돼 있어 새 값을 넣으려면 마이그레이션이 필요하고, "언제 할지가 바뀌었다"는
+     * MOVED의 의미에 배치도 들어간다. 구분은 before/after 상태 JSON이 한다 —
+     * before에 날짜가 없고 after에 있으면 배치다. 회고도 같은 방식으로 판정한다
+     * (스냅샷 날짜 없음 → 현재 날짜 있음 = SCHEDULED, 이동 아님).
+     *
+     * actorType은 SYSTEM이다. 사용자가 [배치하기]를 누른 것은 맞지만 시각을 고른 것은
+     * 솔버이므로, 사용자가 직접 그 시각을 지정한 move()와 구별한다.
+     */
+    @Transactional
+    public void applyRollingPlacement(
+            Long userId, Long executionItemId,
+            LocalDate scheduledDate, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt
+    ) {
+        ExecutionItem before = findOwnedOrThrow(executionItemId, userId);
+
+        int updated = executionItemMapper.applyTimeFixedPlacement(
+                userId, executionItemId, scheduledDate, scheduledStartAt, scheduledEndAt);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.VERSION_CONFLICT);
+        }
+
+        insertEvent(executionItemId, userId, ExecutionEventType.MOVED, ExecutionEventActorType.SYSTEM,
+                "이번 주 배치",
+                toJson(Map.of("placementType", PlacementType.UNSCHEDULED,
+                        "planningStartDate", String.valueOf(before.getPlanningStartDate()),
+                        "planningEndDate", String.valueOf(before.getPlanningEndDate()))),
+                toJson(Map.of("placementType", PlacementType.TIME_FIXED,
+                        "scheduledDate", String.valueOf(scheduledDate),
+                        "scheduledStartAt", String.valueOf(scheduledStartAt),
+                        "scheduledEndAt", String.valueOf(scheduledEndAt))),
+                before.getVersion(), before.getVersion());
+    }
+
+    /**
+     * 날짜/시각을 뗀다. 배치의 역방향이고, 롤링 배치 결과를 되돌리는 수단이다.
+     *
+     * ★ 기간을 요청으로 받는다. 서버가 추론하지 않는다(11-period-plan.md §2-5) —
+     * 같은 날짜에 계획이 여럿 걸릴 수 있어 서버는 "그 계획의 기간"을 고를 수 없다.
+     *
+     * 기간을 주면 계획 안에 남고, 안 주면 미분류로 나간다. 전자가 기본이어야 한다:
+     * 사용자가 날짜만 뗐는데 항목이 화면에서 증발하면 안 된다.
+     *
+     * plan_versions는 건드리지 않는다. 배치와 해제는 실행 조각 조작이고, 스냅샷은
+     * 확정 시점의 사실이다 — 나중에 날짜를 떼는 것이 "그때 무엇을 하기로 했는가"를
+     * 바꾸지는 않는다.
+     */
+    @Transactional
+    public ExecutionItemResponse unschedule(
+            Long executionItemId, Long userId, ExecutionItemUnscheduleRequest request) {
+        ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
+        requireVersion(item, request.getVersion());
+        requireStatusIn(item, ExecutionStatus.PLANNED, ExecutionStatus.HOLD);
+        if (item.getPlacementType() == PlacementType.UNSCHEDULED) {
+            // 이미 날짜가 없다. 기간만 바꾸는 것은 이 액션의 일이 아니다.
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        LocalDate planningStart = request.getPlanningStartDate();
+        LocalDate planningEnd = request.getPlanningEndDate();
+        // planning_* 는 둘 다 있거나 둘 다 없다(chk_execution_items_planning_range).
+        // 한쪽만 온 요청을 통과시키면 UPDATE가 제약에 걸려 원인 없는 500이 된다.
+        if ((planningStart == null) != (planningEnd == null)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        if (planningStart != null && planningEnd.isBefore(planningStart)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        int updated = executionItemMapper.clearPlacement(
+                executionItemId, userId, request.getVersion(), planningStart, planningEnd);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.VERSION_CONFLICT);
+        }
+
+        insertEvent(executionItemId, userId, ExecutionEventType.MOVED, ExecutionEventActorType.USER,
+                request.getReason(),
+                toJson(Map.of("placementType", item.getPlacementType(),
+                        "scheduledDate", String.valueOf(item.getScheduledDate()))),
+                toJson(Map.of("placementType", PlacementType.UNSCHEDULED,
+                        "planningStartDate", String.valueOf(planningStart),
+                        "planningEndDate", String.valueOf(planningEnd))),
+                item.getVersion(), item.getVersion() + 1);
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }

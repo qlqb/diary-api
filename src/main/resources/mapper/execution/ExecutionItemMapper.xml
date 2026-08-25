@@ -319,6 +319,29 @@
       언제인가"에 답이 둘이 되고, chk_execution_items_planning_range가 그것을 막는다 —
       즉 planning_* 를 비우지 않으면 이 UPDATE 자체가 실패한다.
     -->
+    <!--
+      배치 해제. planning_* 를 함께 세팅해야 한다 — 날짜를 비우면서 기간도 비우면
+      그 항목은 기간 조회에서 사라진다(§2-5의 (나) 미분류). 호출자가 기간을 주면
+      (가) 계획 안에 남기고, 안 주면 (나)가 된다.
+
+      version을 조건에 넣어 낙관적 락을 건다. 영향 행 수 0은 그 사이 누군가 이 조각을
+      바꿨다는 뜻이므로 호출자가 409로 돌린다.
+    -->
+    <update id="clearPlacement">
+        UPDATE execution_items
+           SET placement_type      = 'UNSCHEDULED',
+               scheduled_date      = NULL,
+               scheduled_start_at  = NULL,
+               scheduled_end_at    = NULL,
+               planning_start_date = #{planningStartDate},
+               planning_end_date   = #{planningEndDate},
+               version             = version + 1
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND version           = #{version}
+           AND is_deleted        = 0
+    </update>
+
     <update id="applyTimeFixedPlacement">
         UPDATE execution_items
            SET placement_type      = 'TIME_FIXED',
@@ -337,14 +360,49 @@
       롤링 배치 대상: 그 계획이 만들어낸 조각 중 아직 날짜가 없고 목표 기간이 창과 겹치는 것.
       상태로도 거른다 — 이미 끝냈거나 보류·취소한 것에 시각을 새로 박지 않는다.
     -->
-    <select id="findUnscheduledByPlanVersion" resultMap="executionItemResultMap">
+    <!--
+      계획 화면의 항목 목록.
+
+      ★ planKey에 속한 모든 버전의 조각을 잡는다. plan_version_id는 불변 출처이므로
+      재계획으로 v2가 생기면 v1이 만든 조각의 출처는 v1로 남는다 — 단건 id로 거르면
+      v2 화면이 비어버린다.
+
+      planKey와 날짜 조건을 AND로 묶는다. 날짜만 보면 같은 기간의 다른 계획 항목이 섞이고,
+      계획만 보면 기간 밖으로 옮긴 항목이 계속 남는다. 둘 다 필요하다.
+
+      서브쿼리에 user_id를 다시 넣는다 — plan_key는 UUID라 충돌 가능성이 사실상 없지만,
+      소유권 검사를 서비스 코드에만 두면 이 질의를 다른 곳에서 재사용할 때 빠진다.
+    -->
+    <select id="findByPlanKeyAndRange" resultMap="executionItemResultMap">
         SELECT *
         FROM execution_items
-        WHERE user_id         = #{userId}
-          AND plan_version_id = #{planVersionId}
-          AND is_deleted      = 0
-          AND placement_type  = 'UNSCHEDULED'
-          AND status          = 'PLANNED'
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND plan_version_id IN (
+                SELECT plan_version_id FROM plan_versions
+                 WHERE plan_key = #{planKey} AND user_id = #{userId}
+              )
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL,
+                 scheduled_date ASC, order_index ASC, execution_item_id ASC
+    </select>
+
+    <select id="findUnscheduledByPlanKey" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND placement_type = 'UNSCHEDULED'
+          AND status         = 'PLANNED'
+          AND plan_version_id IN (
+                SELECT plan_version_id FROM plan_versions
+                 WHERE plan_key = #{planKey} AND user_id = #{userId}
+              )
           AND planning_start_date &lt;= #{windowEnd}
           AND planning_end_date   &gt;= #{windowStart}
         ORDER BY priority = 'MUST' DESC, order_index ASC, execution_item_id ASC

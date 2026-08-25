@@ -30,13 +30,15 @@ class PlanVersionServiceTest {
 
     @Mock
     private PlanVersionMapper planVersionMapper;
+    @Mock
+    private com.jungwoo.project.memo.execution.ExecutionItemMapper executionItemMapper;
 
     // 코덱은 진짜를 쓴다 — 검증 대상이 "JSON 안의 courseId를 실제로 알아보는가"라서
     // 스텁으로 바꾸면 증명할 것이 남지 않는다.
     private final PlanSnapshotCodec snapshotCodec = new PlanSnapshotCodec();
 
     private PlanVersionService service() {
-        return new PlanVersionService(planVersionMapper, snapshotCodec);
+        return new PlanVersionService(planVersionMapper, snapshotCodec, executionItemMapper);
     }
 
     @Test

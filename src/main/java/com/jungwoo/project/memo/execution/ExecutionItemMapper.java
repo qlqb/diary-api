@@ -88,6 +88,18 @@ public interface ExecutionItemMapper {
             @Param("planVersionId") Long planVersionId
     );
 
+    /**
+     * 배치 해제: 날짜·시각을 비우고 planning_* 를 채운다(전이 규칙 §2-5의 역방향).
+     * version을 조건에 넣어 낙관적 락을 걸고, 성공하면 version을 올린다.
+     */
+    int clearPlacement(
+            @Param("executionItemId") Long executionItemId,
+            @Param("userId") Long userId,
+            @Param("version") Long version,
+            @Param("planningStartDate") LocalDate planningStartDate,
+            @Param("planningEndDate") LocalDate planningEndDate
+    );
+
     /** 롤링 배치: 시각을 확정하고 planning_* 를 비운다(전이 규칙 §2-5). */
     int applyTimeFixedPlacement(
             @Param("userId") Long userId,
@@ -97,10 +109,32 @@ public interface ExecutionItemMapper {
             @Param("scheduledEndAt") java.time.LocalDateTime scheduledEndAt
     );
 
-    /** 그 계획이 만들어낸 조각 중 아직 날짜를 정하지 않은 것들. 롤링 배치의 대상 집합. */
-    List<ExecutionItem> findUnscheduledByPlanVersion(
+    /**
+     * 한 계획에 속한 조각들. 계획 화면이 쓴다.
+     *
+     * ★ planKey로 거른다. plan_version_id가 아니다 — 그 컬럼은 "누가 만들었나"라는 불변
+     * 출처이고, 재계획으로 v2가 생겨도 v1이 만든 조각의 출처는 v1로 남는다. 단건
+     * plan_version_id로 거르면 v2 화면이 비어버린다. 계획을 가리키는 안정적 식별자는
+     * plan_key다.
+     *
+     * ★ 날짜 조건과 AND로 묶는다. 날짜만 보면 같은 기간의 다른 계획 항목이 섞이고
+     * ("이번 주에 뭐 하지"에 남의 계획이 끼어든다), 계획만 보면 기간 밖으로 옮긴 항목이
+     * 계속 남는다(11-period-plan.md §5-3은 그 항목이 사라지는 것을 의도한 동작으로 둔다).
+     */
+    List<ExecutionItem> findByPlanKeyAndRange(
             @Param("userId") Long userId,
-            @Param("planVersionId") Long planVersionId,
+            @Param("planKey") String planKey,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    /**
+     * 그 계획에 속한 조각 중 아직 날짜를 정하지 않은 것들. 롤링 배치의 대상 집합.
+     * 계획 화면과 같은 이유로 planKey 기준이다.
+     */
+    List<ExecutionItem> findUnscheduledByPlanKey(
+            @Param("userId") Long userId,
+            @Param("planKey") String planKey,
             @Param("windowStart") LocalDate windowStart,
             @Param("windowEnd") LocalDate windowEnd
     );

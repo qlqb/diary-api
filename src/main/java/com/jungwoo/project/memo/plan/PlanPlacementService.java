@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.plan;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
@@ -61,6 +62,7 @@ public class PlanPlacementService {
     private final AvailabilityEstimateService availabilityEstimateService;
     private final SchedulingSolverService solverService;
     private final ExecutionItemMapper executionItemMapper;
+    private final ExecutionItemService executionItemService;
     private final Clock clock;
 
     @Value("${scheduling.availability.slot-granularity-minutes:15}")
@@ -91,8 +93,10 @@ public class PlanPlacementService {
             windowEnd = plan.getEndDate();
         }
 
-        List<ExecutionItem> targets = executionItemMapper.findUnscheduledByPlanVersion(
-                userId, planVersionId, windowStart, windowEnd);
+        // planKey로 거른다 — plan_version_id는 불변 출처라, 재계획으로 v2가 생기면
+        // v1이 만든 조각을 v2 화면·배치가 놓친다.
+        List<ExecutionItem> targets = executionItemMapper.findUnscheduledByPlanKey(
+                userId, plan.getPlanKey(), windowStart, windowEnd);
 
         List<PlanPlacementResponse.PlacedItem> placed = new ArrayList<>();
         List<PlanPlacementResponse.UnplacedItem> unplaced = new ArrayList<>();
@@ -132,9 +136,9 @@ public class PlanPlacementService {
                     unplaced.add(toUnplaced(item));
                     continue;
                 }
-                // 전이 규칙(§2-5): 날짜를 정하면 planning_* 를 비운다. 두 곳에 기간이 남으면
-                // "이 항목의 기간은 언제인가"에 답이 둘이 된다.
-                executionItemMapper.applyTimeFixedPlacement(userId, item.getExecutionItemId(),
+                // 전이 규칙(§2-5)과 이벤트 기록, 영향 행 수 검증을 한곳에서 한다 —
+                // 실행 조각 변경과 이력 기록은 ExecutionItemService가 소유한다.
+                executionItemService.applyRollingPlacement(userId, item.getExecutionItemId(),
                         task.getAssignedStart().toLocalDate(),
                         task.getAssignedStart(), task.getAssignedEnd());
                 placed.add(PlanPlacementResponse.PlacedItem.builder()

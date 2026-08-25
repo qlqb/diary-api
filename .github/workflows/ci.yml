@@ -44,6 +44,10 @@ jobs:
           distribution: temurin
           cache: gradle
 
-      # 이 DB는 비어 있다. 로컬 memo DB의 실제 테이블에 직접 쓰는 두 테스트는
+      # 이 DB는 비어 있다. 로컬 memo DB의 실제 테이블에 직접 쓰는 다섯 테스트는
       # 여기서 돌 수 없으므로 뺀다(build.gradle의 excludeDbTests 주석 참고).
+      #
+      # gradlew는 실행 비트(100755)가 있어야 한다. 없으면 이 줄이 permission denied로
+      # 죽고, 그러면 CI는 "테스트를 돌려서 통과한 것"이 아니라 "돌려보지도 못한 것"이 된다.
+      # git update-index --chmod=+x gradlew 로 인덱스에 박아둔다.
       - run: ./gradlew test -PexcludeDbTests

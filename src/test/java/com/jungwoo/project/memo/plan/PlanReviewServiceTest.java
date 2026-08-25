@@ -57,7 +57,8 @@ class PlanReviewServiceTest {
 
     @BeforeEach
     void setUp() {
-        PlanVersionService versionService = new PlanVersionService(planVersionMapper, codec);
+        PlanVersionService versionService =
+                new PlanVersionService(planVersionMapper, codec, executionItemMapper);
         service = new PlanReviewService(planVersionMapper, versionService, codec,
                 executionItemMapper, executionRecordMapper);
         when(executionItemMapper.findInPeriodForReview(anyLong(), any(), any())).thenReturn(List.of());

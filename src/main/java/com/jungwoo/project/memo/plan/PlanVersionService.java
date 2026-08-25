@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.plan;
 
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
@@ -26,6 +28,7 @@ public class PlanVersionService {
 
     private final PlanVersionMapper planVersionMapper;
     private final PlanSnapshotCodec snapshotCodec;
+    private final ExecutionItemMapper executionItemMapper;
 
     /**
      * 그 날짜를 포함하는 계획 목록. courseId를 주면 그 프로젝트의 항목을 하나라도 담은
@@ -74,6 +77,23 @@ public class PlanVersionService {
             return PlanIntensity.DEFAULT;
         }
         return latest.getIntensity();
+    }
+
+    /**
+     * 이 계획의 현재 항목들. 계획 화면이 쓴다.
+     *
+     * ★ 스냅샷이 아니라 현재 execution_items를 본다(11-period-plan.md §5-3). 그리고
+     * planKey로 걸러 같은 기간의 다른 계획 항목이 섞이지 않게 한다 — 날짜만으로 거르면
+     * "이번 주에 뭐 하지"에 남의 계획이 끼어든다.
+     *
+     * 기간은 그 계획의 start_date~end_date다. 항목을 기간 밖으로 옮기면 여기서 사라지는데,
+     * 그건 의도한 동작이다 — "어디 갔지"는 회고가 답한다.
+     */
+    @Transactional(readOnly = true)
+    public List<ExecutionItem> findItems(Long userId, Long planVersionId) {
+        PlanVersion plan = getOwned(userId, planVersionId);
+        return executionItemMapper.findByPlanKeyAndRange(
+                userId, plan.getPlanKey(), plan.getStartDate(), plan.getEndDate());
     }
 
     @Transactional(readOnly = true)

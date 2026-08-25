@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.plan;
 
 import com.jungwoo.project.memo.common.security.UserPrincipal;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemResponse;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
 import com.jungwoo.project.memo.plan.dto.PlanConfirmRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
@@ -32,6 +33,7 @@ import java.util.List;
  * POST /api/plans/proposals/{proposalId}/confirm  확정 (execution_items + plan_versions)
  * GET  /api/plans?date=&courseId=              그 날짜를 포함하는 계획 목록
  * GET  /api/plans/{planVersionId}              계획 하나
+ * GET  /api/plans/{planVersionId}/items         이 계획의 현재 항목 (planKey 기준)
  * GET  /api/plans/{planVersionId}/review        회고
  * POST /api/plans/{planVersionId}/place         롤링 배치 (다가온 창의 시각을 정한다)
  *
@@ -99,6 +101,23 @@ public class PlanController {
     ) {
         return ResponseEntity.ok(
                 PlanResponse.from(planVersionService.getOwned(principal.getUserId(), planVersionId)));
+    }
+
+    /**
+     * 이 계획의 현재 항목들.
+     *
+     * /api/execution-items/range로 기간만 걸러 오면 같은 기간의 다른 계획 항목이 섞인다.
+     * 계획 화면은 이 경로를 쓴다.
+     */
+    @GetMapping("/{planVersionId}/items")
+    public ResponseEntity<List<ExecutionItemResponse>> items(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long planVersionId
+    ) {
+        return ResponseEntity.ok(
+                planVersionService.findItems(principal.getUserId(), planVersionId).stream()
+                        .map(ExecutionItemResponse::from)
+                        .toList());
     }
 
     @GetMapping("/{planVersionId}/review")

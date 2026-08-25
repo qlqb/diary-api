@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemUnscheduleRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemPartialRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReopenRequest;
@@ -68,6 +69,30 @@ public class ExecutionItemActionController {
 
         return ResponseEntity.ok(
                 executionItemService.move(executionItemId, principal.getUserId(), request));
+    }
+
+    /**
+     * 배치 해제. 롤링 배치 결과를 되돌리는 수단이다.
+     *
+     * PATCH를 쓴다 — 배치 상태 필드만 바꾸는 부분 수정이고, 같은 요청을 두 번 보내면
+     * 두 번째는 이미 UNSCHEDULED라 400으로 거절된다(멱등하지 않으므로 PUT은 아니다).
+     *
+     * body의 planningStartDate/EndDate는 서버가 추론하지 않는다 — 같은 날짜에 계획이
+     * 여럿 걸릴 수 있어 "그 계획의 기간"을 서버가 고를 수 없다. 두 값이 null이면
+     * 미분류로 나간다.
+     */
+    @PatchMapping("/{executionItemId}/unschedule")
+    public ResponseEntity<ExecutionItemResponse> unschedule(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionItemId,
+            @Valid @RequestBody ExecutionItemUnscheduleRequest request
+    ) {
+        log.info("PATCH /api/execution-items/{}/unschedule - userId={}, planningRange={}~{}",
+                executionItemId, principal.getUserId(),
+                request.getPlanningStartDate(), request.getPlanningEndDate());
+
+        return ResponseEntity.ok(
+                executionItemService.unschedule(executionItemId, principal.getUserId(), request));
     }
 
     @PostMapping("/{executionItemId}/reduce")
