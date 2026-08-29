@@ -29,6 +29,20 @@ public interface CourseMaterialMapper {
     /** 사용자의 전체 ACTIVE 자료. 전역 자료함 목록용. */
     List<CourseMaterial> findAllByUserId(@Param("userId") Long userId);
 
+    /**
+     * ACTIVE 자료를 행 잠금과 함께 가져온다(SELECT ... FOR UPDATE). 연결 제안 apply 전용.
+     *
+     * 잠그는 것이 material_links가 아니라 course_materials인 것이 핵심이다 — 미연결 자료에는
+     * 링크 행이 아예 없으므로 링크 테이블을 잠그면 아무것도 안 잠긴다. 빈 범위의 갭 락에
+     * 기대면 격리 수준에 따라 동작이 달라져 추론할 수 없으므로, 이미 존재하는 자료 행을
+     * 잠금 기준으로 삼는다.
+     *
+     * 호출부는 materialId 오름차순으로 한 번에 부른다 — 그룹별로 나눠 잠그면 두 요청이 서로
+     * 다른 순서로 진입해 데드락이 난다.
+     */
+    List<CourseMaterial> lockActiveByIdsAndUserId(@Param("materialIds") List<Long> materialIds,
+                                                  @Param("userId") Long userId);
+
     /** soft delete. 파일 원문은 이 호출 이후 서비스가 별도로 디스크에서 지운다. */
     void markDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
 }

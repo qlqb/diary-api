@@ -61,6 +61,23 @@
         ORDER BY created_at DESC
     </select>
 
+    <!--
+      연결 제안 apply의 사전 검증용 잠금. 이 잠금이 지키는 불변식은 "같은 자료로 중복
+      프로젝트를 만들지 않는다"이지 "자료당 링크 1개"가 아니다 — 자료와 프로젝트는 N:M이고
+      여러 링크는 정상이다.
+
+      ORDER BY를 FOR UPDATE와 함께 두는 이유는 잠금 획득 순서를 materialId 오름차순으로
+      고정하기 위해서다. 두 요청이 서로 다른 순서로 같은 행들을 잠그면 데드락이 난다.
+    -->
+    <select id="lockActiveByIdsAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id
+        FOR UPDATE
+    </select>
+
     <update id="markDeleted">
         UPDATE course_materials
         SET status = 'DELETED', extracted_text = NULL

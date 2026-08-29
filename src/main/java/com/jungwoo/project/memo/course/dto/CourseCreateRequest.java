@@ -2,6 +2,7 @@ package com.jungwoo.project.memo.course.dto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
@@ -13,6 +14,9 @@ import lombok.NoArgsConstructor;
  */
 @Getter
 @NoArgsConstructor
+// 서버 내부에서 프로젝트를 만드는 경로(연결 제안 apply)가 이 요청을 직접 조립한다.
+// 세터를 열지 않는 것은 의도다 — 역직렬화 뒤에 필드가 바뀌는 자리를 만들지 않는다.
+@AllArgsConstructor
 public class CourseCreateRequest {
 
     @NotBlank
