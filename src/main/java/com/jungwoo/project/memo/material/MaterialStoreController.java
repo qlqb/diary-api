@@ -1,12 +1,17 @@
 package com.jungwoo.project.memo.material;
 
 import com.jungwoo.project.memo.common.security.UserPrincipal;
+import com.jungwoo.project.memo.material.dto.LinkProposalApplyRequest;
+import com.jungwoo.project.memo.material.dto.LinkProposalApplyResponse;
+import com.jungwoo.project.memo.material.dto.LinkProposalRequest;
+import com.jungwoo.project.memo.material.dto.LinkProposalResponse;
 import com.jungwoo.project.memo.material.dto.MaterialDetailResponse;
 import com.jungwoo.project.memo.material.dto.MaterialLinkCreateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialLinkResponse;
 import com.jungwoo.project.memo.material.dto.MaterialLinkTypeUpdateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import com.jungwoo.project.memo.material.dto.MaterialStoreItemResponse;
+import com.jungwoo.project.memo.material.linkproposal.MaterialLinkProposalService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -25,6 +30,8 @@ import java.util.List;
  * POST   /api/materials                        프로젝트 없이 업로드 (materialType을 받지 않는다)
  * GET    /api/materials/{id}                   단건 + 연결 목록 + 분석 이력
  * DELETE /api/materials/{id}                   자료 삭제 (원본 파일까지)
+ * POST   /api/materials/link-proposal          미연결 자료를 어디에 넣을지 제안 (저장하지 않는다)
+ * POST   /api/materials/link-proposal/apply    승인한 제안을 적용 (단일 트랜잭션)
  * POST   /api/materials/{id}/links             프로젝트에 연결. 이때 materialType이 정해진다
  * PATCH  /api/materials/{id}/links/{courseId}   그 프로젝트에서의 역할(materialType)만 변경
  * DELETE /api/materials/{id}/links/{courseId}  연결 해제만 (자료는 남는다)
@@ -39,6 +46,7 @@ public class MaterialStoreController {
 
     private final MaterialService materialService;
     private final MaterialAnalysisService materialAnalysisService;
+    private final MaterialLinkProposalService materialLinkProposalService;
 
     @GetMapping
     public ResponseEntity<List<MaterialStoreItemResponse>> list(
@@ -84,6 +92,40 @@ public class MaterialStoreController {
         log.info("DELETE /api/materials/{} - userId={}", materialId, principal.getUserId());
         materialService.delete(principal.getUserId(), materialId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 미연결 자료를 어느 프로젝트에 넣을지 제안한다. 아무것도 저장하지 않는다.
+     *
+     * 모델 호출이 실패해도 200 + status=UNAVAILABLE이다. 5xx를 돌려주면 프론트의 자동 경로가
+     * 에러 토스트를 띄우게 되는데, 사용자가 요청하지도 않은 기능의 실패를 알릴 이유가 없다.
+     * (사용량 한도 초과만은 예외다 — 기존 정책대로 429가 나간다. 다시 눌러도 같은 결과라
+     * 재시도를 유도하면 안 되기 때문이다.)
+     *
+     * 멱등하지 않고 부수효과도 없다. GET이 아닌 이유는 모델 호출 비용이 있어 캐시·프리페치
+     * 대상이 되면 안 되기 때문이다.
+     */
+    @PostMapping("/link-proposal")
+    public ResponseEntity<LinkProposalResponse> proposeLinks(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestBody(required = false) LinkProposalRequest request
+    ) {
+        List<Long> materialIds = request == null ? null : request.getMaterialIds();
+        return ResponseEntity.ok(materialLinkProposalService.propose(principal.getUserId(), materialIds));
+    }
+
+    /**
+     * 사용자가 승인한 묶음을 적용한다. 단일 트랜잭션이라 부분 적용이 없다 —
+     * 사용자가 승인한 단위는 화면에 보인 묶음 전체다.
+     */
+    @PostMapping("/link-proposal/apply")
+    public ResponseEntity<LinkProposalApplyResponse> applyLinkProposal(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody LinkProposalApplyRequest request
+    ) {
+        log.info("POST /api/materials/link-proposal/apply - userId={}, groups={}",
+                principal.getUserId(), request.getGroups().size());
+        return ResponseEntity.ok(materialLinkProposalService.apply(principal.getUserId(), request));
     }
 
     @PostMapping("/{materialId}/links")
