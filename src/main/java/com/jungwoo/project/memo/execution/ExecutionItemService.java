@@ -525,6 +525,41 @@ public class ExecutionItemService {
         log.info("실행 조각 삭제: executionItemId={}, userId={}", executionItemId, userId);
     }
 
+    /**
+     * 삭제 되돌리기 (Ctrl+Z).
+     *
+     * soft delete라 지운 행이 그대로 남아 있어서, 되살리는 데 필요한 정보가 이미 전부
+     * execution_items에 있다. 삭제 이력을 따로 쌓지 않는 이유다.
+     *
+     * version을 그대로 요구한다. 지운 뒤 그 항목이 다른 경로로 또 바뀌었다면 되돌리기가
+     * 무엇을 되살리는지 알 수 없으므로, 낙관적 락을 느슨하게 풀지 않는다.
+     */
+    @Transactional
+    public ExecutionItemResponse restore(Long executionItemId, Long userId, Long version) {
+        ExecutionItem item = executionItemMapper.findByIdAndUserIdIncludingDeleted(executionItemId, userId);
+        if (item == null) {
+            throw new NotFoundException(ErrorCode.EXECUTION_ITEM_NOT_FOUND);
+        }
+        requireVersion(item, version);
+
+        int updated = executionItemMapper.restoreWithVersion(executionItemId, userId, version);
+        if (updated != 1) {
+            // 이미 살아 있거나(되돌릴 것이 없음) 그 사이에 버전이 어긋났다. 둘 다 사용자가
+            // 할 수 있는 일은 같다 — 화면을 새로 읽는 것.
+            throw new ConflictException(ErrorCode.VERSION_CONFLICT);
+        }
+
+        insertEvent(executionItemId, userId, ExecutionEventType.RESTORED, ExecutionEventActorType.USER,
+                null,
+                toJson(Map.of("isDeleted", true)),
+                toJson(Map.of("isDeleted", false)),
+                item.getVersion(), item.getVersion() + 1);
+
+        log.info("실행 조각 삭제 되돌리기: executionItemId={}, userId={}", executionItemId, userId);
+
+        return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
+    }
+
     // ===== AI 제안 적용 전용 =====
 
     /**

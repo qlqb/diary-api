@@ -89,6 +89,18 @@
           AND is_deleted        = 0
     </select>
 
+    <!--
+      삭제된 항목까지 찾는다. 되돌리기(restore) 전용이다 — 지운 항목을 다시 살리려면 먼저
+      그 행을 읽어야 하는데, findByIdAndUserId는 is_deleted = 0으로 걸러 못 찾는다.
+
+      이 성질이 다른 조회로 새면 soft delete가 무의미해지므로 여기 말고는 쓰지 않는다.
+    -->
+    <select id="findByIdAndUserIdIncludingDeleted" resultMap="executionItemResultMap">
+        SELECT * FROM execution_items
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+    </select>
+
     <select id="findByUserIdAndDate" resultMap="executionItemResultMap">
         SELECT *
         FROM execution_items
@@ -216,6 +228,21 @@
         WHERE execution_item_id = #{executionItemId}
           AND user_id           = #{userId}
           AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <!--
+      삭제 되돌리기(Ctrl+Z). is_deleted = 1을 조건에 두어 이미 살아 있는 항목에는 걸리지
+      않게 한다 — 그래야 "되돌릴 것이 없다"와 "버전이 어긋났다"를 호출부가 함께 충돌로
+      다뤄도 결과가 안전하다.
+    -->
+    <update id="restoreWithVersion">
+        UPDATE execution_items
+        SET is_deleted = 0,
+            version    = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 1
           AND version           = #{version}
     </update>
 

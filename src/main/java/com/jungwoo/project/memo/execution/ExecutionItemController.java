@@ -28,6 +28,7 @@ import java.util.List;
  * GET    /api/execution-items/records?startDate=&endDate= 실제로 일어난 결과(기록 화면)
  * POST   /api/execution-items                   생성
  * DELETE /api/execution-items/{id}?version=      삭제 (soft delete)
+ * POST   /api/execution-items/{id}/restore?version= 삭제 되돌리기 (Ctrl+Z)
  */
 @Slf4j
 @RestController
@@ -113,5 +114,22 @@ public class ExecutionItemController {
         executionItemService.delete(executionItemId, principal.getUserId(), version);
 
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * 삭제 되돌리기. 지운 직후 Ctrl+Z가 부른다.
+     *
+     * soft delete라 되돌릴 것이 이미 DB에 있다. version은 삭제가 올려준 값을 그대로 쓴다 —
+     * 그 사이 다른 경로로 항목이 바뀌었다면 409로 막고 화면을 다시 읽게 한다.
+     */
+    @PostMapping("/{executionItemId}/restore")
+    public ResponseEntity<ExecutionItemResponse> restore(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionItemId,
+            @RequestParam Long version
+    ) {
+        log.info("POST /api/execution-items/{}/restore - userId={}", executionItemId, principal.getUserId());
+
+        return ResponseEntity.ok(executionItemService.restore(executionItemId, principal.getUserId(), version));
     }
 }

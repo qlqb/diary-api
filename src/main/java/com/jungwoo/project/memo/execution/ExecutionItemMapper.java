@@ -218,6 +218,20 @@ public interface ExecutionItemMapper {
             @Param("version") Long version
     );
 
+    /**
+     * soft delete를 되돌린다. 지운 행이 그대로 남아 있으므로 플래그만 되돌리면 된다.
+     *
+     * is_deleted = 1을 조건에 두는 것이 핵심이다 — 이미 살아 있는 항목에 복구를 걸면
+     * 아무 행도 바뀌지 않고, 호출부가 그걸 충돌로 읽는다.
+     */
+    /** 삭제된 항목까지 찾는다. 되돌리기 전용 — 다른 경로에서 쓰지 않는다. */
+    ExecutionItem findByIdAndUserIdIncludingDeleted(@Param("executionItemId") Long executionItemId,
+                                                    @Param("userId") Long userId);
+
+    int restoreWithVersion(@Param("executionItemId") Long executionItemId,
+                           @Param("userId") Long userId,
+                           @Param("version") Long version);
+
     /** Planning Agent 제안 적용 직후 학습 topic을 연결한다. */
     void updateTopicId(
             @Param("executionItemId") Long executionItemId,

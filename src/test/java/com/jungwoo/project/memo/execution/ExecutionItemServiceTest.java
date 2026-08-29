@@ -333,6 +333,36 @@ class ExecutionItemServiceTest {
     }
 
     @Test
+    void restore_undoesSoftDelete_andWritesRestoredEvent_together() {
+        ExecutionItem deleted = plannedItem(1L);
+        // 삭제된 항목은 findByIdAndUserId로 찾을 수 없다 — 되돌리기 전용 조회를 써야 한다.
+        when(executionItemMapper.findByIdAndUserIdIncludingDeleted(ITEM_ID, USER_ID)).thenReturn(deleted);
+        when(executionItemMapper.restoreWithVersion(ITEM_ID, USER_ID, 1L)).thenReturn(1);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(plannedItem(2L));
+
+        service.restore(ITEM_ID, USER_ID, 1L);
+
+        verify(executionItemMapper).restoreWithVersion(ITEM_ID, USER_ID, 1L);
+        verify(executionItemEventMapper).insert(argThat(event ->
+                event.getEventType() == ExecutionEventType.RESTORED
+                        && event.getExecutionItemId().equals(ITEM_ID)));
+    }
+
+    @Test
+    void restore_rejects_whenNothingWasDeletedOrVersionMovedOn() {
+        ExecutionItem deleted = plannedItem(1L);
+        when(executionItemMapper.findByIdAndUserIdIncludingDeleted(ITEM_ID, USER_ID)).thenReturn(deleted);
+        // is_deleted = 1 조건에 걸리지 않으면 0행이 바뀐다 — 이미 살아 있거나 버전이 어긋난 것이다.
+        when(executionItemMapper.restoreWithVersion(ITEM_ID, USER_ID, 1L)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.restore(ITEM_ID, USER_ID, 1L))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.VERSION_CONFLICT));
+
+        verify(executionItemEventMapper, never()).insert(any());
+    }
+
+    @Test
     void getByDateRange_mapsMapperResultsToResponses_inRangeOrder() {
         ExecutionItem item = plannedItem(0L);
         when(executionItemMapper.findByUserIdAndDateRange(USER_ID, DATE, DATE.plusDays(6)))

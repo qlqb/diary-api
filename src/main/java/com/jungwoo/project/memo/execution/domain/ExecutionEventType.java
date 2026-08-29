@@ -35,5 +35,8 @@ public enum ExecutionEventType {
     PRIORITY_CHANGED,
 
     /** 삭제. soft delete와 함께 기록. */
-    DELETED
+    DELETED,
+
+    /** 삭제 되돌리기. soft delete를 되돌리며 함께 기록한다. */
+    RESTORED
 }
