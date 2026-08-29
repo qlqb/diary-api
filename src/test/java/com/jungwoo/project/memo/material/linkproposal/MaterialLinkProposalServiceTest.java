@@ -1,5 +1,9 @@
 package com.jungwoo.project.memo.material.linkproposal;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
@@ -18,6 +22,7 @@ import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import com.jungwoo.project.memo.material.domain.ProposalAction;
 import com.jungwoo.project.memo.material.dto.LinkProposalResponse;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -29,6 +34,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.slf4j.LoggerFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 import reactor.core.publisher.Flux;
 
@@ -74,12 +80,43 @@ class MaterialLinkProposalServiceTest {
     @InjectMocks
     private MaterialLinkProposalService service;
 
+    /**
+     * 로그 한 줄이 이 기능의 관측 수단이라 테스트도 로그를 본다.
+     *
+     * 30일 자기 검증 동안 "자동 제안이 실제로 카드로 이어졌는지"를 세는 근거가 이 줄뿐이다.
+     * 응답에 trigger를 실어 검증하는 방법도 있지만, 그러면 로그 포맷이 조용히 깨져도
+     * 테스트가 통과한다.
+     */
+    private ListAppender<ILoggingEvent> logs;
+
     /** @InjectMocks는 @Value 필드를 주입하지 않는다 — timeout이 0이면 Flux가 즉시 타임아웃한다. */
     @BeforeEach
     void setUpValueFields() {
         ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(service, "maxCompletionTokens", 4000);
         ReflectionTestUtils.setField(service, "modelName", "test-model");
+
+        logs = new ListAppender<>();
+        logs.start();
+        serviceLogger().addAppender(logs);
+    }
+
+    @AfterEach
+    void detachAppender() {
+        serviceLogger().detachAppender(logs);
+    }
+
+    private Logger serviceLogger() {
+        return (Logger) LoggerFactory.getLogger(MaterialLinkProposalService.class);
+    }
+
+    private String proposalLogLine() {
+        return logs.list.stream()
+                .filter(event -> event.getLevel() == Level.INFO)
+                .map(ILoggingEvent::getFormattedMessage)
+                .filter(message -> message.startsWith("연결 제안: trigger="))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("연결 제안 로그가 남지 않았다"));
     }
 
     private CourseMaterial material(long materialId, ExtractionStatus status) {
@@ -124,7 +161,7 @@ class MaterialLinkProposalServiceTest {
                 MaterialLink.builder().materialId(101L).courseId(10L).userId(USER_ID)
                         .materialType(MaterialType.SYLLABUS).build()));
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.NO_CANDIDATES);
         assertThat(response.getGroups()).isEmpty();
@@ -139,7 +176,7 @@ class MaterialLinkProposalServiceTest {
     void excludesMaterialsWithoutExtractedText() {
         givenUnlinkedMaterials(material(101L, ExtractionStatus.FAILED_NO_TEXT));
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.NO_CANDIDATES);
         verify(aiConsultationClient, never()).streamTurn(anyString(), anyString(), any());
@@ -152,7 +189,7 @@ class MaterialLinkProposalServiceTest {
         when(aiConsultationClient.isConfigured()).thenReturn(false);
         when(courseMapper.findByUserIdAndStatus(eq(USER_ID), anyString())).thenReturn(List.of());
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.UNAVAILABLE);
         verify(aiConsultationClient, never()).streamTurn(anyString(), anyString(), any());
@@ -169,7 +206,7 @@ class MaterialLinkProposalServiceTest {
         when(aiConsultationClient.streamTurn(anyString(), anyString(), anyInt()))
                 .thenReturn(Flux.error(new IllegalStateException("upstream is on fire")));
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.UNAVAILABLE);
         verifyUsageRecorded(UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
@@ -181,7 +218,7 @@ class MaterialLinkProposalServiceTest {
         givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
         givenModelReplies("네, 정리해드릴게요. 운영체제로 묶으면 좋겠습니다.");
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.UNAVAILABLE);
         verifyUsageRecorded(UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
@@ -193,7 +230,7 @@ class MaterialLinkProposalServiceTest {
         givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
         givenModelReplies("<<<AI_STRUCTURED>>>\n{ \"groups\": [ ");
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.UNAVAILABLE);
         verifyUsageRecorded(UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
@@ -212,7 +249,7 @@ class MaterialLinkProposalServiceTest {
         givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
         givenModelReplies("<<<AI_STRUCTURED>>>\n{\"groups\":[]}");
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.GENERATED);
         assertThat(response.getGroups()).singleElement()
@@ -228,7 +265,7 @@ class MaterialLinkProposalServiceTest {
         org.mockito.Mockito.doThrow(new TooManyRequestsException(ErrorCode.AI_USAGE_LIMIT_EXCEEDED))
                 .when(aiUsageLimitService).checkLimit(USER_ID);
 
-        assertThatThrownBy(() -> service.propose(USER_ID, null))
+        assertThatThrownBy(() -> service.propose(USER_ID, null, null))
                 .isInstanceOfSatisfying(TooManyRequestsException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_USAGE_LIMIT_EXCEEDED));
 
@@ -246,11 +283,63 @@ class MaterialLinkProposalServiceTest {
         givenUnlinkedMaterials(materials);
         givenModelReplies("<<<AI_STRUCTURED>>>\n{\"groups\":[]}");
 
-        LinkProposalResponse response = service.propose(USER_ID, null);
+        LinkProposalResponse response = service.propose(USER_ID, null, null);
 
         assertThat(response.getStatus()).isEqualTo(ProposalStatus.GENERATED);
         assertThat(response.getRemainingMaterialIds()).containsExactly(113L, 114L, 115L);
         assertThat(response.getGroups()).singleElement()
                 .satisfies(group -> assertThat(group.getMembers()).hasSize(12));
+    }
+
+    // ===== 호출 경로 로그 =====
+
+    @Test
+    @DisplayName("trigger 없이 보낸 요청은 MANUAL로 남는다 — 기존 호출이 깨지지 않는다")
+    void treatsMissingTriggerAsManual() {
+        givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
+        givenModelReplies("<<<AI_STRUCTURED>>>\n{\"groups\":[]}");
+
+        service.propose(USER_ID, null, null);
+
+        assertThat(proposalLogLine()).startsWith("연결 제안: trigger=MANUAL, candidates=1");
+    }
+
+    @Test
+    @DisplayName("자동 호출이 카드로 이어지지 못한 것도 세야 한다 — selectable=0이 로그에 남는다")
+    void logsAutoCallThatProducesNothingSelectable() {
+        givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
+        givenModelReplies("<<<AI_STRUCTURED>>>\n{\"groups\":[]}");
+
+        service.propose(USER_ID, null, ProposalTrigger.AUTO);
+
+        // 서버는 "카드가 떴는지"를 판정하지 않는다. trigger=AUTO이고 selectable=0이면
+        // 안 뜬 것으로 읽는다 — 프론트의 게이트 규칙을 서버에 복제하지 않는다.
+        assertThat(proposalLogLine())
+                .isEqualTo("연결 제안: trigger=AUTO, candidates=1, groups=1, selectable=0");
+    }
+
+    @Test
+    @DisplayName("후보가 없어 모델을 부르지 않은 호출도 같은 줄로 남는다")
+    void logsCallsThatEndBeforeTheModel() {
+        when(courseMaterialMapper.findAllByUserId(USER_ID)).thenReturn(List.of());
+        when(materialLinkMapper.findByUserId(USER_ID)).thenReturn(List.of());
+
+        service.propose(USER_ID, null, ProposalTrigger.AUTO);
+
+        assertThat(proposalLogLine())
+                .isEqualTo("연결 제안: trigger=AUTO, status=NO_CANDIDATES, candidates=0");
+    }
+
+    @Test
+    @DisplayName("자동 호출이 UNAVAILABLE로 끝난 것도 세야 한다 — 분모가 비면 안 된다")
+    void logsAutoCallThatEndsUnavailable() {
+        givenUnlinkedMaterials(material(101L, ExtractionStatus.SUCCESS));
+        when(aiConsultationClient.isConfigured()).thenReturn(false);
+        when(courseMapper.findByUserIdAndStatus(eq(USER_ID), anyString())).thenReturn(List.of());
+
+        service.propose(USER_ID, null, ProposalTrigger.AUTO);
+
+        assertThat(proposalLogLine())
+                .isEqualTo("연결 제안: trigger=AUTO, status=UNAVAILABLE, candidates=1");
     }
 }

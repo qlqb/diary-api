@@ -225,10 +225,13 @@ public class MaterialLinkProposalService {
      * 모델 장애는 다시 눌러보면 되지만 한도 초과는 다시 눌러도 같은 결과라서, 같은 상태로
      * 묶으면 무의미한 재시도를 유도하게 된다.
      */
-    public LinkProposalResponse propose(Long userId, List<Long> materialIds) {
+    public LinkProposalResponse propose(Long userId, List<Long> materialIds, ProposalTrigger trigger) {
+        ProposalTrigger source = ProposalTrigger.orDefault(trigger);
+
         List<CourseMaterial> pool = collectPool(userId, materialIds);
         if (pool.isEmpty()) {
             // 모델을 부르지 않을 요청으로 한도를 소모시키지 않는다 — checkLimit도 여기선 건너뛴다.
+            logEnded(source, ProposalStatus.NO_CANDIDATES, 0);
             return LinkProposalResponse.noCandidates();
         }
 
@@ -247,12 +250,13 @@ public class MaterialLinkProposalService {
         Optional<LinkProposalPayload> payload =
                 callModel(userId, SYSTEM_PROMPT, buildUserPrompt(candidates, activeProjects));
         if (payload.isEmpty()) {
+            logEnded(source, ProposalStatus.UNAVAILABLE, candidates.size());
             return LinkProposalResponse.unavailable();
         }
 
         List<ProposalGroupResponse> groups =
                 proposalNormalizer.normalize(candidates, payload.get(), activeProjects);
-        logOutcome(candidates, groups);
+        logOutcome(source, candidates, groups);
         return LinkProposalResponse.generated(groups, remainingMaterialIds);
     }
 
@@ -419,9 +423,10 @@ public class MaterialLinkProposalService {
      * 않게 되므로, 둘을 함께 봐야 게이트를 조정할지 대조 규칙을 손볼지 판단할 수 있다.
      * 실제 오탐 사례를 확인하기 전에는 대조 규칙을 완화하지 않는다.
      */
-    private void logOutcome(List<ProposalCandidate> candidates, List<ProposalGroupResponse> groups) {
-        log.info("연결 제안: candidates={}, groups={}, selectable={}",
-                candidates.size(), groups.size(),
+    private void logOutcome(ProposalTrigger trigger, List<ProposalCandidate> candidates,
+                            List<ProposalGroupResponse> groups) {
+        log.info("연결 제안: trigger={}, candidates={}, groups={}, selectable={}",
+                trigger, candidates.size(), groups.size(),
                 groups.stream().filter(ProposalGroupResponse::isDefaultSelected).count());
 
         List<ProposalMemberResponse> placed = groups.stream()
@@ -430,6 +435,14 @@ public class MaterialLinkProposalService {
                 .toList();
         long unverified = placed.stream().filter(m -> !m.isEvidenceVerified()).count();
         log.info("evidence 미검증: {}/{}", unverified, placed.size());
+    }
+
+    /**
+     * 카드까지 가지 못하고 끝난 호출도 같은 줄을 남긴다. 자동 호출이 UNAVAILABLE로 끝난
+     * 것을 세지 못하면 "자동 제안이 실제로 카드로 이어졌는지"의 분모가 비게 된다.
+     */
+    private void logEnded(ProposalTrigger trigger, ProposalStatus status, int candidateCount) {
+        log.info("연결 제안: trigger={}, status={}, candidates={}", trigger, status, candidateCount);
     }
 
     /**

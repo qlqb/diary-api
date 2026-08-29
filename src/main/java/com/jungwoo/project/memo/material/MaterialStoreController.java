@@ -12,6 +12,7 @@ import com.jungwoo.project.memo.material.dto.MaterialLinkTypeUpdateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import com.jungwoo.project.memo.material.dto.MaterialStoreItemResponse;
 import com.jungwoo.project.memo.material.linkproposal.MaterialLinkProposalService;
+import com.jungwoo.project.memo.material.linkproposal.ProposalTrigger;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -111,7 +112,10 @@ public class MaterialStoreController {
             @RequestBody(required = false) LinkProposalRequest request
     ) {
         List<Long> materialIds = request == null ? null : request.getMaterialIds();
-        return ResponseEntity.ok(materialLinkProposalService.propose(principal.getUserId(), materialIds));
+        // trigger는 로그로만 쓴다 — 어느 경로에서 온 호출인지가 없으면 selectable=0을 봐도
+        // "자동인데 카드가 안 떴다"인지 "수동이라 카드는 떴다"인지 구분할 수 없다.
+        ProposalTrigger trigger = request == null ? null : request.getTrigger();
+        return ResponseEntity.ok(materialLinkProposalService.propose(principal.getUserId(), materialIds, trigger));
     }
 
     /**
