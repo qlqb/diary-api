@@ -11,6 +11,11 @@ import java.time.LocalDateTime;
  * equals/hashCode를 startAt 기준으로 정의한다 — 같은 시각이면 confidence가 달라도 Timefold
  * 입장에서는 같은 배치로 취급해야 이동 연산(변경 이웃 탐색)이 정상적으로 동작한다.
  */
+// 주의: 같은 시각을 후보로 가진 태스크가 둘 이상이면, 배정된 인스턴스의
+// confidence가 자기 목록의 값이 아닐 수 있다. startAt은 항상 맞으므로
+// 하드 제약과 순서 제약은 영향이 없고, preferHighConfidenceSlot의 점수만
+// 어긋난다. 고치려면 equals에 confidence를 넣어야 하는데 그러면 이동 연산이
+// 달라진다. (2026-08-30 확인, 실사용에서 문제가 되면 그때 판단)
 public final class TimeSlotOption {
 
     private final LocalDateTime startAt;

@@ -213,7 +213,10 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 {
                   "title": "구체적인 행동 제목",
                   "description": "설명 또는 null",
-                  "expectedMinutes": 5에서 120 사이의 양의 정수,
+                  "expectedMinutes": 5에서 120 사이의 양의 정수. 단 placementType이 TIME_FIXED이면
+                    이 범위를 지키지 않아도 된다 — 그때는 서버가 시작·종료 시각에서 길이를 직접
+                    계산하고 이 값은 쓰지 않는다. 범위에 맞추려고 시각을 실제보다 짧게 적지 마라
+                    (예: 17시부터 23시까지 알바면 그 시각을 그대로 적는다),
                   "priority": "MUST" 또는 "SHOULD" 또는 "OPTIONAL",
                   "placementType": "DATE_ONLY" 또는 "TIME_FIXED" 또는 "UNSCHEDULED",
                   "startTime": "HH:mm" 형식 또는 null (periodStartDate 하루 안에서 TIME_FIXED일 때만 값을 가진다),

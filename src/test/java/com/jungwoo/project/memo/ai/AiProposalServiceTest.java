@@ -184,6 +184,78 @@ class AiProposalServiceTest {
         verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
     }
 
+    /*
+       ===== TIME_FIXED의 길이는 구간이 정한다 =====
+
+       5~120분 상한은 "잘게 쪼갠 할 일"에 맞춘 값인데, 알바·수업처럼 이미 시각이 박힌
+       일정에까지 걸려 있었다. 그 결과 모델이 검증을 통과하려고 시각은 진짜로 넣고
+       expectedMinutes만 120으로 깎는 일이 실제로 일어났다 — 17:00~23:00짜리 알바가
+       120분으로 저장돼 화면 표시와 하루 부하 계산이 어긋났다.
+     */
+
+    @Test
+    void createFromItems_timeFixed_isNotBoundByTheTwoHourCap() {
+        // 6시간짜리 알바. 상한에 걸려 제안 전체가 버려지면 안 된다.
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "알바 근무", "설명", 120, "MUST", PlacementType.TIME_FIXED,
+                LocalTime.of(17, 0), LocalTime.of(23, 0), null, null, null, null, null));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
+
+        // 모델이 적어 낸 120이 아니라 구간에서 계산한 360이 저장된다.
+        assertThat(captor.getValue().get(0).expectedMinutes()).isEqualTo(360);
+    }
+
+    @Test
+    void createFromItems_timeFixed_overwritesModelMinutes_evenWhenWithinTheCap() {
+        // 상한 안쪽 숫자라도 구간과 다르면 그대로 두지 않는다 — 두 출처가 어긋나는 것 자체가 버그다.
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "스터디", "설명", 90, "SHOULD", PlacementType.TIME_FIXED,
+                LocalTime.of(9, 0), LocalTime.of(9, 30), null, null, null, null, null));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
+
+        assertThat(captor.getValue().get(0).expectedMinutes()).isEqualTo(30);
+    }
+
+    @Test
+    void createFromItems_fixedStartAt_derivesMinutesFromTheSpan() {
+        // 날짜+시각 고정 경로(fixedStartAt/fixedEndAt)도 같은 규칙을 따른다.
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "알바 근무", "설명", 120, "MUST", PlacementType.DATE_ONLY, null, null, null, null,
+                TARGET_DATE.atTime(18, 0), TARGET_DATE.atTime(23, 0), null));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+                .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
+
+        ProposalItemPayload payload = captor.getValue().get(0);
+        assertThat(payload.placementType()).isEqualTo(PlacementType.TIME_FIXED);
+        assertThat(payload.expectedMinutes()).isEqualTo(300);
+    }
+
+    @Test
+    void createFromItems_dateOnly_stillRejectsMinutesAboveTheCap() {
+        // 상한이 사라진 것이 아니다 — 시각이 없는 후보에는 그대로 적용된다.
+        List<ProposalItem> items = List.of(dateOnlyItem("제목", 360, "SHOULD"));
+
+        assertThatThrownBy(() -> service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
+                .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
+
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
+    }
+
     // ===== targetDate 오염 방지(수정사항 4: 항목별 itemTargetDate가 메서드 파라미터를 오염시키지 않음) =====
 
     @Test
@@ -349,6 +421,34 @@ class AiProposalServiceTest {
         assertThat(response.getStatus()).isEqualTo(AiProposalStatus.MODIFIED_APPLIED);
         verify(aiProposalItemMapper).updateAfterApply(
                 eq(1L), eq(USER_ID), eq(AiProposalItemStatus.MODIFIED_APPLIED), any(), eq("EXECUTION_ITEM"), eq(501L), any());
+    }
+
+    @Test
+    void apply_recomputesMinutes_whenEditMovesATimeFixedItemToALongerSpan() {
+        // 편집으로 시각만 바꾸면 expectedMinutes는 원본 값이 그대로 남는다. 그대로 저장하면
+        // 생성 때 맞춰 둔 불변식이 편집 한 번으로 다시 깨진다.
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
+                .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
+        when(executionItemService.nextOrderIndexStart(USER_ID, TARGET_DATE)).thenReturn(0);
+        when(executionItemService.createFromApprovedProposal(
+                any(), any(), any(), any(), anyInt(), any(), anyInt(), anyBoolean(), any(), any(), any()))
+                .thenReturn(ExecutionItem.builder().executionItemId(501L).build());
+
+        AiProposalApplyRequest request = new AiProposalApplyRequest();
+        request.setEditedItems(List.of(AiProposalApplyRequest.EditedProposalItem.builder()
+                .proposalItemId(1L)
+                .placementType(PlacementType.TIME_FIXED)
+                .scheduledStartAt(TARGET_DATE.atTime(17, 0))
+                .scheduledEndAt(TARGET_DATE.atTime(23, 0))
+                .build()));
+
+        service.apply(PROPOSAL_ID, USER_ID, request);
+
+        // 원본 payload의 30분이 아니라 새 구간의 360분으로 만들어져야 한다.
+        verify(executionItemService).createFromApprovedProposal(
+                eq(USER_ID), any(), any(), eq(TARGET_DATE), eq(360), any(), anyInt(), eq(true),
+                eq(PlacementType.TIME_FIXED), eq(TARGET_DATE.atTime(17, 0)), eq(TARGET_DATE.atTime(23, 0)));
     }
 
     @Test
