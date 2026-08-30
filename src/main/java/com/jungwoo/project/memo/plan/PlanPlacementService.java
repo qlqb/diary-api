@@ -119,9 +119,11 @@ public class PlanPlacementService {
                 unplaced.add(toUnplaced(item));
                 continue;
             }
+            // courseId·orderIndex는 순서 제약(preferOrderIndexSequence)이 쓴다. 같은 프로젝트
+            // 안에서 계획이 나열한 순서를 배치가 뒤집지 않게 하기 위한 값이다.
             tasks.add(new SchedulingTask(item.getExecutionItemId(), item.getTitle(), duration,
                     item.getPriority() != null ? item.getPriority() : ExecutionPriority.SHOULD,
-                    null, candidates));
+                    null, item.getCourseId(), item.getOrderIndex(), candidates));
         }
 
         if (!tasks.isEmpty()) {

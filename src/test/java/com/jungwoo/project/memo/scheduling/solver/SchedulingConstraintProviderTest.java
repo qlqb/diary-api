@@ -36,6 +36,14 @@ class SchedulingConstraintProviderTest {
         return task;
     }
 
+    /** 같은 프로젝트(courseId)에 속하고 order_index를 가진 배치된 태스크. */
+    private SchedulingTask orderedTask(long id, Long courseId, Integer orderIndex, LocalDateTime start) {
+        SchedulingTask task = new SchedulingTask(id, "task-" + id, 30, ExecutionPriority.SHOULD, null,
+                courseId, orderIndex, List.of());
+        task.setAssignedSlot(new TimeSlotOption(start, AvailabilityConfidence.HIGH));
+        return task;
+    }
+
     private SchedulingTask unscheduledTask(long id, ExecutionPriority priority) {
         return new SchedulingTask(id, "task-" + id, 30, priority, null, List.of());
     }
@@ -199,5 +207,111 @@ class SchedulingConstraintProviderTest {
         verifier.verifyThat(SchedulingConstraintProvider::limitDailyLoad)
                 .given(t1, t2)
                 .penalizesBy(0);
+    }
+
+    // ===== 같은 프로젝트 안의 배치 순서 =====
+
+    @Test
+    void preferOrderIndexSequence_doesNotPenalize_whenOrderAndTimeAgree() {
+        SchedulingTask first = orderedTask(1, 10L, 0, BASE);
+        SchedulingTask second = orderedTask(2, 10L, 1, BASE.plusHours(2));
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(first, second)
+                .penalizesBy(0);
+    }
+
+    @Test
+    void preferOrderIndexSequence_penalizesInvertedPair() {
+        SchedulingTask first = orderedTask(1, 10L, 0, BASE.plusHours(2));
+        SchedulingTask second = orderedTask(2, 10L, 1, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(first, second)
+                .penalizesBy(3);
+    }
+
+    /**
+     * forEachUniquePair는 어느 쪽을 a로 줄지 보장하지 않는다. 쌍을 뒤집어 넣어도 같은
+     * 위반으로 잡혀야 한다 — "a.orderIndex < b.orderIndex"만 검사하면 절반을 놓친다.
+     */
+    @Test
+    void preferOrderIndexSequence_catchesInversion_regardlessOfPairDirection() {
+        SchedulingTask later = orderedTask(1, 10L, 1, BASE);
+        SchedulingTask earlier = orderedTask(2, 10L, 0, BASE.plusHours(2));
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(later, earlier)
+                .penalizesBy(3);
+    }
+
+    /** 과목이 다르면 선행 관계가 없다. 전체 order_index를 하나의 순서로 취급하지 않는다. */
+    @Test
+    void preferOrderIndexSequence_ignoresTasksFromDifferentProjects() {
+        SchedulingTask a = orderedTask(1, 10L, 0, BASE.plusHours(2));
+        SchedulingTask b = orderedTask(2, 20L, 1, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(a, b)
+                .penalizesBy(0);
+    }
+
+    /** 프로젝트에 묶이지 않은 할 일에는 순서 개념이 없다. */
+    @Test
+    void preferOrderIndexSequence_ignoresTasksWithoutProject() {
+        SchedulingTask a = orderedTask(1, null, 0, BASE.plusHours(2));
+        SchedulingTask b = orderedTask(2, null, 1, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(a, b)
+                .penalizesBy(0);
+    }
+
+    @Test
+    void preferOrderIndexSequence_ignoresTiedOrderIndex() {
+        SchedulingTask a = orderedTask(1, 10L, 2, BASE.plusHours(2));
+        SchedulingTask b = orderedTask(2, 10L, 2, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(a, b)
+                .penalizesBy(0);
+    }
+
+    @Test
+    void preferOrderIndexSequence_ignoresTasksStartingAtTheSameTime() {
+        SchedulingTask a = orderedTask(1, 10L, 1, BASE);
+        SchedulingTask b = orderedTask(2, 10L, 0, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(a, b)
+                .penalizesBy(0);
+    }
+
+    /** 미배치는 비교할 시각이 없다. forEach가 이미 건너뛴다. */
+    @Test
+    void preferOrderIndexSequence_ignoresUnscheduledTasks() {
+        SchedulingTask scheduled = orderedTask(1, 10L, 1, BASE);
+        SchedulingTask unscheduled = new SchedulingTask(2L, "task-2", 30, ExecutionPriority.SHOULD, null,
+                10L, 0, List.of());
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(scheduled, unscheduled)
+                .penalizesBy(0);
+    }
+
+    /**
+     * 페널티는 위반 쌍 개수에 비례한다. 시간 차이에 비례시키면 이 값이 달라진다 —
+     * 30분 뒤집힌 것과 3일 뒤집힌 것은 문제의 성격이 같다.
+     */
+    @Test
+    void preferOrderIndexSequence_accumulatesPerInvertedPair() {
+        // 순서 0·1·2를 정확히 거꾸로 배치하면 뒤집힌 쌍이 셋이다.
+        SchedulingTask a = orderedTask(1, 10L, 0, BASE.plusHours(4));
+        SchedulingTask b = orderedTask(2, 10L, 1, BASE.plusHours(2));
+        SchedulingTask c = orderedTask(3, 10L, 2, BASE);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferOrderIndexSequence)
+                .given(a, b, c)
+                .penalizesBy(9);
     }
 }

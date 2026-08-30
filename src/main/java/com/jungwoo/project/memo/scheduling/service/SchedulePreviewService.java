@@ -163,8 +163,13 @@ public class SchedulePreviewService {
                 continue;
             }
 
+            // 미리보기는 아직 execution_items가 없어 courseId·orderIndex를 모른다.
+            // null이면 preferOrderIndexSequence가 걸리지 않는데, 그게 의도다 —
+            // 확정 전 제안에는 지켜야 할 순서라는 것이 아직 없다. 나중에 이 자리를 채우면
+            // 미리보기에도 순서 제약이 걸리면서 결과가 조용히 달라진다.
             tasks.add(new SchedulingTask(item.getProposalItemId(), title, duration,
-                    ExecutionPriority.valueOf(priorityStr), effectiveDeadline, candidates));
+                    ExecutionPriority.valueOf(priorityStr), effectiveDeadline,
+                    null, null, candidates));
         }
 
         if (!tasks.isEmpty()) {

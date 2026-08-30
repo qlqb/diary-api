@@ -28,6 +28,16 @@ public class SchedulingTask {
     private int durationMinutes;
     private ExecutionPriority priority;
     private LocalDateTime deadline;
+    /**
+     * 이 배치가 속한 프로젝트. 순서 제약(preferOrderIndexSequence)이 같은 프로젝트 안에서만
+     * 비교하기 위해 쓴다 — 과목이 다르면 선행 관계가 없다.
+     */
+    private Long courseId;
+    /**
+     * 계획이 나열한 순서. AI가 낸 배열 순서가 execution_items.order_index로 살아남은 값이다.
+     * "진짜 선행 관계"가 아니라 "이 순서로 하자고 제안된 것"이므로 소프트 제약으로만 쓴다.
+     */
+    private Integer orderIndex;
     private List<TimeSlotOption> candidateStarts;
 
     @PlanningVariable(valueRangeProviderRefs = "taskStartRange", allowsUnassigned = true)
@@ -40,11 +50,20 @@ public class SchedulingTask {
     public SchedulingTask(Long proposalItemId, String title, int durationMinutes,
                            ExecutionPriority priority, LocalDateTime deadline,
                            List<TimeSlotOption> candidateStarts) {
+        this(proposalItemId, title, durationMinutes, priority, deadline, null, null, candidateStarts);
+    }
+
+    public SchedulingTask(Long proposalItemId, String title, int durationMinutes,
+                           ExecutionPriority priority, LocalDateTime deadline,
+                           Long courseId, Integer orderIndex,
+                           List<TimeSlotOption> candidateStarts) {
         this.proposalItemId = proposalItemId;
         this.title = title;
         this.durationMinutes = durationMinutes;
         this.priority = priority;
         this.deadline = deadline;
+        this.courseId = courseId;
+        this.orderIndex = orderIndex;
         this.candidateStarts = candidateStarts;
     }
 
@@ -72,6 +91,14 @@ public class SchedulingTask {
 
     public LocalDateTime getDeadline() {
         return deadline;
+    }
+
+    public Long getCourseId() {
+        return courseId;
+    }
+
+    public Integer getOrderIndex() {
+        return orderIndex;
     }
 
     public TimeSlotOption getAssignedSlot() {

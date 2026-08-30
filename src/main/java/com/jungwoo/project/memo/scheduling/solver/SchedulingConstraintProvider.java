@@ -29,6 +29,17 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
     /** 같은 날 두 후보 사이 이 여유(분) 미만이면 소프트 페널티를 준다. */
     private static final int PREFERRED_BUFFER_MINUTES = 10;
 
+    /**
+     * 순서가 뒤집힌 쌍 하나당 페널티.
+     *
+     * 여유시간 부족(쌍당 1)보다 크고, 낮은 신뢰도 슬롯(3)과 같은 무게다 — 순서가 뒤집히는
+     * 것이 여유가 없는 것보다는 큰 문제이지만, 배치를 포기할 만한 일은 아니다.
+     *
+     * 우선순위(preferHighPriorityScheduled)보다 낮아야 한다는 요구는 레벨이 보장한다.
+     * 그쪽은 MEDIUM이고 이건 SOFT다.
+     */
+    private static final int ORDER_INVERSION_PENALTY = 3;
+
     @Override
     public Constraint[] defineConstraints(ConstraintFactory factory) {
         return new Constraint[]{
@@ -40,6 +51,7 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
                 preferHighPriorityScheduled(factory),
                 preferHighConfidenceSlot(factory),
                 limitDailyLoad(factory),
+                preferOrderIndexSequence(factory),
                 preferBufferBetweenTasks(factory),
         };
     }
@@ -141,6 +153,35 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
                 .asConstraint("Avoid overloading a single day");
     }
 
+    /**
+     * 같은 프로젝트 안에서는 계획이 나열한 순서를 지킨다.
+     *
+     * order_index는 AI가 낸 배열 순서를 그대로 담고 있고 배치 조회도 그 순으로 정렬하지만,
+     * 그건 솔버에 넣는 리스트의 순서일 뿐이라 솔버가 존중할 의무가 없었다. 파이썬 기초보다
+     * 판다스가 먼저 배치돼도 제약 위반이 아니었다.
+     *
+     * 하드가 아니라 소프트인 이유: 앞선 항목을 놓을 슬롯이 없는데 뒤 항목은 놓을 수 있는
+     * 상황에서 하드로 걸면 둘 다 미배치가 된다. 순서는 "지키면 좋은 것"이지 "어기면 안 되는
+     * 것"이 아니다 — 사용자가 뒤 항목을 먼저 보고 싶어 할 수도 있고, order_index는 그걸
+     * 알 수 없다.
+     *
+     * 같은 courseId 안에서만 비교한다. 과목이 다르면 선행 관계가 없고, 전체 order_index를
+     * 하나의 순서로 취급하면 배치가 불필요하게 굳는다.
+     *
+     * 페널티를 시간 차이에 비례시키지 않는다. 30분 뒤집힌 것과 3일 뒤집힌 것은 문제의 성격이
+     * 같은데, 분 단위로 재면 뒤집힌 쌍 하나가 다른 소프트 제약을 전부 압도한다. 뒤집힌 쌍이
+     * 몇 개인지가 의미 있는 척도다.
+     */
+    Constraint preferOrderIndexSequence(ConstraintFactory factory) {
+        return factory.forEachUniquePair(SchedulingTask.class,
+                        Joiners.equal(SchedulingTask::getCourseId))
+                .filter((a, b) -> a.getCourseId() != null
+                        && a.getOrderIndex() != null && b.getOrderIndex() != null
+                        && isOrderInverted(a, b))
+                .penalize(HardMediumSoftScore.ONE_SOFT, (a, b) -> ORDER_INVERSION_PENALTY)
+                .asConstraint("Prefer keeping the planned order within a project");
+    }
+
     /** 가능하면 적절한 여유시간을 남긴다. */
     Constraint preferBufferBetweenTasks(ConstraintFactory factory) {
         return factory.forEachUniquePair(SchedulingTask.class,
@@ -163,6 +204,27 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
         long gapAfterA = Duration.between(a.getAssignedEnd(), b.getAssignedStart()).toMinutes();
         long gapAfterB = Duration.between(b.getAssignedEnd(), a.getAssignedStart()).toMinutes();
         return Math.max(gapAfterA, gapAfterB);
+    }
+
+    /**
+     * 앞선 항목이 뒤 항목보다 늦게 시작하면 뒤집힘이다.
+     *
+     * forEachUniquePair는 어느 쪽을 a로 줄지 보장하지 않으므로 "a.orderIndex < b.orderIndex"만
+     * 검사하면 쌍의 절반을 놓친다. 두 방향(순서·시각)이 어긋나는지를 본다.
+     *
+     * compareTo의 반환값을 그대로 비교하지 않는다 — LocalDateTime.compareTo는 -1/0/1이 아니라
+     * 필드 차이를 돌려주므로 부호가 같아도 값이 달라 오판한다.
+     */
+    private static boolean isOrderInverted(SchedulingTask a, SchedulingTask b) {
+        if (a.getOrderIndex().equals(b.getOrderIndex())) {
+            return false;
+        }
+        if (a.getAssignedStart().isEqual(b.getAssignedStart())) {
+            return false;
+        }
+        boolean aFirstByOrder = a.getOrderIndex() < b.getOrderIndex();
+        boolean aFirstByTime = a.getAssignedStart().isBefore(b.getAssignedStart());
+        return aFirstByOrder != aFirstByTime;
     }
 
     private static int priorityWeight(ExecutionPriority priority) {
