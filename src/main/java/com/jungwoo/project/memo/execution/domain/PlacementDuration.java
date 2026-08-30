@@ -1,5 +1,7 @@
 package com.jungwoo.project.memo.execution.domain;
 
+import com.jungwoo.project.memo.common.time.MinutePrecision;
+
 import java.time.Duration;
 import java.time.LocalDateTime;
 
@@ -43,11 +45,12 @@ public final class PlacementDuration {
     /**
      * 시각이 분 단위인가(초·나노가 0인가).
      *
-     * <p>이 앱에서 시각을 고르는 단위는 분이다. 초가 섞이면 길이 계산이 잘리고, 화면에 보이는
-     * 값과 저장된 값이 어긋난다. 30초짜리 일정은 만들 수 없어야 한다.
+     * <p>판정 자체는 {@link MinutePrecision}이 갖는다. 반복 일정도 같은 규칙을 쓰는데 그쪽
+     * 시각은 {@code LocalTime}이라, 규칙을 여기 두면 양쪽에 복사본이 생긴다. 이 메서드는
+     * 기존 호출부를 위한 통로로만 남긴다.
      */
     public static boolean isMinutePrecision(LocalDateTime at) {
-        return at.getSecond() == 0 && at.getNano() == 0;
+        return MinutePrecision.isMinutePrecision(at);
     }
 
     /**
