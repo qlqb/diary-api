@@ -35,6 +35,16 @@ public enum ErrorCode {
     MATERIAL_EXTRACTION_NOT_READY(HttpStatus.BAD_REQUEST, "E400_018", "자료에서 텍스트를 추출하지 못해 분석할 수 없습니다"),
     STUDY_RECOMMENDATION_NOT_SUGGESTED(HttpStatus.BAD_REQUEST, "E400_019", "이미 처리된 학습 추천입니다"),
     REDUCE_MUST_SHORTEN(HttpStatus.BAD_REQUEST, "E400_020", "줄이기는 지금보다 짧은 시간으로만 가능합니다"),
+    // 반복 일정은 자정 넘김(end <= start)이 정상값이라 INVALID_TIME_RANGE를 쓸 수 없다.
+    // 여기서 막는 것은 길이 0(시작 == 종료)과 초·나노가 섞인 시각이다.
+    ROUTINE_TIME_INVALID(HttpStatus.BAD_REQUEST, "E400_021",
+            "반복 일정의 시각은 분 단위여야 하고, 시작과 종료가 같을 수 없습니다"),
+    ROUTINE_WEEKDAYS_REQUIRED(HttpStatus.BAD_REQUEST, "E400_022", "반복 일정은 요일을 하나 이상 골라야 합니다"),
+    ROUTINE_RANGE_INVALID(HttpStatus.BAD_REQUEST, "E400_023", "반복 일정의 종료일은 시작일과 같거나 이후여야 합니다"),
+    ROUTINE_EXCEPTION_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_024",
+            "예외 날짜가 이 반복 일정의 기간이나 요일에 맞지 않습니다"),
+    ROUTINE_EXCEPTION_MOVED_INVALID(HttpStatus.BAD_REQUEST, "E400_025",
+            "옮기려면 옮길 날짜가 필요하고, 옮길 시각은 둘 다 있거나 둘 다 없어야 합니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -62,6 +72,8 @@ public enum ErrorCode {
     STUDY_RECOMMENDATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_015", "학습 추천을 찾을 수 없습니다"),
     LEARNING_CONVERSATION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_016", "학습 상담을 찾을 수 없습니다"),
     MATERIAL_NOT_LINKED_TO_COURSE(HttpStatus.NOT_FOUND, "E404_017", "이 프로젝트에 연결되지 않은 자료입니다"),
+    ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_019", "반복 일정을 찾을 수 없습니다"),
+    ROUTINE_EXCEPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_020", "반복 일정의 예외를 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -73,8 +85,13 @@ public enum ErrorCode {
     CONTEXT_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_007", "이미 처리된 컨텍스트 변경 후보입니다"),
     MATERIAL_ALREADY_LINKED_TO_COURSE(HttpStatus.CONFLICT, "E409_009", "이미 이 프로젝트에 연결된 자료입니다"),
     CONTEXT_APPLY_CONFLICT(HttpStatus.CONFLICT, "E409_008", "컨텍스트 상태가 그 사이 바뀌어 적용할 수 없습니다"),
+    // 자료 연결과 반복 일정이 같은 코드를 쓴다 — 상황이 같기 때문이다(보관된 프로젝트에
+    // 새로 무언가를 붙이려는 시도). 문구는 그래서 자료에 한정하지 않는다.
     COURSE_ARCHIVED(HttpStatus.CONFLICT, "E409_010",
-            "보관된 프로젝트에는 자료를 새로 연결하거나 연결을 바꿀 수 없습니다"),
+            "보관된 프로젝트에는 새로 연결하거나 연결을 바꿀 수 없습니다"),
+    ROUTINE_EXCEPTIONS_CONFLICT(HttpStatus.CONFLICT, "E409_011",
+            "이 변경은 기존 예외를 무효로 만듭니다. 예외를 먼저 정리해 주세요"),
+    ROUTINE_EXCEPTION_DATE_TAKEN(HttpStatus.CONFLICT, "E409_012", "그 날짜에는 이미 예외가 있습니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",
