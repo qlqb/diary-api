@@ -393,6 +393,7 @@
                scheduled_date      = #{scheduledDate},
                scheduled_start_at  = #{scheduledStartAt},
                scheduled_end_at    = #{scheduledEndAt},
+               expected_minutes    = #{expectedMinutes},
                planning_start_date = NULL,
                planning_end_date   = NULL,
                version             = version + 1

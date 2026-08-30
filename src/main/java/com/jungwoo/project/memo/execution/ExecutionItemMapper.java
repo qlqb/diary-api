@@ -105,6 +105,9 @@ public interface ExecutionItemMapper {
      *
      * version과 status='PLANNED'를 조건에 넣는다 — 대상 조회와 이 UPDATE 사이에 항목이
      * 바뀌었으면(옮겼거나 보류했거나 지웠거나) 0행이 되어 호출자가 409로 돌린다.
+     *
+     * expectedMinutes는 배치된 구간에서 계산한 값이다. 배치 형식과 시각과 길이가 한 UPDATE
+     * 안에서 함께 맞아야 TIME_FIXED인데 길이가 어긋난 행이 잠깐도 보이지 않는다.
      */
     int applyTimeFixedPlacement(
             @Param("userId") Long userId,
@@ -112,7 +115,8 @@ public interface ExecutionItemMapper {
             @Param("version") Long version,
             @Param("scheduledDate") LocalDate scheduledDate,
             @Param("scheduledStartAt") java.time.LocalDateTime scheduledStartAt,
-            @Param("scheduledEndAt") java.time.LocalDateTime scheduledEndAt
+            @Param("scheduledEndAt") java.time.LocalDateTime scheduledEndAt,
+            @Param("expectedMinutes") Integer expectedMinutes
     );
 
     /**

@@ -488,6 +488,147 @@ class ExecutionItemServiceTest {
     }
 
     @Test
+    void reduce_rejectsSameLength_forDateOnly() {
+        // 축소 검사는 배치 형식과 무관하다 — 예전에는 TIME_FIXED에만 걸려 있었다.
+        ExecutionItem item = plannedItem(0L);   // expectedMinutes = 30
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(30).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.REDUCE_MUST_SHORTEN));
+
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reduce_rejectsLonger_forDateOnly() {
+        // 30분짜리에 90분을 보내면 늘어난 값이 REDUCED 이벤트로 남았다. 그건 줄이기가 아니다.
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(90).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.REDUCE_MUST_SHORTEN));
+
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reduce_rejectsMinutes_whenCurrentMinutesIsNull() {
+        // 지금 길이를 모르면 무엇에 견줘 줄이는지도 알 수 없다.
+        ExecutionItem item = plannedItem(0L);
+        item.setExpectedMinutes(null);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(10).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.REDUCE_MUST_SHORTEN));
+
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reduce_allowsTitleOnly_whenCurrentMinutesIsNull() {
+        // 길이를 모르는 것과 제목을 줄이는 것은 별개다 — 후자는 계속 된다.
+        ExecutionItem item = plannedItem(0L);
+        item.setExpectedMinutes(null);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq("줄인 제목"), isNull(), isNull())).thenReturn(1);
+
+        service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .reducedTitle("줄인 제목").version(0L).build());
+
+        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq("줄인 제목"), isNull(), isNull());
+    }
+
+    // ===== 롤링 배치도 같은 정책을 지난다 =====
+
+    @Test
+    void applyRollingPlacement_derivesMinutesFromPlacedSpan() {
+        /*
+           솔버가 만든 구간은 보통 expectedMinutes에서 나오므로 둘이 우연히 일치한다. 하지만
+           expectedMinutes가 null인 항목은 PlanPlacementService가 30분으로 가정해 구간을
+           만들고, 그러면 길이가 null인 TIME_FIXED가 남는다. 구간이 길이를 정해야 한다.
+         */
+        ExecutionItem item = plannedItem(0L);
+        item.setPlacementType(PlacementType.UNSCHEDULED);
+        item.setExpectedMinutes(45);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.applyTimeFixedPlacement(eq(USER_ID), eq(ITEM_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(10, 0)), eq(DATE.atTime(11, 0)), eq(60))).thenReturn(1);
+
+        service.applyRollingPlacement(USER_ID, ITEM_ID, DATE,
+                DATE.atTime(10, 0), DATE.atTime(11, 0));
+
+        // 기존 45가 아니라 배치된 구간 60이 저장돼야 한다.
+        verify(executionItemMapper).applyTimeFixedPlacement(eq(USER_ID), eq(ITEM_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(10, 0)), eq(DATE.atTime(11, 0)), eq(60));
+        verify(executionItemEventMapper).insert(argThat(event ->
+                event.getEventType() == ExecutionEventType.MOVED
+                        && event.getAfterState().contains("\"expectedMinutes\":60")));
+    }
+
+    @Test
+    void applyRollingPlacement_rejectsInvalidSpan() {
+        ExecutionItem item = plannedItem(0L);
+        item.setPlacementType(PlacementType.UNSCHEDULED);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.applyRollingPlacement(USER_ID, ITEM_ID, DATE,
+                DATE.atTime(11, 0), DATE.atTime(10, 0)))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_TIME_RANGE));
+
+        verify(executionItemMapper, never()).applyTimeFixedPlacement(
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ===== 시각은 분 단위여야 한다 =====
+
+    @Test
+    void create_rejectsSubMinuteTimeFixedSpan() {
+        /*
+           09:00:30~09:01:00은 end > start를 통과하지만 길이가 0분으로 잘린다. 0은
+           chk_execution_items_expected_minutes(> 0)에 걸려 저장이 터지므로, 500이 나가기 전에
+           400으로 막는다.
+         */
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .title("짧은 일")
+                .scheduledDate(DATE)
+                .scheduledStartAt(DATE.atTime(9, 0, 30))
+                .scheduledEndAt(DATE.atTime(9, 1))
+                .build();
+
+        assertThatThrownBy(() -> service.create(USER_ID, request))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_TIME_RANGE));
+
+        verify(executionItemMapper, never()).insert(any());
+    }
+
+    @Test
+    void move_rejectsTimesContainingSeconds() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE)
+                .startTime(LocalTime.of(16, 0, 30))
+                .endTime(LocalTime.of(16, 30))
+                .version(0L)
+                .build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_TIME_RANGE));
+
+        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void reduce_doesNotTouchTimes_forDateOnly() {
         // 시각이 없는 항목은 예전 그대로 expectedMinutes만 바뀐다.
         ExecutionItem item = plannedItem(0L);

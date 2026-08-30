@@ -28,11 +28,26 @@ public final class PlacementDuration {
     }
 
     /**
-     * 두 시각 사이의 분. execution_items의 chk_execution_items_placement가
-     * scheduled_start_at &lt; scheduled_end_at을 보장하므로 결과는 항상 1 이상이다.
+     * 두 시각 사이의 분.
+     *
+     * <p>{@link #isMinutePrecision}으로 걸러진 시각에 대해서만 정확하다. DB의
+     * chk_execution_items_placement는 start &lt; end만 보장하고 "1분 이상"은 보장하지 않아,
+     * 09:00:30~09:01:00 같은 구간은 toMinutes()가 버려서 0이 된다. 0은
+     * chk_execution_items_expected_minutes(&gt; 0)에 걸려 저장 단계에서 터지므로, 그 전에
+     * 입력을 분 단위로 제한한다.
      */
     public static int minutesBetween(LocalDateTime startAt, LocalDateTime endAt) {
         return (int) Duration.between(startAt, endAt).toMinutes();
+    }
+
+    /**
+     * 시각이 분 단위인가(초·나노가 0인가).
+     *
+     * <p>이 앱에서 시각을 고르는 단위는 분이다. 초가 섞이면 길이 계산이 잘리고, 화면에 보이는
+     * 값과 저장된 값이 어긋난다. 30초짜리 일정은 만들 수 없어야 한다.
+     */
+    public static boolean isMinutePrecision(LocalDateTime at) {
+        return at.getSecond() == 0 && at.getNano() == 0;
     }
 
     /**

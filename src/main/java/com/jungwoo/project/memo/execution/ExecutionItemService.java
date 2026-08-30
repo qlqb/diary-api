@@ -258,9 +258,20 @@ public class ExecutionItemService {
     ) {
         ExecutionItem before = findOwnedOrThrow(executionItemId, userId);
 
+        // 배치는 UNSCHEDULED를 TIME_FIXED로 바꾸는 일이므로 TIME_FIXED의 규칙을 그대로 받는다.
+        validatePlacement(PlacementType.TIME_FIXED, scheduledDate, scheduledStartAt, scheduledEndAt);
+
+        /*
+           솔버가 만든 구간은 보통 expectedMinutes에서 나오므로 둘이 우연히 일치한다. 하지만
+           expectedMinutes가 null인 항목은 PlanPlacementService가 30분으로 가정해 구간을
+           만들고, 그러면 "구간은 30분인데 길이는 null"인 TIME_FIXED가 남는다. 여기서도 길이는
+           구간이 정한다.
+         */
+        int placedMinutes = PlacementDuration.minutesBetween(scheduledStartAt, scheduledEndAt);
+
         int updated = executionItemMapper.applyTimeFixedPlacement(
                 userId, executionItemId, before.getVersion(),
-                scheduledDate, scheduledStartAt, scheduledEndAt);
+                scheduledDate, scheduledStartAt, scheduledEndAt, placedMinutes);
         if (updated != 1) {
             throw new ConflictException(ErrorCode.VERSION_CONFLICT);
         }
@@ -273,7 +284,8 @@ public class ExecutionItemService {
                 toJson(Map.of("placementType", PlacementType.TIME_FIXED,
                         "scheduledDate", String.valueOf(scheduledDate),
                         "scheduledStartAt", String.valueOf(scheduledStartAt),
-                        "scheduledEndAt", String.valueOf(scheduledEndAt))),
+                        "scheduledEndAt", String.valueOf(scheduledEndAt),
+                        "expectedMinutes", placedMinutes)),
                 before.getVersion(), before.getVersion() + 1);
     }
 
@@ -378,6 +390,11 @@ public class ExecutionItemService {
             }
         }
 
+        // move는 validatePlacement를 지나지 않으므로 여기서 같은 규칙을 건다.
+        if (PlacementType.TIME_FIXED.equals(item.getPlacementType())) {
+            requireMinutePrecision(newStart, newEnd);
+        }
+
         boolean dateChanged = !toDate.equals(fromDate);
         boolean timeChanged = !Objects.equals(newStart, item.getScheduledStartAt())
                 || !Objects.equals(newEnd, item.getScheduledEndAt());
@@ -433,28 +450,43 @@ public class ExecutionItemService {
         boolean timeFixed = PlacementType.TIME_FIXED.equals(item.getPlacementType());
 
         /*
-           TIME_FIXED를 줄인다는 것은 종료 시각을 당긴다는 뜻이다.
+           줄이기는 실제로 줄일 때만 줄이기다.
 
-           시각이 진실이므로(PlacementDuration 참고) expectedMinutes만 바꾸고 구간을 두면
-           둘이 어긋난다. 그렇다고 줄이기를 막지는 않는다 — 화면은 TIME_FIXED에도 줄이기를
-           보여주고 있고, 이 항목들은 잠금 상태가 아니다. 시작 시각은 그대로 두고 종료 시각을
-           당긴다. 사용자가 줄이려는 것은 분량이지 언제 시작할지가 아니다.
+           지금 길이가 어디 적혀 있는지는 배치 형식에 달렸다. TIME_FIXED는 시각이 진실이므로
+           (PlacementDuration 참고) 구간에서 읽고, 시각이 없는 항목은 expectedMinutes가 곧
+           길이다. 어느 쪽이든 "지금보다 짧게"라는 규칙은 같다 — 예전에는 이 검사가
+           TIME_FIXED에만 있어서 DATE_ONLY 30분짜리에 90분을 보내면 늘어난 값이 REDUCED
+           이벤트로 남았다.
 
            늘리는 것은 줄이기가 아니다. 그건 이동(move)이 할 일이라 여기서는 거부한다.
+
+           TIME_FIXED는 길이만 바꾸면 구간과 어긋나므로 종료 시각도 함께 당긴다. 시작 시각은
+           그대로 둔다 — 사용자가 줄이려는 것은 분량이지 언제 시작할지가 아니다.
          */
+        Integer requestedMinutes = request.getExpectedMinutes();
         LocalDateTime newEnd = null;
-        boolean minutesChanged;
-        if (timeFixed && request.getExpectedMinutes() != null) {
-            int currentSpan = PlacementDuration.minutesBetween(
-                    item.getScheduledStartAt(), item.getScheduledEndAt());
-            if (request.getExpectedMinutes() >= currentSpan) {
+        boolean minutesChanged = false;
+
+        if (requestedMinutes != null) {
+            // 삼항으로 쓰면 안 된다 — int 분기와 Integer 분기가 섞이면 양쪽이 int로 언박싱돼
+            // expectedMinutes가 null일 때 아래 null 검사에 닿기도 전에 NPE가 난다.
+            Integer currentMinutes;
+            if (timeFixed) {
+                currentMinutes = PlacementDuration.minutesBetween(
+                        item.getScheduledStartAt(), item.getScheduledEndAt());
+            } else {
+                currentMinutes = item.getExpectedMinutes();
+            }
+
+            // 지금 길이를 모르면 무엇에 견줘 줄이는지도 알 수 없다. 그때는 제목만 줄일 수 있다.
+            if (currentMinutes == null || requestedMinutes <= 0 || requestedMinutes >= currentMinutes) {
                 throw new BadRequestException(ErrorCode.REDUCE_MUST_SHORTEN);
             }
-            newEnd = PlacementDuration.shortenedEnd(item.getScheduledStartAt(), request.getExpectedMinutes());
+
             minutesChanged = true;
-        } else {
-            minutesChanged = request.getExpectedMinutes() != null
-                    && !Objects.equals(item.getExpectedMinutes(), request.getExpectedMinutes());
+            if (timeFixed) {
+                newEnd = PlacementDuration.shortenedEnd(item.getScheduledStartAt(), requestedMinutes);
+            }
         }
 
         boolean titleChanged = request.getReducedTitle() != null
@@ -855,6 +887,7 @@ public class ExecutionItemService {
             if (!end.isAfter(start)) {
                 throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
             }
+            requireMinutePrecision(start, end);
             if (!scheduledDate.equals(start.toLocalDate()) || !scheduledDate.equals(end.toLocalDate())) {
                 throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
             }
@@ -865,6 +898,19 @@ public class ExecutionItemService {
             if (scheduledDate == null) {
                 throw new BadRequestException(ErrorCode.MISSING_INPUT_VALUE);
             }
+        }
+    }
+
+    /**
+     * TIME_FIXED 시각은 분 단위여야 한다.
+     *
+     * end &gt; start만으로는 부족하다 — 09:00:30~09:01:00은 그 검사를 통과하지만 길이가 0분으로
+     * 잘리고, 0은 chk_execution_items_expected_minutes에 걸려 저장이 터진다. 400으로 먼저
+     * 막아 500이 나가지 않게 한다.
+     */
+    private void requireMinutePrecision(java.time.LocalDateTime start, java.time.LocalDateTime end) {
+        if (!PlacementDuration.isMinutePrecision(start) || !PlacementDuration.isMinutePrecision(end)) {
+            throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
         }
     }
 
