@@ -33,12 +33,21 @@ public interface CourseMapper {
     List<CourseSummaryCounts> findSummaryCounts(@Param("userId") Long userId,
                                                  @Param("courseId") Long courseId);
 
+    /** AI 분석 적용 경로. 비어 있는 칸만 채운다 — 이미 있는 값은 사람 것으로 보고 건드리지 않는다. */
     void updateTextbookInfo(@Param("courseId") Long courseId,
                              @Param("userId") Long userId,
                              @Param("textbookTitle") String textbookTitle,
                              @Param("textbookAuthor") String textbookAuthor,
                              @Param("textbookPublisher") String textbookPublisher,
                              @Param("textbookIsbn") String textbookIsbn);
+
+    /** 사용자 편집 경로. 받은 값을 그대로 쓴다 — null이면 비운다. */
+    void updateTextbookByUser(@Param("courseId") Long courseId,
+                              @Param("userId") Long userId,
+                              @Param("textbookTitle") String textbookTitle,
+                              @Param("textbookAuthor") String textbookAuthor,
+                              @Param("textbookPublisher") String textbookPublisher,
+                              @Param("textbookIsbn") String textbookIsbn);
 
     /** 제목/분류 수정. groupLabel은 COALESCE하지 않는다 — null을 보내면 "분류 없음"으로 지운다. */
     void updateBasics(@Param("courseId") Long courseId,

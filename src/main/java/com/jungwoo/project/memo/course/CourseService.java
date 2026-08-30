@@ -44,11 +44,23 @@ public class CourseService {
         return CourseResponse.of(course, null);
     }
 
+    /**
+     * 제목·분류·교재 정보를 고친다.
+     *
+     * 교재는 사용자 편집 전용 경로(updateTextbookByUser)로 쓴다 — 받은 값을 그대로 넣고,
+     * 비우면 비운다. AI 분석 적용 경로(updateTextbookInfo)는 반대로 비어 있는 칸만 채우는데,
+     * 그래야 사람이 고쳐 놓은 값을 재분석이 조용히 뒤집지 않는다.
+     */
     @Transactional
     public CourseResponse update(Long userId, Long courseId, CourseUpdateRequest request) {
         getOwned(userId, courseId);
         courseMapper.updateBasics(courseId, userId, blankToNull(request.getTitle()),
                 blankToNull(request.getGroupLabel()));
+        courseMapper.updateTextbookByUser(courseId, userId,
+                blankToNull(request.getTextbookTitle()),
+                blankToNull(request.getTextbookAuthor()),
+                blankToNull(request.getTextbookPublisher()),
+                blankToNull(request.getTextbookIsbn()));
         return get(userId, courseId);
     }
 
