@@ -72,6 +72,18 @@ tasks.named('test') {
     useJUnitPlatform()
 
     /*
+      테스트 로그를 관찰용 로그 파일과 분리한다.
+
+      logging.file.name의 목적은 30일 자기 검증에서 "연결 제안: trigger=..." 같은 줄을
+      며칠 단위로 세는 것이다. 테스트도 같은 파일에 쓰면 목 호출이 만든 줄이 섞여 집계가
+      그대로 오염된다 — MaterialLinkProposalServiceTest만 해도 그 줄을 여러 번 찍는다.
+
+      build/ 아래로 보낸다. 이미 gitignore 대상이고 clean으로 함께 지워진다.
+    */
+    systemProperty 'logging.file.name',
+            layout.buildDirectory.file('logs/test.log').get().asFile.absolutePath
+
+    /*
       -PexcludeDbTests: 앱 스키마가 있는 DB가 없는 환경(CI)에서 뺄 테스트.
 
       아래 일곱은 로컬 memo DB의 실제 테이블에 직접 INSERT/DELETE해서 SQL 자체를 검증한다 —
