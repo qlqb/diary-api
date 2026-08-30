@@ -143,7 +143,17 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
                 .asConstraint("Prefer higher confidence availability slots");
     }
 
-    /** 같은 날에 모든 일을 과도하게 몰지 않는다. */
+    /**
+     * 같은 날에 모든 일을 과도하게 몰지 않는다.
+     *
+     * <p>★ 지금은 항목 "개수"를 센다. 길이도 BusyWindow도 보지 않는다. 그래서 알바 6시간이
+     * 있는 날에도 부하는 0이고, 남은 시간에 학습 3개가 페널티 없이 들어간다.
+     *
+     * <p>이번에 고치지 않은 것은 순서가 반대이기 때문이다. 시간 기준으로 바꾸려면 하루 상한
+     * 분(480? 600?)을 정해야 하는데 지금은 근거가 없다 — 하루가 실제로 얼마나 차는지 보고
+     * 정해야 한다. 그리고 그걸 보려면 수업·알바가 BusyWindow에 들어와 있어야 하는데, 그게
+     * 방금 들어왔다(반복 일정). 며칠 써본 뒤 시간 기준으로 바꾼다. (2026-08-31)
+     */
     Constraint limitDailyLoad(ConstraintFactory factory) {
         return factory.forEach(SchedulingTask.class)
                 .filter(SchedulingTask::isScheduled)

@@ -3,6 +3,8 @@ package com.jungwoo.project.memo.scheduling.service;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
+import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
@@ -28,7 +30,8 @@ import java.util.Set;
  * 출처와 신뢰도, 이유를 함께 만든다.
  *
  * 판단 순서:
- * 1. 기존 TIME_FIXED 실행 조각과 겹치는 시간은 항상 제외한다(강한 조건, 사용자 재허용 불가).
+ * 1. 기존 TIME_FIXED 실행 조각, 그리고 반복 일정(수업·알바)의 발생분과 겹치는 시간은 항상
+ *    제외한다(강한 조건, 사용자 재허용 불가).
  * 2. 현재 대화에서 사용자가 명시한 사용 불가 시간을 제외한다(AI_INFERRED 강한 조건).
  * 3. 사용자가 미리보기에서 직접 고친 예외를 반영한다 — 막거나(available=false) 다시
  *    열거나(available=true, 단 1번 TIME_FIXED는 재허용 대상이 아니다).
@@ -49,6 +52,7 @@ public class AvailabilityEstimateService {
     private static final Set<DayOfWeek> WEEKEND = Set.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
 
     private final ExecutionItemMapper executionItemMapper;
+    private final RoutineOccurrenceService routineOccurrenceService;
     private final Clock clock;
 
     @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
@@ -70,6 +74,20 @@ public class AvailabilityEstimateService {
         for (ExecutionItem item : existingFixed) {
             hardBusy.add(new Interval(item.getScheduledStartAt(), item.getScheduledEndAt()));
             busyWindows.add(new BusyWindow(item.getScheduledStartAt(), item.getScheduledEndAt(), item.getTitle()));
+        }
+
+        /*
+         * 반복 일정 발생분은 기존 TIME_FIXED 조각과 완전히 같은 취급이다 — hardBusy이지
+         * softBlocked가 아니다. softBlocked는 AI가 대화에서 추론한 것과 사용자가 미리보기에서
+         * 고친 예외를 담고 available=true로 다시 열리는데, 수업 시간은 재허용 대상이 아니다.
+         *
+         * 화면(GET /api/routines/occurrences)과 여기가 같은 expand를 부른다. 그래서 "화면에는
+         * 보이는데 배치는 그 시간에 학습을 넣는" 상태가 구조적으로 불가능하다.
+         */
+        for (RoutineOccurrence occurrence :
+                routineOccurrenceService.expand(userId, horizonStart, horizonEnd)) {
+            hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
+            busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(), occurrence.title()));
         }
 
         List<Interval> softBlocked = new ArrayList<>();
