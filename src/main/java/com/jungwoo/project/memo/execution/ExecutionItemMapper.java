@@ -175,6 +175,9 @@ public interface ExecutionItemMapper {
 
     /**
      * 이동 전용 갱신. version이 일치할 때만 반영되고 version을 1 증가시킨다.
+     *
+     * expectedMinutes는 TIME_FIXED에서만 값이 있다(옮긴 뒤 구간에서 계산한 값). null이면
+     * 기존 값을 그대로 둔다 — DATE_ONLY는 시각이 없어 길이가 이동으로 달라지지 않는다.
      */
     int updateForMove(
             @Param("executionItemId") Long executionItemId,
@@ -182,18 +185,23 @@ public interface ExecutionItemMapper {
             @Param("version") Long version,
             @Param("scheduledDate") LocalDate scheduledDate,
             @Param("scheduledStartAt") LocalDateTime scheduledStartAt,
-            @Param("scheduledEndAt") LocalDateTime scheduledEndAt
+            @Param("scheduledEndAt") LocalDateTime scheduledEndAt,
+            @Param("expectedMinutes") Integer expectedMinutes
     );
 
     /**
-     * 축소 전용 갱신. title/expectedMinutes 중 null이 아닌 것만 반영한다.
+     * 축소 전용 갱신. title/expectedMinutes/scheduledEndAt 중 null이 아닌 것만 반영한다.
+     *
+     * scheduledEndAt은 TIME_FIXED를 줄일 때만 값이 있다. 길이와 종료 시각이 따로 갱신되면
+     * 그 사이에 둘이 어긋난 행이 보이므로 한 UPDATE에서 함께 바꾼다.
      */
     int updateForReduce(
             @Param("executionItemId") Long executionItemId,
             @Param("userId") Long userId,
             @Param("version") Long version,
             @Param("title") String title,
-            @Param("expectedMinutes") Integer expectedMinutes
+            @Param("expectedMinutes") Integer expectedMinutes,
+            @Param("scheduledEndAt") LocalDateTime scheduledEndAt
     );
 
     int updateStatusWithVersion(

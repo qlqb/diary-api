@@ -34,6 +34,7 @@ public enum ErrorCode {
     MATERIAL_ANALYSIS_NOT_DRAFT(HttpStatus.BAD_REQUEST, "E400_017", "이미 처리된 분석 결과입니다"),
     MATERIAL_EXTRACTION_NOT_READY(HttpStatus.BAD_REQUEST, "E400_018", "자료에서 텍스트를 추출하지 못해 분석할 수 없습니다"),
     STUDY_RECOMMENDATION_NOT_SUGGESTED(HttpStatus.BAD_REQUEST, "E400_019", "이미 처리된 학습 추천입니다"),
+    REDUCE_MUST_SHORTEN(HttpStatus.BAD_REQUEST, "E400_020", "줄이기는 지금보다 짧은 시간으로만 가능합니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),

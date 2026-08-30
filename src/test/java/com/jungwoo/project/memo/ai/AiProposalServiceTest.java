@@ -424,9 +424,13 @@ class AiProposalServiceTest {
     }
 
     @Test
-    void apply_recomputesMinutes_whenEditMovesATimeFixedItemToALongerSpan() {
-        // 편집으로 시각만 바꾸면 expectedMinutes는 원본 값이 그대로 남는다. 그대로 저장하면
-        // 생성 때 맞춰 둔 불변식이 편집 한 번으로 다시 깨진다.
+    void apply_passesTheEditedTimesThrough_soTheBoundaryCanDeriveMinutes() {
+        /*
+           편집으로 시각만 바꾸면 expectedMinutes는 원본 값(30)이 그대로 남는다. 길이를 맞추는
+           일은 여기가 아니라 ExecutionItemService.createFromApprovedProposal이 한다
+           (PlacementDuration). 여기서 확인할 것은 새 시각이 그 경계까지 그대로 전달되는지다 —
+           실제 도출은 ExecutionItemServiceTest가 검증한다.
+         */
         when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
                 .thenReturn(List.of(proposalItem(1L, samplePayloadJson())));
@@ -445,9 +449,8 @@ class AiProposalServiceTest {
 
         service.apply(PROPOSAL_ID, USER_ID, request);
 
-        // 원본 payload의 30분이 아니라 새 구간의 360분으로 만들어져야 한다.
         verify(executionItemService).createFromApprovedProposal(
-                eq(USER_ID), any(), any(), eq(TARGET_DATE), eq(360), any(), anyInt(), eq(true),
+                eq(USER_ID), any(), any(), eq(TARGET_DATE), anyInt(), any(), anyInt(), eq(true),
                 eq(PlacementType.TIME_FIXED), eq(TARGET_DATE.atTime(17, 0)), eq(TARGET_DATE.atTime(23, 0)));
     }
 

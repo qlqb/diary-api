@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.execution.domain.ExecutionRecordOutcome;
 import com.jungwoo.project.memo.execution.domain.ExecutionStatus;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
+import com.jungwoo.project.memo.execution.dto.ExecutionItemCreateRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
@@ -193,12 +194,13 @@ class ExecutionItemServiceTest {
     void reduce_succeeds_forTimeFixedItem_placementTypeDoesNotBlockReduce() {
         ExecutionItem item = timeFixedItem(0L);
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
-        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull())).thenReturn(1);
+        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull(), isNull())).thenReturn(1);
 
         service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
                 .reducedTitle("줄인 제목").version(0L).build());
 
-        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull());
+        // 제목만 바꾸는 요청은 시각과 expectedMinutes를 건드리지 않는다.
+        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L), eq("줄인 제목"), isNull(), isNull());
     }
 
     @Test
@@ -206,13 +208,13 @@ class ExecutionItemServiceTest {
         ExecutionItem item = plannedItem(0L);
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
         when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
-                eq(DATE.plusDays(1)), any(), any())).thenReturn(1);
+                eq(DATE.plusDays(1)), any(), any(), any())).thenReturn(1);
 
         service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
                 .toDate(DATE.plusDays(1)).version(0L).build());
 
         verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
-                eq(DATE.plusDays(1)), any(), any());
+                eq(DATE.plusDays(1)), any(), any(), any());
         verify(executionItemEventMapper).insert(argThat(event ->
                 event.getEventType() == ExecutionEventType.MOVED
                         && event.getExecutionItemId().equals(ITEM_ID)));
@@ -225,7 +227,7 @@ class ExecutionItemServiceTest {
         ExecutionItem item = timeFixedItem(0L);
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
         when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
-                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)))).thenReturn(1);
+                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)), eq(30))).thenReturn(1);
 
         service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
                 .toDate(DATE)
@@ -235,7 +237,7 @@ class ExecutionItemServiceTest {
                 .build());
 
         verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
-                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)));
+                eq(DATE), eq(DATE.atTime(16, 0)), eq(DATE.atTime(16, 30)), eq(30));
         verify(executionItemEventMapper).insert(argThat(event ->
                 event.getEventType() == ExecutionEventType.MOVED
                         && event.getExecutionItemId().equals(ITEM_ID)));
@@ -255,7 +257,7 @@ class ExecutionItemServiceTest {
                 .isInstanceOfSatisfying(BadRequestException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MOVE_TARGET_DATE_INVALID));
 
-        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any());
+        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -273,7 +275,7 @@ class ExecutionItemServiceTest {
                 .isInstanceOfSatisfying(BadRequestException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.TASK_MUST_NOT_HAVE_TIME));
 
-        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any());
+        verify(executionItemMapper, never()).updateForMove(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -294,13 +296,13 @@ class ExecutionItemServiceTest {
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
         when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
                 eq(DATE.plusDays(1)), eq(DATE.plusDays(1).atTime(9, 0)),
-                eq(DATE.plusDays(1).atTime(9, 30)))).thenReturn(1);
+                eq(DATE.plusDays(1).atTime(9, 30)), eq(30))).thenReturn(1);
 
         service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
                 .toDate(DATE.plusDays(1)).version(0L).build());
 
         verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
-                eq(DATE.plusDays(1)), eq(DATE.plusDays(1).atTime(9, 0)), eq(DATE.plusDays(1).atTime(9, 30)));
+                eq(DATE.plusDays(1)), eq(DATE.plusDays(1).atTime(9, 0)), eq(DATE.plusDays(1).atTime(9, 30)), eq(30));
     }
 
     @Test
@@ -315,7 +317,189 @@ class ExecutionItemServiceTest {
                 .isInstanceOfSatisfying(BadRequestException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.EXECUTION_ITEM_NO_ACTUAL_CHANGE));
 
-        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any());
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    /*
+       ===== TIME_FIXED의 길이는 시각이 정한다 =====
+
+       expectedMinutes와 (시작, 종료) 구간은 같은 사실을 가리키는 두 출처다. 시각이 진실이고
+       길이는 파생값이라, 두 값이 어긋난 행이 만들어질 수 있으면 데이터 계약이 깨진 것이다.
+       실제로 17:00~23:00짜리 알바가 120분으로 저장된 적이 있다.
+     */
+
+    @Test
+    void create_derivesMinutesFromTheSpan_forTimeFixed_ignoringTheRequestedValue() {
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .title("알바 근무")
+                .scheduledDate(DATE)
+                .scheduledStartAt(DATE.atTime(17, 0))
+                .scheduledEndAt(DATE.atTime(23, 0))
+                .expectedMinutes(120)   // 요청이 뭘 보내든 시각이 이긴다
+                .build();
+        when(executionItemMapper.findByIdAndUserId(any(), eq(USER_ID))).thenReturn(timeFixedItem(0L));
+
+        service.create(USER_ID, request);
+
+        verify(executionItemMapper).insert(argThat(item ->
+                item.getPlacementType() == PlacementType.TIME_FIXED
+                        && item.getExpectedMinutes() == 360));
+    }
+
+    @Test
+    void create_keepsRequestedMinutes_forDateOnly() {
+        // 시각이 없는 항목은 길이를 사람이 정한다 — 여기까지 덮어쓰면 안 된다.
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .title("알고리즘 문제 풀기")
+                .scheduledDate(DATE)
+                .expectedMinutes(45)
+                .build();
+        when(executionItemMapper.findByIdAndUserId(any(), eq(USER_ID))).thenReturn(plannedItem(0L));
+
+        service.create(USER_ID, request);
+
+        verify(executionItemMapper).insert(argThat(item ->
+                item.getPlacementType() == PlacementType.DATE_ONLY
+                        && item.getExpectedMinutes() == 45));
+    }
+
+    @Test
+    void createFromApprovedProposal_derivesMinutesFromTheSpan_forTimeFixed() {
+        // AI 제안 적용도 같은 경계를 지난다. 제안 payload가 어떤 값을 들고 오든 시각이 이긴다 —
+        // 17:00~23:00짜리 알바가 120분으로 저장된 사고가 바로 이 지점이었다.
+        service.createFromApprovedProposal(USER_ID, "알바 근무", null, DATE,
+                120, ExecutionPriority.MUST, 0, false,
+                PlacementType.TIME_FIXED, DATE.atTime(17, 0), DATE.atTime(23, 0));
+
+        verify(executionItemMapper).insert(argThat(item -> item.getExpectedMinutes() == 360));
+    }
+
+    @Test
+    void createFromApprovedProposal_keepsGivenMinutes_forUnscheduled() {
+        // 시각이 없는 계획 항목은 솔버가 이 길이를 보고 슬롯을 고른다 — 덮어쓰면 안 된다.
+        service.createFromApprovedProposal(USER_ID, "자료구조 3장 읽기", null, null,
+                45, ExecutionPriority.SHOULD, 0, false,
+                PlacementType.UNSCHEDULED, null, null);
+
+        verify(executionItemMapper).insert(argThat(item -> item.getExpectedMinutes() == 45));
+    }
+
+    @Test
+    void move_recomputesMinutes_whenTheSpanChanges() {
+        // 09:00~09:30(30분)을 17:00~23:00으로 옮기면 360분이 된다. 시각만 갱신하고
+        // expectedMinutes를 두면 6시간짜리가 30분으로 남는다.
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(17, 0)), eq(DATE.atTime(23, 0)), eq(360))).thenReturn(1);
+
+        service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE)
+                .startTime(LocalTime.of(17, 0))
+                .endTime(LocalTime.of(23, 0))
+                .version(0L)
+                .build());
+
+        verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE), eq(DATE.atTime(17, 0)), eq(DATE.atTime(23, 0)), eq(360));
+    }
+
+    @Test
+    void move_leavesMinutesAlone_forDateOnly() {
+        // 시각이 없으면 이동으로 길이가 달라질 수 없다 — null을 넘겨 기존 값을 보존한다.
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE.plusDays(1)), isNull(), isNull(), isNull())).thenReturn(1);
+
+        service.move(ITEM_ID, USER_ID, ExecutionItemMoveRequest.builder()
+                .toDate(DATE.plusDays(1)).version(0L).build());
+
+        verify(executionItemMapper).updateForMove(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                eq(DATE.plusDays(1)), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    void reduce_shortensTheEndTime_forTimeFixed_keepingTheStart() {
+        // 09:00~09:30(30분)을 10분으로 줄이면 09:00~09:10이 된다. 시작 시각은 그대로다 —
+        // 사용자가 줄이려는 것은 분량이지 언제 시작할지가 아니다.
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                isNull(), eq(10), eq(DATE.atTime(9, 10)))).thenReturn(1);
+
+        service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(10).version(0L).build());
+
+        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                isNull(), eq(10), eq(DATE.atTime(9, 10)));
+    }
+
+    @Test
+    void reduce_writesBothMinutesAndEndTime_intoTheReducedEvent() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForReduce(any(), any(), any(), any(), any(), any())).thenReturn(1);
+
+        service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(10).version(0L).build());
+
+        /*
+           시각이 함께 바뀐 변경이므로 무엇이 달라졌는지 이벤트만 보고 알 수 있어야 한다.
+
+           scheduledEndAt의 직렬화 형식에는 기대지 않는다 — 이 서비스의 ObjectMapper는
+           LocalDateTime을 배열로 쓰고(WRITE_DATES_AS_TIMESTAMPS 기본값), 같은 컬럼에
+           String.valueOf로 문자열을 넣는 호출부도 따로 있다. 여기서 검증할 것은 "종료 시각의
+           전후가 남는가"이지 그 표기법이 아니다.
+         */
+        verify(executionItemEventMapper).insert(argThat(event ->
+                event.getEventType() == ExecutionEventType.REDUCED
+                        && event.getBeforeState().contains("scheduledEndAt")
+                        && event.getBeforeState().contains("\"expectedMinutes\":30")
+                        && event.getAfterState().contains("scheduledEndAt")
+                        && event.getAfterState().contains("\"expectedMinutes\":10")
+                        && !event.getBeforeState().equals(event.getAfterState())));
+    }
+
+    @Test
+    void reduce_rejectsSameLength_forTimeFixed() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(30).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.REDUCE_MUST_SHORTEN));
+
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reduce_rejectsLonger_forTimeFixed_thatIsMoveNotReduce() {
+        ExecutionItem item = timeFixedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+
+        assertThatThrownBy(() -> service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(90).version(0L).build()))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.REDUCE_MUST_SHORTEN));
+
+        verify(executionItemMapper, never()).updateForReduce(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void reduce_doesNotTouchTimes_forDateOnly() {
+        // 시각이 없는 항목은 예전 그대로 expectedMinutes만 바뀐다.
+        ExecutionItem item = plannedItem(0L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                isNull(), eq(10), isNull())).thenReturn(1);
+
+        service.reduce(ITEM_ID, USER_ID, ExecutionItemReduceRequest.builder()
+                .expectedMinutes(10).version(0L).build());
+
+        verify(executionItemMapper).updateForReduce(eq(ITEM_ID), eq(USER_ID), eq(0L),
+                isNull(), eq(10), isNull());
     }
 
     @Test

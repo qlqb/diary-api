@@ -182,6 +182,7 @@
         SET scheduled_date     = #{scheduledDate},
             scheduled_start_at = #{scheduledStartAt},
             scheduled_end_at   = #{scheduledEndAt},
+            expected_minutes   = CASE WHEN #{expectedMinutes} IS NOT NULL THEN #{expectedMinutes} ELSE expected_minutes END,
             version            = version + 1
         WHERE execution_item_id = #{executionItemId}
           AND user_id           = #{userId}
@@ -194,6 +195,7 @@
         UPDATE execution_items
         SET title = CASE WHEN #{title} IS NOT NULL THEN #{title} ELSE title END,
             expected_minutes = CASE WHEN #{expectedMinutes} IS NOT NULL THEN #{expectedMinutes} ELSE expected_minutes END,
+            scheduled_end_at = CASE WHEN #{scheduledEndAt} IS NOT NULL THEN #{scheduledEndAt} ELSE scheduled_end_at END,
             version = version + 1
         WHERE execution_item_id = #{executionItemId}
           AND user_id           = #{userId}

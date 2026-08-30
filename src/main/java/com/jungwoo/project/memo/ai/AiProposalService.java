@@ -23,6 +23,7 @@ import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
+import com.jungwoo.project.memo.execution.domain.PlacementDuration;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
@@ -32,7 +33,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
@@ -75,7 +75,7 @@ public class AiProposalService {
      * 값이고 두 시간을 우습게 넘는다. 여기에 상한을 걸었더니 모델이 검증을 통과하려고
      * 시각은 진짜로 넣고 expectedMinutes만 120으로 깎아 내는 일이 실제로 있었다
      * (17:00~23:00짜리 알바가 120분으로 저장됨). 그래서 TIME_FIXED에서는 이 범위를
-     * 검사하지 않고, 길이를 모델에게 묻지도 않는다 — timeFixedMinutes()로 계산한다.
+     * 검사하지 않고, 길이를 모델에게 묻지도 않는다 — PlacementDuration이 계산한다.
      */
     private static final int MIN_EXPECTED_MINUTES = 5;
     private static final int MAX_EXPECTED_MINUTES = 120;
@@ -266,15 +266,6 @@ public class AiProposalService {
         return item.getPriority() != null ? item.getPriority().name() : "SHOULD";
     }
 
-    /**
-     * TIME_FIXED 한 조각의 길이. execution_items의 chk_execution_items_placement가
-     * scheduled_start_at &lt; scheduled_end_at을 보장하므로 결과는 항상 1 이상이다.
-     * 시각이 아직 없는 단계에서 부르면 안 된다 — 그건 호출부의 버그다.
-     */
-    private static int timeFixedMinutes(LocalDateTime startAt, LocalDateTime endAt) {
-        return (int) Duration.between(startAt, endAt).toMinutes();
-    }
-
     private List<ProposalItemPayload> validateAndNormalize(
             List<ProposalItem> items, LocalDate targetDate, int maxItems) {
         if (items == null || items.isEmpty()) {
@@ -357,7 +348,7 @@ public class AiProposalService {
             if (placementType == PlacementType.TIME_FIXED) {
                 // 시각이 정해진 순간 길이는 이미 결정돼 있다. 모델이 따로 적어 낸 숫자는 보지
                 // 않는다 — 두 출처가 어긋나면 화면과 하루 부하 계산이 조용히 틀어진다.
-                expectedMinutes = timeFixedMinutes(scheduledStartAt, scheduledEndAt);
+                expectedMinutes = PlacementDuration.minutesBetween(scheduledStartAt, scheduledEndAt);
             } else {
                 if (item.expectedMinutes() == null
                         || item.expectedMinutes() < MIN_EXPECTED_MINUTES
@@ -540,12 +531,8 @@ public class AiProposalService {
                 scheduledEndAt = null;
             }
 
-            // 생성 때와 같은 불변식: TIME_FIXED의 길이는 구간이 정한다. 편집으로 시각만
-            // 바꾸고 expectedMinutes를 그대로 둔 경우에도 둘이 어긋난 채 저장되지 않는다.
-            if (placementType == PlacementType.TIME_FIXED
-                    && scheduledStartAt != null && scheduledEndAt != null) {
-                expectedMinutes = timeFixedMinutes(scheduledStartAt, scheduledEndAt);
-            }
+            // TIME_FIXED의 길이를 여기서 다시 계산하지 않는다 — 편집으로 시각만 바꿔도
+            // createFromApprovedProposal이 PlacementDuration으로 맞춰 저장한다.
 
             int orderIndex = nextOrderIndexByDate.computeIfAbsent(
                     scheduledDate, d -> executionItemService.nextOrderIndexStart(userId, d));

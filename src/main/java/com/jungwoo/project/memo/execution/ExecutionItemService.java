@@ -15,6 +15,7 @@ import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.execution.domain.ExecutionRecord;
 import com.jungwoo.project.memo.execution.domain.ExecutionRecordOutcome;
 import com.jungwoo.project.memo.execution.domain.ExecutionStatus;
+import com.jungwoo.project.memo.execution.domain.PlacementDuration;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCompleteRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemCreateRequest;
@@ -133,7 +134,9 @@ public class ExecutionItemService {
                 .scheduledDate(request.getScheduledDate())
                 .scheduledStartAt(request.getScheduledStartAt())
                 .scheduledEndAt(request.getScheduledEndAt())
-                .expectedMinutes(request.getExpectedMinutes())
+                // TIME_FIXED면 요청이 보낸 값이 아니라 시각에서 계산한다 (PlacementDuration 참고).
+                .expectedMinutes(PlacementDuration.resolve(placementType,
+                        request.getScheduledStartAt(), request.getScheduledEndAt(), request.getExpectedMinutes()))
                 .status(ExecutionStatus.PLANNED)
                 .priority(request.getPriority() != null ? request.getPriority() : ExecutionPriority.SHOULD)
                 .orderIndex(0)
@@ -382,8 +385,14 @@ public class ExecutionItemService {
             throw new BadRequestException(ErrorCode.MOVE_TARGET_DATE_INVALID);
         }
 
+        // 이동으로 구간이 달라지면 길이도 달라진다. 시각만 갱신하고 expected_minutes를 두면
+        // 2시간짜리를 6시간으로 늘려도 120분으로 남는다 — 같은 UPDATE에서 함께 맞춘다.
+        // 날짜만 옮기는 경우(구간 길이 동일)에는 계산 결과도 같으므로 아무것도 달라지지 않는다.
+        Integer newExpectedMinutes = PlacementDuration.resolve(
+                item.getPlacementType(), newStart, newEnd, null);
+
         int updated = executionItemMapper.updateForMove(
-                executionItemId, userId, request.getVersion(), toDate, newStart, newEnd);
+                executionItemId, userId, request.getVersion(), toDate, newStart, newEnd, newExpectedMinutes);
         if (updated != 1) {
             throw new ConflictException(ErrorCode.VERSION_CONFLICT);
         }
@@ -421,10 +430,35 @@ public class ExecutionItemService {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
 
+        boolean timeFixed = PlacementType.TIME_FIXED.equals(item.getPlacementType());
+
+        /*
+           TIME_FIXED를 줄인다는 것은 종료 시각을 당긴다는 뜻이다.
+
+           시각이 진실이므로(PlacementDuration 참고) expectedMinutes만 바꾸고 구간을 두면
+           둘이 어긋난다. 그렇다고 줄이기를 막지는 않는다 — 화면은 TIME_FIXED에도 줄이기를
+           보여주고 있고, 이 항목들은 잠금 상태가 아니다. 시작 시각은 그대로 두고 종료 시각을
+           당긴다. 사용자가 줄이려는 것은 분량이지 언제 시작할지가 아니다.
+
+           늘리는 것은 줄이기가 아니다. 그건 이동(move)이 할 일이라 여기서는 거부한다.
+         */
+        LocalDateTime newEnd = null;
+        boolean minutesChanged;
+        if (timeFixed && request.getExpectedMinutes() != null) {
+            int currentSpan = PlacementDuration.minutesBetween(
+                    item.getScheduledStartAt(), item.getScheduledEndAt());
+            if (request.getExpectedMinutes() >= currentSpan) {
+                throw new BadRequestException(ErrorCode.REDUCE_MUST_SHORTEN);
+            }
+            newEnd = PlacementDuration.shortenedEnd(item.getScheduledStartAt(), request.getExpectedMinutes());
+            minutesChanged = true;
+        } else {
+            minutesChanged = request.getExpectedMinutes() != null
+                    && !Objects.equals(item.getExpectedMinutes(), request.getExpectedMinutes());
+        }
+
         boolean titleChanged = request.getReducedTitle() != null
                 && !Objects.equals(item.getTitle(), request.getReducedTitle());
-        boolean minutesChanged = request.getExpectedMinutes() != null
-                && !Objects.equals(item.getExpectedMinutes(), request.getExpectedMinutes());
         if (!titleChanged && !minutesChanged) {
             throw new BadRequestException(ErrorCode.EXECUTION_ITEM_NO_ACTUAL_CHANGE);
         }
@@ -432,10 +466,13 @@ public class ExecutionItemService {
         Map<String, Object> before = new LinkedHashMap<>();
         before.put("title", item.getTitle());
         before.put("expectedMinutes", item.getExpectedMinutes());
+        if (timeFixed) {
+            before.put("scheduledEndAt", item.getScheduledEndAt());
+        }
 
         int updated = executionItemMapper.updateForReduce(
                 executionItemId, userId, request.getVersion(),
-                request.getReducedTitle(), request.getExpectedMinutes());
+                request.getReducedTitle(), request.getExpectedMinutes(), newEnd);
         if (updated != 1) {
             throw new ConflictException(ErrorCode.VERSION_CONFLICT);
         }
@@ -444,6 +481,10 @@ public class ExecutionItemService {
         after.put("title", request.getReducedTitle() != null ? request.getReducedTitle() : item.getTitle());
         after.put("expectedMinutes",
                 request.getExpectedMinutes() != null ? request.getExpectedMinutes() : item.getExpectedMinutes());
+        if (timeFixed) {
+            // 제목만 바꾼 요청이면 newEnd가 null이다 — 그때는 기존 종료 시각이 그대로 남는다.
+            after.put("scheduledEndAt", newEnd != null ? newEnd : item.getScheduledEndAt());
+        }
 
         insertEvent(executionItemId, userId, ExecutionEventType.REDUCED, ExecutionEventActorType.USER,
                 request.getReason(), toJson(before), toJson(after),
@@ -591,6 +632,11 @@ public class ExecutionItemService {
     ) {
         validatePlacement(placementType, scheduledDate, scheduledStartAt, scheduledEndAt);
 
+        // AI 경로도 같은 정책을 지난다 — 제안 payload에서 이미 계산해 오지만, 불변식을
+        // 지키는 책임은 호출부가 아니라 이 경계에 있다.
+        Integer resolvedMinutes = PlacementDuration.resolve(
+                placementType, scheduledStartAt, scheduledEndAt, expectedMinutes);
+
         ExecutionItem item = ExecutionItem.builder()
                 .userId(userId)
                 .title(title)
@@ -599,7 +645,7 @@ public class ExecutionItemService {
                 .scheduledDate(scheduledDate)
                 .scheduledStartAt(scheduledStartAt)
                 .scheduledEndAt(scheduledEndAt)
-                .expectedMinutes(expectedMinutes)
+                .expectedMinutes(resolvedMinutes)
                 .status(ExecutionStatus.PLANNED)
                 .priority(priority)
                 .orderIndex(orderIndex)
@@ -618,7 +664,7 @@ public class ExecutionItemService {
         afterState.put("scheduledStartAt", scheduledStartAt);
         afterState.put("scheduledEndAt", scheduledEndAt);
         afterState.put("priority", priority);
-        afterState.put("expectedMinutes", expectedMinutes);
+        afterState.put("expectedMinutes", resolvedMinutes);
 
         insertEvent(item.getExecutionItemId(), userId, ExecutionEventType.CREATED,
                 ExecutionEventActorType.USER, "AI 제안 적용", null, toJson(afterState), null, item.getVersion());
