@@ -56,4 +56,14 @@
         WHERE analysis_id = #{analysisId}
     </update>
 
+    <!--
+      계획 생성이 강의 일정을 읽는 경로. APPLIED만 본다 — DRAFT는 아직 사용자가 승인하지
+      않은 것이라 확정 정보로 쓸 수 없다.
+    -->
+    <select id="findAppliedByCourseIdAndUserId" resultMap="analysisResultMap">
+        SELECT * FROM course_material_analyses
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND status = 'APPLIED'
+        ORDER BY applied_at DESC
+    </select>
+
 </mapper>

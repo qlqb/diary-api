@@ -14,6 +14,13 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.CourseNoteMapper;
+import com.jungwoo.project.memo.course.domain.CourseNoteCategory;
+import com.jungwoo.project.memo.learning.TopicService;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
+import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
+import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
@@ -60,6 +67,18 @@ public class PlanDraftService {
     private static final int SHORT_PLAN_DAYS = 7;
 
     /** AiProposalService가 강제하는 항목별 시간 범위. 프롬프트에도 같은 값을 알려준다. */
+    /**
+     * 프로젝트당 학습 항목 줄 수 상한.
+     *
+     * 계획은 프로젝트를 고르지 않으면 ACTIVE 전체를 대상으로 한다. 상한이 없으면 과목이
+     * 늘수록 프롬프트가 그대로 커진다. 30줄이면 한 과목의 주차별 진도를 담기에 넉넉하고,
+     * 넘치면 뒤쪽은 접고 개수만 알린다 — 뒤쪽 주차는 어차피 지금 계획할 범위가 아니다.
+     */
+    private static final int MAX_TOPIC_LINES_PER_COURSE = 30;
+
+    /** 일정·평가 줄 수 상한. 개강일·시험·평가 비율이면 충분하다. */
+    private static final int MAX_SCHEDULE_LINES_PER_COURSE = 8;
+
     private static final int MIN_ITEM_MINUTES = 5;
     private static final int MAX_ITEM_MINUTES = 120;
 
@@ -72,6 +91,9 @@ public class PlanDraftService {
     private final PlanVersionService planVersionService;
     private final PlanReviewService planReviewService;
     private final CourseMapper courseMapper;
+    private final TopicService topicService;
+    private final CourseNoteMapper courseNoteMapper;
+    private final CourseMaterialAnalysisMapper analysisMapper;
     private final ExecutionItemMapper executionItemMapper;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -241,19 +263,25 @@ public class PlanDraftService {
                 .append("넘기지 마라. 항목을 잘게 쪼개 개수를 늘리지 마라. 채울 내용이 없으면 ")
                 .append("억지로 채우지 말고 적게 제안하라. 항목은 최대 ").append(maxItems).append("개다.\n\n");
 
+        /*
+          학습 항목과 일정을 줘도 어디까지가 "지금"인지는 따로 말해주지 않으면 모른다.
+          실험에서 이 지시가 없으면 한참 뒤 주차 내용까지 당겨왔다.
+        */
+        sb.append("[진도 기준]\n")
+                .append("프로젝트에 학습 항목이 실려 있으면 그 안에서 고른다. 항목 옆 괄호는 ")
+                .append("자료에서 확인한 위치다. 일정에 개강일이 있으면 오늘 날짜와 대조해 지금이 ")
+                .append("몇 주차인지 계산하고, 이번 주와 다음 주 진도에 집중하라. 한참 뒤 주차 ")
+                .append("내용을 당겨오지 마라. 학습 항목에 없는 것을 지어내지 마라 — 교재의 장 ")
+                .append("번호나 쪽수처럼 자료에 없는 값은 쓰지 않는다.\n\n");
+
         List<Course> courses = resolveCourses(userId, request.getCourseIds());
         sb.append("[대상 프로젝트]\n");
         if (courses.isEmpty()) {
             sb.append("(없음 — 프로젝트에 묶이지 않는 할 일만 제안해도 된다)\n");
         }
         for (Course course : courses) {
-            sb.append("- id=").append(course.getCourseId()).append(" ").append(course.getTitle());
-            if (course.getTextbookTitle() != null) {
-                sb.append(" (교재: ").append(course.getTextbookTitle()).append(")");
-            }
-            sb.append("\n");
+            appendCourseContext(sb, userId, course);
         }
-        sb.append("\n");
 
         List<ExecutionItem> existing =
                 executionItemMapper.findByUserIdAndPlanningRange(userId, start, end);
@@ -289,6 +317,101 @@ public class PlanDraftService {
             sb.append("[사용자가 정한 제목]\n").append(request.getTitle()).append("\n");
         }
         return sb.toString();
+    }
+
+    /**
+     * 프로젝트 한 줄 + 그 프로젝트에 대해 자료에서 뽑아 둔 것.
+     *
+     * 이게 없으면 모델이 아는 것은 과목명과 교재명뿐이다. 실측해 보니 그 상태에서는 교재
+     * 장 번호를 지어내고("교재 1장(전처리 기본)") 실제 수업 진도와 무관한 계획이 나왔다.
+     * 사용자가 자료를 올리고 분석까지 적용했는데 그 결과가 계획에 한 글자도 반영되지 않고
+     * 있었다.
+     *
+     * course_topics를 쓰는 이유는 교재 목차가 아니라 강의 진도라서다. 교재 목차는 저자가
+     * 정한 순서이고 수업이 그 순서대로 나가지 않는다 — 이 과목만 해도 전처리가 교재
+     * 앞쪽인데 수업은 9주차다. source_locator에 "2주차"처럼 위치가 붙어 있어 그대로 전달된다.
+     */
+    private void appendCourseContext(StringBuilder sb, Long userId, Course course) {
+        sb.append("- id=").append(course.getCourseId()).append(" ").append(course.getTitle());
+        if (course.getTextbookTitle() != null) {
+            sb.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+        }
+        sb.append("\n");
+
+        List<String> topicLines = new ArrayList<>();
+        for (TopicResponse root : topicService.getTopicTree(userId, course.getCourseId())) {
+            appendTopicLine(topicLines, root, 0);
+        }
+        if (!topicLines.isEmpty()) {
+            sb.append("  [학습 항목]").append("\n");
+            int shown = Math.min(topicLines.size(), MAX_TOPIC_LINES_PER_COURSE);
+            for (int i = 0; i < shown; i++) {
+                sb.append("  ").append(topicLines.get(i)).append("\n");
+            }
+            if (topicLines.size() > shown) {
+                sb.append("    … 외 ").append(topicLines.size() - shown).append("개\n");
+            }
+        }
+
+        List<String> scheduleLines = courseScheduleLines(userId, course.getCourseId());
+        if (!scheduleLines.isEmpty()) {
+            sb.append("  [일정·평가]").append("\n");
+            for (String line : scheduleLines) {
+                sb.append("  - ").append(line).append("\n");
+            }
+        }
+        sb.append("\n");
+    }
+
+    /*
+      수집 단계에서 미리 자르지 않는다. 자르면 "외 N개"의 N이 실제로 접힌 개수가 아니라
+      "상한을 넘긴 만큼"이 되어, 40개 중 30개를 보여주고 "외 1개"라고 말하게 된다.
+      자르는 것은 출력할 때 한 번만 한다.
+    */
+    private void appendTopicLine(List<String> out, TopicResponse node, int depth) {
+        StringBuilder line = new StringBuilder("  ".repeat(depth)).append("- ").append(node.getTitle());
+        if (node.getSourceLocator() != null && !node.getSourceLocator().isBlank()) {
+            line.append(" (").append(node.getSourceLocator()).append(")");
+        }
+        out.add(line.toString());
+        if (node.getChildren() != null) {
+            for (TopicResponse child : node.getChildren()) {
+                appendTopicLine(out, child, depth + 1);
+            }
+        }
+    }
+
+    /**
+     * 일정과 평가. 개강일이 있어야 모델이 "지금 몇 주차인지"를 계산할 수 있다.
+     *
+     * keyDates는 별도 테이블이 없고 analysis_json 안에만 있다 — apply가 course_topics와
+     * course_notes만 꺼내 저장하고 날짜는 원문에 남겨둔다. 그래서 여기서 읽어 파싱한다.
+     * 파싱이 실패하면 조용히 건너뛴다. 일정이 없다고 계획을 못 만들 이유는 없다.
+     */
+    private List<String> courseScheduleLines(Long userId, Long courseId) {
+        List<String> lines = new ArrayList<>();
+        for (CourseMaterialAnalysis analysis : analysisMapper.findAppliedByCourseIdAndUserId(courseId, userId)) {
+            String json = analysis.getEditedJson() != null ? analysis.getEditedJson() : analysis.getAnalysisJson();
+            try {
+                MaterialAnalysisPayload payload = objectMapper.readValue(json, MaterialAnalysisPayload.class);
+                if (payload.keyDates() == null) {
+                    continue;
+                }
+                for (MaterialAnalysisPayload.KeyDate keyDate : payload.keyDates()) {
+                    String detail = keyDate.date() != null ? keyDate.date() : keyDate.description();
+                    if (detail != null && !detail.isBlank()) {
+                        lines.add(keyDate.title() + ": " + detail);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("계획 생성: 분석 JSON에서 일정을 읽지 못했다. analysisId={}", analysis.getAnalysisId());
+            }
+        }
+        courseNoteMapper.findByCourseIdAndUserId(courseId, userId).stream()
+                .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
+                .forEach(note -> lines.add(note.getLabel() + ": " + note.getDetail()));
+
+        return lines.stream().distinct().limit(MAX_SCHEDULE_LINES_PER_COURSE).toList();
     }
 
     private List<Course> resolveCourses(Long userId, List<Long> courseIds) {

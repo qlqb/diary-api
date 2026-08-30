@@ -29,6 +29,15 @@ public interface CourseMaterialAnalysisMapper {
                                                                         @Param("courseId") Long courseId,
                                                                         @Param("userId") Long userId);
 
+    /**
+     * 이 프로젝트에서 적용된 분석들. 계획 생성이 강의 일정(개강일·시험)을 읽는 데 쓴다.
+     *
+     * keyDates는 별도 테이블이 없고 analysis_json 안에만 있다 — course_topics/course_notes와
+     * 달리 apply가 따로 꺼내 저장하지 않는다. 그래서 여기서 원문을 읽어 파싱한다.
+     */
+    List<CourseMaterialAnalysis> findAppliedByCourseIdAndUserId(@Param("courseId") Long courseId,
+                                                                 @Param("userId") Long userId);
+
     void updateEditedJson(@Param("analysisId") Long analysisId, @Param("editedJson") String editedJson);
 
     void updateStatus(@Param("analysisId") Long analysisId,

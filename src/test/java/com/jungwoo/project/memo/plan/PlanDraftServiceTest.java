@@ -16,6 +16,8 @@ import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -74,6 +76,12 @@ class PlanDraftServiceTest {
     private CourseMapper courseMapper;
     @Mock
     private ExecutionItemMapper executionItemMapper;
+    @Mock
+    private com.jungwoo.project.memo.learning.TopicService topicService;
+    @Mock
+    private com.jungwoo.project.memo.course.CourseNoteMapper courseNoteMapper;
+    @Mock
+    private com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper analysisMapper;
 
     private PlanDraftService service;
 
@@ -81,6 +89,7 @@ class PlanDraftServiceTest {
     void setUp() {
         service = new PlanDraftService(aiConsultationClient, aiProposalService, aiProposalMapper,
                 aiUsageLimitService, planVersionService, planReviewService, courseMapper,
+                topicService, courseNoteMapper, analysisMapper,
                 executionItemMapper, Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
         ReflectionTestUtils.setField(service, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 90);
@@ -94,6 +103,10 @@ class PlanDraftServiceTest {
                         Course.builder().courseId(7L).title("빅데이터분석").build()));
         when(executionItemMapper.findByUserIdAndPlanningRange(anyLong(), any(), any())).thenReturn(List.of());
         when(planReviewService.summarizeLatestForPrompt(anyLong())).thenReturn(null);
+        // 자료에서 뽑아 둔 것이 없는 프로젝트가 기본값이다 — 있는 경우는 개별 테스트에서 채운다.
+        when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(List.of());
+        when(courseNoteMapper.findByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
+        when(analysisMapper.findAppliedByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
         when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
     }
@@ -162,6 +175,63 @@ class PlanDraftServiceTest {
                 .contains("조정이 필요하면 조정하고")
                 .contains("억지로 채우지 말고 적게 제안하라")
                 .contains("시험 전까지 자료구조 위주로");
+    }
+
+    /**
+     * 자료에서 뽑아 둔 것이 계획 프롬프트까지 실제로 도달하는지.
+     *
+     * 이게 없던 동안 모델이 아는 것은 과목명과 교재명뿐이었고, 실측해 보니 교재 장 번호를
+     * 지어내고 실제 진도와 무관한 계획을 냈다. 사용자는 자료를 올리고 분석까지 적용했는데
+     * 그 결과가 계획에 한 글자도 반영되지 않고 있었다.
+     */
+    @Test
+    void promptCarriesTopicsAndScheduleFromAppliedAnalyses() {
+        givenAiResponse(BASELINE, null);
+        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(List.of(
+                TopicResponse.builder().title("파이썬 기초").sourceLocator("2주차")
+                        .children(List.of(TopicResponse.builder()
+                                .title("변수·연산자·제어문").sourceLocator("2주차").children(List.of()).build()))
+                        .build(),
+                TopicResponse.builder().title("NumPy").sourceLocator("3주차").children(List.of()).build()));
+        when(analysisMapper.findAppliedByCourseIdAndUserId(6L, USER_ID)).thenReturn(List.of(
+                CourseMaterialAnalysis.builder().analysisId(1L)
+                        .analysisJson("{\"keyDates\":[{\"title\":\"개강일\",\"date\":null,"
+                                + "\"description\":\"1주차: 개강일(8/25)\"}]}")
+                        .build()));
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        assertThat(userPrompt.getValue())
+                // 항목 옆 괄호가 "몇 주차 내용"을 그대로 전달한다.
+                .contains("- 파이썬 기초 (2주차)")
+                .contains("  - 변수·연산자·제어문 (2주차)")
+                .contains("- NumPy (3주차)")
+                // 개강일이 있어야 모델이 지금 몇 주차인지 계산할 수 있다.
+                .contains("개강일: 1주차: 개강일(8/25)")
+                .contains("몇 주차인지 계산하고")
+                .contains("당겨오지 마라");
+    }
+
+    @Test
+    void topicLinesAreCappedPerCourse_soManyProjectsDoNotBlowUpThePrompt() {
+        givenAiResponse(BASELINE, null);
+        List<TopicResponse> many = new java.util.ArrayList<>();
+        for (int i = 1; i <= 40; i++) {
+            many.add(TopicResponse.builder().title("항목 " + i).children(List.of()).build());
+        }
+        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        // 뒤쪽 주차는 어차피 지금 계획할 범위가 아니다 — 접고 개수만 알린다.
+        assertThat(userPrompt.getValue())
+                .contains("- 항목 30")
+                .doesNotContain("- 항목 31")
+                .contains("… 외 10개");
     }
 
     @Test
