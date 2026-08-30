@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  routine_exceptions에는 user_id가 없다. routine_id가 이미 소유자를 가리키는데 여기에도 두면
+  routine.user_id와 exception.user_id가 어긋난 상태가 만들어질 수 있다. 사용자 범위 조회는
+  전부 routines를 JOIN한다.
+-->
+<mapper namespace="com.jungwoo.project.memo.routine.RoutineExceptionMapper">
+
+    <resultMap id="routineExceptionResultMap"
+               type="com.jungwoo.project.memo.routine.domain.RoutineException">
+        <id     property="routineExceptionId" column="routine_exception_id"/>
+        <result property="routineId"          column="routine_id"/>
+        <result property="exceptionDate"      column="exception_date"/>
+        <result property="type"               column="type"/>
+        <result property="movedDate"          column="moved_date"/>
+        <result property="movedStartTime"     column="moved_start_time"/>
+        <result property="movedEndTime"       column="moved_end_time"/>
+        <result property="movedLocation"      column="moved_location"/>
+        <result property="note"               column="note"/>
+        <result property="createdAt"          column="created_at"/>
+        <result property="updatedAt"          column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="routineExceptionId">
+        INSERT INTO routine_exceptions (
+            routine_id, exception_date, type, moved_date, moved_start_time, moved_end_time,
+            moved_location, note
+        ) VALUES (
+            #{routineId}, #{exceptionDate}, #{type}, #{movedDate}, #{movedStartTime}, #{movedEndTime},
+            #{movedLocation}, #{note}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="routineExceptionResultMap">
+        SELECT e.*
+          FROM routine_exceptions e
+          JOIN routines r ON r.routine_id = e.routine_id
+         WHERE e.routine_exception_id = #{routineExceptionId}
+           AND r.user_id = #{userId}
+           AND r.is_deleted = 0
+    </select>
+
+    <select id="findByRoutineId" resultMap="routineExceptionResultMap">
+        SELECT * FROM routine_exceptions
+         WHERE routine_id = #{routineId}
+         ORDER BY exception_date
+    </select>
+
+    <select id="findByUserIdAndExceptionDateRange" resultMap="routineExceptionResultMap">
+        SELECT e.*
+          FROM routine_exceptions e
+          JOIN routines r ON r.routine_id = e.routine_id
+         WHERE r.user_id = #{userId}
+           AND r.is_deleted = 0
+           AND e.exception_date BETWEEN #{from} AND #{to}
+    </select>
+
+    <select id="findByUserIdAndMovedDateRange" resultMap="routineExceptionResultMap">
+        SELECT e.*
+          FROM routine_exceptions e
+          JOIN routines r ON r.routine_id = e.routine_id
+         WHERE r.user_id = #{userId}
+           AND r.is_deleted = 0
+           AND e.type = 'MOVED'
+           AND e.moved_date BETWEEN #{from} AND #{to}
+    </select>
+
+    <!--
+      전체 교체다. SKIP으로 바꾸면 moved_* 가 전부 null이 되어야 하고(chk_routine_exceptions_moved),
+      COALESCE로 "생략 = 유지"를 하면 그 전환이 불가능해진다.
+    -->
+    <update id="update">
+        UPDATE routine_exceptions
+           SET exception_date   = #{exception.exceptionDate},
+               type             = #{exception.type},
+               moved_date       = #{exception.movedDate},
+               moved_start_time = #{exception.movedStartTime},
+               moved_end_time   = #{exception.movedEndTime},
+               moved_location   = #{exception.movedLocation},
+               note             = #{exception.note}
+         WHERE routine_exception_id = #{routineExceptionId}
+           AND routine_id = #{exception.routineId}
+    </update>
+
+    <delete id="deleteByIdAndRoutineId">
+        DELETE FROM routine_exceptions
+         WHERE routine_exception_id = #{routineExceptionId} AND routine_id = #{routineId}
+    </delete>
+</mapper>

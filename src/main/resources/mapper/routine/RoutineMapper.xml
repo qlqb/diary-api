@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  routines에는 종료 상태 컬럼이 없다. is_deleted = 0이 곧 "살아 있는 루틴"이고, 끝났는지는
+  effective_until을 오늘과 비교해 계산한다. 그래서 모든 조회가 같은 한 가지 조건을 공유한다.
+-->
+<mapper namespace="com.jungwoo.project.memo.routine.RoutineMapper">
+
+    <resultMap id="routineResultMap" type="com.jungwoo.project.memo.routine.domain.Routine">
+        <id     property="routineId"       column="routine_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="courseId"        column="course_id"/>
+        <result property="title"           column="title"/>
+        <result property="location"        column="location"/>
+        <result property="startTime"       column="start_time"/>
+        <result property="endTime"         column="end_time"/>
+        <result property="effectiveFrom"   column="effective_from"/>
+        <result property="effectiveUntil"  column="effective_until"/>
+        <result property="deleted"         column="is_deleted"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="updatedAt"       column="updated_at"/>
+        <!--
+          daysOfWeek는 여기서 채우지 않는다. MyBatis의 <collection>은 스칼라(여기서는 enum)
+          목록을 그대로 담지 못해 래퍼 타입을 하나 더 만들게 되는데, 요일은 루틴당 최대
+          7행이라 별도 조회 한 번으로 전부 가져와 RoutineReader가 붙이는 편이 단순하다.
+          루틴이 몇 개든 조회는 항상 두 번이다(N+1이 아니다).
+        -->
+    </resultMap>
+
+    <resultMap id="routineWeekdayRowResultMap" type="com.jungwoo.project.memo.routine.dto.RoutineWeekdayRow">
+        <result property="routineId" column="routine_id"/>
+        <result property="dayOfWeek" column="day_of_week"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="routineId">
+        INSERT INTO routines (
+            user_id, course_id, title, location, start_time, end_time, effective_from, effective_until
+        ) VALUES (
+            #{userId}, #{courseId}, #{title}, #{location}, #{startTime}, #{endTime},
+            #{effectiveFrom}, #{effectiveUntil}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="routineResultMap">
+        SELECT r.* FROM routines r
+         WHERE r.routine_id = #{routineId} AND r.user_id = #{userId} AND r.is_deleted = 0
+    </select>
+
+    <!-- 잠글 대상은 부모 한 행이다. 요일·예외는 이 잠금 뒤에 따로 읽는다. -->
+    <select id="findByIdAndUserIdForUpdate" resultMap="routineResultMap">
+        SELECT r.*
+          FROM routines r
+         WHERE r.routine_id = #{routineId} AND r.user_id = #{userId} AND r.is_deleted = 0
+        FOR UPDATE
+    </select>
+
+    <select id="findAllByUserId" resultMap="routineResultMap">
+        SELECT r.* FROM routines r
+         WHERE r.user_id = #{userId} AND r.is_deleted = 0
+         ORDER BY r.start_time, r.routine_id
+    </select>
+
+    <!-- 그 사용자의 살아 있는 루틴에 달린 요일 전부. routine_weekdays에는 user_id가 없어
+         소유권은 routines를 JOIN해서 본다. -->
+    <select id="findWeekdaysByUserId" resultMap="routineWeekdayRowResultMap">
+        SELECT w.routine_id, w.day_of_week
+          FROM routine_weekdays w
+          JOIN routines r ON r.routine_id = w.routine_id
+         WHERE r.user_id = #{userId} AND r.is_deleted = 0
+    </select>
+
+    <select id="findWeekdaysByRoutineId" resultType="java.lang.String">
+        SELECT day_of_week FROM routine_weekdays WHERE routine_id = #{routineId}
+    </select>
+
+    <update id="updateAll">
+        UPDATE routines
+           SET course_id       = #{courseId},
+               title           = #{title},
+               location        = #{location},
+               start_time      = #{startTime},
+               end_time        = #{endTime},
+               effective_from  = #{effectiveFrom},
+               effective_until = #{effectiveUntil}
+         WHERE routine_id = #{routineId} AND user_id = #{userId} AND is_deleted = 0
+    </update>
+
+    <update id="softDelete">
+        UPDATE routines
+           SET is_deleted = 1
+         WHERE routine_id = #{routineId} AND user_id = #{userId} AND is_deleted = 0
+    </update>
+
+    <delete id="deleteWeekdays">
+        DELETE FROM routine_weekdays WHERE routine_id = #{routineId}
+    </delete>
+
+    <insert id="insertWeekdays">
+        INSERT INTO routine_weekdays (routine_id, day_of_week) VALUES
+        <foreach collection="daysOfWeek" item="day" separator=",">
+            (#{routineId}, #{day})
+        </foreach>
+    </insert>
+</mapper>

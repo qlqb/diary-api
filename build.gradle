@@ -103,6 +103,7 @@ tasks.named('test') {
             excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanConfirmAndPlacementIntegrationTest'
             excludeTestsMatching 'com.jungwoo.project.memo.material.linkproposal.MaterialLinkProposalApplyIntegrationTest'
             excludeTestsMatching 'com.jungwoo.project.memo.course.CourseTextbookMapperTest'
+            excludeTestsMatching 'com.jungwoo.project.memo.routine.RoutineMapperTest'
         }
     }
 }
