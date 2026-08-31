@@ -24,10 +24,12 @@ import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisResponse;
+import com.jungwoo.project.memo.material.dto.MaterialAnalysisStartResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -160,12 +162,37 @@ public class MaterialAnalysisService {
             }
             """;
 
-    public MaterialAnalysisResponse analyze(Long userId, Long courseId, Long materialId) {
+    /**
+     * 구조 분석을 시작한다. 같은 맥락에 검토 중인 DRAFT가 이미 있으면 새로 만들지 않고 그것을
+     * 돌려준다.
+     *
+     * <p>재사용이 필요한 이유는 화면이 새로고침되면 검토 폼이 사라지기 때문이다. 사용자는
+     * DRAFT가 없어진 줄 알고 다시 누르는데, 그때마다 AI가 호출되고 DRAFT가 쌓였다. 화면
+     * 복원(프론트)과 이 재사용(서버)과 DB 유일 인덱스가 한 묶음이다 — 하나만 고치면
+     * 더블클릭·다중 탭·재시도로 다시 뚫린다.
+     */
+    public MaterialAnalysisStartResult analyze(Long userId, Long courseId, Long materialId) {
         courseService.getOwned(userId, courseId);
         CourseMaterial material = materialService.getActiveOwned(userId, materialId);
         // 자료가 전역이 된 이상 소유권 확인만으로는 부족하다 — 연결되지 않은 자료를 임의의
         // 프로젝트 맥락에서 분석할 수 있는 구멍을 링크 검증으로 막는다.
         MaterialLink link = materialService.getRequiredLink(userId, materialId, courseId);
+
+        /*
+         * 소유권·연결 검증 다음, 그 밖의 모든 것보다 먼저 본다. 기존 DRAFT를 돌려주는
+         * 경로에서는 추출 상태·AI 설정·사용량 제한을 확인하지 않는다 — 이미 만들어 둔 것을
+         * 읽어 오는 데 AI가 필요하지 않고, 사용량을 깎을 이유도 없다.
+         *
+         * 소유권·연결 검증은 이 경로에서도 건너뛰지 않는다. 남의 프로젝트 맥락으로 DRAFT를
+         * 꺼내 볼 수 있으면 그건 조회 권한 구멍이다.
+         */
+        CourseMaterialAnalysis openDraft = analysisMapper.findLatestDraftByContext(userId, courseId, materialId);
+        if (openDraft != null) {
+            log.info("Material Agent 기존 DRAFT 재사용: userId={}, materialId={}, analysisId={}",
+                    userId, materialId, openDraft.getAnalysisId());
+            return MaterialAnalysisStartResult.reused(toResponse(openDraft, null));
+        }
+
         if (material.getExtractionStatus() != ExtractionStatus.SUCCESS) {
             throw new BadRequestException(ErrorCode.MATERIAL_EXTRACTION_NOT_READY);
         }
@@ -192,14 +219,17 @@ public class MaterialAnalysisService {
         } catch (Exception e) {
             log.warn("Material Agent 호출 실패: userId={}, materialId={}", userId, materialId, e);
             recordUsage(userId, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
-            return saveFailed(userId, courseId, materialId, "AI 호출 중 오류가 발생했습니다: " + e.getClass().getSimpleName());
+            return MaterialAnalysisStartResult.created(
+                    saveFailed(userId, courseId, materialId,
+                            "AI 호출 중 오류가 발생했습니다: " + e.getClass().getSimpleName()));
         }
 
         AiStreamParser.Result result = parser.finish();
         MaterialAnalysisPayload payload = parsePayload(result.structuredJson());
         if (payload == null) {
             recordUsage(userId, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
-            return saveFailed(userId, courseId, materialId, "AI 응답을 구조화된 형식으로 해석하지 못했습니다");
+            return MaterialAnalysisStartResult.created(
+                    saveFailed(userId, courseId, materialId, "AI 응답을 구조화된 형식으로 해석하지 못했습니다"));
         }
 
         recordUsage(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null);
@@ -212,11 +242,33 @@ public class MaterialAnalysisService {
                 .analysisJson(writeJson(payload))
                 .model(modelName)
                 .build();
-        analysisMapper.insert(analysis);
+        try {
+            analysisMapper.insert(analysis);
+        } catch (DuplicateKeyException e) {
+            /*
+             * 위의 사전 조회는 경쟁을 못 막는다 — 두 요청이 동시에 "DRAFT 없음"을 읽고 둘 다
+             * AI 호출까지 갈 수 있다. 그때 늦게 도착한 INSERT가 여기로 온다.
+             *
+             * 이 시점에는 상대 요청이 만든 DRAFT가 이미 커밋돼 있으므로 그것을 돌려준다.
+             * 사용자 입장에서는 어느 쪽이 이겼든 검토 폼 하나가 열리는 것으로 같다.
+             *
+             * AI 호출까지 정확히 한 번으로 줄이는 것은 이번 범위가 아니다. 그러려면 ANALYZING
+             * 예약 상태와 만료·복구 정책이 필요한데, 여기서 막는 것은 데이터 중복이다.
+             */
+            CourseMaterialAnalysis winner = analysisMapper.findLatestDraftByContext(userId, courseId, materialId);
+            if (winner == null) {
+                // DRAFT가 없는데 유일 키 위반이면 우리가 아는 그 제약이 아니다. 삼키면
+                // 원인이 사라지므로 그대로 올린다.
+                throw e;
+            }
+            log.info("Material Agent DRAFT 경쟁에서 밀림, 기존 것을 반환: userId={}, materialId={}, analysisId={}",
+                    userId, materialId, winner.getAnalysisId());
+            return MaterialAnalysisStartResult.reused(toResponse(winner, null));
+        }
         log.info("Material Agent 분석 완료: userId={}, materialId={}, analysisId={}, topicCount={}",
                 userId, materialId, analysis.getAnalysisId(), countTopics(payload.topics()));
 
-        return toResponse(analysis, payload);
+        return MaterialAnalysisStartResult.created(toResponse(analysis, payload));
     }
 
     @Transactional(readOnly = true)

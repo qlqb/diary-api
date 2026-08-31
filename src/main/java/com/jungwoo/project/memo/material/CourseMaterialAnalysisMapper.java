@@ -38,6 +38,20 @@ public interface CourseMaterialAnalysisMapper {
     List<CourseMaterialAnalysis> findAppliedByCourseIdAndUserId(@Param("courseId") Long courseId,
                                                                  @Param("userId") Long userId);
 
+    /**
+     * 같은 맥락(user_id + course_id + material_id)의 열린 DRAFT 하나.
+     *
+     * <p>analyze()가 AI를 부르기 전에 이걸로 먼저 확인한다. 다만 이 조회만으로는 두 요청이
+     * 동시에 "없음"을 읽는 경쟁을 막지 못한다 — 최종 방어선은 DB의
+     * uq_course_material_analyses_single_draft다.
+     *
+     * <p>LIMIT 1이지만 정렬을 붙이는 이유는 마이그레이션 전 레거시 데이터에 중복 DRAFT가
+     * 남아 있을 수 있어서다. created_at이 같을 때 흔들리지 않도록 analysis_id까지 본다.
+     */
+    CourseMaterialAnalysis findLatestDraftByContext(@Param("userId") Long userId,
+                                                     @Param("courseId") Long courseId,
+                                                     @Param("materialId") Long materialId);
+
     void updateEditedJson(@Param("analysisId") Long analysisId, @Param("editedJson") String editedJson);
 
     void updateStatus(@Param("analysisId") Long analysisId,

@@ -33,7 +33,7 @@
     <select id="findByMaterialIdAndUserId" resultMap="analysisResultMap">
         SELECT * FROM course_material_analyses
         WHERE material_id = #{materialId} AND user_id = #{userId}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, analysis_id DESC
     </select>
 
     <!--
@@ -43,7 +43,22 @@
     <select id="findByMaterialIdAndCourseIdAndUserId" resultMap="analysisResultMap">
         SELECT * FROM course_material_analyses
         WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, analysis_id DESC
+    </select>
+
+    <!--
+      analyze()가 AI를 부르기 전에 보는 조회. 정렬은 findByMaterialIdAndCourseIdAndUserId와
+      같아야 한다 — 화면이 목록에서 고르는 "최신"과 서버가 재사용하는 "최신"이 다른 행이면
+      같은 DRAFT를 두고 둘이 다른 말을 하게 된다.
+    -->
+    <select id="findLatestDraftByContext" resultMap="analysisResultMap">
+        SELECT * FROM course_material_analyses
+        WHERE user_id = #{userId}
+          AND course_id = #{courseId}
+          AND material_id = #{materialId}
+          AND status = 'DRAFT'
+        ORDER BY created_at DESC, analysis_id DESC
+        LIMIT 1
     </select>
 
     <update id="updateEditedJson">

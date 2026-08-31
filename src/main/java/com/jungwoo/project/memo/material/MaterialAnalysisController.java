@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.material;
 import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisEditRequest;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisResponse;
+import com.jungwoo.project.memo.material.dto.MaterialAnalysisStartResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -36,8 +37,15 @@ public class MaterialAnalysisController {
             @PathVariable Long materialId
     ) {
         log.info("POST materials/{}/analyses - userId={}, courseId={}", materialId, principal.getUserId(), courseId);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(materialAnalysisService.analyze(principal.getUserId(), courseId, materialId));
+        /*
+         * 새로 만들었으면 201, 검토 중이던 DRAFT를 그대로 돌려줬으면 200이다. 본문 형식은
+         * 두 경우가 같다 — 화면이 하는 일(검토 폼을 연다)이 같기 때문이다.
+         */
+        MaterialAnalysisStartResult result =
+                materialAnalysisService.analyze(principal.getUserId(), courseId, materialId);
+        return ResponseEntity
+                .status(result.created() ? HttpStatus.CREATED : HttpStatus.OK)
+                .body(result.analysis());
     }
 
     /**

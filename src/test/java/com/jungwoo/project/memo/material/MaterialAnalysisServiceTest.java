@@ -21,8 +21,10 @@ import com.jungwoo.project.memo.material.domain.MaterialAnalysisStatus;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisResponse;
+import com.jungwoo.project.memo.material.dto.MaterialAnalysisStartResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -42,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -160,13 +163,124 @@ class MaterialAnalysisServiceTest {
         when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
                 .thenReturn(Flux.just(chatResponse("분석 완료\n<<<AI_STRUCTURED>>>\n" + json)));
 
-        MaterialAnalysisResponse response = service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
+        MaterialAnalysisStartResult result = service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
 
-        assertThat(response.getStatus()).isEqualTo(MaterialAnalysisStatus.DRAFT);
+        assertThat(result.analysis().getStatus()).isEqualTo(MaterialAnalysisStatus.DRAFT);
+        assertThat(result.created()).isTrue();
         verify(analysisMapper).insert(any());
         // DRAFT 저장만 하고, 확정 topic 트리에는 전혀 손대지 않는다.
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
         verify(courseMapper, never()).updateTextbookInfo(any(), any(), any(), any(), any(), any());
+    }
+
+    // ===== 열린 DRAFT는 맥락당 하나 =====
+
+    /**
+     * 검토 중이던 DRAFT가 있으면 다시 분석하지 않고 그것을 돌려준다. 화면이 새로고침되면
+     * 검토 폼이 사라져 사용자가 같은 버튼을 다시 누르는데, 그때마다 AI를 부르고 DRAFT를
+     * 쌓던 것이 원래 문제였다.
+     */
+    @Test
+    void analyze_reusesOpenDraft_withoutCallingAi() {
+        givenOwnedAndLinked();
+        when(analysisMapper.findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID))
+                .thenReturn(openDraft());
+
+        MaterialAnalysisStartResult result = service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
+
+        assertThat(result.created()).isFalse();
+        assertThat(result.analysis().getAnalysisId()).isEqualTo(ANALYSIS_ID);
+        assertThat(result.analysis().getStatus()).isEqualTo(MaterialAnalysisStatus.DRAFT);
+    }
+
+    /**
+     * 재사용 경로는 AI 쪽을 하나도 건드리지 않아야 한다. 사용량 한도를 깎거나 "AI 미설정"으로
+     * 막히면, 이미 만들어 둔 초안을 못 꺼내 보는 상태가 된다.
+     */
+    @Test
+    void analyze_reusingDraft_skipsAiConfigUsageAndInsert() {
+        givenOwnedAndLinked();
+        when(analysisMapper.findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID))
+                .thenReturn(openDraft());
+
+        service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
+
+        verify(aiConsultationClient, never()).isConfigured();
+        verify(aiUsageLimitService, never()).checkLimit(any());
+        verify(aiConsultationClient, never()).streamTurn(any(), any(), anyInt());
+        verify(analysisMapper, never()).insert(any());
+        verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
+    }
+
+    /** 재사용이든 아니든 소유권·연결 검증은 건너뛰지 않는다. 남의 맥락의 초안이 나오면 안 된다. */
+    @Test
+    void analyze_looksUpDraftScopedToUserCourseAndMaterial() {
+        givenOwnedAndLinked();
+        when(analysisMapper.findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID))
+                .thenReturn(openDraft());
+
+        service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
+
+        verify(courseService).getOwned(USER_ID, COURSE_ID);
+        verify(materialService).getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID);
+        verify(analysisMapper).findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID);
+    }
+
+    /**
+     * 사전 조회는 경쟁을 못 막는다 — 두 요청이 동시에 "없음"을 읽으면 둘 다 INSERT까지 온다.
+     * 늦게 도착한 쪽은 유일 인덱스에 걸리고, 그때는 이긴 쪽의 DRAFT를 돌려준다.
+     */
+    @Test
+    void analyze_returnsWinningDraft_whenInsertLosesUniqueRace() {
+        givenAiProducesDraft();
+        when(analysisMapper.findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID))
+                .thenReturn(null)          // 사전 조회: 아직 없다
+                .thenReturn(openDraft());  // 충돌 후 재조회: 상대가 만든 것이 보인다
+        doThrow(new DuplicateKeyException("uq_course_material_analyses_single_draft"))
+                .when(analysisMapper).insert(any());
+
+        MaterialAnalysisStartResult result = service.analyze(USER_ID, COURSE_ID, MATERIAL_ID);
+
+        assertThat(result.created()).isFalse();
+        assertThat(result.analysis().getAnalysisId()).isEqualTo(ANALYSIS_ID);
+    }
+
+    /** 유일 키 위반인데 DRAFT가 없으면 우리가 아는 그 제약이 아니다. 삼키면 원인이 사라진다. */
+    @Test
+    void analyze_rethrows_whenDuplicateKeyButNoDraftFound() {
+        givenAiProducesDraft();
+        when(analysisMapper.findLatestDraftByContext(USER_ID, COURSE_ID, MATERIAL_ID)).thenReturn(null);
+        doThrow(new DuplicateKeyException("다른 제약")).when(analysisMapper).insert(any());
+
+        assertThatThrownBy(() -> service.analyze(USER_ID, COURSE_ID, MATERIAL_ID))
+                .isInstanceOf(DuplicateKeyException.class)
+                .hasMessageContaining("다른 제약");
+    }
+
+    private void givenOwnedAndLinked() {
+        when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
+        when(materialService.getActiveOwned(USER_ID, MATERIAL_ID)).thenReturn(extractedMaterial());
+        when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
+                .thenReturn(link(MaterialType.TEXTBOOK_TOC));
+    }
+
+    private CourseMaterialAnalysis openDraft() {
+        return CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.DRAFT)
+                .analysisJson("{}")
+                .build();
+    }
+
+    /** AI가 정상 응답해 INSERT 직전까지 가는 상태를 만든다. */
+    private void givenAiProducesDraft() {
+        givenOwnedAndLinked();
+        when(aiConsultationClient.isConfigured()).thenReturn(true);
+        String json = """
+                {"summary":"목차를 찾았어요","courseFields":{"textbookTitle":null,"textbookAuthor":null,"textbookPublisher":null,"textbookIsbn":null},"keyDates":[],"topics":[]}
+                """;
+        when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
+                .thenReturn(Flux.just(chatResponse("분석 완료\n<<<AI_STRUCTURED>>>\n" + json)));
     }
 
     @Test
