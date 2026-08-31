@@ -49,6 +49,18 @@ public record AiTurnStructured(
         AiPlanScope planScope,
         LocalDate periodStartDate,
         LocalDate periodEndDate,
-        List<ContextChangeSuggestion> contextChanges
+        List<ContextChangeSuggestion> contextChanges,
+        /**
+         * 대화에서 사용자가 말한 "시간을 차지하는 현실"을 구조화한 후보(약속·반복 일정).
+         * contextChanges와 같은 sidecar다 — decision과 무관하게 어디에든 붙을 수 있고,
+         * 이 필드가 있다고 responseType이 바뀌지 않는다. AiModelDecision을 늘리지 않는다.
+         *
+         * ai_proposals.items에 섞지 않는다. 저기는 사용자가 수행하고 완료하는 행동이고
+         * 여기는 수행 대상이 아닌 사실이라, 한 묶음에 넣으면 적용 경로가 둘을 다시 갈라야 한다.
+         *
+         * 모델 출력을 그대로 신뢰하지 않는다 — ScheduleSuggestionService가 payload를 실제
+         * 도메인 요청으로 읽어 본 뒤에만 PROPOSED로 남긴다.
+         */
+        List<ScheduleSuggestion> scheduleSuggestions
 ) {
 }

@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -75,6 +76,11 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     @Override
     public void onContextSuggestionsReady(List<ContextSuggestionResponse> suggestions) {
         send("context.suggestions.ready", Map.of("suggestions", suggestions));
+    }
+
+    @Override
+    public void onScheduleSuggestionsReady(List<ScheduleSuggestionResponse> suggestions) {
+        send("schedule.suggestions.ready", Map.of("suggestions", suggestions));
     }
 
     @Override

@@ -55,6 +55,7 @@ class AiTurnLifecycleServiceTest {
     @Mock private AiConsultationClient aiConsultationClient;
     @Mock private AiUsageLimitService aiUsageLimitService;
     @Mock private ContextChangeSuggestionService contextChangeSuggestionService;
+    @Mock private ScheduleSuggestionService scheduleSuggestionService;
 
     @InjectMocks
     private AiTurnLifecycleService service;
@@ -305,7 +306,7 @@ class AiTurnLifecycleServiceTest {
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.PROPOSAL,
-                List.of(sampleItem()), List.of(), LocalDate.now(), List.of(), List.of());
+                List.of(sampleItem()), List.of(), LocalDate.now(), List.of(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNotNull();
         assertThat(result.proposalResponseOrNull().getProposalId()).isEqualTo(900L);
@@ -319,7 +320,7 @@ class AiTurnLifecycleServiceTest {
                 .thenReturn(1);
 
         AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
-                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), List.of(), LocalDate.now(), List.of(), List.of());
+                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT, List.of(), List.of(), LocalDate.now(), List.of(), List.of(), List.of());
 
         assertThat(result.proposalResponseOrNull()).isNull();
         verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any(), any());
@@ -337,7 +338,7 @@ class AiTurnLifecycleServiceTest {
 
         assertThatThrownBy(() -> service.completeTurnSuccess(
                 CONVERSATION_ID, USER_ID, 501L, "뒤늦게 도착한 답변", AiResponseType.CHAT,
-                List.of(), List.of(), LocalDate.now(), List.of(), List.of()))
+                List.of(), List.of(), LocalDate.now(), List.of(), List.of(), List.of()))
                 .isInstanceOfSatisfying(ServiceUnavailableException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_GENERATION_FAILED));
 

@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.ai.dto.AiConversationResponse;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiMessageResponse;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.common.security.UserPrincipal;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -97,6 +98,16 @@ public class AiConversationController {
             @PathVariable Long conversationId
     ) {
         return ResponseEntity.ok(aiConversationService.getPendingContextSuggestions(conversationId, principal.getUserId()));
+    }
+
+    /** 아직 승인/거절하지 않은 일정 후보(약속·반복 일정). 새로고침 후 카드 복원용. */
+    @GetMapping("/{conversationId}/schedule-suggestions")
+    public ResponseEntity<List<ScheduleSuggestionResponse>> getScheduleSuggestions(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long conversationId
+    ) {
+        return ResponseEntity.ok(
+                aiConversationService.getPendingScheduleSuggestions(conversationId, principal.getUserId()));
     }
 
     @PostMapping(value = "/{conversationId}/messages", produces = MediaType.TEXT_EVENT_STREAM_VALUE)

@@ -75,6 +75,7 @@ public enum ErrorCode {
     ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_019", "반복 일정을 찾을 수 없습니다"),
     ROUTINE_EXCEPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_020", "반복 일정의 예외를 찾을 수 없습니다"),
     COMMITMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_021", "약속을 찾을 수 없습니다"),
+    SCHEDULE_SUGGESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_022", "일정 후보를 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -93,6 +94,7 @@ public enum ErrorCode {
     ROUTINE_EXCEPTIONS_CONFLICT(HttpStatus.CONFLICT, "E409_011",
             "이 변경은 기존 예외를 무효로 만듭니다. 예외를 먼저 정리해 주세요"),
     ROUTINE_EXCEPTION_DATE_TAKEN(HttpStatus.CONFLICT, "E409_012", "그 날짜에는 이미 예외가 있습니다"),
+    SCHEDULE_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_013", "이미 처리된 일정 후보입니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

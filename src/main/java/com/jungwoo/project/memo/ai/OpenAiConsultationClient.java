@@ -253,6 +253,34 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   "reason": "사용자가 말한 이유(예: 알바)"
                 }
               ],
+              "scheduleSuggestions": [
+                {
+                  "kind": "COMMITMENT" 또는 "ROUTINE",
+                  "payload": kind에 따라 아래 둘 중 하나. 다른 필드를 추가하지 않는다.
+
+                    COMMITMENT(한 번만 일어나는 일정):
+                    {
+                      "title": "친구 약속",
+                      "startAt": "YYYY-MM-DDTHH:mm",
+                      "endAt": "YYYY-MM-DDTHH:mm" (startAt보다 이후. 자정을 넘기면 다음 날짜를
+                        그대로 적는다 — 예: 22:00 시작 02:00 종료는 endAt의 날짜가 하루 뒤다),
+                      "locationText": "홍대" 또는 null (사용자가 말했을 때만)
+                    }
+
+                    ROUTINE(반복해서 일어나는 일정):
+                    {
+                      "courseId": 프로젝트 번호(정수) 또는 null,
+                      "title": "알바",
+                      "location": "장소" 또는 null,
+                      "daysOfWeek": ["MONDAY".."SUNDAY"] 중 하나 이상,
+                      "startTime": "HH:mm",
+                      "endTime": "HH:mm" (startTime과 같으면 안 된다. startTime보다 이르면
+                        다음 날 종료로 읽는다 — 18:00~02:00 같은 야간 근무가 그렇다),
+                      "effectiveFrom": "YYYY-MM-DD",
+                      "effectiveUntil": "YYYY-MM-DD" 또는 null (끝이 정해지지 않았으면 null)
+                    }
+                }
+              ] (후보가 없으면 빈 배열. 최대 5개),
               "contextChanges": [
                 {
                   "operation": "ADD" 또는 "SUPERSEDE" 또는 "MARK_STALE" 또는 "ARCHIVE" 또는 "CONFIRM",
@@ -267,7 +295,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
 
             - decision이 CHAT이면 clarifyingQuestion은 null, missingInformation은 빈 배열,
               proposalItems/adjustments는 빈 배열, planScope/periodStartDate/periodEndDate는 null,
-              unavailableWindows도 빈 배열이다.
+              unavailableWindows도 빈 배열이다(scheduleSuggestions는 이 제한과 무관하다).
             - decision이 ASK_CLARIFICATION이면 clarifyingQuestion을 반드시 채우고,
               proposalItems/adjustments는 빈 배열, planScope/periodStartDate/periodEndDate는 null,
               unavailableWindows도 빈 배열이다.
@@ -283,6 +311,35 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               반드시 periodStartDate~periodEndDate 범위 안에 있어야 한다. 벗어나면 서버가 이
               PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다 — 날짜가
               없는 항목(DATE_ONLY 등)은 periodStartDate를 기준으로 서버가 배치한다.
+            - scheduleSuggestions는 decision 값과 무관하게 아래 기준으로만 채운다(빈 배열이 기본값).
+
+              무엇을 여기에 넣는가: 사용자가 말한 "시간을 차지하는 현실 일정"이다. 사용자가
+              직접 수행하고 완료하는 공부·과제는 여기가 아니라 proposalItems다.
+                "내일 7시부터 9시까지 친구 만나"        -> COMMITMENT 후보
+                "다음 주 화요일 2시에 병원"             -> COMMITMENT 후보
+                "매주 목요일 6시부터 11시까지 알바해"    -> ROUTINE 후보
+                "오늘 웹서버 공부 1시간 해야 해"         -> 후보 아님(기존 proposalItems 경로)
+
+              ★ 반복 여부를 추측하지 않는다. ROUTINE은 반복이 말로 명백할 때만 만든다
+              (매주 / 매일 / 평일마다 / 주말마다 / 월수금마다 / 이번 학기 매주 / 앞으로 매주).
+              "목요일에 알바 있어", "주말에 운동해", "금요일 저녁 바빠"처럼 한 번인지 반복인지
+              알 수 없는 말에는 후보를 만들지 말고, 그것이 다음 판단에 필요하면
+              clarifyingQuestion으로 그것만 묻는다("이번 목요일만인가요, 매주 목요일마다인가요?").
+
+              ★ 모르는 값을 지어내지 않는다. COMMITMENT는 title/startAt/endAt이 다 있어야
+              후보를 만든다. "내일 친구 만나"처럼 시각이 없거나 "내일 7시에 친구 만나"처럼
+              종료 시각이 없으면 후보 대신 그 값을 묻는다. locationText는 없어도 된다.
+              ROUTINE의 effectiveFrom은, 사용자가 "지금부터 계속"처럼 이미 진행 중이라고
+              말했고 시작일을 따로 말하지 않았으면 오늘 날짜를 쓴다.
+
+              ★ 같은 사실을 contextChanges에 또 넣지 않는다. "매주 목요일 18~23시는 알바야"는
+              ROUTINE 후보로 충분하다. 다만 "알바 다음 날은 공부를 가볍게 잡아줘"처럼 일정으로
+              표현되지 않는 선호가 함께 있으면 그것만 contextChanges로 따로 낸다.
+
+              ★ 사용자가 "그거 빼고 계획 짜줘"라고 하면 그 시간을 unavailableWindows에도 함께
+              담는다. 후보는 아직 승인되지 않았으므로, 그렇게 하지 않으면 이번 계획이 그 시간을
+              비어 있다고 보고 학습을 넣는다.
+
             - contextChanges는 decision 값과 무관하게 원칙 16의 기준으로만 채운다(빈 배열이
               기본값). ADD는 targetContextId=null 및 content 필수, SUPERSEDE는 targetContextId와
               content 모두 필수, MARK_STALE/ARCHIVE/CONFIRM은 targetContextId 필수이고

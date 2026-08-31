@@ -10,6 +10,8 @@ import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
@@ -54,6 +56,7 @@ public class AiTurnLifecycleService {
     private final AiConsultationClient aiConsultationClient;
     private final AiUsageLimitService aiUsageLimitService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
+    private final ScheduleSuggestionService scheduleSuggestionService;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초가 돼 stale 판정이 어긋난다.
@@ -186,7 +189,8 @@ public class AiTurnLifecycleService {
             List<ProposalItem> proposalItemsIfProposal, List<ProposalAdjustment> adjustmentsIfProposal,
             LocalDate targetDateIfProposal,
             List<UnavailableWindowSpec> unavailableWindowsIfProposal,
-            List<ContextChangeSuggestion> contextChangesIfAny
+            List<ContextChangeSuggestion> contextChangesIfAny,
+            List<ScheduleSuggestion> scheduleSuggestionsIfAny
     ) {
         int claimed = aiMessageMapper.updateStatusIfCurrent(
                 requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
@@ -218,10 +222,20 @@ public class AiTurnLifecycleService {
         List<ContextSuggestionResponse> contextSuggestions = contextChangeSuggestionService.createFromSuggestions(
                 userId, conversationId, assistantMessage.getMessageId(), contextChangesIfAny);
 
+        /*
+         * 일정 후보도 같은 트랜잭션 안이다. 여기서 계약 위반이 나오면 ASSISTANT 메시지와
+         * Proposal까지 함께 롤백된다 — "AI 응답은 남았는데 후보만 사라진" 상태를 만들지 않는다.
+         * 이 시점에는 one_off_commitments/routines를 전혀 건드리지 않는다. 원본은 사용자가
+         * 카드에서 적용했을 때만 만들어진다.
+         */
+        List<ScheduleSuggestionResponse> scheduleSuggestions = scheduleSuggestionService.createFromSuggestions(
+                userId, conversationId, assistantMessage.getMessageId(), scheduleSuggestionsIfAny);
+
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
 
-        return new TurnCompletionResult(assistantMessage, proposalResponse, contextSuggestions);
+        return new TurnCompletionResult(
+                assistantMessage, proposalResponse, contextSuggestions, scheduleSuggestions);
     }
 
     /**
@@ -256,7 +270,8 @@ public class AiTurnLifecycleService {
     public record TurnCompletionResult(
             AiMessage assistantMessage,
             AiProposalResponse proposalResponseOrNull,
-            List<ContextSuggestionResponse> contextSuggestions
+            List<ContextSuggestionResponse> contextSuggestions,
+            List<ScheduleSuggestionResponse> scheduleSuggestions
     ) {
     }
 }

@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  AI가 대화에서 뽑은 일정 후보. 승인 전이라 어떤 화면도 이 테이블을 시간축으로 쓰지 않는다.
+  소유권은 user_id 조건이 유일한 방어선이다(FK 없음).
+-->
+<mapper namespace="com.jungwoo.project.memo.ai.AiScheduleSuggestionMapper">
+
+    <resultMap id="scheduleSuggestionResultMap"
+               type="com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion">
+        <id     property="suggestionId"    column="suggestion_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="conversationId"  column="conversation_id"/>
+        <result property="sourceMessageId" column="source_message_id"/>
+        <result property="kind"            column="kind"/>
+        <result property="proposedPayload" column="proposed_payload"/>
+        <result property="status"          column="status"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="resolvedAt"      column="resolved_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="suggestionId">
+        INSERT INTO ai_schedule_suggestions (
+            user_id, conversation_id, source_message_id, kind, proposed_payload, status
+        ) VALUES (
+            #{userId}, #{conversationId}, #{sourceMessageId}, #{kind}, #{proposedPayload}, #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="scheduleSuggestionResultMap">
+        SELECT s.* FROM ai_schedule_suggestions s
+         WHERE s.suggestion_id = #{suggestionId} AND s.user_id = #{userId}
+    </select>
+
+    <select id="findByIdAndUserIdForUpdate" resultMap="scheduleSuggestionResultMap">
+        SELECT s.* FROM ai_schedule_suggestions s
+         WHERE s.suggestion_id = #{suggestionId} AND s.user_id = #{userId}
+        FOR UPDATE
+    </select>
+
+    <select id="findPendingByConversationIdAndUserId" resultMap="scheduleSuggestionResultMap">
+        SELECT s.* FROM ai_schedule_suggestions s
+         WHERE s.conversation_id = #{conversationId}
+           AND s.user_id = #{userId}
+           AND s.status = 'PROPOSED'
+         ORDER BY s.suggestion_id
+    </select>
+
+    <select id="findBySourceMessageIdAndUserId" resultMap="scheduleSuggestionResultMap">
+        SELECT s.* FROM ai_schedule_suggestions s
+         WHERE s.source_message_id = #{sourceMessageId} AND s.user_id = #{userId}
+         ORDER BY s.suggestion_id
+    </select>
+
+    <!-- 상태 조건 UPDATE가 재적용·재거절 경합을 막는다. -->
+    <update id="resolveIfProposed">
+        UPDATE ai_schedule_suggestions
+           SET status = #{status},
+               resolved_at = #{resolvedAt}
+         WHERE suggestion_id = #{suggestionId}
+           AND user_id = #{userId}
+           AND status = 'PROPOSED'
+    </update>
+</mapper>

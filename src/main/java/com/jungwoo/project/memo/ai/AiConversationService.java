@@ -20,6 +20,8 @@ import com.jungwoo.project.memo.ai.dto.AiTurnCompletedPayload;
 import com.jungwoo.project.memo.ai.dto.AiTurnStructured;
 import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
@@ -143,6 +145,7 @@ public class AiConversationService {
     private final AiProposalService aiProposalService;
     private final AiUsageLimitService aiUsageLimitService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
+    private final ScheduleSuggestionService scheduleSuggestionService;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -209,6 +212,13 @@ public class AiConversationService {
     public List<ContextSuggestionResponse> getPendingContextSuggestions(Long conversationId, Long userId) {
         requireOwnedConversation(conversationId, userId);
         return contextChangeSuggestionService.listPendingByConversation(conversationId, userId);
+    }
+
+    /** 대화 재진입 시 복원할 일정 후보. 소유권 확인은 후보 조회 쿼리가 user_id로 한다. */
+    @Transactional(readOnly = true)
+    public List<ScheduleSuggestionResponse> getPendingScheduleSuggestions(Long conversationId, Long userId) {
+        requireOwnedConversation(conversationId, userId);
+        return scheduleSuggestionService.listPendingByConversation(conversationId, userId);
     }
 
     /**
@@ -298,6 +308,13 @@ public class AiConversationService {
                 assistantReply.getMessageId(), requestMessage.getUserId());
         if (!contextSuggestions.isEmpty()) {
             sink.onContextSuggestionsReady(contextSuggestions);
+        }
+
+        // 일정 후보도 같은 sidecar다 — 재생에서 빠지면 새로고침 후 카드가 사라진다.
+        List<ScheduleSuggestionResponse> scheduleSuggestions = scheduleSuggestionService.findBySourceMessageId(
+                assistantReply.getMessageId(), requestMessage.getUserId());
+        if (!scheduleSuggestions.isEmpty()) {
+            sink.onScheduleSuggestionsReady(scheduleSuggestions);
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
@@ -427,10 +444,24 @@ public class AiConversationService {
 
         ResolvedTurn resolved = resolveTurn(requestedAction, structured, result.reply(), todayDate);
 
+        /*
+         * 일정 후보는 ResolvedTurn을 거치지 않고 구조화 출력에서 바로 꺼낸다. decision과
+         * 완전히 독립이라 분기마다 실어 나를 이유가 없다.
+         *
+         * contextChanges와 달리 CREATE_PROPOSAL에서도 막지 않는다. "금요일 7~9시 친구
+         * 만나니까 나머지로 공부 계획 짜줘" 한 마디에 약속 후보와 계획이 함께 나오는 것이
+         * 정상 흐름이기 때문이다 — 그 시간은 이번 계산에서 UnavailableWindowSpec으로 피하고,
+         * 약속 자체는 사용자가 카드에서 승인해야 저장된다.
+         */
+        List<ScheduleSuggestion> scheduleSuggestions =
+                structured != null && structured.scheduleSuggestions() != null
+                        ? structured.scheduleSuggestions() : List.of();
+
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
                 resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.adjustments(),
-                resolved.targetDate(), resolved.unavailableWindows(), resolved.contextChanges());
+                resolved.targetDate(), resolved.unavailableWindows(), resolved.contextChanges(),
+                scheduleSuggestions);
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -446,6 +477,10 @@ public class AiConversationService {
 
         if (!completion.contextSuggestions().isEmpty()) {
             sink.onContextSuggestionsReady(completion.contextSuggestions());
+        }
+
+        if (!completion.scheduleSuggestions().isEmpty()) {
+            sink.onScheduleSuggestionsReady(completion.scheduleSuggestions());
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
