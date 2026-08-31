@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.routine.domain.Routine;
 import com.jungwoo.project.memo.routine.domain.RoutineException;
+import com.jungwoo.project.memo.routine.domain.RoutineExceptionConflictReason;
 import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
@@ -119,21 +120,22 @@ public class RoutineService {
         Set<DayOfWeek> daysOfWeek = validate(userId, request);
 
         List<RoutineException> existing = routineExceptionMapper.findByRoutineId(routineId);
-        List<Long> conflictingIds = new ArrayList<>();
-        List<LocalDate> conflictingDates = new ArrayList<>();
+        List<RoutineExceptionsConflictDetails.Conflict> conflicts = new ArrayList<>();
         for (RoutineException exception : existing) {
             // movedDate는 검증 대상이 아니다 — 기간 밖 보강은 정상이다.
-            if (!isValidExceptionDate(exception.getExceptionDate(), daysOfWeek,
-                    request.getEffectiveFrom(), request.getEffectiveUntil())) {
-                conflictingIds.add(exception.getRoutineExceptionId());
-                conflictingDates.add(exception.getExceptionDate());
+            List<RoutineExceptionConflictReason> reasons = conflictReasons(
+                    exception.getExceptionDate(), daysOfWeek,
+                    request.getEffectiveFrom(), request.getEffectiveUntil());
+            if (!reasons.isEmpty()) {
+                conflicts.add(new RoutineExceptionsConflictDetails.Conflict(
+                        exception.getRoutineExceptionId(), exception.getExceptionDate(), reasons));
             }
         }
-        if (!conflictingIds.isEmpty()) {
+        if (!conflicts.isEmpty()) {
             log.info("반복 일정 수정 거부(기존 예외 무효화): userId={}, routineId={}, 걸린 예외={}",
-                    userId, routineId, conflictingIds);
+                    userId, routineId, conflicts);
             throw new ConflictException(ErrorCode.ROUTINE_EXCEPTIONS_CONFLICT,
-                    new RoutineExceptionsConflictDetails(conflictingIds, conflictingDates));
+                    new RoutineExceptionsConflictDetails(conflicts));
         }
 
         routineMapper.updateAll(routineId, userId, request.getCourseId(), request.getTitle().trim(),
@@ -246,8 +248,11 @@ public class RoutineService {
     }
 
     private void validateException(Routine routine, RoutineExceptionSaveRequest request) {
-        if (!isValidExceptionDate(request.getExceptionDate(), routine.getDaysOfWeek(),
-                routine.getEffectiveFrom(), routine.getEffectiveUntil())) {
+        if (request.getExceptionDate() == null
+                || !conflictReasons(request.getExceptionDate(), routine.getDaysOfWeek(),
+                        routine.getEffectiveFrom(), routine.getEffectiveUntil()).isEmpty()) {
+            // 저장 경로는 400 하나로 거절한다. 사유 목록이 필요한 곳은 루틴 수정(409)뿐이다 —
+            // 거기서는 이미 저장된 여러 예외가 한꺼번에 걸리고, 화면이 그 목록을 보여줘야 한다.
             throw new BadRequestException(ErrorCode.ROUTINE_EXCEPTION_DATE_INVALID);
         }
         boolean hasStart = request.getMovedStartTime() != null;
@@ -268,19 +273,29 @@ public class RoutineService {
     }
 
     /**
-     * exceptionDate는 "실제로 발생했을 날"이어야 한다 — 기간 안이고, 그 날짜의 요일이 이
-     * 루틴의 요일이어야 한다. 이 검사가 루틴 수정 시의 재검증과 같은 함수를 쓴다는 것이
-     * 요점이다. 두 벌이면 한쪽만 고쳐져 "추가는 되는데 수정은 막히는" 상태가 생긴다.
+     * exceptionDate가 "실제로 발생했을 날"인지 보고, 걸린 사유를 전부 돌려준다. 빈 목록이면
+     * 유효하다.
+     *
+     * <p>이 검사가 예외 저장과 루틴 수정 시의 재검증에서 같은 함수를 쓴다는 것이 요점이다.
+     * 두 벌이면 한쪽만 고쳐져 "추가는 되는데 수정은 막히는" 상태가 생긴다.
+     *
+     * <p><b>두 조건을 각각 독립적으로 검사하고 첫 위반에서 빠져나가지 않는다.</b> 요일과
+     * 기간을 한 번에 바꾸면 한 예외가 둘 다 위반할 수 있는데, 먼저 걸린 하나만 돌려주면
+     * 화면은 "기간을 고치면 되겠다"고 알려주고 사용자가 기간을 고친 뒤에야 요일도 안 맞는다는
+     * 것을 알게 된다. 그건 boolean이던 때와 같다.
      */
-    private boolean isValidExceptionDate(LocalDate date, Set<DayOfWeek> daysOfWeek,
-                                         LocalDate effectiveFrom, LocalDate effectiveUntil) {
-        if (date == null || date.isBefore(effectiveFrom)) {
-            return false;
+    private List<RoutineExceptionConflictReason> conflictReasons(
+            LocalDate date, Set<DayOfWeek> daysOfWeek,
+            LocalDate effectiveFrom, LocalDate effectiveUntil) {
+        List<RoutineExceptionConflictReason> reasons = new ArrayList<>();
+        if (!daysOfWeek.contains(date.getDayOfWeek())) {
+            reasons.add(RoutineExceptionConflictReason.DAY_OF_WEEK_MISMATCH);
         }
-        if (effectiveUntil != null && date.isAfter(effectiveUntil)) {
-            return false;
+        if (date.isBefore(effectiveFrom)
+                || (effectiveUntil != null && date.isAfter(effectiveUntil))) {
+            reasons.add(RoutineExceptionConflictReason.OUTSIDE_EFFECTIVE_RANGE);
         }
-        return daysOfWeek.contains(date.getDayOfWeek());
+        return reasons;
     }
 
     /**

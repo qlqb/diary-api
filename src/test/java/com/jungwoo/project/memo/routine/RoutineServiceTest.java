@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.routine.domain.Routine;
 import com.jungwoo.project.memo.routine.domain.RoutineException;
+import com.jungwoo.project.memo.routine.domain.RoutineExceptionConflictReason;
 import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionsConflictDetails;
@@ -32,6 +33,7 @@ import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -260,12 +262,16 @@ class RoutineServiceTest {
         assertThatThrownBy(() -> service.update(USER_ID, ROUTINE_ID, request(DayOfWeek.TUESDAY)))
                 .isInstanceOf(ConflictException.class)
                 .satisfies(thrown -> {
-                    Object details = ((ConflictException) thrown).getDetails();
-                    assertThat(details).isInstanceOf(RoutineExceptionsConflictDetails.class);
-                    RoutineExceptionsConflictDetails conflict = (RoutineExceptionsConflictDetails) details;
-                    assertThat(conflict.conflictingExceptionIds()).containsExactly(101L, 102L);
-                    assertThat(conflict.conflictingDates()).containsExactly(
-                            LocalDate.of(2026, 9, 24), LocalDate.of(2026, 10, 8));
+                    List<RoutineExceptionsConflictDetails.Conflict> conflicts = conflictsOf(thrown);
+                    assertThat(conflicts)
+                            .extracting(RoutineExceptionsConflictDetails.Conflict::exceptionId,
+                                    RoutineExceptionsConflictDetails.Conflict::exceptionDate)
+                            .containsExactly(
+                                    tuple(101L, LocalDate.of(2026, 9, 24)),
+                                    tuple(102L, LocalDate.of(2026, 10, 8)));
+                    // 기간은 그대로이므로 요일만 걸린다.
+                    assertThat(conflicts).allSatisfy(conflict -> assertThat(conflict.reasons())
+                            .containsExactly(RoutineExceptionConflictReason.DAY_OF_WEEK_MISMATCH));
                 });
 
         // 예외를 자동으로 지우지 않는다. 루틴도 그대로 둔다 — 전체를 거부하는 것이 요점이다.
@@ -285,7 +291,46 @@ class RoutineServiceTest {
                 SEMESTER_START, LocalDate.of(2026, 10, 1));
 
         assertThatThrownBy(() -> service.update(USER_ID, ROUTINE_ID, shortened))
-                .isInstanceOf(ConflictException.class);
+                .isInstanceOf(ConflictException.class)
+                .satisfies(thrown -> {
+                    // 요일은 그대로이므로 기간만 걸린다. 사유가 하나로 좁혀져야 화면이
+                    // "기간 밖이에요"만 말하고, 사용자가 요일까지 의심하지 않는다.
+                    assertThat(conflictsOf(thrown)).singleElement()
+                            .extracting(RoutineExceptionsConflictDetails.Conflict::reasons)
+                            .isEqualTo(List.of(RoutineExceptionConflictReason.OUTSIDE_EFFECTIVE_RANGE));
+                });
+    }
+
+    /**
+     * 요일과 기간을 한 번에 바꾸면 한 예외가 둘 다 위반할 수 있다. 첫 위반에서 빠져나가면
+     * 화면은 "기간을 고치면 되겠다"고 알려주고, 사용자가 기간을 고친 뒤에야 요일도 안 맞는다는
+     * 것을 알게 된다 — boolean을 돌려주던 때와 같아진다.
+     */
+    @Test
+    void 요일과_기간을_함께_바꾸면_사유가_둘_다_담긴다() {
+        lockedRoutine(DayOfWeek.THURSDAY);
+        when(routineExceptionMapper.findByRoutineId(ROUTINE_ID))
+                .thenReturn(List.of(exception(101L, LocalDate.of(2026, 10, 8))));
+
+        // 화요일로 바꾸고(10/8은 목요일) 기간도 10/1까지로 당긴다.
+        RoutineSaveRequest both = new RoutineSaveRequest(null, "빅데이터분석", null,
+                Set.of(DayOfWeek.TUESDAY), LocalTime.of(10, 0), LocalTime.of(12, 50),
+                SEMESTER_START, LocalDate.of(2026, 10, 1));
+
+        assertThatThrownBy(() -> service.update(USER_ID, ROUTINE_ID, both))
+                .isInstanceOf(ConflictException.class)
+                .satisfies(thrown -> assertThat(conflictsOf(thrown)).singleElement()
+                        .extracting(RoutineExceptionsConflictDetails.Conflict::reasons)
+                        .isEqualTo(List.of(
+                                RoutineExceptionConflictReason.DAY_OF_WEEK_MISMATCH,
+                                RoutineExceptionConflictReason.OUTSIDE_EFFECTIVE_RANGE)));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<RoutineExceptionsConflictDetails.Conflict> conflictsOf(Throwable thrown) {
+        Object details = ((ConflictException) thrown).getDetails();
+        assertThat(details).isInstanceOf(RoutineExceptionsConflictDetails.class);
+        return ((RoutineExceptionsConflictDetails) details).conflicts();
     }
 
     /** movedDate는 재검증 대상이 아니다. 기간을 당겨도 그 밖의 보강은 그대로 남는다. */
