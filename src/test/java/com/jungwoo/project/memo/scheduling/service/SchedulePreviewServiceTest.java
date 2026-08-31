@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
@@ -63,13 +64,16 @@ class SchedulePreviewServiceTest {
     private ExecutionItemMapper executionItemMapper;
     @Mock
     private RoutineOccurrenceService routineOccurrenceService;
+    @Mock
+    private CommitmentService commitmentService;
 
     private SchedulePreviewService service;
 
     @BeforeEach
     void setUp() {
         AvailabilityEstimateService availabilityEstimateService =
-                new AvailabilityEstimateService(executionItemMapper, routineOccurrenceService, FIXED_CLOCK);
+                new AvailabilityEstimateService(
+                        executionItemMapper, routineOccurrenceService, commitmentService, FIXED_CLOCK);
         SchedulingSolverService solverService = new SchedulingSolverService(3);
         service = new SchedulePreviewService(
                 aiProposalMapper, aiProposalItemMapper, schedulePreviewMapper,

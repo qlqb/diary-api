@@ -74,6 +74,7 @@ public enum ErrorCode {
     MATERIAL_NOT_LINKED_TO_COURSE(HttpStatus.NOT_FOUND, "E404_017", "이 프로젝트에 연결되지 않은 자료입니다"),
     ROUTINE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_019", "반복 일정을 찾을 수 없습니다"),
     ROUTINE_EXCEPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_020", "반복 일정의 예외를 찾을 수 없습니다"),
+    COMMITMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_021", "약속을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),

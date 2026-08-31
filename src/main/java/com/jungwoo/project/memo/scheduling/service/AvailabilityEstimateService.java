@@ -3,6 +3,8 @@ package com.jungwoo.project.memo.scheduling.service;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
 import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
 import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
@@ -53,6 +55,7 @@ public class AvailabilityEstimateService {
 
     private final ExecutionItemMapper executionItemMapper;
     private final RoutineOccurrenceService routineOccurrenceService;
+    private final CommitmentService commitmentService;
     private final Clock clock;
 
     @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
@@ -88,6 +91,18 @@ public class AvailabilityEstimateService {
                 routineOccurrenceService.expand(userId, horizonStart, horizonEnd)) {
             hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
             busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(), occurrence.title()));
+        }
+
+        /*
+         * 일회성 약속도 같은 자리에 들어온다 — 반복이냐 한 번이냐만 다르고 "그 시간은 못
+         * 쓴다"는 의미는 같다. 새 제약을 만들지 않고 이미 있는 hardBusy 입력이 하나 느는
+         * 것뿐이다. 루틴과 약속이 겹쳐도 시간을 두 번 빼지 않는다 — 아래 subtract가
+         * 구간 단위로 깎으므로 겹친 부분은 한 번만 사라진다.
+         */
+        for (Commitment commitment : commitmentService.findOverlapping(userId, horizonStart, horizonEnd)) {
+            hardBusy.add(new Interval(commitment.getStartAt(), commitment.getEndAt()));
+            busyWindows.add(new BusyWindow(
+                    commitment.getStartAt(), commitment.getEndAt(), commitment.getTitle()));
         }
 
         List<Interval> softBlocked = new ArrayList<>();

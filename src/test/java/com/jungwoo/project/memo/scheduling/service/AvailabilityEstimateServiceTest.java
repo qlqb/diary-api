@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.scheduling.service;
 
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
+import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
@@ -50,13 +52,17 @@ class AvailabilityEstimateServiceTest {
     @Mock
     private RoutineOccurrenceService routineOccurrenceService;
 
+    @Mock
+    private CommitmentService commitmentService;
+
     private AvailabilityEstimateService service;
 
     @BeforeEach
     void setUp() {
         // defaultTimeZoneId 필드 이니셜라이저가 이미 "Asia/Seoul"이다 — @Value가 적용되지
         // 않는 순수 단위 테스트에서도 기본값으로 동작한다.
-        service = new AvailabilityEstimateService(executionItemMapper, routineOccurrenceService, FIXED_CLOCK);
+        service = new AvailabilityEstimateService(
+                executionItemMapper, routineOccurrenceService, commitmentService, FIXED_CLOCK);
     }
 
     @Test
@@ -208,5 +214,78 @@ class AvailabilityEstimateServiceTest {
 
         LocalDateTime now = LocalDateTime.of(2026, 8, 10, 9, 0);
         assertThat(result.windows()).allSatisfy(w -> assertThat(w.startAt()).isAfterOrEqualTo(now));
+    }
+
+    // ===== 일회성 약속 =====
+
+    private Commitment commitment(String title, LocalDateTime startAt, LocalDateTime endAt) {
+        return Commitment.builder()
+                .commitmentId(50L).userId(USER_ID).title(title)
+                .startAt(startAt).endAt(endAt)
+                .build();
+    }
+
+    @Test
+    void excludesCommitments_fromAvailabilityWindows() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        // 기본 추정 창(월 19:00-22:00)과 겹치는 약속
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(commitment("친구 약속",
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0)),
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(21, 0)))));
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        boolean overlaps = result.windows().stream()
+                .filter(w -> w.startAt().toLocalDate().equals(HORIZON_START))
+                .anyMatch(w -> w.startAt().isBefore(LocalDateTime.of(HORIZON_START, LocalTime.of(21, 0)))
+                        && w.endAt().isAfter(LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0))));
+        assertThat(overlaps).isFalse();
+        assertThat(result.busyWindows()).extracting(BusyWindow::label).contains("친구 약속");
+    }
+
+    @Test
+    void userCannotReopenCommitmentTime() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(commitment("면접",
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0)),
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(21, 0)))));
+
+        AvailabilityOverrideRequest reopen = new AvailabilityOverrideRequest();
+        reopen.setStartAt(LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0)));
+        reopen.setEndAt(LocalDateTime.of(HORIZON_START, LocalTime.of(21, 0)));
+        reopen.setAvailable(true);
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of(reopen));
+
+        // 루틴과 같은 취급이다 — "이 시간 돼요"라고 말해도 실제 고정 일정은 다시 열리지 않는다.
+        boolean overlaps = result.windows().stream()
+                .anyMatch(w -> w.startAt().isBefore(LocalDateTime.of(HORIZON_START, LocalTime.of(21, 0)))
+                        && w.endAt().isAfter(LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0))));
+        assertThat(overlaps).isFalse();
+    }
+
+    @Test
+    void overlappingRoutineAndCommitment_doNotSubtractTwice() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        LocalDateTime start = LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0));
+        LocalDateTime end = LocalDateTime.of(HORIZON_START, LocalTime.of(20, 0));
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(new RoutineOccurrence(
+                        9L, null, "수업", null, start, end, HORIZON_START, false)));
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(commitment("겹치는 약속", start, end)));
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        // 같은 구간을 두 번 빼는 개념이 아니다 — 20:00~22:00은 그대로 남아야 한다.
+        boolean keepsRemainder = result.windows().stream()
+                .anyMatch(w -> w.startAt().equals(end)
+                        && w.endAt().equals(LocalDateTime.of(HORIZON_START, LocalTime.of(22, 0))));
+        assertThat(keepsRemainder).isTrue();
     }
 }
