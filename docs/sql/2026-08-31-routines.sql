@@ -6,11 +6,24 @@
 --
 -- 기존 docs/sql/*.sql 컨벤션(날짜 파일, 수동 적용)을 따른다. MariaDB 10.4 기준.
 -- 신규 테이블은 FK를 걸지 않는다(2026-08-16-material-store.sql에서 정한 컨벤션,
--- plan_versions도 같다). 소유권은 서비스 코드에서 user_id로 검증하고, 예외의 소유권은
--- routines를 JOIN해서 확인한다.
+-- plan_versions도 같다).
 --
--- FK가 없어도 잃는 것이 거의 없다: 루틴 삭제는 is_deleted = 1 소프트 삭제라 CASCADE가
--- 실질적으로 도는 일이 없다. 요일·예외 행은 남고, 그게 맞다 — 복구할 수 있어야 한다.
+-- ###############################################################
+-- FK를 빼면 무엇을 잃는가
+--
+-- DB가 고아 행을 막아 주는 것을 잃는다. 부모 없는 routine_weekdays / routine_exceptions가
+-- 물리적으로 만들어질 수 있고, 엔진은 그것을 거절하지 않는다. 적게 잃는 것이 아니다.
+--
+-- 그럼에도 빼는 이유는 위 컨벤션을 따르기 위해서다. 대신 다음으로 관리한다:
+--   - 모든 자식 조회·변경·전개가 부모의 존재·소유권·is_deleted = 0을 먼저 검증한다
+--     (routine_exceptions에는 user_id가 없으므로 소유권은 routines를 JOIN해서 본다).
+--   - 예외 변경과 루틴 수정은 부모 행을 SELECT ... FOR UPDATE로 잠근 뒤 진행한다.
+--   - 이 파일 끝의 고아 행 검사로 실제로 새지 않았는지 확인한다.
+--
+-- 루틴 삭제가 is_deleted = 1 소프트 삭제라서 CASCADE가 실질적으로 돌 일이 없다는 것은
+-- 사실이지만, 그건 "삭제 경로에서 고아가 안 생긴다"는 뜻이지 "FK가 없어도 잃는 것이 없다"는
+-- 뜻이 아니다. 요일·예외 행이 남는 것은 의도다 — 복구할 수 있어야 한다.
+-- ###############################################################
 --
 -- ###############################################################
 -- 주의: 이 파일은 execution_items.routine_id와 무관하다.
@@ -161,3 +174,23 @@ CREATE TABLE routine_exceptions (
 --   SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE
 --    WHERE TABLE_SCHEMA = DATABASE()
 --      AND TABLE_NAME LIKE 'routine%' AND REFERENCED_TABLE_NAME IS NOT NULL;     -- 0
+
+
+-- ===============================================================
+-- 고아 행 검사
+-- ===============================================================
+-- FK가 없으므로 DB가 막아 주지 않는다. 서비스 코드가 부모를 먼저 검증하는 것이 유일한
+-- 방어선이고, 그 방어선이 실제로 서 있는지는 이 두 쿼리로만 확인된다. 둘 다 0이 정상이다.
+--
+-- 0이 아니라면 부모 검증을 건너뛴 경로가 생겼다는 뜻이다. 행을 지우기 전에 어느 경로가
+-- 만들었는지부터 찾을 것 — 지우고 나면 원인이 사라진다.
+--
+--   SELECT COUNT(*) AS orphan_weekdays
+--     FROM routine_weekdays w
+--     LEFT JOIN routines r ON r.routine_id = w.routine_id
+--    WHERE r.routine_id IS NULL;                                                 -- 0
+--
+--   SELECT COUNT(*) AS orphan_exceptions
+--     FROM routine_exceptions e
+--     LEFT JOIN routines r ON r.routine_id = e.routine_id
+--    WHERE r.routine_id IS NULL;                                                 -- 0
