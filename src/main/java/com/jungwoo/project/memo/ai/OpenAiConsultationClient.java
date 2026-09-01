@@ -211,12 +211,14 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 최대 6일 뒤까지(최대 7일 범위). MONTH면 사용자가 말한 달 또는 기간에 맞게 정한다),
               "proposalItems": [
                 {
-                  "title": "구체적인 행동 제목",
+                  "title": "구체적인 행동 제목. 사용자가 직접 수행하고 완료하는 것만 여기 넣는다 —
+                    알바·수업·약속처럼 시간만 차지하는 현실 일정은 완료할 대상이 아니므로
+                    여기가 아니라 scheduleSuggestions로 낸다",
                   "description": "설명 또는 null",
                   "expectedMinutes": 5에서 120 사이의 양의 정수. 단 placementType이 TIME_FIXED이면
                     이 범위를 지키지 않아도 된다 — 그때는 서버가 시작·종료 시각에서 길이를 직접
                     계산하고 이 값은 쓰지 않는다. 범위에 맞추려고 시각을 실제보다 짧게 적지 마라
-                    (예: 17시부터 23시까지 알바면 그 시각을 그대로 적는다),
+                    (예: 19시부터 22시까지 몰아서 하기로 한 과제면 그 시각을 그대로 적는다),
                   "priority": "MUST" 또는 "SHOULD" 또는 "OPTIONAL",
                   "placementType": "DATE_ONLY" 또는 "TIME_FIXED" 또는 "UNSCHEDULED",
                   "startTime": "HH:mm" 형식 또는 null (periodStartDate 하루 안에서 TIME_FIXED일 때만 값을 가진다),
