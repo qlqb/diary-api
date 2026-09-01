@@ -381,7 +381,7 @@ public class AiWorkspaceContextBuilder {
 
         try {
             for (RoutineOccurrence occurrence : routineOccurrenceService.expand(userId, from, to)) {
-                lines.add(String.format("- (수업) %s %s~%s %s%s%n",
+                lines.add(String.format("- [이미 등록됨 · 반복 일정] %s %s~%s %s%s%n",
                         occurrence.startAt().toLocalDate().format(DATE_FMT),
                         occurrence.startAt().format(TIME_FMT),
                         occurrence.endAt().format(TIME_FMT),
@@ -394,7 +394,7 @@ public class AiWorkspaceContextBuilder {
 
         try {
             for (Commitment commitment : commitmentService.findOverlapping(userId, from, to)) {
-                lines.add(String.format("- (약속) %s %s~%s %s%s%n",
+                lines.add(String.format("- [이미 등록됨 · 약속] %s %s~%s %s%s%n",
                         commitment.getStartAt().toLocalDate().format(DATE_FMT),
                         commitment.getStartAt().format(TIME_FMT),
                         commitment.getEndAt().format(TIME_FMT),
@@ -405,6 +405,21 @@ public class AiWorkspaceContextBuilder {
             log.warn("약속 컨텍스트 생략: userId={}", userId, e);
         }
 
+        if (lines.isEmpty()) {
+            return;
+        }
+        /*
+         * "이미 등록됨"을 줄마다 붙이고 머리말로도 말한다.
+         *
+         * 이 줄들을 넣자마자 모델이 그것을 "등록해야 할 일정"으로 읽고 수업·알바를
+         * scheduleSuggestions 후보로 다시 냈다(적용하면 routines/one_off_commitments에
+         * 중복이 생긴다). 되묻지 말라고만 했지 다시 내지 말라고는 안 한 탓이다.
+         *
+         * 종류를 "(수업)"이 아니라 "반복 일정"으로 적는 것도 의도다 — 저장소 이름과 맞춰야
+         * 모델이 "이건 routines에 이미 있는 것"으로 읽는다.
+         */
+        sb.append("아래는 이미 앱에 등록된 일정이다(반복 일정=routines, 약속=one_off_commitments). "
+                + "새로 만들 대상이 아니며, 후보로 다시 내지 않는다. 계획은 이 시간을 피해서 잡는다.\n");
         lines.stream().sorted().forEach(sb::append);
     }
 

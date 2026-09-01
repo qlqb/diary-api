@@ -83,4 +83,18 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("같은 날 안에서 시각만 뒤로 미는");
         assertThat(prompt).contains("\"startTime\"");
     }
+
+    /*
+     * [이번 주 일정]에 수업·알바를 실었더니 모델이 그것을 "등록해야 할 일정"으로 읽고
+     * COMMITMENT 후보로 다시 냈다. 적용하면 routines/one_off_commitments에 중복이 생긴다.
+     * "되묻지 마라"는 있었지만 "다시 내지 마라"가 없었다.
+     */
+    @Test
+    void systemPrompt_forbidsReproposingSchedulesAlreadyRegistered() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("이미 앱에 등록된 일정을 후보로 다시 내지 않는다");
+        assertThat(prompt).contains("[이미 등록됨 · 반복 일정]");
+        assertThat(prompt).contains("사용자가 이번 대화에서 새로 말한 일정뿐이다");
+    }
 }

@@ -261,8 +261,15 @@ class AiWorkspaceContextBuilderTest {
 
         String block = builder.build(weekConversation(), USER_ID, NOW);
 
-        assertThat(block).contains("(수업) 2026-08-18 14:00~17:00 자료구조 @3-218");
-        assertThat(block).contains("(약속) 2026-08-17 17:00~23:00 알바 근무");
+        assertThat(block).contains("[이미 등록됨 · 반복 일정] 2026-08-18 14:00~17:00 자료구조 @3-218");
+        assertThat(block).contains("[이미 등록됨 · 약속] 2026-08-17 17:00~23:00 알바 근무");
+        /*
+         * 이 줄들을 넣자마자 모델이 그것을 "등록해야 할 일정"으로 읽고 수업·알바를
+         * scheduleSuggestions 후보로 다시 냈다. 적용하면 중복이 생긴다. 참고용이라는 것을
+         * 줄과 머리말 양쪽에서 말한다.
+         */
+        assertThat(block).contains("이미 앱에 등록된 일정이다");
+        assertThat(block).contains("후보로 다시 내지 않는다");
     }
 
     @Test
