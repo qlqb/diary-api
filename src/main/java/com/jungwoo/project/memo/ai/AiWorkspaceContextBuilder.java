@@ -27,6 +27,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import com.jungwoo.project.memo.course.dto.CourseResponse;
+import com.jungwoo.project.memo.routine.RoutineService;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
+import java.time.DayOfWeek;
+import java.util.Set;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.List;
@@ -76,6 +81,7 @@ public class AiWorkspaceContextBuilder {
     private final CourseMaterialMapper courseMaterialMapper;
     private final MaterialLinkMapper materialLinkMapper;
     private final ExecutionItemMapper executionItemMapper;
+    private final RoutineService routineService;
 
     /**
      * @param now 이 턴의 "지금"(사용자 시간대 기준). 스트리밍 도중 다시 계산하지 않도록
@@ -92,7 +98,22 @@ public class AiWorkspaceContextBuilder {
         Long courseId = conversation.getCourseId();
 
         if (courseId != null) {
+            // 우선 프로젝트 — 학습 항목까지 자세히.
             appendProjectBlock(sb, userId, courseId, today);
+        } else {
+            /*
+             * 프로젝트가 정해지지 않은 대화에도 활성 프로젝트를 싣는다.
+             *
+             * 전에는 courseId가 없으면 프로젝트 정보를 통째로 건너뛰었다. 그래서 일정 탭에서
+             * "내 프로젝트들 보고 일주일 계획 짜줘"라고 하면 모델이 받는 프로젝트 정보가
+             * 0바이트였고, 과목 이름조차 모른 채 "다른 과목/활동 균형 잡기" 같은 일반론을
+             * 내놓았다. 계획을 짜라면서 무엇을 계획할지는 안 알려준 셈이다.
+             *
+             * 여러 프로젝트에 걸친 계획 요청(EXECUTION/MIXED)일 때만 자세히 싣는다. 전부
+             * 자세히 넣으면 토큰만 늘고 예산에 걸려 앞쪽만 살아남는다.
+             */
+            appendProjectsOverviewBlock(sb, userId,
+                    scope == AiProposalTargetScope.EXECUTION || scope == AiProposalTargetScope.MIXED);
         }
 
         // 오늘 상태는 프로젝트 대화에서도 함께 싣는다 — 프로젝트 안에서 "오늘 30분 하고 싶어"라고
@@ -116,6 +137,84 @@ public class AiWorkspaceContextBuilder {
     }
 
     // ===== 프로젝트 =====
+
+    /**
+     * 활성 프로젝트 목록. 보관된 프로젝트는 싣지 않는다 — 계획 대상이 아니다.
+     *
+     * <p>자료 본문도 싣지 않는다. 그건 프로젝트가 하나로 정해진 대화에서만 의미가 있고,
+     * 여기서 전부 넣으면 예산을 혼자 다 쓴다.
+     *
+     * <p>진도 요약은 CourseResponse가 이미 계산해 온다(topicCount/learnedTopicCount/
+     * currentTopicTitle). 프로젝트마다 따로 조회하지 않으므로 개수가 늘어도 조회 횟수는 그대로다.
+     */
+    private void appendProjectsOverviewBlock(StringBuilder sb, Long userId, boolean detailed) {
+        List<CourseResponse> courses;
+        try {
+            courses = courseService.list(userId, CourseStatus.ACTIVE);
+        } catch (RuntimeException e) {
+            log.warn("프로젝트 목록 컨텍스트 생략: userId={}", userId, e);
+            return;
+        }
+        if (courses.isEmpty()) {
+            sb.append("[프로젝트] 활성 프로젝트 없음\n\n");
+            return;
+        }
+
+        Map<Long, List<RoutineResponse>> routinesByCourse = detailed
+                ? classSchedulesByCourse(userId) : Map.of();
+
+        sb.append("[프로젝트] 활성 ").append(courses.size()).append("개 (#뒤는 courseId)\n");
+        for (CourseResponse course : courses) {
+            sb.append("- #").append(course.getCourseId()).append(' ').append(course.getTitle());
+            if (course.getGroupLabel() != null) {
+                sb.append(" (").append(course.getGroupLabel()).append(')');
+            }
+            if (course.getTopicCount() > 0) {
+                sb.append(" · 학습 항목 ").append(course.getLearnedTopicCount())
+                        .append('/').append(course.getTopicCount()).append(" 완료");
+            } else {
+                sb.append(" · 학습 구조 아직 없음");
+            }
+            sb.append('\n');
+
+            if (!detailed) {
+                continue;
+            }
+            if (course.getCurrentTopicTitle() != null) {
+                sb.append("    다음 학습 항목: ").append(course.getCurrentTopicTitle()).append('\n');
+            }
+            if (course.getTextbookTitle() != null) {
+                sb.append("    교재: ").append(course.getTextbookTitle()).append('\n');
+            }
+            for (RoutineResponse routine : routinesByCourse.getOrDefault(course.getCourseId(), List.of())) {
+                sb.append("    수업: ").append(renderWeekdays(routine.daysOfWeek())).append(' ')
+                        .append(routine.startTime().format(TIME_FMT)).append('~')
+                        .append(routine.endTime().format(TIME_FMT)).append('\n');
+            }
+        }
+        sb.append('\n');
+    }
+
+    /** 아직 끝나지 않은 반복 일정 중 프로젝트에 묶인 것만. 알바·운동은 프로젝트가 없다. */
+    private Map<Long, List<RoutineResponse>> classSchedulesByCourse(Long userId) {
+        try {
+            return routineService.list(userId).stream()
+                    .filter(r -> r.courseId() != null && !r.ended())
+                    .collect(Collectors.groupingBy(RoutineResponse::courseId));
+        } catch (RuntimeException e) {
+            log.warn("수업 일정 컨텍스트 생략: userId={}", userId, e);
+            return Map.of();
+        }
+    }
+
+    private String renderWeekdays(Set<DayOfWeek> days) {
+        if (days == null || days.isEmpty()) {
+            return "";
+        }
+        return days.stream().sorted()
+                .map(d -> d.getDisplayName(TextStyle.SHORT, Locale.KOREAN))
+                .collect(Collectors.joining("·"));
+    }
 
     private void appendProjectBlock(StringBuilder sb, Long userId, Long courseId, LocalDate today) {
         Course course;

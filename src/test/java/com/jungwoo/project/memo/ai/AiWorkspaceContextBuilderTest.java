@@ -17,12 +17,21 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.course.dto.CourseResponse;
+import com.jungwoo.project.memo.routine.RoutineService;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
+import java.time.DayOfWeek;
+import java.util.Set;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 /**
@@ -51,6 +60,9 @@ class AiWorkspaceContextBuilderTest {
 
     @Mock
     private ExecutionItemMapper executionItemMapper;
+
+    @Mock
+    private RoutineService routineService;
 
     @InjectMocks
     private AiWorkspaceContextBuilder builder;
@@ -121,5 +133,91 @@ class AiWorkspaceContextBuilderTest {
                 .status(ExecutionStatus.PLANNED)
                 .priority(ExecutionPriority.SHOULD)
                 .build();
+    }
+
+    /*
+     * "내 프로젝트들 보고 일주일 계획 짜줘"에서 모델이 받은 프로젝트 정보가 0바이트였다.
+     * courseId가 없으면 프로젝트 블록을 통째로 건너뛰고 있었고, 그래서 과목 이름조차 모른 채
+     * "다른 과목/활동 균형 잡기" 같은 일반론이 나왔다.
+     */
+    @Test
+    void weekPlanning_includesActiveProjects_evenWithoutCourseId() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(36L, "자료구조", 12, 5, "연결 리스트"),
+                course(31L, "빅데이터분석", 0, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("[프로젝트] 활성 2개");
+        assertThat(block).contains("#36 자료구조");
+        assertThat(block).contains("#31 빅데이터분석");
+        // 계획을 짜려면 무엇이 남았는지를 알아야 한다.
+        assertThat(block).contains("학습 항목 5/12 완료");
+        assertThat(block).contains("다음 학습 항목: 연결 리스트");
+        assertThat(block).contains("수업: 화 14:00~17:00");
+        // 학습 구조가 없는 프로젝트도 숨기지 않는다 — 없다는 것도 판단 재료다.
+        assertThat(block).contains("학습 구조 아직 없음");
+    }
+
+    @Test
+    void todayConversation_listsProjectsBriefly_withoutTopicDetail() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(36L, "자료구조", 12, 5, "연결 리스트")));
+
+        String block = builder.build(todayConversation(), USER_ID, NOW);
+
+        // 이름과 진도는 항상 싣는다.
+        assertThat(block).contains("#36 자료구조");
+        assertThat(block).contains("학습 항목 5/12 완료");
+        // 오늘 대화에까지 학습 항목·수업 일정을 붙이면 예산만 쓴다.
+        assertThat(block).doesNotContain("다음 학습 항목:");
+        verify(routineService, never()).list(any());
+    }
+
+    @Test
+    void projectsBlock_isSkipped_whenConversationHasItsOwnProject() {
+        // 프로젝트가 정해진 대화는 기존 상세 블록이 맡는다 — 목록을 또 싣지 않는다.
+        when(courseService.getOwned(USER_ID, 36L)).thenThrow(new IllegalStateException("stop"));
+
+        String block = builder.build(projectConversation(36L), USER_ID, NOW);
+
+        assertThat(block).doesNotContain("[프로젝트] 활성");
+        verify(courseService, never()).list(any(), any());
+    }
+
+    private AiConversation weekConversation() {
+        return AiConversation.builder()
+                .conversationId(9L)
+                .userId(USER_ID)
+                .scope(AiProposalTargetScope.EXECUTION)
+                .build();
+    }
+
+    private AiConversation projectConversation(Long courseId) {
+        return AiConversation.builder()
+                .conversationId(9L)
+                .userId(USER_ID)
+                .courseId(courseId)
+                .scope(AiProposalTargetScope.TODAY)
+                .build();
+    }
+
+    private CourseResponse course(Long id, String title, int topicCount, int learned, String currentTopic) {
+        return CourseResponse.builder()
+                .courseId(id)
+                .title(title)
+                .status(CourseStatus.ACTIVE)
+                .topicCount(topicCount)
+                .learnedTopicCount(learned)
+                .currentTopicTitle(currentTopic)
+                .build();
+    }
+
+    private RoutineResponse classRoutine(Long routineId, Long courseId, DayOfWeek day,
+                                         LocalTime start, LocalTime end) {
+        return new RoutineResponse(routineId, courseId, "수업", null, Set.of(day), start, end,
+                LocalDate.of(2026, 8, 25), LocalDate.of(2026, 12, 11), false, false, false, List.of());
     }
 }
