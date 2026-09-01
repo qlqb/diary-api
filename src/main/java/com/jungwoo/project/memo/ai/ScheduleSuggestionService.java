@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.ai;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
@@ -27,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -109,7 +111,7 @@ public class ScheduleSuggestionService {
                     .build();
             suggestionMapper.insert(entity);
 
-            result.add(ScheduleSuggestionResponse.of(entity, candidate.payload()));
+            result.add(ScheduleSuggestionResponse.of(entity, toMap(candidate.payload())));
         }
         log.info("일정 후보 저장: userId={}, conversationId={}, count={}", userId, conversationId, result.size());
         return result;
@@ -141,7 +143,7 @@ public class ScheduleSuggestionService {
      * 통과해야 한다 — 사용자가 고쳤다고 검증을 건너뛰지 않는다.
      */
     @Transactional
-    public ScheduleSuggestionResponse apply(Long suggestionId, Long userId, JsonNode editedPayload) {
+    public ScheduleSuggestionResponse apply(Long suggestionId, Long userId, Map<String, Object> editedPayload) {
         AiScheduleSuggestion suggestion = requireForUpdate(suggestionId, userId);
         // 이미 결론이 난 후보는 다시 적용하지 않는다. APPLIED에 또 적용하면 원본이 하나 더 생긴다.
         if (suggestion.getStatus() != ScheduleSuggestionStatus.PROPOSED) {
@@ -154,8 +156,9 @@ public class ScheduleSuggestionService {
          * 후자는 사실상 나오지 않지만, 나온다면 그건 우리 저장 데이터가 깨졌다는 뜻이지
          * 사용자가 잘못 입력했다는 뜻이 아니다.
          */
-        boolean edited = editedPayload != null && editedPayload.isObject();
-        JsonNode payload = edited ? editedPayload : readTree(suggestion.getProposedPayload());
+        boolean edited = editedPayload != null && !editedPayload.isEmpty();
+        JsonNode payload = edited
+                ? objectMapper.valueToTree(editedPayload) : readTree(suggestion.getProposedPayload());
         Object request = readAndValidatePayload(suggestion.getKind(), payload,
                 edited ? PayloadSource.USER_EDIT : PayloadSource.MODEL);
         createDomain(userId, suggestion.getKind(), request);
@@ -170,7 +173,7 @@ public class ScheduleSuggestionService {
 
         log.info("일정 후보 적용: userId={}, suggestionId={}, kind={}", userId, suggestionId, suggestion.getKind());
         suggestion.setStatus(ScheduleSuggestionStatus.APPLIED);
-        return ScheduleSuggestionResponse.of(suggestion, payload);
+        return ScheduleSuggestionResponse.of(suggestion, toMap(payload));
     }
 
     /** 도메인 행을 만들지 않고 후보만 닫는다. */
@@ -188,7 +191,7 @@ public class ScheduleSuggestionService {
         }
 
         suggestion.setStatus(ScheduleSuggestionStatus.DISMISSED);
-        return ScheduleSuggestionResponse.of(suggestion, readTree(suggestion.getProposedPayload()));
+        return ScheduleSuggestionResponse.of(suggestion, toMap(readTree(suggestion.getProposedPayload())));
     }
 
     // ===== 내부 =====
@@ -266,7 +269,7 @@ public class ScheduleSuggestionService {
         List<ScheduleSuggestionResponse> responses = new ArrayList<>();
         for (AiScheduleSuggestion suggestion : suggestions) {
             responses.add(ScheduleSuggestionResponse.of(
-                    suggestion, readTree(suggestion.getProposedPayload())));
+                    suggestion, toMap(readTree(suggestion.getProposedPayload()))));
         }
         return responses;
     }
@@ -278,6 +281,23 @@ public class ScheduleSuggestionService {
             log.warn("저장된 일정 후보 payload를 읽지 못했다", e);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
+    }
+
+    /**
+     * 화면으로 나가는 payload는 Map이다.
+     *
+     * <p>HTTP·SSE 직렬화는 Jackson 3(tools.jackson)이 하는데(JacksonConfig 주석 참고),
+     * Jackson 3은 Jackson 2의 JsonNode를 트리로 인식하지 못한다 — 일반 객체로 보고 내부
+     * 구조를 내보내거나 빈 객체를 쓴다. 실제로 검토 카드에 제목·시각·장소가 하나도 안 떴다.
+     *
+     * <p>코드 안에서는 계속 JsonNode로 다룬다(모델 출력 파싱과 DTO 역직렬화가 Jackson 2
+     * ObjectMapper를 쓴다). 경계에서만 바꾼다.
+     */
+    private Map<String, Object> toMap(JsonNode payload) {
+        if (payload == null || !payload.isObject()) {
+            return Map.of();
+        }
+        return objectMapper.convertValue(payload, new TypeReference<Map<String, Object>>() { });
     }
 
     private String toJson(JsonNode payload) {

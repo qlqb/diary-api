@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.ai;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
@@ -31,6 +32,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -89,6 +91,11 @@ class ScheduleSuggestionServiceTest {
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
         service = new ScheduleSuggestionService(
                 suggestionMapper, commitmentService, routineService, factory.getValidator());
+    }
+
+    /** apply()가 받는 것은 화면에서 온 값이라 Map이다. HTTP 경계에서 Jackson 3이 그렇게 만든다. */
+    private Map<String, Object> map(String raw) {
+        return objectMapper.convertValue(json(raw), new TypeReference<Map<String, Object>>() { });
     }
 
     private JsonNode json(String raw) {
@@ -216,7 +223,7 @@ class ScheduleSuggestionServiceTest {
                         ScheduleSuggestionStatus.PROPOSED));
         when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
 
-        service.apply(SUGGESTION_ID, USER_ID, json(
+        service.apply(SUGGESTION_ID, USER_ID, map(
                 "{\"title\":\"친구 약속\",\"startAt\":\"2026-09-04T19:00\",\"endAt\":\"2026-09-04T21:30\"}"));
 
         ArgumentCaptor<CommitmentCreateRequest> captor =
@@ -355,7 +362,7 @@ class ScheduleSuggestionServiceTest {
         when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
                 .thenReturn(stored(kind, storedJson, ScheduleSuggestionStatus.PROPOSED));
 
-        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, json(editedJson)))
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, map(editedJson)))
                 .isInstanceOf(BadRequestException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_INPUT_VALUE);
 
@@ -389,7 +396,7 @@ class ScheduleSuggestionServiceTest {
         org.mockito.Mockito.doThrow(new BadRequestException(ErrorCode.INVALID_TIME_RANGE))
                 .when(commitmentService).create(anyLong(), any(), any());
 
-        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, json(
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, map(
                 "{\"title\":\"친구 약속\",\"startAt\":\"2026-09-04T21:00\",\"endAt\":\"2026-09-04T19:00\"}")))
                 .isInstanceOf(BadRequestException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_TIME_RANGE);
@@ -409,7 +416,7 @@ class ScheduleSuggestionServiceTest {
         org.mockito.Mockito.doThrow(new BadRequestException(ErrorCode.ROUTINE_WEEKDAYS_REQUIRED))
                 .when(routineService).create(anyLong(), any());
 
-        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, json(
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, map(
                 "{\"title\":\"알바\",\"daysOfWeek\":[],\"startTime\":\"18:00\",\"endTime\":\"23:00\","
                         + "\"effectiveFrom\":\"2026-09-01\"}")))
                 .isInstanceOf(BadRequestException.class)
@@ -457,6 +464,6 @@ class ScheduleSuggestionServiceTest {
 
         assertThat(pending).hasSize(1);
         // 화면이 다시 파싱하지 않도록 payload를 객체로 내보낸다.
-        assertThat(pending.get(0).getPayload().get("title").asText()).isEqualTo("친구 약속");
+        assertThat(pending.get(0).getPayload()).containsEntry("title", "친구 약속");
     }
 }
