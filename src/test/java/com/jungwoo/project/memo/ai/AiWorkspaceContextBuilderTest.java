@@ -21,6 +21,15 @@ import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.course.dto.CourseResponse;
 import com.jungwoo.project.memo.routine.RoutineService;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
+import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
+import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
+import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
 import java.time.DayOfWeek;
 import java.util.Set;
 import java.time.LocalDate;
@@ -32,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 
 /**
@@ -63,6 +73,15 @@ class AiWorkspaceContextBuilderTest {
 
     @Mock
     private RoutineService routineService;
+
+    @Mock
+    private RoutineOccurrenceService routineOccurrenceService;
+
+    @Mock
+    private CommitmentService commitmentService;
+
+    @Mock
+    private AvailabilityEstimateService availabilityEstimateService;
 
     @InjectMocks
     private AiWorkspaceContextBuilder builder;
@@ -219,5 +238,77 @@ class AiWorkspaceContextBuilderTest {
                                          LocalTime start, LocalTime end) {
         return new RoutineResponse(routineId, courseId, "수업", null, Set.of(day), start, end,
                 LocalDate.of(2026, 8, 25), LocalDate.of(2026, 12, 11), false, false, false, List.of());
+    }
+
+    /*
+     * "고정으로 빼야 할 일정(알바·수업·약속)이 있나요"라고 되물은 사고의 재발 방지.
+     *
+     * 셋 다 앱이 아는 값인데 컨텍스트에 없었다. [이번 주 일정]이 execution_items만 읽었고,
+     * 알바를 약속(one_off_commitments)으로 옮기면서 모델 눈에서 아예 사라졌다.
+     */
+    @Test
+    void weekBlock_includesClassesAndCommitments_notJustExecutionItems() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(routineOccurrenceService.expand(eq(USER_ID), any(), any())).thenReturn(List.of(
+                new RoutineOccurrence(85L, 36L, "자료구조", "3-218",
+                        LocalDateTime.of(2026, 8, 18, 14, 0), LocalDateTime.of(2026, 8, 18, 17, 0),
+                        LocalDate.of(2026, 8, 18), false)));
+        when(commitmentService.findOverlapping(eq(USER_ID), any(), any())).thenReturn(List.of(
+                Commitment.builder().commitmentId(34L).userId(USER_ID).title("알바 근무")
+                        .startAt(LocalDateTime.of(2026, 8, 17, 17, 0))
+                        .endAt(LocalDateTime.of(2026, 8, 17, 23, 0))
+                        .build()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("(수업) 2026-08-18 14:00~17:00 자료구조 @3-218");
+        assertThat(block).contains("(약속) 2026-08-17 17:00~23:00 알바 근무");
+    }
+
+    @Test
+    void fixedRealityLines_doNotCarryExecutionItemIds() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(commitmentService.findOverlapping(eq(USER_ID), any(), any())).thenReturn(List.of(
+                Commitment.builder().commitmentId(34L).userId(USER_ID).title("알바 근무")
+                        .startAt(LocalDateTime.of(2026, 8, 17, 17, 0))
+                        .endAt(LocalDateTime.of(2026, 8, 17, 23, 0))
+                        .build()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        // #뒤의 숫자는 조정 후보가 참조하는 executionItemId다. 수업·약속은 조정 대상이
+        // 아니므로 그 접두사를 주면 모델이 없는 실행 조각을 줄이거나 옮기려 든다.
+        assertThat(block).doesNotContain("#34");
+    }
+
+    @Test
+    void availabilityBlock_tellsRemainingTime_soTheModelNeedNotAsk() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(availabilityEstimateService.estimate(eq(USER_ID), any(), any(), any(), any()))
+                .thenReturn(new AvailabilityEstimateResult(List.of(
+                        new AvailabilityWindow(
+                                LocalDateTime.of(2026, 8, 17, 19, 0), LocalDateTime.of(2026, 8, 17, 22, 0),
+                                AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW, "기본 추정")),
+                        List.of()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("[남는 시간(추정)]");
+        assertThat(block).contains("2026-08-17 월 19:00~22:00 (180분)");
+        assertThat(block).contains("합계 약 180분");
+        // 추정을 확정처럼 말하지 않게 한다.
+        assertThat(block).contains("확정한 값이 아니라 추정");
+    }
+
+    @Test
+    void availabilityBlock_saysSoWhenNothingIsLeft() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(availabilityEstimateService.estimate(eq(USER_ID), any(), any(), any(), any()))
+                .thenReturn(new AvailabilityEstimateResult(List.of(), List.of()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        // 비어 있는 것과 모르는 것은 다르다 — 없다고 말해 줘야 되묻지 않는다.
+        assertThat(block).contains("남는 시간이 없다고 추정된다");
     }
 }

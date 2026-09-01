@@ -32,6 +32,15 @@ import com.jungwoo.project.memo.routine.RoutineService;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import java.time.DayOfWeek;
 import java.util.Set;
+import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
+import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
+import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.List;
@@ -82,6 +91,9 @@ public class AiWorkspaceContextBuilder {
     private final MaterialLinkMapper materialLinkMapper;
     private final ExecutionItemMapper executionItemMapper;
     private final RoutineService routineService;
+    private final RoutineOccurrenceService routineOccurrenceService;
+    private final CommitmentService commitmentService;
+    private final AvailabilityEstimateService availabilityEstimateService;
 
     /**
      * @param now 이 턴의 "지금"(사용자 시간대 기준). 스트리밍 도중 다시 계산하지 않도록
@@ -315,7 +327,9 @@ public class AiWorkspaceContextBuilder {
                         .append("개 있다(위 줄의 '예정 시간 지남' 표시). 이건 실패가 아니라 조정할 거리다.\n");
             }
         }
+        appendFixedRealityLines(sb, userId, today, today);
         sb.append('\n');
+        appendAvailabilityBlock(sb, userId, today, today);
     }
 
     /**
@@ -340,13 +354,103 @@ public class AiWorkspaceContextBuilder {
 
         sb.append("[이번 주 일정] ").append(monday.format(DATE_FMT)).append(" ~ ").append(sunday.format(DATE_FMT)).append('\n');
         if (items.isEmpty()) {
-            sb.append("이번 주에 잡힌 항목이 없다.\n");
+            sb.append("이번 주에 잡힌 실행 항목이 없다.\n");
         } else {
             for (ExecutionItem item : items) {
                 sb.append(renderExecutionLine(item, projectTitles));
             }
         }
+        appendFixedRealityLines(sb, userId, monday, sunday);
         sb.append('\n');
+        appendAvailabilityBlock(sb, userId, today, sunday);
+    }
+
+    /**
+     * 그 기간에 이미 시간이 차 있는 현실 일정. 수업(반복)과 약속(일회성)을 한 줄씩 낸다.
+     *
+     * <p>이게 없으면 앱이 아는 것을 모델이 되묻는다 — 실제로 "고정으로 빼야 할 일정(알바·수업
+     * ·약속)이 있나요"라고 물었다. 셋 다 앱에 이미 있는 값이고, 물으면 안 되는 것들이다
+     * (docs/product-thesis.md 현실층 갱신 원칙 ①).
+     *
+     * <p><b>#executionItemId를 붙이지 않는다.</b> 실행 조각 줄만 그 접두사를 갖는다 — 모델이
+     * 조정 후보(adjustments)에서 참조하는 것이 그 id이고, 수업·약속은 조정 대상이 아니다.
+     * 대신 "(수업)" "(약속)"으로 종류를 밝혀 바꿀 수 없는 것임을 알린다.
+     */
+    private void appendFixedRealityLines(StringBuilder sb, Long userId, LocalDate from, LocalDate to) {
+        List<String> lines = new ArrayList<>();
+
+        try {
+            for (RoutineOccurrence occurrence : routineOccurrenceService.expand(userId, from, to)) {
+                lines.add(String.format("- (수업) %s %s~%s %s%s%n",
+                        occurrence.startAt().toLocalDate().format(DATE_FMT),
+                        occurrence.startAt().format(TIME_FMT),
+                        occurrence.endAt().format(TIME_FMT),
+                        occurrence.title(),
+                        occurrence.location() != null ? " @" + occurrence.location() : ""));
+            }
+        } catch (RuntimeException e) {
+            log.warn("수업 일정 컨텍스트 생략: userId={}", userId, e);
+        }
+
+        try {
+            for (Commitment commitment : commitmentService.findOverlapping(userId, from, to)) {
+                lines.add(String.format("- (약속) %s %s~%s %s%s%n",
+                        commitment.getStartAt().toLocalDate().format(DATE_FMT),
+                        commitment.getStartAt().format(TIME_FMT),
+                        commitment.getEndAt().format(TIME_FMT),
+                        commitment.getTitle(),
+                        commitment.getLocationText() != null ? " @" + commitment.getLocationText() : ""));
+            }
+        } catch (RuntimeException e) {
+            log.warn("약속 컨텍스트 생략: userId={}", userId, e);
+        }
+
+        lines.stream().sorted().forEach(sb::append);
+    }
+
+    /**
+     * 남는 시간 추정. 배치가 쓰는 것과 같은 계산을 그대로 읽어 온다.
+     *
+     * <p>이게 없으면 모델이 "언제 시간 있어요?"를 물을 수밖에 없다. 배치 단계
+     * (SchedulePreviewService)는 이미 이 값을 쓰는데, 정작 계획을 만드는 모델은 못 보고
+     * 있었다 — 같은 사실을 두 단계가 다르게 알고 있던 셈이다.
+     *
+     * <p>추정값이라고 명시한다. 기본 추론 창(평일 저녁·주말 낮)에서 수업·약속·이미 잡힌
+     * 일정을 뺀 값이고, 사용자가 확정한 사실이 아니다.
+     */
+    private void appendAvailabilityBlock(StringBuilder sb, Long userId, LocalDate from, LocalDate to) {
+        AvailabilityEstimateResult result;
+        try {
+            result = availabilityEstimateService.estimate(userId, from, to, List.of(), List.of());
+        } catch (RuntimeException e) {
+            log.warn("가용시간 컨텍스트 생략: userId={}", userId, e);
+            return;
+        }
+        // 컨텍스트 조립이 대화를 깨뜨리지 않는다 — 이 블록이 없어도 상담은 계속돼야 한다.
+        if (result == null || result.windows() == null) {
+            return;
+        }
+
+        sb.append("[남는 시간(추정)] ").append(from.format(DATE_FMT)).append(" ~ ").append(to.format(DATE_FMT))
+                .append("\n지난 시간과 위 고정 일정을 뺀 값이다. 사용자가 확정한 값이 아니라 추정이므로 "
+                        + "\"확정했어요\"처럼 말하지 않는다.\n");
+        if (result.windows().isEmpty()) {
+            sb.append("남는 시간이 없다고 추정된다. 이럴 때는 무엇을 줄일지 물어보는 편이 낫다.\n\n");
+            return;
+        }
+
+        long totalMinutes = 0;
+        for (AvailabilityWindow window : result.windows()) {
+            long minutes = Duration.between(window.startAt(), window.endAt()).toMinutes();
+            totalMinutes += minutes;
+            sb.append("- ").append(window.startAt().toLocalDate().format(DATE_FMT)).append(' ')
+                    .append(window.startAt().toLocalDate().getDayOfWeek()
+                            .getDisplayName(TextStyle.SHORT, Locale.KOREAN)).append(' ')
+                    .append(window.startAt().format(TIME_FMT)).append('~')
+                    .append(window.endAt().format(TIME_FMT))
+                    .append(" (").append(minutes).append("분)\n");
+        }
+        sb.append("합계 약 ").append(totalMinutes).append("분.\n\n");
     }
 
     /**

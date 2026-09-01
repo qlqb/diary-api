@@ -28,11 +28,27 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("보수적으로 추정");
     }
 
+    /*
+     * "고정으로 빼야 할 일정(알바·수업·약속)이 있나요"라고 되물은 적이 있다. 셋 다 앱이
+     * 이미 아는 값이고, 지금은 화면 상태 블록에 실려 나간다 — 되물으면 사용자에게 앱이
+     * 아는 것을 다시 시키는 셈이다(docs/product-thesis.md 현실층 갱신 원칙 ①).
+     *
+     * 대화 이력만 언급하던 옛 문구로는 이 경우를 막지 못했다. 규칙이 화면 상태 블록까지
+     * 덮는지, 그리고 되묻지 말아야 할 블록 이름이 실제로 적혀 있는지 함께 고정한다.
+     */
     @Test
     void systemPrompt_doesNotAskAboutInformationAlreadyKnown() {
         String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
 
-        assertThat(prompt).contains("이미 [최근 대화]나 [장기 컨텍스트]에 있는 정보는 같은");
+        assertThat(prompt).contains("화면 상태 블록에 이미 있는 것은 절대 되묻지 않는다");
+        assertThat(prompt).contains("[최근 대화]");
+        assertThat(prompt).contains("[장기 컨텍스트]");
+        // 이번에 되물었던 바로 그 값들이 이름으로 적혀 있어야 한다.
+        assertThat(prompt).contains("[이번 주 일정]");
+        assertThat(prompt).contains("[남는 시간(추정)]");
+        assertThat(prompt).contains("고정 일정(수업·알바·약속)");
+        // 블록이 비어 있는 것을 "모른다"로 읽고 되묻는 것도 막아야 한다.
+        assertThat(prompt).contains("비어 있다면 그건 \"없다\"는 뜻이지");
     }
 
     @Test
