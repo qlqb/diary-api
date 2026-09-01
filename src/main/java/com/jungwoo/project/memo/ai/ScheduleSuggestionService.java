@@ -10,12 +10,15 @@ import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
 import com.jungwoo.project.memo.commitment.dto.CommitmentCreateRequest;
+import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.routine.RoutineService;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.Validator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * AI가 대화에서 뽑은 일정 사실 후보의 검증·저장·적용·거절을 전담한다.
@@ -50,6 +55,15 @@ public class ScheduleSuggestionService {
     private final AiScheduleSuggestionMapper suggestionMapper;
     private final CommitmentService commitmentService;
     private final RoutineService routineService;
+    /**
+     * DTO에 선언된 Bean Validation을 직접 돌린다.
+     *
+     * <p>직접 생성 경로(POST /api/commitments)는 Spring MVC가 @Valid로 이것을 대신 해주지만,
+     * 이 경로는 JSON을 ObjectMapper로 읽어 서비스를 바로 부르므로 아무도 돌려주지 않는다.
+     * 역직렬화 성공과 Bean Validation 성공은 다른 것이다 — title이 없는 JSON도 객체로는
+     * 멀쩡히 만들어지고, 그 객체는 도메인 서비스에서 getTitle().trim()에 닿아 NPE가 된다.
+     */
+    private final Validator validator;
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -81,8 +95,9 @@ public class ScheduleSuggestionService {
                 log.warn("일정 후보 검증 실패: kind 또는 payload 누락");
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
-            // 읽히는지만 본다. 실제 도메인 검증(시간 역전 등)은 적용 시점에 같은 서비스가 한다.
-            readPayload(candidate.kind(), candidate.payload());
+            // 모델이 낸 값이므로 계약 위반이다. 실제 도메인 검증(시간 역전 등)은 적용 시점에
+            // 같은 도메인 서비스가 한 번 더 한다 — 두 층은 보는 것이 다르다.
+            readAndValidatePayload(candidate.kind(), candidate.payload(), PayloadSource.MODEL);
 
             AiScheduleSuggestion entity = AiScheduleSuggestion.builder()
                     .userId(userId)
@@ -133,9 +148,17 @@ public class ScheduleSuggestionService {
             throw new ConflictException(ErrorCode.SCHEDULE_SUGGESTION_ALREADY_RESOLVED);
         }
 
-        JsonNode payload = editedPayload != null && editedPayload.isObject()
-                ? editedPayload : readTree(suggestion.getProposedPayload());
-        createDomain(userId, suggestion.getKind(), payload);
+        /*
+         * 사용자가 고친 값이면 그 오류는 사용자의 것이라 400이고, 저장된 원본을 그대로 쓰는
+         * 경우면 그 값은 모델이 낸 것이라 계약 위반(503)이다. 저장 시점에 이미 검증했으므로
+         * 후자는 사실상 나오지 않지만, 나온다면 그건 우리 저장 데이터가 깨졌다는 뜻이지
+         * 사용자가 잘못 입력했다는 뜻이 아니다.
+         */
+        boolean edited = editedPayload != null && editedPayload.isObject();
+        JsonNode payload = edited ? editedPayload : readTree(suggestion.getProposedPayload());
+        Object request = readAndValidatePayload(suggestion.getKind(), payload,
+                edited ? PayloadSource.USER_EDIT : PayloadSource.MODEL);
+        createDomain(userId, suggestion.getKind(), request);
 
         int resolved = suggestionMapper.resolveIfProposed(
                 suggestionId, userId, ScheduleSuggestionStatus.APPLIED.name(), LocalDateTime.now());
@@ -171,30 +194,64 @@ public class ScheduleSuggestionService {
     // ===== 내부 =====
 
     /** 종류별로 기존 생성 경로를 그대로 부른다. 여기서 새 규칙을 만들지 않는다. */
-    private void createDomain(Long userId, ScheduleSuggestionKind kind, JsonNode payload) {
+    private void createDomain(Long userId, ScheduleSuggestionKind kind, Object request) {
         switch (kind) {
-            case COMMITMENT -> commitmentService.create(userId,
-                    (CommitmentCreateRequest) readPayload(kind, payload),
+            case COMMITMENT -> commitmentService.create(userId, (CommitmentCreateRequest) request,
                     CommitmentSourceType.AI_SUGGESTION_APPROVED);
-            case ROUTINE -> routineService.create(userId, (RoutineSaveRequest) readPayload(kind, payload));
+            case ROUTINE -> routineService.create(userId, (RoutineSaveRequest) request);
         }
     }
 
+    /** 이 payload가 누구의 것인지. 같은 검증이 실패해도 누구의 잘못인지에 따라 결과가 다르다. */
+    private enum PayloadSource {
+        /** 모델이 낸 값. 계약 위반이므로 턴을 실패시킨다(503). */
+        MODEL,
+        /** 사용자가 검토 카드에서 고친 값. 입력 오류이므로 400이고, 후보는 PROPOSED로 남는다. */
+        USER_EDIT
+    }
+
     /**
-     * payload를 종류에 맞는 도메인 요청으로 읽는다.
+     * payload를 종류에 맞는 도메인 요청으로 읽고, 그 DTO에 선언된 Bean Validation을 돌린다.
      *
-     * <p>필드 이름을 도메인 요청과 맞춰 둔 덕에 변환 계층이 없다. 읽히지 않으면 계약 위반이다.
+     * <p>두 단계가 모두 필요하다. 역직렬화는 "JSON이 이 모양인가"만 보고, title이 없는
+     * JSON도 객체로는 멀쩡히 만들어진다. 그 객체가 도메인 서비스에 닿으면
+     * {@code getTitle().trim()}에서 NPE가 난다 — 500으로 끝나고 무엇이 잘못됐는지도
+     * 사용자에게 알려주지 못한다.
+     *
+     * <p>이 검증이 도메인 서비스의 검증을 대신하지 않는다. 여기는 DTO 계약(필수값·길이)을
+     * 보고, 거기는 도메인 규칙(시작 &lt; 종료, 요일이 하나 이상, 기간 역전)을 본다.
+     * 예를 들어 RoutineSaveRequest.daysOfWeek에는 애초에 annotation이 없고
+     * RoutineService가 빈 목록을 거절한다 — 두 층을 합치면 그런 규칙이 갈 곳이 없어진다.
      */
-    private Object readPayload(ScheduleSuggestionKind kind, JsonNode payload) {
+    private Object readAndValidatePayload(ScheduleSuggestionKind kind, JsonNode payload,
+                                          PayloadSource source) {
+        Object request;
         try {
-            return switch (kind) {
+            request = switch (kind) {
                 case COMMITMENT -> objectMapper.treeToValue(payload, CommitmentCreateRequest.class);
                 case ROUTINE -> objectMapper.treeToValue(payload, RoutineSaveRequest.class);
             };
         } catch (Exception e) {
-            log.warn("일정 후보 payload를 읽지 못했다: kind={}, payload={}", kind, payload, e);
-            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            log.warn("일정 후보 payload를 읽지 못했다: kind={}, source={}, payload={}", kind, source, payload, e);
+            throw rejected(source);
         }
+
+        Set<ConstraintViolation<Object>> violations = validator.validate(request);
+        if (!violations.isEmpty()) {
+            String detail = violations.stream()
+                    .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                    .sorted()
+                    .collect(Collectors.joining(", "));
+            log.warn("일정 후보 payload 검증 실패: kind={}, source={}, 위반={}", kind, source, detail);
+            throw rejected(source);
+        }
+        return request;
+    }
+
+    private RuntimeException rejected(PayloadSource source) {
+        return source == PayloadSource.MODEL
+                ? new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED)
+                : new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
     }
 
     private AiScheduleSuggestion requireForUpdate(Long suggestionId, Long userId) {
