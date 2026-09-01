@@ -30,11 +30,15 @@ import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -85,7 +89,24 @@ public class AiProposalService {
     private final AiProposalItemMapper aiProposalItemMapper;
     private final AiConversationMapper aiConversationMapper;
     private final ExecutionItemService executionItemService;
+    private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+
+    /** 다른 배치 경로와 같은 키를 쓴다 — 시간대가 하루를 좌우하므로 두 벌이 되게 하지 않는다. */
+    @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
+    private String defaultTimeZoneId = "Asia/Seoul";
+
+    /**
+     * 배치 가능 구간(placementWindow)의 시작일. 요청 기간(requestedPeriod)과는 다른 값이다.
+     *
+     * <p>수요일에 "이번 주"를 요청하면 요청 기간은 8/31~9/6 그대로 두고, 새 조각을 놓을 수
+     * 있는 구간만 오늘 이후로 본다. SchedulePreviewService가 horizonStart를 오늘로 자르고
+     * AvailabilityEstimateService가 lowerBound를 지금으로 자르는 것과 같은 층이다 —
+     * 그 둘은 UNSCHEDULED 경로를 막고 있었고, 날짜가 박힌 경로만 뚫려 있었다.
+     */
+    private LocalDate placementFloor() {
+        return ZonedDateTime.now(clock).withZoneSameInstant(ZoneId.of(defaultTimeZoneId)).toLocalDate();
+    }
 
     // ===== 생성 (PROPOSAL 턴에서만 호출) =====
 
@@ -344,6 +365,25 @@ public class AiProposalService {
                 }
             }
 
+            /*
+             * 날짜가 박힌 항목(DATE_ONLY/TIME_FIXED)은 배치 가능 구간 안이어야 한다.
+             *
+             * UNSCHEDULED는 여기서 보지 않는다 — 그쪽은 SchedulePreviewService가 horizonStart를
+             * 오늘로 자르고 AvailabilityEstimateService가 lowerBound를 지금으로 잘라 이미 두 겹으로
+             * 막혀 있다. 뚫려 있던 것은 날짜가 박힌 경로 하나뿐이었고, 실제로 "이번 주" 계획
+             * 5건이 전부 지난 월요일에 쌓였다.
+             *
+             * 조용히 오늘로 당기지 않는다. 모델이 지난 날짜를 지정했다는 것은 그 항목을 언제
+             * 하기로 한 것인지 서버가 모른다는 뜻이고, 날짜만 바꿔 놓으면 사용자는 자기가
+             * 승인하지 않은 날짜를 보게 된다.
+             */
+            if (placementType != PlacementType.UNSCHEDULED
+                    && itemTargetDate != null && itemTargetDate.isBefore(placementFloor())) {
+                log.warn("AI 제안 구조 검증 실패: 항목 '{}'의 배치 날짜({})가 이미 지났음(오늘={})",
+                        item.title(), itemTargetDate, placementFloor());
+                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            }
+
             Integer expectedMinutes;
             if (placementType == PlacementType.TIME_FIXED) {
                 // 시각이 정해진 순간 길이는 이미 결정돼 있다. 모델이 따로 적어 낸 숫자는 보지
@@ -533,6 +573,21 @@ public class AiProposalService {
 
             // TIME_FIXED의 길이를 여기서 다시 계산하지 않는다 — 편집으로 시각만 바꿔도
             // createFromApprovedProposal이 PlacementDuration으로 맞춰 저장한다.
+
+            /*
+             * 적용 시점에 다시 본다. 초안을 만든 뒤 자정이 지나 적용하는 경우가 있고, 그때는
+             * 생성 시점 검사를 통과한 날짜가 이미 과거다. 여기서 조용히 당기지 않고 막는다 —
+             * 사용자가 승인한 것은 "그 날짜"이지 "오늘"이 아니다.
+             *
+             * 계약 위반(503)이 아니라 400이다. 모델이 잘못한 것이 아니라 시간이 지난 것이고,
+             * 사용자가 할 일은 재시도가 아니라 기간을 다시 잡는 것이다.
+             */
+            if (placementType != PlacementType.UNSCHEDULED
+                    && scheduledDate != null && scheduledDate.isBefore(placementFloor())) {
+                log.warn("제안 적용 차단: 항목 '{}'의 날짜({})가 이미 지났음(오늘={}, proposalId={})",
+                        title, scheduledDate, placementFloor(), proposalId);
+                throw new BadRequestException(ErrorCode.PLAN_PLACEMENT_IN_PAST);
+            }
 
             int orderIndex = nextOrderIndexByDate.computeIfAbsent(
                     scheduledDate, d -> executionItemService.nextOrderIndexStart(userId, d));

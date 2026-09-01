@@ -24,6 +24,7 @@ import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -31,6 +32,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -59,6 +63,13 @@ class AiProposalServiceTest {
     private static final Long CONVERSATION_ID = 10L;
     private static final Long SOURCE_MESSAGE_ID = 50L;
     private static final LocalDate TARGET_DATE = LocalDate.of(2026, 8, 4);
+    /**
+     * 2026-08-04 09:00 KST로 고정한다. TARGET_DATE와 같은 날이어야 한다 — 배치 가능 구간
+     * 검사가 "오늘 이전인가"를 보므로, 시계를 안 고정하면 이 테스트들이 실행하는 날에 따라
+     * 통과했다 실패했다 한다.
+     */
+    private static final Clock FIXED_CLOCK = Clock.fixed(
+            Instant.parse("2026-08-04T00:00:00Z"), ZoneOffset.UTC);
 
     @Mock
     private AiProposalPersistenceService persistenceService;
@@ -75,8 +86,13 @@ class AiProposalServiceTest {
     @Mock
     private ExecutionItemService executionItemService;
 
-    @InjectMocks
     private AiProposalService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new AiProposalService(persistenceService, aiProposalMapper, aiProposalItemMapper,
+                aiConversationMapper, executionItemService, FIXED_CLOCK);
+    }
 
     // ===== createFromItems =====
 
@@ -792,4 +808,65 @@ class AiProposalServiceTest {
                 + "\"priority\":\"SHOULD\",\"targetDate\":\"2026-08-04\",\"placementType\":\"DATE_ONLY\","
                 + "\"scheduledStartAt\":null,\"scheduledEndAt\":null}";
     }
+    // ===== 계획 기간과 배치 가능 기간의 분리 =====
+    //
+    // 요청 기간(requestedPeriod)은 사용자가 보고 싶은 범위이고, 배치 가능 구간
+    // (placementWindow)은 새 조각을 실제로 놓을 수 있는 구간이다. 수요일에 "이번 주"를
+    // 물으면 앞은 8/31~9/6 그대로, 뒤는 오늘부터다. 앞을 오늘로 덮어쓰면 사용자가 요청한
+    // 범위가 사라진다.
+
+    @Test
+    void createFromItems_rejectsDateOnlyItem_placedBeforeToday() {
+        // 실제로 있었던 일이다 — 수요일에 "이번 주" 계획을 만들었더니 5건이 전부 지난
+        // 월요일에 쌓였다. UNSCHEDULED 경로는 이미 막혀 있었고 여기만 뚫려 있었다.
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "자료구조 복습", null, 60, "SHOULD", PlacementType.DATE_ONLY,
+                null, null, null, null, null, null, null));
+
+        assertThatThrownBy(() -> service.createFromItems(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE.minusDays(2), List.of()))
+                .isInstanceOf(ServiceUnavailableException.class);
+        verify(persistenceService, never()).save(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_allowsDateOnlyItem_placedToday() {
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "자료구조 복습", null, 60, "SHOULD", PlacementType.DATE_ONLY,
+                null, null, null, null, null, null, null));
+
+        service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
+
+        verify(persistenceService).save(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_allowsUnscheduledItem_evenWhenPeriodStartedInThePast() {
+        /*
+         * UNSCHEDULED는 날짜가 없으므로 요청 기간이 과거에 시작해도 막지 않는다. 배치는
+         * SchedulePreviewService가 horizonStart를 오늘로 잘라 계산한다 — 그게
+         * placementWindow이고, 요청 기간과 다른 층이다.
+         */
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "자료구조 복습", null, 60, "SHOULD", PlacementType.UNSCHEDULED,
+                null, null, null, null, null, null, null));
+
+        service.createFromItems(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE.minusDays(2), List.of());
+
+        verify(persistenceService).save(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createFromItems_rejectsFixedTimeItem_placedBeforeToday() {
+        List<ProposalItem> items = List.of(new ProposalItem(
+                "자료구조 복습", null, null, "SHOULD", PlacementType.TIME_FIXED,
+                null, null, null, null,
+                TARGET_DATE.minusDays(1).atTime(14, 0), TARGET_DATE.minusDays(1).atTime(15, 0), null));
+
+        assertThatThrownBy(() -> service.createFromItems(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of()))
+                .isInstanceOf(ServiceUnavailableException.class);
+    }
+
 }

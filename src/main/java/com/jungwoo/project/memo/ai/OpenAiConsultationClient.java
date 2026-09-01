@@ -198,7 +198,11 @@ public class OpenAiConsultationClient implements AiConsultationClient {
             {
               "decision": "CHAT" 또는 "ASK_CLARIFICATION" 또는 "OFFER_PROPOSAL" 또는 "PROPOSAL_READY",
               "clarifyingQuestion": "사용자에게 되물을 질문 하나" 또는 null (decision이
-                ASK_CLARIFICATION일 때만 채운다. 그 외에는 반드시 null이다),
+                ASK_CLARIFICATION일 때만 채운다. 그 외에는 반드시 null이다.
+                ★ 기간을 되물을 때는 "이번 주" 같은 말 대신 실제 날짜를 보여준다 —
+                "이번 주(지금 포함)"는 달력 주의 시작(지난 월요일)으로도, 오늘부터로도 읽혀
+                실제로 지난 날짜에 계획이 쌓인 적이 있다. 예: "오늘부터 7일(9/2~9/8)로 할까요,
+                이번 주 남은 기간(9/2~9/6)으로 할까요, 다음 주(9/7~9/13)로 할까요?"),
               "missingInformation": ["빠진 정보 이름", ...] (decision이 ASK_CLARIFICATION일 때만
                 참고용으로 나열한다. 그 외에는 반드시 빈 배열이다),
               "planScope": "DAY" 또는 "WEEK" 또는 "MONTH" 또는 null (decision이 PROPOSAL_READY일
@@ -311,8 +315,22 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               없으면 빈 배열로 둔다. 사용자가 말하지 않은 사용 불가 시간을 추측해 채우지 않는다.
             - proposalItems의 모든 날짜(earliestStartDate/deadlineDate/fixedStartAt/fixedEndAt)는
               반드시 periodStartDate~periodEndDate 범위 안에 있어야 한다. 벗어나면 서버가 이
-              PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다 — 날짜가
-              없는 항목(DATE_ONLY 등)은 periodStartDate를 기준으로 서버가 배치한다.
+              PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다.
+
+            - ★ placementType을 고르는 기준은 "사용자가 언제 할지 정해 줬는가" 하나다.
+              DATE_ONLY는 "날짜가 없는 상태"가 아니라 "날짜는 정했고 시각만 없는 상태"다.
+
+                사용자가 날짜와 시각을 함께 말함  -> fixedStartAt/fixedEndAt (그대로 고정된다)
+                사용자가 날짜만 말함(하루 계획)    -> DATE_ONLY (periodStartDate가 곧 그 날이다)
+                사용자가 언제 할지 안 말함        -> UNSCHEDULED
+
+              ★ periodStartDate를 항목의 기본 날짜로 복사하지 마라. 지정이 없으면 UNSCHEDULED다.
+              UNSCHEDULED로 내야 서버가 가용시간을 계산해 기간 안에 분산 배치한다(수업·알바·약속을
+              피하고 지난 시간에는 놓지 않는다). DATE_ONLY로 내면 그 날 하루에 그대로 쌓인다.
+
+              여러 날에 걸친 계획(planScope=WEEK/MONTH)에서 날짜 지정이 없는 항목은 반드시
+              UNSCHEDULED다. 특정 요일에만 하고 싶다고 말했으면 UNSCHEDULED로 두고
+              earliestStartDate/deadlineDate를 그 날짜로 함께 지정한다.
             - scheduleSuggestions는 decision 값과 무관하게 아래 기준으로만 채운다(빈 배열이 기본값).
 
               무엇을 여기에 넣는가: 사용자가 말한 "시간을 차지하는 현실 일정"이다. 사용자가

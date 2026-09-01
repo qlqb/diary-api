@@ -1451,6 +1451,63 @@ class AiConversationServiceTest {
         assertThat(result.get(0).getTitle()).isEqualTo("안녕");
     }
 
+    /*
+     * 요청 기간이 통째로 지나갔으면 배치할 구간이 없다. 시작만 과거인 것은 거부하지 않는다 —
+     * 수요일에 "이번 주"를 물으면 8/31~9/6이 맞는 답이고, 그 기간을 오늘로 덮어쓰면 사용자가
+     * 요청한 범위가 사라진다. 배치를 오늘 이후로 제한하는 것은 배치 가능 구간의 일이다.
+     */
+    @Test
+    void createProposal_rejectsPeriod_entirelyInThePast() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        // 고정 시계는 2026-08-05다. 아래 기간은 그보다 앞서 끝난다.
+        String raw = """
+                지난주 계획이에요.
+                <<<AI_STRUCTURED>>>
+                {"decision":"PROPOSAL_READY","planScope":"WEEK",
+                 "periodStartDate":"2026-07-27","periodEndDate":"2026-08-02",
+                 "missingInformation":[],"adjustments":[],"unavailableWindows":[],
+                 "proposalItems":[{"title":"자료구조 복습","expectedMinutes":60,
+                   "priority":"SHOULD","placementType":"UNSCHEDULED"}]}""";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-past-1"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createProposal_allowsPeriod_thatStartedInThePastButStillCoversToday() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        // "이번 주" — 시작(8/3)은 지났지만 오늘(8/5)을 포함한다. 요청 기간은 그대로 둔다.
+        String raw = """
+                이번 주 계획이에요.
+                <<<AI_STRUCTURED>>>
+                {"decision":"PROPOSAL_READY","planScope":"WEEK",
+                 "periodStartDate":"2026-08-03","periodEndDate":"2026-08-09",
+                 "missingInformation":[],"adjustments":[],"unavailableWindows":[],
+                 "proposalItems":[{"title":"자료구조 복습","expectedMinutes":60,
+                   "priority":"SHOULD","placementType":"UNSCHEDULED"}]}""";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(410L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), createProposalRequest("k-past-2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isNull();
+        // 요청 기간의 시작을 오늘로 덮어쓰지 않는다.
+        ArgumentCaptor<LocalDate> targetDate = ArgumentCaptor.forClass(LocalDate.class);
+        verify(aiTurnLifecycleService).completeTurnSuccess(
+                any(), any(), any(), any(), any(), any(), any(), targetDate.capture(), any(), any(), any());
+        assertThat(targetDate.getValue()).isEqualTo(LocalDate.of(2026, 8, 3));
+    }
+
     // ===== 일정 후보(scheduleSuggestions) sidecar =====
     //
     // 여기서 고정하는 것은 서버가 후보를 어디로 보내느냐다. "이 말이 반복인가 한 번인가"는

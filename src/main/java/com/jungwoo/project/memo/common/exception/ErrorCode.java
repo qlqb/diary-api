@@ -22,6 +22,8 @@ public enum ErrorCode {
     MISSING_INPUT_VALUE(HttpStatus.BAD_REQUEST, "E400_003", "필수 입력값이 누락되었습니다"),
     INVALID_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_004", "종료 시각은 시작 시각보다 이후여야 합니다"),
     MOVE_TARGET_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_006", "이동 대상 날짜가 현재 날짜와 같습니다"),
+    PLAN_PLACEMENT_IN_PAST(HttpStatus.BAD_REQUEST, "E400_026",
+            "이미 지난 시간에는 배치할 수 없습니다. 기간을 다시 잡아 주세요"),
     REDUCE_TITLE_UNCHANGED(HttpStatus.BAD_REQUEST, "E400_007", "줄인 후 제목이 기존 제목과 같습니다"),
     TIME_FIXED_REQUIRES_TIME(HttpStatus.BAD_REQUEST, "E400_008", "시간 고정 블록은 시작/종료 시각이 필요합니다"),
     PARTIAL_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_009", "시작/종료 시각은 함께 입력해야 합니다"),

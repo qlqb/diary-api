@@ -624,7 +624,7 @@ public class AiConversationService {
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
             String violation = periodViolationReason(structured.planScope(), structured.periodStartDate(),
-                    structured.periodEndDate(), structured.proposalItems(), structured.adjustments());
+                    structured.periodEndDate(), structured.proposalItems(), structured.adjustments(), todayDate);
             if (violation != null) {
                 log.warn("AI 턴 실패 처리: CREATE_PROPOSAL+PROPOSAL_READY 기간 계약 위반: {}", violation);
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
@@ -715,7 +715,8 @@ public class AiConversationService {
      * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH는 최대 31일(spanDays<=30)까지만 허용한다.
      */
     private String periodViolationReason(AiPlanScope planScope, LocalDate start, LocalDate end,
-                                          List<ProposalItem> items, List<ProposalAdjustment> adjustments) {
+                                          List<ProposalItem> items, List<ProposalAdjustment> adjustments,
+                                          LocalDate today) {
         if (planScope == null) {
             return "planScope가 비어 있음";
         }
@@ -724,6 +725,17 @@ public class AiConversationService {
         }
         if (end.isBefore(start)) {
             return "periodEndDate(" + end + ")가 periodStartDate(" + start + ")보다 이전임";
+        }
+        /*
+         * 요청 기간(requestedPeriod)이 통째로 지나갔으면 배치할 수 있는 구간이 없다.
+         *
+         * 시작이 과거인 것 자체는 거부하지 않는다 — 수요일에 "이번 주"를 물으면 8/31~9/6이
+         * 맞는 답이고, 그 기간을 오늘로 덮어쓰면 사용자가 요청한 범위가 사라진다. 배치를
+         * 오늘 이후로 제한하는 것은 배치 가능 구간(placementWindow)의 일이지 요청 기간의
+         * 일이 아니다.
+         */
+        if (today != null && end.isBefore(today)) {
+            return "요청 기간(" + start + "~" + end + ")이 전부 지났음(오늘=" + today + ")";
         }
         long spanDays = ChronoUnit.DAYS.between(start, end);
         if (planScope == AiPlanScope.DAY && !start.equals(end)) {
