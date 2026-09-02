@@ -97,4 +97,23 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("[이미 등록됨 · 반복 일정]");
         assertThat(prompt).contains("사용자가 이번 대화에서 새로 말한 일정뿐이다");
     }
+
+    /*
+     * 계획 경로(PlanDraftService)에는 "개강일로 몇 주차인지 계산하고 이번 주·다음 주 진도에
+     * 집중하라"가 있는데 대화 경로에는 없었다("주차"·"개강" 검색 0건). 그 결과 이 강의계획서에
+     * 없는 "핵심 3개(배열·리스트·스택)"가 나왔다 — 2주차 진도는 ADT·Big-O였다.
+     */
+    @Test
+    void systemPrompt_tellsHowToUseWeekNumbers_andForbidsInventingTopics() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("몇 주차인지 계산");
+        assertThat(prompt).contains("이번 주와 다음 주 진도에 집중");
+        assertThat(prompt).contains("한참 뒤 주차 내용을 미리 당겨오지 않는다");
+        // 지어내기 금지는 반드시 있어야 한다.
+        assertThat(prompt).contains("학습 항목에 없는 것을 지어내지 않는다");
+        // 줄바꿈을 타지 않는 조각으로 본다 — 원문은 "교재의 장 / 번호나 쪽수처럼"으로 접힌다.
+        assertThat(prompt).contains("번호나 쪽수처럼 거기 없는 값은 만들지 않는다");
+        assertThat(prompt).contains("상상해 넣는 것도 지어내는 것이다");
+    }
 }
