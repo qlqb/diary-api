@@ -1,351 +1,370 @@
 # 05. Database
 
-이 문서는 v2.1 기준 DB 설계 메모를 관리한다.
+## 1. 문서 범위
 
-구현 기준은 Spring Boot + MyBatis + Mapper XML이다.
+이 문서는 목표 실행 모델과 레거시 전환 기준을 정의한다. 현재 코드에 존재하는 `todos`, `schedule_blocks`, `daily_plans`, `plan_item_events`를 그대로 최종 구조로 간주하지 않는다.
 
-## 1. 핵심 테이블
+## 2. 목표 테이블
 
 ```text
 users
-diaries
-problems
-todos
-daily_plans
-daily_plan_condition_tags
-user_plan_preferences
-schedule_blocks
-plan_item_events
-quick_logs
-weekly_reviews
-ai_suggestions
-expenses
+daily_states
+plan_items
+context_items
+plan_item_context_links
+execution_items
+execution_item_context_links
+execution_records
+execution_item_events
+ai_proposals
+ai_proposal_items
 ```
 
-MonthlyPlan, YearlyPlan, LifeGoal, BehaviorPattern은 MVP에서 테이블도 만들지 않는다. 장기 확장 방향으로만 남긴다.
-
-## 2. daily_plans
+마이그레이션 중에는 다음 보조 테이블을 사용할 수 있다.
 
 ```text
-daily_plan_id
+legacy_execution_item_map
+migration_data_adjustments
+```
+
+## 3. 핵심 관계
+
+```text
+PlanItem 1 ── N ExecutionItem
+ExecutionItem 1 ── 0..N ExecutionRecord
+ExecutionItem 1 ── N ExecutionItemEvent
+PlanItem N ── M ContextItem
+ExecutionItem N ── M ContextItem
+AIProposal 1 ── N AIProposalItem
+```
+
+DailyState는 ExecutionItem의 부모가 아니다. 두 모델은 날짜로 조회해 화면에서 합성한다.
+
+## 4. daily_states
+
+하루의 컨디션과 운영 설정을 저장한다.
+
+```text
+daily_state_id
 user_id
-plan_date
-view_mode
-view_mode_source
-intensity
+state_date
+view_mode              TIME_TABLE / CHECKLIST
+view_mode_source       USER_DEFAULT / USER_SELECTED / SYSTEM_SUGGESTED / AI_RECOMMENDED
+intensity              LIGHT / NORMAL / FOCUSED
 condition_note
-main_goal
+focus_note
 memo
 created_at
 updated_at
-
-UNIQUE(user_id, plan_date)
 ```
 
-DailyPlan은 날짜별 하루 운영 상태다. 대상 날짜 DailyPlan이 없을 때 이동 액션 등에서 기본값으로 생성될 수 있다.
+무결성:
 
-## 3. daily_plan_condition_tags
+- `UNIQUE(user_id, state_date)`
+- ExecutionItem FK를 두지 않는다.
 
-```text
-daily_plan_condition_tag_id
-daily_plan_id
-tag_text
-```
+## 5. plan_items
 
-conditionTags는 자유 태그다. enum으로 미리 고정하지 않는다.
-
-## 4. user_plan_preferences
+상위 계획과 계획 항목을 별도 계층으로 과도하게 쪼개기 전에, 앞으로 하려는 의도·범위·기간을 한 단위로 저장한다.
 
 ```text
-user_plan_preference_id
+plan_item_id
 user_id
-default_view_mode
-default_intensity
-plan_depth
-created_at
-updated_at
-```
-
-## 5. schedule_blocks
-
-```text
-schedule_block_id
-user_id
-daily_plan_id
-todo_id nullable
-routine_id nullable
-block_date
 title
-block_type
-priority
-start_time nullable
-end_time nullable
-order_index
-status
-memo
+description
+start_date
+end_date
+status                  DRAFT / ACTIVE / HOLD / DONE / CANCELLED
+priority                MUST / SHOULD / OPTIONAL
 origin_type
 modified_after_creation
+version
 is_deleted
 created_at
 updated_at
 ```
 
-ScheduleStatus는 다음 네 값만 사용한다.
+기간은 시작일과 종료일이 모두 있을 때 `start_date <= end_date`를 만족해야 한다.
+
+## 6. context_items
 
 ```text
-PLANNED
-DONE
-HOLD
-CANCELLED
-```
-
-MOVED, REDUCED는 status가 아니라 plan_item_events의 event_type으로 기록한다.
-
-1차-A 기준 사용자 화면의 "오늘 해볼 것"은 내부적으로 `schedule_blocks`에 저장한다. 시간이 없는 실행 카드도 ScheduleBlock이며 `block_type = TASK`를 사용한다.
-
-ScheduleBlock 시간 정책은 다음과 같다.
-
-```text
-TIME_FIXED:
-- start_time NOT NULL
-- end_time NOT NULL
-- end_time > start_time
-
-TASK:
-- start_time NULL
-- end_time NULL
-```
-
-`block_date`는 운영상 하루 기준 날짜이고, `start_time`/`end_time`은 실제 시각이다. 따라서 서로 날짜가 다를 수 있다.
-
-DB와 서비스 모두 `DATE(start_time)=block_date` 제약을 두지 않는다.
-
-허용 가능한 DB 권장 제약 예시는 다음과 같다. MySQL/MariaDB 버전과 기존 데이터 상태에 따라 CHECK 적용 가능 여부를 먼저 확인한다.
-
-```sql
-CHECK (
-    (
-        block_type = 'TIME_FIXED'
-        AND start_time IS NOT NULL
-        AND end_time IS NOT NULL
-        AND end_time > start_time
-    )
-    OR
-    (
-        block_type = 'TASK'
-        AND start_time IS NULL
-        AND end_time IS NULL
-    )
-)
-```
-
-## 6. plan_item_events
-
-```text
-plan_item_event_id
+context_item_id
 user_id
-todo_id nullable
-schedule_block_id nullable
-event_type
-event_date
-from_date nullable
-to_date nullable
-before_title nullable
-after_title nullable
-before_block_type nullable
-after_block_type nullable
-before_start_time nullable
-after_start_time nullable
-before_end_time nullable
-after_end_time nullable
-memo
-created_at
-
-CHECK(todo_id IS NOT NULL OR schedule_block_id IS NOT NULL)
-INDEX(user_id, event_date)
-INDEX(todo_id)
-INDEX(schedule_block_id)
-```
-
-해석 정책은 다음과 같다.
-
-```text
-todo_id만 있음 = 미배치 Todo 이벤트
-schedule_block_id만 있음 = 계획 항목 이벤트
-둘 다 있음 = ScheduleBlock 기준 우선 해석
-```
-
-블록 이벤트의 todo_id는 클라이언트 입력을 받지 않는다. 서버가 ScheduleBlock.todo_id에서 복사해 무결성을 유지한다.
-
-`REDUCED` 같은 조정 이벤트는 변경 전/후 blockType과 시간을 함께 저장할 수 있다.
-
-```text
-before_block_type
-after_block_type
-before_start_time
-after_start_time
-before_end_time
-after_end_time
-```
-
-컬럼명은 REDUCED 전용이 아니라 일반 before/after 구조로 둔다. 향후 EXPANDED/EXTENDED 같은 이벤트가 추가되어도 재사용 가능하다. 이번 작업에서 새 인덱스는 추가하지 않는다.
-
-## 7. quick_logs
-
-```text
-quick_log_id
-user_id
-log_date
-log_type
-value_numeric
-value_text nullable
-created_at
-
-UNIQUE(user_id, log_date, log_type)
-```
-
-값 정의:
-
-```text
-SLEEP: 1=6시간 미만, 2=6~7시간, 3=7시간 이상
-EMOTION: 1=나쁨, 2=보통, 3=좋음
-```
-
-## 8. weekly_reviews
-
-```text
-weekly_review_id
-user_id
-week_start_date
-done_summary
-moved_summary
-reduced_summary
-hold_summary
-next_week_note
-ai_summary nullable
+context_type            GOAL / DECISION / CONSTRAINT / PREFERENCE
+                        CONCERN / OBSERVATION / INSIGHT / UNKNOWN
+content
+source_type             USER_INPUT / AI_CONVERSATION / EXECUTION_DERIVED
+source_ref nullable
+verification_status     UNCONFIRMED / AI_INFERRED / USER_CONFIRMED
+lifecycle_status        PENDING / ACTIVE / SUPERSEDED / WITHDRAWN / ARCHIVED
+valid_from nullable
+valid_to nullable
+supersedes_context_item_id nullable
+withdrawn_at nullable
+version
 created_at
 updated_at
 ```
 
-주간 회고 집계 화면은 1차-B 범위다. AI 주간 요약은 1.5차 범위다.
-
-## 9. ai_suggestions
-
-ai_suggestions는 2차 구현이다. v2.1에서는 피드백 루프를 위해 설계만 확정한다.
+`plan_item_context_links`와 `execution_item_context_links`는 다음 연결 유형을 사용한다.
 
 ```text
-ai_suggestion_id
+RATIONALE / CONSTRAINT / SOURCE / RELATED
+```
+
+이 연결이 있어야 “왜 이 실행 조각이 생겼는가”를 화면에서 추적할 수 있다.
+
+`valid_from <= valid_to`를 보장한다. `supersedes_context_item_id`는 같은 사용자의 ContextItem만 가리킬 수 있고 자기 자신을 가리키면 안 된다. `WITHDRAWN` 항목은 `withdrawn_at`을 가져야 하며 다음 계획 생성에서 제외한다.
+
+2026-08-03 마이그레이션 SQL 초안이 `DECISION/INSIGHT`, 유효 기간, 교체·철회 필드를 아직 포함하지 않는다면 Context API 구현 전에 DDL을 이 목표 계약으로 보완한다. 제품의 핵심인 결정·제약 기억을 `OBSERVATION` 하나로 뭉개지 않는다.
+
+## 7. execution_items
+
+Todo와 ScheduleBlock의 최종 통합 원본이다.
+
+```text
+execution_item_id
 user_id
-suggestion_type
-content JSON
-status
-created_item_type nullable
-created_item_id nullable
+plan_item_id nullable
+source_execution_item_id nullable
+title
+description
+placement_type          UNSCHEDULED / DATE_ONLY / TIME_FIXED
+scheduled_date nullable
+scheduled_start_at nullable
+scheduled_end_at nullable
+expected_minutes nullable
+status                  PLANNED / PARTIAL / HOLD / DONE / CANCELLED
+priority                MUST / SHOULD / OPTIONAL
+order_index
+routine_id nullable
+origin_type
+modified_after_creation
+version
+is_deleted
 created_at
-responded_at nullable
-
-INDEX(user_id, status)
-INDEX(user_id, created_at)
+updated_at
 ```
 
-status는 다음 값을 사용한다.
+배치 조건:
+
+| placement_type | scheduled_date | start/end |
+| --- | --- | --- |
+| UNSCHEDULED | NULL | 둘 다 NULL |
+| DATE_ONLY | NOT NULL | 둘 다 NULL |
+| TIME_FIXED | NOT NULL | 둘 다 NOT NULL |
+
+TIME_FIXED는 `scheduled_start_at < scheduled_end_at`이고 `DATE(scheduled_start_at) = scheduled_date`여야 한다.
+
+`source_execution_item_id`는 부분 수행 후 남은 조각이나 분할된 항목의 출처를 추적한다. 자기 자신을 가리키는지는 MariaDB 10.4의 AUTO_INCREMENT/CHECK 제약 때문에 애플리케이션 검증과 사후 검증 쿼리로 보장한다.
+
+## 8. execution_records
 
 ```text
-PROPOSED
-APPLIED
-MODIFIED_APPLIED
-DISMISSED
-EXPIRED
+execution_record_id
+user_id
+execution_item_id
+outcome                 COMPLETED / PARTIAL / NOT_DONE
+started_at nullable
+ended_at nullable
+actual_minutes nullable
+completion_percent
+note nullable
+remaining_execution_item_id nullable
+recorded_at
+created_at
 ```
 
-## 10. Todo 설계 메모
+무결성:
 
-Todo는 기존 구현 흐름을 유지하되, 아직 날짜가 확정되지 않은 실행 후보 대기열로 본다. 나중에 Today로 가져오면 ScheduleBlock이 생성될 수 있다. 1차-A 사용자 화면에서는 Todo를 노출하지 않지만 기존 Todo 백엔드와 테이블은 삭제하지 않는다.
+- COMPLETED는 100%
+- PARTIAL은 1~99%이고 remainingExecutionItemId 필수
+- NOT_DONE은 0%
+- actualMinutes를 모르면 NULL
+- 시작·종료가 모두 있으면 시작 <= 종료
 
-주요 조회 인덱스는 날짜별 조회와 상태별 조회를 우선한다.
+## 9. execution_item_events
 
 ```text
-INDEX(user_id, is_deleted, todo_date)
-INDEX(user_id, is_deleted, status)
-INDEX(routine_id)
+execution_item_event_id
+user_id
+execution_item_id
+related_execution_item_id nullable
+event_type
+reason nullable
+before_state JSON nullable
+after_state JSON nullable
+before_version nullable
+after_version nullable
+actor_type              USER / AI / SYSTEM / MIGRATION / UNKNOWN
+occurred_at
+created_at
 ```
 
-## 11. Enum
+Event 유형:
 
 ```text
-DailyPlanViewMode
-- TIME_TABLE
-- CHECKLIST
-
-ViewModeSource
-- USER_DEFAULT
-- USER_SELECTED
-
-DailyPlanIntensity
-- LIGHT
-- NORMAL
-- FOCUSED
-
-ScheduleBlockType
-- TIME_FIXED
-- TASK
-
-SchedulePriority
-- MUST
-- SHOULD
-- OPTIONAL
-
-ScheduleStatus
-- PLANNED
-- DONE
-- HOLD
-- CANCELLED
-
-PlanItemEventType
-- CREATED
-- DONE
-- MOVED
-- REDUCED
-- HOLD
-- REOPENED
-- RESUMED
-- DELETED
-
-QuickLogType
-- EMOTION
-- SLEEP
-
-OriginType
-- MANUAL
-- AI_GENERATED
-- AI_SUGGESTED
-- ROUTINE_GENERATED
-
-SuggestionStatus
-- PROPOSED
-- APPLIED
-- MODIFIED_APPLIED
-- DISMISSED
-- EXPIRED
-
-PlanDepth
-- TODAY_ONLY
-- TODAY_AND_TOMORROW
-- WEEKLY
-- MONTHLY
-- YEARLY
-- LONG_TERM
+CREATED / MOVED / REDUCED / SPLIT / HOLD / RESUMED
+REOPENED / CANCELLED / PRIORITY_CHANGED / DELETED
 ```
 
-## 12. 장기 확장 참고
+완료·부분 수행·미수행은 Event만으로 표현하지 않고 ExecutionRecord로 남긴다.
 
-구버전의 goals/plans 중심 설계는 장기 확장 참고 수준으로만 둔다.
+## 10. ai_conversations / ai_messages / ai_proposals / ai_proposal_items
 
-MVP에서는 다음 테이블을 만들지 않는다.
+2026-08-05부터 AI 패널은 1회성 제안 생성기가 아니라 실제 다회차 상담이다. `ai_conversations`/`ai_messages`가
+대화와 메시지를 저장하고, Proposal은 대화 중 사용자가 명시적으로 요청하거나 OFFER에 동의했을 때만 만들어지는
+승인 전 초안으로 남는다. DDL은 `docs/sql/2026-08-05-ai-consultation-conversations.sql` 참고 (Flyway/Liquibase
+미도입 — 기존 `docs/sql/*.sql` 날짜 파일 컨벤션을 따라 수동 적용한다).
 
 ```text
-monthly_plans
-yearly_plans
-life_goals
-behavior_patterns
+ai_conversations
+- conversation_id, user_id
+- scope                  PLAN / TODAY / EXECUTION / CONTEXT / MIXED
+- status                 ACTIVE / ARCHIVED
+- summary nullable       (오래된 메시지 요약. 이번 버전은 생성 로직 없이 컬럼만 둔다)
+- created_at, updated_at
+
+ai_messages
+- message_id, conversation_id, user_id
+- role                   USER / ASSISTANT
+- content
+- response_type nullable CHAT / OFFER / PROPOSAL (ASSISTANT만 값을 가진다)
+- proposal_id nullable   (해당 턴이 PROPOSAL을 만들었으면 그 proposal_id)
+- idempotency_key nullable  (user_id + idempotency_key UNIQUE — 동일 전송 중복 AI 호출 차단)
+- status                 COMPLETED / FAILED
+- created_at
+
+ai_proposals
+- proposal_id, user_id, conversation_id nullable, source_message_id nullable
+- target_scope           PLAN / TODAY / EXECUTION / CONTEXT / MIXED
+- status
+- created_at, expires_at, responded_at
+
+ai_proposal_items
+- proposal_item_id, proposal_id, user_id
+- item_type              PLAN_ITEM / EXECUTION_ITEM / CONTEXT_ITEM
+- original_payload JSON  (title/description/expectedMinutes/priority/targetDate/
+                          placementType/scheduledStartAt/scheduledEndAt)
+- edited_payload JSON nullable
+- target_item_id nullable
+- base_version nullable
+- status
+- created_item_type / created_item_id nullable
+- created_at, responded_at
 ```
+
+`source_message_id`는 이 Proposal을 만들게 한 사용자 메시지를 가리킨다. AI 생성이나 파싱이 실패해도
+사용자 메시지(`ai_messages`)는 항상 먼저 저장되어 있으므로 원문이 사라지지 않는다.
+
+상태:
+
+```text
+ai_proposals / ai_proposal_items: PROPOSED / APPLIED / MODIFIED_APPLIED / DISMISSED / EXPIRED
+```
+
+## 10.5 ai_proposals.unavailable_windows / ai_proposal_schedule_previews
+
+2026-08-06부터 7일 범위 일정 후보 배치(Timefold)를 지원한다. DDL은
+`docs/sql/2026-08-06-scheduling-preview.sql` 참고.
+
+`ai_proposals`에 `unavailable_windows JSON NULL` 컬럼을 추가했다. 이 제안을 만든 대화에서
+사용자가 명시한 사용 불가 시간(예: "화요일 저녁은 알바")을 원본 그대로 보존한다 —
+AI_INFERRED 성격이며 별도 확정 저장소(ContextItem)가 아직 없어 이 제안 범위 안에서만
+재사용한다.
+
+```text
+ai_proposal_schedule_previews
+- schedule_preview_id, proposal_id(UNIQUE), user_id
+- horizon_start, horizon_end
+- availability_windows JSON   (계산 당시 화면에 보여준 가용시간 요약: 출처·신뢰도·이유)
+- user_overrides JSON nullable (사용자가 이 계산에 반영한 예외)
+- placed_items JSON            (배치된 제안 항목)
+- unplaced_items JSON          (배치하지 못한 제안 항목과 사유)
+- computed_at, created_at, updated_at
+```
+
+Proposal 하나당 미리보기는 최신 계산 결과 하나만 보존한다(재계산은 upsert) — 이 표는 승인
+전까지 공식 `execution_items`가 아니며, 새로고침 후 미리보기를 복원하는 용도로만 쓴다.
+
+## 11. version과 동시 수정 방지
+
+PlanItem, ContextItem, ExecutionItem은 version을 가진다. 기존 항목을 수정하는 AI 제안은 생성 당시 version을 baseVersion으로 저장한다.
+
+```sql
+UPDATE execution_items
+SET title = ?,
+    version = version + 1,
+    updated_at = CURRENT_TIMESTAMP
+WHERE execution_item_id = ?
+  AND user_id = ?
+  AND version = ?;
+```
+
+수정된 행이 0개면 오래된 제안이므로 `409 Conflict`로 처리한다.
+
+## 12. 트랜잭션 경계
+
+- 완료: COMPLETED Record 생성 + Item DONE
+- 부분 수행: PARTIAL Record + 남은 Item + SPLIT Event
+- 이동: Item 날짜·시간 변경 + MOVED Event
+- 축소: Item 변경 + REDUCED Event
+- 보류·재개·취소: 상태 변경 + 대응 Event
+- 삭제: soft delete + DELETED Event
+- AI 적용: version 확인 + 공식 데이터 변경 + 제안 상태 변경
+
+각 묶음은 하나의 트랜잭션으로 처리한다.
+
+## 13. 레거시 변환 규칙
+
+| 기존 | 신규 |
+| --- | --- |
+| `todos.todo_date` | `execution_items.scheduled_date` |
+| `schedule_blocks.block_date` | `scheduled_date` |
+| Todo / TASK | `DATE_ONLY` |
+| TIME_FIXED | `TIME_FIXED` |
+| `start_time/end_time` | `scheduled_start_at/end_at` |
+| Todo `HIGH/MEDIUM/LOW` | `MUST/SHOULD/OPTIONAL` |
+| `plan_item_events` 조정 사건 | `execution_item_events` |
+| DONE와 completed_at | `execution_records` 생성 근거 |
+| `daily_plans` | `daily_states` |
+
+기존 완료 데이터에 실제 시간이 없으면 다음처럼 남긴다.
+
+```text
+outcome = COMPLETED
+actual_minutes = NULL
+note = 기존 완료 데이터 이전: 실제 수행 시간 미확인
+```
+
+## 14. 이상 데이터 보정
+
+마이그레이션은 레거시 원본을 수정하지 않고 신규 값만 보정하며 `migration_data_adjustments`에 근거를 남긴다.
+
+- TIME_FIXED 날짜 불일치: start_time의 날짜를 scheduled_date로 사용
+- 시간 누락·역전: DATE_ONLY로 낮추고 원래 block_date 유지
+- 빈 제목: 원본 ID가 포함된 임시 제목
+- 알 수 없는 상태·우선순위: PLANNED / SHOULD
+- 대상이 완전히 사라진 이벤트: 건너뛰고 보정 내역 기록
+- Todo와 ScheduleBlock이 겹침: 연결된 첫 블록에 합치고 추가 블록은 별도 실행 조각으로 보존
+
+## 15. 안전한 전환 순서
+
+1. 실제 DB 전체 백업
+2. 애플리케이션 쓰기 중지
+3. 신규 테이블 생성
+4. 레거시 데이터 복사와 ID 매핑
+5. 보정 내역과 건수·무결성 검증
+6. MyBatis 조회·수정 코드를 신규 테이블 기준으로 변경
+7. 레거시 쓰기 중단
+8. 일정 기간 레거시 테이블 보관
+
+신규 구조와 레거시 구조에 동시에 저장하지 않는다.
+
+## 16. 보안
+
+- 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.
+- 저장소에는 스키마와 가짜 테스트 데이터만 둔다.
+- 평문 또는 BCrypt가 아닌 비밀번호 데이터는 삭제하거나 재설정한다.
+- 모든 FK 연결과 조회는 같은 userId 범위인지 확인한다.

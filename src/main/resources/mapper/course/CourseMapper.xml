@@ -1,0 +1,119 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.CourseMapper">
+
+    <resultMap id="courseResultMap" type="com.jungwoo.project.memo.course.domain.Course">
+        <id     property="courseId"          column="course_id"/>
+        <result property="userId"            column="user_id"/>
+        <result property="title"             column="title"/>
+        <result property="groupLabel"        column="group_label"/>
+        <result property="textbookTitle"     column="textbook_title"/>
+        <result property="textbookAuthor"    column="textbook_author"/>
+        <result property="textbookPublisher" column="textbook_publisher"/>
+        <result property="textbookIsbn"      column="textbook_isbn"/>
+        <result property="status"            column="status"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="updatedAt"         column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="courseId">
+        INSERT INTO courses (
+            user_id, title, group_label, textbook_title, textbook_author, textbook_publisher, textbook_isbn, status
+        ) VALUES (
+            #{userId}, #{title}, #{groupLabel}, #{textbookTitle}, #{textbookAuthor}, #{textbookPublisher},
+            #{textbookIsbn}, #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByUserIdAndStatus" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE user_id = #{userId} AND status = #{status} ORDER BY created_at DESC
+    </select>
+
+    <select id="findByIdsAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses
+        WHERE user_id = #{userId}
+        AND course_id IN
+        <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      프로젝트 카드 요약. topic 트리 전체를 가져와 프론트에서 세지 않도록 서버가 한 번에
+      계산한다. 진행 중 주제는 order_index가 가장 앞선 것 하나만 고른다.
+    -->
+    <select id="findSummaryCounts" resultType="com.jungwoo.project.memo.course.dto.CourseSummaryCounts">
+        SELECT
+            c.course_id AS courseId,
+            (SELECT COUNT(*) FROM course_topics t
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE') AS topicCount,
+            (SELECT COUNT(*) FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'LEARNED') AS learnedTopicCount,
+            (SELECT t.title FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'IN_PROGRESS'
+              ORDER BY t.order_index ASC, t.topic_id ASC
+              LIMIT 1) AS currentTopicTitle
+        FROM courses c
+        WHERE c.user_id = #{userId}
+        <if test="courseId != null">
+            AND c.course_id = #{courseId}
+        </if>
+    </select>
+
+    <!--
+      AI 분석 적용 경로. 비어 있는 칸만 채운다.
+
+      COALESCE의 인자 순서가 핵심이다. 기존 값을 먼저 놓으면 "이미 있는 값은 건드리지
+      않는다"가 된다 — 자료 분석은 한 프로젝트에서 여러 번 일어나는데(강의계획서 한 번,
+      나중에 교수 자료로 또 한 번), 그때마다 덮어쓰면 사용자가 고쳐 놓은 값이 조용히
+      되돌아간다. DB는 그 값이 사람이 고친 것인지 AI가 넣은 것인지 구분할 수 없으므로,
+      한 번 채워진 칸은 사람 것으로 보고 손대지 않는다.
+
+      AI가 더 나은 값을 찾아도 반영되지 않는다는 뜻이지만, 사용자가 프로젝트 화면에서
+      직접 고칠 수 있으므로(updateTextbookByUser) 그쪽이 낫다. 사람이 고친 것을 말없이
+      뒤집는 쪽이 훨씬 비싸다.
+    -->
+    <update id="updateTextbookInfo">
+        UPDATE courses
+        SET textbook_title     = COALESCE(textbook_title, #{textbookTitle}),
+            textbook_author    = COALESCE(textbook_author, #{textbookAuthor}),
+            textbook_publisher = COALESCE(textbook_publisher, #{textbookPublisher}),
+            textbook_isbn      = COALESCE(textbook_isbn, #{textbookIsbn})
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      사용자 편집 경로. 받은 값을 그대로 쓴다 — 비우면 비워진다.
+
+      위와 반대인 것이 의도다. 사람이 화면에서 지운 것은 "모른다"는 뜻이고, 그걸
+      COALESCE로 되살리면 지울 방법이 없어진다. group_label을 다루는 방식과 같다.
+    -->
+    <update id="updateTextbookByUser">
+        UPDATE courses
+        SET textbook_title     = #{textbookTitle},
+            textbook_author    = #{textbookAuthor},
+            textbook_publisher = #{textbookPublisher},
+            textbook_isbn      = #{textbookIsbn}
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateBasics">
+        UPDATE courses
+        SET title       = COALESCE(#{title}, title),
+            group_label = #{groupLabel}
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE courses SET status = #{status} WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+</mapper>

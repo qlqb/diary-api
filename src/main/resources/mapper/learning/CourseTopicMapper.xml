@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.CourseTopicMapper">
+
+    <resultMap id="courseTopicResultMap" type="com.jungwoo.project.memo.learning.domain.CourseTopic">
+        <id     property="topicId"         column="topic_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="courseId"        column="course_id"/>
+        <result property="parentTopicId"   column="parent_topic_id"/>
+        <result property="title"           column="title"/>
+        <result property="orderIndex"      column="order_index"/>
+        <result property="sourceType"      column="source_type"/>
+        <result property="sourceMaterialId" column="source_material_id"/>
+        <result property="sourceLocator"   column="source_locator"/>
+        <result property="status"          column="status"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="updatedAt"       column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="topicId">
+        INSERT INTO course_topics (
+            user_id, course_id, parent_topic_id, title, order_index,
+            source_type, source_material_id, source_locator, status
+        ) VALUES (
+            #{userId}, #{courseId}, #{parentTopicId}, #{title}, #{orderIndex},
+            #{sourceType}, #{sourceMaterialId}, #{sourceLocator}, #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseTopicResultMap">
+        SELECT * FROM course_topics WHERE topic_id = #{topicId} AND user_id = #{userId}
+    </select>
+
+    <select id="findActiveByCourseIdAndUserId" resultMap="courseTopicResultMap">
+        SELECT * FROM course_topics
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY order_index ASC, topic_id ASC
+    </select>
+
+    <select id="findActiveByIds" resultMap="courseTopicResultMap">
+        SELECT * FROM course_topics
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND topic_id IN
+        <foreach collection="topicIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      ARCHIVED까지 포함해서 센다. 보관된 항목도 order_index를 점유하고 있어서, 그걸 빼고
+      세면 새 루트가 기존 번호와 겹친다.
+    -->
+    <select id="findMaxRootOrderIndex" resultType="java.lang.Integer">
+        SELECT MAX(order_index) FROM course_topics
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND parent_topic_id IS NULL
+    </select>
+
+</mapper>

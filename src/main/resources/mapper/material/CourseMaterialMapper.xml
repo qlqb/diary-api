@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.CourseMaterialMapper">
+
+    <resultMap id="courseMaterialResultMap" type="com.jungwoo.project.memo.material.domain.CourseMaterial">
+        <id     property="materialId"       column="material_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="storedFilename"   column="stored_filename"/>
+        <result property="storagePath"      column="storage_path"/>
+        <result property="contentType"      column="content_type"/>
+        <result property="sizeBytes"        column="size_bytes"/>
+        <result property="fileHash"         column="file_hash"/>
+        <result property="extractionStatus" column="extraction_status"/>
+        <result property="extractedText"    column="extracted_text"/>
+        <result property="extractionError"  column="extraction_error"/>
+        <result property="status"           column="status"/>
+        <result property="createdAt"        column="created_at"/>
+        <result property="updatedAt"        column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
+        INSERT INTO course_materials (
+            user_id, original_filename, stored_filename, storage_path,
+            content_type, size_bytes, file_hash, extraction_status, extracted_text, extraction_error
+        ) VALUES (
+            #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
+            #{contentType}, #{sizeBytes}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </select>
+
+    <select id="findByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      §4 호환: statement id와 시그니처(courseId, userId)는 그대로 둔다 — 단계 3의 "기존 API
+      겉보기 무변화" 게이트가 이 이름에 걸려 있다. 내부만 course_id 직접 참조에서
+      material_links JOIN으로 바뀐다.
+    -->
+    <select id="findByCourseIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        JOIN material_links l ON l.material_id = cm.material_id AND l.course_id = #{courseId}
+        WHERE cm.user_id = #{userId} AND cm.status = 'ACTIVE'
+        ORDER BY cm.created_at DESC
+    </select>
+
+    <select id="findAllByUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+    </select>
+
+    <!--
+      연결 제안 apply의 사전 검증용 잠금. 이 잠금이 지키는 불변식은 "같은 자료로 중복
+      프로젝트를 만들지 않는다"이지 "자료당 링크 1개"가 아니다 — 자료와 프로젝트는 N:M이고
+      여러 링크는 정상이다.
+
+      ORDER BY를 FOR UPDATE와 함께 두는 이유는 잠금 획득 순서를 materialId 오름차순으로
+      고정하기 위해서다. 두 요청이 서로 다른 순서로 같은 행들을 잠그면 데드락이 난다.
+    -->
+    <select id="lockActiveByIdsAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id
+        FOR UPDATE
+    </select>
+
+    <update id="markDeleted">
+        UPDATE course_materials
+        SET status = 'DELETED', extracted_text = NULL
+        WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+</mapper>

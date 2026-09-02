@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  plan_versions는 INSERT와 SELECT만 있다. update/delete가 없는 것은 누락이 아니라 설계다
+  (PlanVersionMapper 주석 참고).
+-->
+<mapper namespace="com.jungwoo.project.memo.plan.PlanVersionMapper">
+
+    <resultMap id="planVersionResultMap" type="com.jungwoo.project.memo.plan.domain.PlanVersion">
+        <id     property="planVersionId"    column="plan_version_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="planKey"          column="plan_key"/>
+        <result property="version"          column="version"/>
+        <result property="startDate"        column="start_date"/>
+        <result property="endDate"          column="end_date"/>
+        <result property="title"            column="title"/>
+        <result property="goalSummary"      column="goal_summary"/>
+        <result property="intensity"        column="intensity"/>
+        <result property="targetMinutes"    column="target_minutes"/>
+        <result property="itemsSnapshot"    column="items_snapshot"/>
+        <result property="sourceProposalId" column="source_proposal_id"/>
+        <result property="confirmedAt"      column="confirmed_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="planVersionId">
+        INSERT INTO plan_versions (
+            user_id,
+            plan_key,
+            version,
+            start_date,
+            end_date,
+            title,
+            goal_summary,
+            intensity,
+            target_minutes,
+            items_snapshot,
+            source_proposal_id
+        ) VALUES (
+            #{userId},
+            #{planKey},
+            #{version},
+            #{startDate},
+            #{endDate},
+            #{title},
+            #{goalSummary},
+            #{intensity},
+            #{targetMinutes},
+            #{itemsSnapshot},
+            #{sourceProposalId}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="planVersionResultMap">
+        SELECT *
+        FROM plan_versions
+        WHERE plan_version_id = #{planVersionId}
+          AND user_id         = #{userId}
+    </select>
+
+    <!--
+      그 날짜를 포함하는 계획 목록.
+
+      정렬: 기간이 짧은 순 → 같으면 최근 확정 순 → 같으면 id 역순.
+      마지막 id 조건은 동률일 때 순서가 흔들리지 않게 하는 것뿐이다. 확정 시각이 같은
+      두 계획이 호출할 때마다 다른 순서로 나오면 화면의 "대표 계획"이 깜빡인다.
+
+      DATEDIFF는 인덱스를 못 타지만 한 사용자의 특정 날짜를 덮는 계획은 많아야 서너 개다.
+      먼저 (user_id, start_date) 인덱스로 후보를 좁힌 뒤 그 위에서만 정렬한다.
+    -->
+    <select id="findCoveringDate" resultMap="planVersionResultMap">
+        SELECT *
+        FROM plan_versions
+        WHERE user_id = #{userId}
+          AND start_date &lt;= #{date}
+          AND end_date   &gt;= #{date}
+        ORDER BY DATEDIFF(end_date, start_date) ASC,
+                 confirmed_at DESC,
+                 plan_version_id DESC
+    </select>
+
+    <!--
+      강도 기본값 승계용(11-period-plan.md §5-1-2). 가장 최근 확정한 계획 한 건.
+      사용자 설정 테이블을 따로 만들지 않고 여기서 읽는다 — 사용자가 강도를 바꾸면
+      그것이 자동으로 다음 기본값이 되므로 설정을 고치러 갈 일이 없다.
+    -->
+    <select id="findLatestConfirmed" resultMap="planVersionResultMap">
+        SELECT *
+        FROM plan_versions
+        WHERE user_id = #{userId}
+        ORDER BY confirmed_at DESC, plan_version_id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findByPlanKeyAndUserId" resultMap="planVersionResultMap">
+        SELECT *
+        FROM plan_versions
+        WHERE plan_key = #{planKey}
+          AND user_id  = #{userId}
+        ORDER BY version DESC
+    </select>
+
+</mapper>

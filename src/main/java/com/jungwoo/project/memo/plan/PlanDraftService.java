@@ -1,0 +1,516 @@
+package com.jungwoo.project.memo.plan;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jungwoo.project.memo.ai.AiConsultationClient;
+import com.jungwoo.project.memo.ai.AiProposalService;
+import com.jungwoo.project.memo.ai.AiProposalMapper;
+import com.jungwoo.project.memo.ai.AiStreamParser;
+import com.jungwoo.project.memo.ai.AiUsageLimitService;
+import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
+import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
+import com.jungwoo.project.memo.ai.dto.ProposalItem;
+import com.jungwoo.project.memo.ai.AiChatResponseUtils;
+import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
+import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.CourseNoteMapper;
+import com.jungwoo.project.memo.course.domain.CourseNoteCategory;
+import com.jungwoo.project.memo.learning.TopicService;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
+import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
+import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
+import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
+import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
+import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
+import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * 기간 계획 초안 생성. 기존 PlanningAgentService.createDraft와 별개 경로다 — 그쪽은
+ * recommendationId가 필수라 여러 프로젝트를 아우를 수 없고, 기존 동작을 건드리지 않는다.
+ *
+ * 이 서비스는 execution_items도 plan_versions도 만들지 않는다. ai_proposals만 만들고,
+ * 실제 데이터는 사용자가 확정(PlanConfirmService)해야 생긴다.
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PlanDraftService {
+
+    private static final int MAX_PLAN_DAYS = 31;
+
+    /** 개수는 주 제약이 아니다(§5-1-1). "확실히 뭔가 잘못됐다"는 폭주 방지선으로만 둔다. */
+    private static final int MAX_ITEMS_SHORT = 15;
+    private static final int MAX_ITEMS_LONG = 30;
+    private static final int SHORT_PLAN_DAYS = 7;
+
+    /** AiProposalService가 강제하는 항목별 시간 범위. 프롬프트에도 같은 값을 알려준다. */
+    /**
+     * 프로젝트당 학습 항목 줄 수 상한.
+     *
+     * 계획은 프로젝트를 고르지 않으면 ACTIVE 전체를 대상으로 한다. 상한이 없으면 과목이
+     * 늘수록 프롬프트가 그대로 커진다. 30줄이면 한 과목의 주차별 진도를 담기에 넉넉하고,
+     * 넘치면 뒤쪽은 접고 개수만 알린다 — 뒤쪽 주차는 어차피 지금 계획할 범위가 아니다.
+     */
+    private static final int MAX_TOPIC_LINES_PER_COURSE = 30;
+
+    /** 일정·평가 줄 수 상한. 개강일·시험·평가 비율이면 충분하다. */
+    private static final int MAX_SCHEDULE_LINES_PER_COURSE = 8;
+
+    private static final int MIN_ITEM_MINUTES = 5;
+    private static final int MAX_ITEM_MINUTES = 120;
+
+    private static final String FEATURE = "PLAN_DRAFT";
+
+    private final AiConsultationClient aiConsultationClient;
+    private final AiProposalService aiProposalService;
+    private final AiProposalMapper aiProposalMapper;
+    private final AiUsageLimitService aiUsageLimitService;
+    private final PlanVersionService planVersionService;
+    private final PlanReviewService planReviewService;
+    private final CourseMapper courseMapper;
+    private final TopicService topicService;
+    private final CourseNoteMapper courseNoteMapper;
+    private final CourseMaterialAnalysisMapper analysisMapper;
+    private final ExecutionItemMapper executionItemMapper;
+    private final Clock clock;
+    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+
+    @Value("${ai.planning.max-completion-tokens:2000}")
+    private int maxCompletionTokens = 2000;
+
+    @Value("${ai.request.timeout-seconds:90}")
+    private int requestTimeoutSeconds = 90;
+
+    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
+    private String modelName = "gpt-5-mini";
+
+    @Value("${ai.context.default-time-zone:Asia/Seoul}")
+    private String defaultTimeZoneId = "Asia/Seoul";
+
+    @Transactional
+    public PlanDraftResponse createDraft(Long userId, PlanDraftRequest request) {
+        LocalDate start = request.getStartDate();
+        LocalDate end = request.getEndDate();
+        if (start == null || end == null || end.isBefore(start)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        int days = (int) ChronoUnit.DAYS.between(start, end) + 1;
+        if (days > MAX_PLAN_DAYS) {
+            // 31일을 넘으면 계획이 아니라 목표에 가깝다. 그건 이 기능이 다룰 대상이 아니다.
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        if (!aiConsultationClient.isConfigured()) {
+            throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
+        }
+
+        PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
+        int baseline = intensity.baselineMinutes(days);
+        int maxItems = days <= SHORT_PLAN_DAYS ? MAX_ITEMS_SHORT : MAX_ITEMS_LONG;
+
+        PlanDraftAiResult ai = callAi(userId, request, start, end, days, intensity, baseline, maxItems);
+
+        // 모델이 목표를 빼먹거나 말이 안 되는 값을 주면 기준선으로 되돌린다. 조정 권한을
+        // 주는 것과 출력을 그대로 믿는 것은 다르다.
+        Integer aiTarget = ai.targetMinutes();
+        boolean adjusted = aiTarget != null && aiTarget > 0 && aiTarget != baseline;
+        int targetMinutes = adjusted ? aiTarget : baseline;
+        String reason = adjusted ? blankToNull(ai.targetMinutesReason()) : null;
+
+        List<ProposalItem> items = toProposalItems(ai, start, end, resolveCourses(userId, request.getCourseIds()));
+        if (items.isEmpty()) {
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+
+        AiProposalResponse proposal = aiProposalService.createFromItems(
+                userId, null, null, items, List.of(), start, List.of(), maxItems);
+
+        aiProposalMapper.updatePlanMetadata(
+                proposal.getProposalId(), userId, start, end, intensity, targetMinutes);
+
+        log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, "
+                        + "baseline={}분, target={}분, 조정={}, 항목={}개",
+                userId, proposal.getProposalId(), start, end, days, intensity,
+                baseline, targetMinutes, adjusted, items.size());
+
+        return PlanDraftResponse.builder()
+                .proposalId(proposal.getProposalId())
+                .startDate(start)
+                .endDate(end)
+                .days(days)
+                .intensity(intensity)
+                .baselineMinutes(baseline)
+                .targetMinutes(targetMinutes)
+                .targetMinutesReason(reason)
+                .suggestedTitle(blankToNull(ai.title()) != null ? ai.title() : defaultTitle(start, end))
+                .goalSummary(blankToNull(ai.goalSummary()))
+                .proposal(proposal)
+                .build();
+    }
+
+    // ===== AI 호출 =====
+
+    private static final String SYSTEM_PROMPT = """
+            너는 사용자의 기간 학습 계획 초안을 만드는 조수다.
+
+            응답 형식: 자연어 한두 문장 + "%s" + 구조화 JSON.
+
+            구조화 JSON:
+            {
+              "title": "계획 제목 (짧게)",
+              "goalSummary": "이 기간에 무엇을 이루려는지 한 문장 (없으면 null)",
+              "targetMinutes": 정수,
+              "targetMinutesReason": "기준선을 조정했을 때만 한 문장, 조정 안 했으면 null",
+              "items": [
+                {
+                  "title": "한 번에 앉아서 할 만한 단위의 할 일",
+                  "description": "필요하면 한 문장, 아니면 null",
+                  "expectedMinutes": 정수,
+                  "priority": "MUST" | "SHOULD" | "OPTIONAL",
+                  "courseId": 정수 또는 null,
+                  "scheduledDate": "YYYY-MM-DD" 또는 null,
+                  "reason": "왜 이걸 지금 하는지 한 문장"
+                }
+              ]
+            }
+
+            규칙:
+            - courseId는 [대상 프로젝트]에 실린 id만 쓴다. 해당 없으면 null.
+            - scheduledDate는 "반드시 그날 해야 하는" 항목에만 넣는다(마감·수업 연동 등).
+              대부분은 null로 두어라 — 날짜는 나중에 사용자가 주 단위로 배치한다.
+            - expectedMinutes는 %d~%d 사이여야 한다. 벗어나면 그 항목은 버려진다.
+            - 사용자를 탓하거나 뒤처졌다는 식으로 쓰지 마라. 못 한 것은 "아직 시작하지
+              않았어요" 정도로만 다룬다.
+            """.formatted(AiStreamParser.DELIMITER, MIN_ITEM_MINUTES, MAX_ITEM_MINUTES);
+
+    private PlanDraftAiResult callAi(
+            Long userId, PlanDraftRequest request, LocalDate start, LocalDate end,
+            int days, PlanIntensity intensity, int baseline, int maxItems
+    ) {
+        String userPrompt = buildUserPrompt(userId, request, start, end, days, intensity, baseline, maxItems);
+        AiStreamParser parser = new AiStreamParser();
+        AtomicReference<Usage> lastUsage = new AtomicReference<>();
+        try {
+            aiConsultationClient.streamTurn(SYSTEM_PROMPT, userPrompt, maxCompletionTokens)
+                    .timeout(Duration.ofSeconds(requestTimeoutSeconds))
+                    .doOnNext(chatResponse -> {
+                        parser.onChunk(AiChatResponseUtils.extractText(chatResponse));
+                        Usage usage = AiChatResponseUtils.extractUsage(chatResponse);
+                        if (usage != null) {
+                            lastUsage.set(usage);
+                        }
+                    })
+                    .blockLast();
+        } catch (Exception e) {
+            recordUsage(userId, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
+            log.warn("계획 초안 생성 AI 호출 실패: userId={}", userId, e);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        recordUsage(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null);
+
+        AiStreamParser.Result result = parser.finish();
+        if (result.structuredJson() == null) {
+            log.warn("계획 초안 생성: 구조화 JSON이 없음. userId={}", userId);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        try {
+            return objectMapper.readValue(result.structuredJson(), PlanDraftAiResult.class);
+        } catch (Exception e) {
+            log.warn("계획 초안 생성: 구조화 JSON 파싱 실패. userId={}", userId, e);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+    }
+
+    private String buildUserPrompt(
+            Long userId, PlanDraftRequest request, LocalDate start, LocalDate end,
+            int days, PlanIntensity intensity, int baseline, int maxItems
+    ) {
+        StringBuilder sb = new StringBuilder();
+        LocalDate today = ZonedDateTime.now(clock).withZoneSameInstant(ZoneId.of(defaultTimeZoneId)).toLocalDate();
+
+        sb.append("[기간]\n")
+                .append(start).append(" ~ ").append(end)
+                .append(" (").append(days).append("일, 오늘은 ").append(today).append(")\n\n");
+
+        // ★ 기준선으로 제시한다. 고정값이 아니다 — 프리셋 숫자에 실사용 근거가 없으므로
+        //   상황을 더 많이 아는 모델에게 조정 권한을 준다.
+        sb.append("[시간]\n")
+                .append("이 기간의 기준 학습 시간은 약 ").append(baseline).append("분이다. ")
+                .append("사용자 상황(아래 지시, 고정 일정, 직전 회고)상 조정이 필요하면 조정하고 ")
+                .append("이유를 한 문장으로 밝혀라. 항목들의 예상 시간 합이 최종 목표 근처가 되게 하되 ")
+                .append("넘기지 마라. 항목을 잘게 쪼개 개수를 늘리지 마라. 채울 내용이 없으면 ")
+                .append("억지로 채우지 말고 적게 제안하라. 항목은 최대 ").append(maxItems).append("개다.\n\n");
+
+        /*
+          학습 항목과 일정을 줘도 어디까지가 "지금"인지는 따로 말해주지 않으면 모른다.
+          실험에서 이 지시가 없으면 한참 뒤 주차 내용까지 당겨왔다.
+        */
+        sb.append("[진도 기준]\n")
+                .append("프로젝트에 학습 항목이 실려 있으면 그 안에서 고른다. 항목 옆 괄호는 ")
+                .append("자료에서 확인한 위치다. 일정에 개강일이 있으면 오늘 날짜와 대조해 지금이 ")
+                .append("몇 주차인지 계산하고, 이번 주와 다음 주 진도에 집중하라. 한참 뒤 주차 ")
+                .append("내용을 당겨오지 마라. 학습 항목에 없는 것을 지어내지 마라 — 교재의 장 ")
+                .append("번호나 쪽수처럼 자료에 없는 값은 쓰지 않는다.\n\n");
+
+        List<Course> courses = resolveCourses(userId, request.getCourseIds());
+        sb.append("[대상 프로젝트]\n");
+        if (courses.isEmpty()) {
+            sb.append("(없음 — 프로젝트에 묶이지 않는 할 일만 제안해도 된다)\n");
+        }
+        for (Course course : courses) {
+            appendCourseContext(sb, userId, course);
+        }
+
+        List<ExecutionItem> existing =
+                executionItemMapper.findByUserIdAndPlanningRange(userId, start, end);
+        sb.append("[이 기간에 이미 있는 일정]\n");
+        if (existing.isEmpty()) {
+            sb.append("(없음)\n");
+        }
+        for (ExecutionItem item : existing) {
+            sb.append("- ").append(item.getTitle());
+            if (item.getPlacementType() == PlacementType.TIME_FIXED) {
+                sb.append(" · ").append(item.getScheduledStartAt()).append(" (고정)");
+            } else if (item.getScheduledDate() != null) {
+                sb.append(" · ").append(item.getScheduledDate());
+            } else {
+                sb.append(" · 날짜 미정");
+            }
+            if (item.getExpectedMinutes() != null) {
+                sb.append(" · ").append(item.getExpectedMinutes()).append("분");
+            }
+            sb.append("\n");
+        }
+        sb.append("\n");
+
+        String previous = planReviewService.summarizeLatestForPrompt(userId);
+        if (previous != null) {
+            sb.append("[직전 계획 회고]\n").append(previous).append("\n\n");
+        }
+
+        if (request.getInstruction() != null && !request.getInstruction().isBlank()) {
+            sb.append("[사용자 지시]\n").append(request.getInstruction()).append("\n\n");
+        }
+        if (request.getTitle() != null && !request.getTitle().isBlank()) {
+            sb.append("[사용자가 정한 제목]\n").append(request.getTitle()).append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 프로젝트 한 줄 + 그 프로젝트에 대해 자료에서 뽑아 둔 것.
+     *
+     * 이게 없으면 모델이 아는 것은 과목명과 교재명뿐이다. 실측해 보니 그 상태에서는 교재
+     * 장 번호를 지어내고("교재 1장(전처리 기본)") 실제 수업 진도와 무관한 계획이 나왔다.
+     * 사용자가 자료를 올리고 분석까지 적용했는데 그 결과가 계획에 한 글자도 반영되지 않고
+     * 있었다.
+     *
+     * course_topics를 쓰는 이유는 교재 목차가 아니라 강의 진도라서다. 교재 목차는 저자가
+     * 정한 순서이고 수업이 그 순서대로 나가지 않는다 — 이 과목만 해도 전처리가 교재
+     * 앞쪽인데 수업은 9주차다. source_locator에 "2주차"처럼 위치가 붙어 있어 그대로 전달된다.
+     */
+    private void appendCourseContext(StringBuilder sb, Long userId, Course course) {
+        sb.append("- id=").append(course.getCourseId()).append(" ").append(course.getTitle());
+        if (course.getTextbookTitle() != null) {
+            sb.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+        }
+        sb.append("\n");
+
+        List<String> topicLines = new ArrayList<>();
+        for (TopicResponse root : topicService.getTopicTree(userId, course.getCourseId())) {
+            appendTopicLine(topicLines, root, 0);
+        }
+        if (!topicLines.isEmpty()) {
+            sb.append("  [학습 항목]").append("\n");
+            int shown = Math.min(topicLines.size(), MAX_TOPIC_LINES_PER_COURSE);
+            for (int i = 0; i < shown; i++) {
+                sb.append("  ").append(topicLines.get(i)).append("\n");
+            }
+            if (topicLines.size() > shown) {
+                sb.append("    … 외 ").append(topicLines.size() - shown).append("개\n");
+            }
+        }
+
+        List<String> scheduleLines = courseScheduleLines(userId, course.getCourseId());
+        if (!scheduleLines.isEmpty()) {
+            sb.append("  [일정·평가]").append("\n");
+            for (String line : scheduleLines) {
+                sb.append("  - ").append(line).append("\n");
+            }
+        }
+        sb.append("\n");
+    }
+
+    /*
+      수집 단계에서 미리 자르지 않는다. 자르면 "외 N개"의 N이 실제로 접힌 개수가 아니라
+      "상한을 넘긴 만큼"이 되어, 40개 중 30개를 보여주고 "외 1개"라고 말하게 된다.
+      자르는 것은 출력할 때 한 번만 한다.
+    */
+    private void appendTopicLine(List<String> out, TopicResponse node, int depth) {
+        StringBuilder line = new StringBuilder("  ".repeat(depth)).append("- ").append(node.getTitle());
+        if (node.getSourceLocator() != null && !node.getSourceLocator().isBlank()) {
+            line.append(" (").append(node.getSourceLocator()).append(")");
+        }
+        out.add(line.toString());
+        if (node.getChildren() != null) {
+            for (TopicResponse child : node.getChildren()) {
+                appendTopicLine(out, child, depth + 1);
+            }
+        }
+    }
+
+    /**
+     * 일정과 평가. 개강일이 있어야 모델이 "지금 몇 주차인지"를 계산할 수 있다.
+     *
+     * keyDates는 별도 테이블이 없고 analysis_json 안에만 있다 — apply가 course_topics와
+     * course_notes만 꺼내 저장하고 날짜는 원문에 남겨둔다. 그래서 여기서 읽어 파싱한다.
+     * 파싱이 실패하면 조용히 건너뛴다. 일정이 없다고 계획을 못 만들 이유는 없다.
+     */
+    private List<String> courseScheduleLines(Long userId, Long courseId) {
+        List<String> lines = new ArrayList<>();
+        for (CourseMaterialAnalysis analysis : analysisMapper.findAppliedByCourseIdAndUserId(courseId, userId)) {
+            String json = analysis.getEditedJson() != null ? analysis.getEditedJson() : analysis.getAnalysisJson();
+            try {
+                MaterialAnalysisPayload payload = objectMapper.readValue(json, MaterialAnalysisPayload.class);
+                if (payload.keyDates() == null) {
+                    continue;
+                }
+                for (MaterialAnalysisPayload.KeyDate keyDate : payload.keyDates()) {
+                    String detail = keyDate.date() != null ? keyDate.date() : keyDate.description();
+                    if (detail != null && !detail.isBlank()) {
+                        lines.add(keyDate.title() + ": " + detail);
+                    }
+                }
+            } catch (Exception e) {
+                log.debug("계획 생성: 분석 JSON에서 일정을 읽지 못했다. analysisId={}", analysis.getAnalysisId());
+            }
+        }
+        courseNoteMapper.findByCourseIdAndUserId(courseId, userId).stream()
+                .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
+                .forEach(note -> lines.add(note.getLabel() + ": " + note.getDetail()));
+
+        return lines.stream().distinct().limit(MAX_SCHEDULE_LINES_PER_COURSE).toList();
+    }
+
+    private List<Course> resolveCourses(Long userId, List<Long> courseIds) {
+        if (courseIds != null && !courseIds.isEmpty()) {
+            return courseMapper.findByIdsAndUserId(courseIds, userId);
+        }
+        return courseMapper.findByUserIdAndStatus(userId, "ACTIVE");
+    }
+
+    // ===== 변환 =====
+
+    /**
+     * 모델 출력을 기존 제안 항목으로 옮긴다.
+     *
+     * 날짜를 정한 항목은 DATE_ONLY로, 나머지는 UNSCHEDULED로 만든다. 확정 시점에는 솔버를
+     * 돌리지 않으므로(§5-2) TIME_FIXED는 여기서 만들지 않는다 — 시각 배치는 롤링 배치가
+     * 전담한다. 계획 기간 밖 날짜는 조용히 버리고 UNSCHEDULED로 떨어뜨린다.
+     *
+     * courseId는 모델 출력을 그대로 믿지 않는다. 대상 프로젝트 목록에 없는 id는 버린다 —
+     * 모델이 존재하지 않는 id를 만들어내면 그 항목이 어느 프로젝트에도 안 잡히거나
+     * 남의 프로젝트에 붙는다.
+     *
+     * 대상이 정확히 하나일 때는 모델이 null을 줘도 그 프로젝트로 채운다. 후보가 하나뿐이면
+     * 추측이 아니라 유일한 답이고, 비워두면 초안 검토 화면에서 전부 "기타"로 묶여 그룹핑이
+     * 의미를 잃는다. 대상이 여럿이면 추측하지 않고 null로 둔다.
+     */
+    private List<ProposalItem> toProposalItems(
+            PlanDraftAiResult ai, LocalDate start, LocalDate end, List<Course> targetCourses) {
+        java.util.Set<Long> allowedCourseIds = targetCourses.stream()
+                .map(Course::getCourseId).collect(java.util.stream.Collectors.toSet());
+        Long soleCourseId = targetCourses.size() == 1 ? targetCourses.get(0).getCourseId() : null;
+        List<ProposalItem> items = new ArrayList<>();
+        if (ai.items() == null) {
+            return items;
+        }
+        for (PlanDraftAiResult.PlanDraftAiItem raw : ai.items()) {
+            if (raw == null || raw.title() == null || raw.title().isBlank()) {
+                continue;
+            }
+            LocalDate scheduled = parseDateInRange(raw.scheduledDate(), start, end);
+            items.add(new ProposalItem(
+                    raw.title(),
+                    blankToNull(raw.reason()) != null ? raw.reason() : blankToNull(raw.description()),
+                    raw.expectedMinutes(),
+                    normalizePriority(raw.priority()),
+                    scheduled != null ? PlacementType.DATE_ONLY : PlacementType.UNSCHEDULED,
+                    null, null,
+                    scheduled != null ? scheduled : start,
+                    scheduled != null ? scheduled : end,
+                    null, null,
+                    resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId)
+            ));
+        }
+        return items;
+    }
+
+    private Long resolveItemCourseId(Long raw, java.util.Set<Long> allowed, Long soleCourseId) {
+        if (raw != null && allowed.contains(raw)) {
+            return raw;
+        }
+        return soleCourseId;
+    }
+
+    private LocalDate parseDateInRange(String raw, LocalDate start, LocalDate end) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            LocalDate parsed = LocalDate.parse(raw.trim());
+            return parsed.isBefore(start) || parsed.isAfter(end) ? null : parsed;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private String normalizePriority(String raw) {
+        if (raw == null) {
+            return "SHOULD";
+        }
+        return switch (raw.trim().toUpperCase()) {
+            case "MUST" -> "MUST";
+            case "OPTIONAL" -> "OPTIONAL";
+            default -> "SHOULD";
+        };
+    }
+
+    private String defaultTitle(LocalDate start, LocalDate end) {
+        return start.getMonthValue() + "월 " + start.getDayOfMonth() + "일 ~ "
+                + end.getMonthValue() + "월 " + end.getDayOfMonth() + "일 계획";
+    }
+
+    private String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
+    }
+
+    private void recordUsage(Long userId, Usage usage, UsageResultStatus status, String errorCode) {
+        aiUsageLimitService.record(userId, null, null, modelName,
+                AiChatResponseUtils.safeTokenCount(usage, true), null,
+                AiChatResponseUtils.safeTokenCount(usage, false), status, errorCode,
+                FEATURE, null, UUID.randomUUID().toString(), null);
+    }
+}

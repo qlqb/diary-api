@@ -1,0 +1,53 @@
+# diary-api 기본 검증. 브랜치를 제한하지 않는다 — 어느 브랜치에 올리든 같은 확인을 받는다.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # application.properties가 DB_URL/JWT_SECRET을 환경변수에서 읽고(로컬 값은
+    # application-local.properties에 있으며 커밋되지 않는다), @SpringBootTest가
+    # 애플리케이션 컨텍스트를 실제로 띄우므로 연결 가능한 DB가 필요하다.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: ci
+          MYSQL_DATABASE: memo
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DB_URL: jdbc:mysql://127.0.0.1:3306/memo?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+      DB_USERNAME: root
+      DB_PASSWORD: ci
+      # 실제 시크릿이 아니다. 토큰을 발급하는 테스트가 없고 컨텍스트를 띄우는 데만 쓰인다.
+      JWT_SECRET: ci-only-placeholder-secret-not-used-to-sign-anything-000000000000000000
+      # AI 호출은 하지 않는다. none이면 상담 호출 시에만 503을 반환하고 부팅/테스트는 정상이다.
+      AI_PROVIDER: none
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: temurin
+          cache: gradle
+
+      # 이 DB는 비어 있다. 로컬 memo DB의 실제 테이블에 직접 쓰는 다섯 테스트는
+      # 여기서 돌 수 없으므로 뺀다(build.gradle의 excludeDbTests 주석 참고).
+      #
+      # gradlew는 실행 비트(100755)가 있어야 한다. 없으면 이 줄이 permission denied로
+      # 죽고, 그러면 CI는 "테스트를 돌려서 통과한 것"이 아니라 "돌려보지도 못한 것"이 된다.
+      # git update-index --chmod=+x gradlew 로 인덱스에 박아둔다.
+      - run: ./gradlew test -PexcludeDbTests

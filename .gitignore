@@ -2,6 +2,12 @@ HELP.md
 src/main/resources/application-local.properties
 .gradle
 build/
+
+# 로컬 개발 환경에서 업로드된 학습 자료 원본(storage.materials.upload-dir). 메타데이터만 DB에 남고
+# 파일 자체는 커밋 대상이 아니다.
+/data/
+# 로그 파일(logging.file.name). 로테이션까지 포함해 전부 로컬 산출물이다.
+/logs/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
@@ -36,3 +42,10 @@ out/
 
 ### VS Code ###
 .vscode/
+
+### DB 백업 덤프 ###
+# 실제 사용자 데이터(이메일·비밀번호 해시·일기 본문·AI 대화 원문)가 들어가므로
+# 저장소에 올리지 않는다. README "문서 수정 규칙"의 같은 항목을 파일로 강제한다.
+# 덤프는 로컬 디스크에만 두고, 무엇을 언제 왜 떴는지는 docs/sql/의 마이그레이션
+# 파일 주석에 남긴다.
+docs/sql/backup/*.sql

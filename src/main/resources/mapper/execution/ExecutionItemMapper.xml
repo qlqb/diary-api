@@ -1,0 +1,460 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.execution.ExecutionItemMapper">
+
+    <resultMap id="executionItemResultMap"
+               type="com.jungwoo.project.memo.execution.domain.ExecutionItem">
+        <id     property="executionItemId"       column="execution_item_id"/>
+        <result property="userId"                column="user_id"/>
+        <result property="topicId"               column="topic_id"/>
+        <result property="courseId"              column="course_id"/>
+        <result property="planVersionId"         column="plan_version_id"/>
+        <result property="sourceExecutionItemId" column="source_execution_item_id"/>
+        <result property="title"                 column="title"/>
+        <result property="description"           column="description"/>
+        <result property="placementType"         column="placement_type"/>
+        <result property="scheduledDate"         column="scheduled_date"/>
+        <result property="planningStartDate"     column="planning_start_date"/>
+        <result property="planningEndDate"       column="planning_end_date"/>
+        <result property="scheduledStartAt"      column="scheduled_start_at"/>
+        <result property="scheduledEndAt"        column="scheduled_end_at"/>
+        <result property="expectedMinutes"       column="expected_minutes"/>
+        <result property="status"                column="status"/>
+        <result property="priority"              column="priority"/>
+        <result property="orderIndex"            column="order_index"/>
+        <result property="routineId"             column="routine_id"/>
+        <result property="originType"            column="origin_type"/>
+        <result property="modifiedAfterCreation" column="modified_after_creation"/>
+        <result property="version"               column="version"/>
+        <result property="isDeleted"             column="is_deleted"/>
+        <result property="createdAt"             column="created_at"/>
+        <result property="updatedAt"             column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="executionItemId">
+        INSERT INTO execution_items (
+            user_id,
+            topic_id,
+            course_id,
+            source_execution_item_id,
+            title,
+            description,
+            placement_type,
+            scheduled_date,
+            planning_start_date,
+            planning_end_date,
+            scheduled_start_at,
+            scheduled_end_at,
+            expected_minutes,
+            status,
+            priority,
+            order_index,
+            routine_id,
+            origin_type,
+            modified_after_creation,
+            version,
+            is_deleted
+        ) VALUES (
+            #{userId},
+            #{topicId},
+            #{courseId},
+            #{sourceExecutionItemId},
+            #{title},
+            #{description},
+            #{placementType},
+            #{scheduledDate},
+            #{planningStartDate},
+            #{planningEndDate},
+            #{scheduledStartAt},
+            #{scheduledEndAt},
+            #{expectedMinutes},
+            #{status},
+            #{priority},
+            #{orderIndex},
+            #{routineId},
+            #{originType},
+            #{modifiedAfterCreation},
+            #{version},
+            #{isDeleted}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+    </select>
+
+    <!--
+      삭제된 항목까지 찾는다. 되돌리기(restore) 전용이다 — 지운 항목을 다시 살리려면 먼저
+      그 행을 읽어야 하는데, findByIdAndUserId는 is_deleted = 0으로 걸러 못 찾는다.
+
+      이 성질이 다른 조회로 새면 soft delete가 무의미해지므로 여기 말고는 쓰지 않는다.
+    -->
+    <select id="findByIdAndUserIdIncludingDeleted" resultMap="executionItemResultMap">
+        SELECT * FROM execution_items
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+    </select>
+
+    <select id="findByUserIdAndDate" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND scheduled_date = #{scheduledDate}
+        ORDER BY order_index ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
+
+    <select id="findByUserIdAndDateRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND scheduled_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY scheduled_date ASC, order_index ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
+
+    <!--
+      계획 화면용. 배치된 항목은 scheduled_date로, 미배치 항목은 planning_* 기간이
+      조회 범위와 겹치는지로 잡는다.
+
+      겹침 판정은 planning_start <= endDate AND planning_end >= startDate 다.
+      "계획 기간이 조회 범위 안에 들어온다"가 아니라 "두 구간이 조금이라도 만난다"이므로,
+      계획이 범위를 완전히 포함하는 경우와 앞뒤로 한쪽만 걸치는 경우도 모두 잡힌다.
+      전자를 놓치면 "8월 한 달 계획"이 이번 주 화면에서 통째로 사라진다.
+
+      OR로 두 조건을 묶어도 행이 중복되지 않는다 — chk_execution_items_planning_range가
+      scheduled_date와 planning_* 의 동시 존재를 막으므로 한 행은 둘 중 하나에만 걸린다.
+    -->
+    <select id="findByUserIdAndPlanningRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL,
+                 scheduled_date ASC, order_index ASC, execution_item_id ASC
+    </select>
+
+    <select id="findTimeFixedByUserIdAndDateRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND placement_type = 'TIME_FIXED'
+          AND status         != 'CANCELLED'
+          AND scheduled_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY scheduled_start_at ASC
+    </select>
+
+    <select id="findMaxOrderIndexByUserIdAndDate" resultType="java.lang.Integer">
+        SELECT MAX(order_index)
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND scheduled_date = #{scheduledDate}
+    </select>
+
+    <select id="findPendingBefore" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND status         = 'PLANNED'
+          AND scheduled_date IS NOT NULL
+          AND scheduled_date &lt; #{baseDate}
+        ORDER BY scheduled_date ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
+
+    <!-- 이동: 날짜/시각만 변경. status는 그대로. version이 일치할 때만 반영 -->
+    <update id="updateForMove">
+        UPDATE execution_items
+        SET scheduled_date     = #{scheduledDate},
+            scheduled_start_at = #{scheduledStartAt},
+            scheduled_end_at   = #{scheduledEndAt},
+            expected_minutes   = CASE WHEN #{expectedMinutes} IS NOT NULL THEN #{expectedMinutes} ELSE expected_minutes END,
+            version            = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <!-- 축소: null이 아닌 필드만 변경 -->
+    <update id="updateForReduce">
+        UPDATE execution_items
+        SET title = CASE WHEN #{title} IS NOT NULL THEN #{title} ELSE title END,
+            expected_minutes = CASE WHEN #{expectedMinutes} IS NOT NULL THEN #{expectedMinutes} ELSE expected_minutes END,
+            scheduled_end_at = CASE WHEN #{scheduledEndAt} IS NOT NULL THEN #{scheduledEndAt} ELSE scheduled_end_at END,
+            version = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <update id="updateStatusWithVersion">
+        UPDATE execution_items
+        SET status  = #{status},
+            version = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <update id="completeWithVersion">
+        UPDATE execution_items
+        SET status  = 'DONE',
+            version = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <update id="softDeleteWithVersion">
+        UPDATE execution_items
+        SET is_deleted = 1,
+            version    = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 0
+          AND version           = #{version}
+    </update>
+
+    <!--
+      삭제 되돌리기(Ctrl+Z). is_deleted = 1을 조건에 두어 이미 살아 있는 항목에는 걸리지
+      않게 한다 — 그래야 "되돌릴 것이 없다"와 "버전이 어긋났다"를 호출부가 함께 충돌로
+      다뤄도 결과가 안전하다.
+    -->
+    <update id="restoreWithVersion">
+        UPDATE execution_items
+        SET is_deleted = 0,
+            version    = version + 1
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+          AND is_deleted        = 1
+          AND version           = #{version}
+    </update>
+
+    <!-- Planning Agent가 제안을 적용한 뒤 생성된 실행 조각에 학습 topic을 연결한다.
+         version을 건드리지 않는다 — 이 필드는 사용자가 직접 편집하는 대상이 아니라
+         내부 연결 메타데이터라서 낙관적 락 대상에 포함하지 않는다. -->
+    <update id="updateTopicId">
+        UPDATE execution_items
+        SET topic_id = #{topicId}
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+    </update>
+
+    <!-- 프로젝트 대화에서 만든 제안을 적용한 뒤 그 프로젝트를 연결한다. updateTopicId와 같은
+         이유로 version을 건드리지 않는다. -->
+    <update id="updateCourseId">
+        UPDATE execution_items
+        SET course_id = #{courseId}
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+    </update>
+
+    <!-- 프로젝트 화면의 "관련 실행". 날짜가 없는(UNSCHEDULED) 항목도 함께 보여준다. -->
+    <select id="findByUserIdAndCourseId" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND course_id  = #{courseId}
+          AND (scheduled_date IS NULL OR scheduled_date BETWEEN #{startDate} AND #{endDate})
+        ORDER BY scheduled_date ASC, scheduled_start_at ASC, execution_item_id ASC
+    </select>
+
+
+    <!--
+      ===== 계획 회고 / 확정 / 롤링 배치 전용 =====
+    -->
+
+    <!--
+      ★ is_deleted를 거르지 않는다. 회고는 "계획에서 뺐어요"를 분류해야 하므로 삭제된
+      항목도 보여야 한다. 이 성질이 다른 조회로 새면 soft delete가 무의미해지므로
+      이름에 ForReview를 박아 용도를 못 헷갈리게 한다.
+    -->
+    <select id="findByIdsForReview" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id = #{userId}
+          AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY scheduled_date IS NULL, scheduled_date ASC, execution_item_id ASC
+    </select>
+
+    <!-- 회고의 "계획 밖에서 한 일" 판정용. 여기도 is_deleted를 거르지 않는다. -->
+    <select id="findInPeriodForReview" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id = #{userId}
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL, scheduled_date ASC, execution_item_id ASC
+    </select>
+
+    <!-- 확정: 미배치 항목의 목표 기간을 계획 기간으로 채운다. -->
+    <update id="assignPlanningRange">
+        UPDATE execution_items
+           SET planning_start_date = #{planningStartDate},
+               planning_end_date   = #{planningEndDate}
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND placement_type    = 'UNSCHEDULED'
+    </update>
+
+    <!--
+      확정: 생성 출처를 기록한다.
+
+      ★ plan_version_id IS NULL 조건이 "출처는 한 번만 기록된다"의 강제 지점이다.
+      호출자는 영향 행 수가 기대와 다르면 예외를 던져 트랜잭션 전체를 되돌린다 —
+      이미 출처가 박힌 조각이 섞였다는 뜻이고, 그대로 커밋하면 스냅샷과 실제가 어긋난다.
+    -->
+    <update id="assignPlanVersionId">
+        UPDATE execution_items
+           SET plan_version_id = #{planVersionId}
+         WHERE user_id = #{userId}
+           AND plan_version_id IS NULL
+           AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+    </update>
+
+    <!--
+      배치 해제. 배치의 역방향이다.
+
+      planning_* 를 함께 세팅해야 한다 — 날짜를 비우면서 기간도 비우면 그 항목은 기간
+      조회에서 사라진다(11-period-plan.md 2-5의 (나) 미분류). 호출자가 기간을 주면
+      (가) 계획 안에 남기고, 안 주면 (나)가 된다.
+
+      applyTimeFixedPlacement와 같은 형태로 version을 조건에 넣고 올린다. 그리고
+      placement_type이 이미 UNSCHEDULED인 행은 조건에서 걸러 0행이 되게 한다 —
+      "뗄 날짜가 없는데 뗀다"는 요청을 성공으로 응답하지 않는다.
+    -->
+    <update id="clearPlacement">
+        UPDATE execution_items
+           SET placement_type      = 'UNSCHEDULED',
+               scheduled_date      = NULL,
+               scheduled_start_at  = NULL,
+               scheduled_end_at    = NULL,
+               planning_start_date = #{planningStartDate},
+               planning_end_date   = #{planningEndDate},
+               version             = version + 1
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND is_deleted        = 0
+           AND placement_type   &lt;&gt; 'UNSCHEDULED'
+           AND version           = #{version}
+    </update>
+
+    <!--
+      롤링 배치: 시각을 확정하고 planning_* 를 비운다.
+
+      전이 규칙(11-period-plan.md 2-5)이다. 두 곳에 기간이 남으면 "이 항목의 기간은
+      언제인가"에 답이 둘이 되고, chk_execution_items_planning_range가 그것을 막는다 —
+      즉 planning_* 를 비우지 않으면 이 UPDATE 자체가 실패한다.
+
+      ★ version을 조건에 넣고 올린다. plan_versions.version을 올리지 않는 것과는 전혀
+      다른 문제다:
+        plan_versions.version   불변 스냅샷의 세대. 배치는 확정 시점의 사실을 바꾸지
+                                않으므로 건드리면 안 된다
+        execution_items.version 행 낙관적 락 카운터. 행을 바꿨으면 반드시 올려야 한다.
+                                안 올리면 배치 직후 다른 요청이 낡은 version으로도
+                                이 행을 또 고칠 수 있다
+
+      ★ status = 'PLANNED' 조건이 핵심이다. 없으면 배치 대상 조회와 이 UPDATE 사이에
+      사용자가 HOLD로 바꾼 항목을 솔버가 시간표에 앉힌다 — "잠시 멈춰뒀다"고 한 것이
+      다시 일정에 나타난다.
+    -->
+    <update id="applyTimeFixedPlacement">
+        UPDATE execution_items
+           SET placement_type      = 'TIME_FIXED',
+               scheduled_date      = #{scheduledDate},
+               scheduled_start_at  = #{scheduledStartAt},
+               scheduled_end_at    = #{scheduledEndAt},
+               expected_minutes    = #{expectedMinutes},
+               planning_start_date = NULL,
+               planning_end_date   = NULL,
+               version             = version + 1
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND is_deleted        = 0
+           AND placement_type    = 'UNSCHEDULED'
+           AND status            = 'PLANNED'
+           AND version           = #{version}
+    </update>
+
+    <!--
+      롤링 배치 대상: 그 계획이 만들어낸 조각 중 아직 날짜가 없고 목표 기간이 창과 겹치는 것.
+      상태로도 거른다 — 이미 끝냈거나 보류·취소한 것에 시각을 새로 박지 않는다.
+    -->
+    <!--
+      계획 화면의 항목 목록.
+
+      ★ planKey에 속한 모든 버전의 조각을 잡는다. plan_version_id는 불변 출처이므로
+      재계획으로 v2가 생기면 v1이 만든 조각의 출처는 v1로 남는다 — 단건 id로 거르면
+      v2 화면이 비어버린다.
+
+      planKey와 날짜 조건을 AND로 묶는다. 날짜만 보면 같은 기간의 다른 계획 항목이 섞이고,
+      계획만 보면 기간 밖으로 옮긴 항목이 계속 남는다. 둘 다 필요하다.
+
+      서브쿼리에 user_id를 다시 넣는다 — plan_key는 UUID라 충돌 가능성이 사실상 없지만,
+      소유권 검사를 서비스 코드에만 두면 이 질의를 다른 곳에서 재사용할 때 빠진다.
+    -->
+    <select id="findByPlanKeyAndRange" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id    = #{userId}
+          AND is_deleted = 0
+          AND plan_version_id IN (
+                SELECT plan_version_id FROM plan_versions
+                 WHERE plan_key = #{planKey} AND user_id = #{userId}
+              )
+          AND (
+                scheduled_date BETWEEN #{startDate} AND #{endDate}
+             OR (scheduled_date IS NULL
+                 AND planning_start_date &lt;= #{endDate}
+                 AND planning_end_date   &gt;= #{startDate})
+              )
+        ORDER BY scheduled_date IS NULL,
+                 scheduled_date ASC, order_index ASC, execution_item_id ASC
+    </select>
+
+    <select id="findUnscheduledByPlanKey" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND placement_type = 'UNSCHEDULED'
+          AND status         = 'PLANNED'
+          AND plan_version_id IN (
+                SELECT plan_version_id FROM plan_versions
+                 WHERE plan_key = #{planKey} AND user_id = #{userId}
+              )
+          AND planning_start_date &lt;= #{windowEnd}
+          AND planning_end_date   &gt;= #{windowStart}
+        ORDER BY priority = 'MUST' DESC, order_index ASC, execution_item_id ASC
+    </select>
+
+</mapper>

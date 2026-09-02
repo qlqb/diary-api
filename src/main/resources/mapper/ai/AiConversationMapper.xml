@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.AiConversationMapper">
+
+    <resultMap id="aiConversationResultMap"
+               type="com.jungwoo.project.memo.ai.domain.AiConversation">
+        <id     property="conversationId"        column="conversation_id"/>
+        <result property="userId"                column="user_id"/>
+        <result property="scope"                 column="scope"/>
+        <result property="courseId"              column="course_id"/>
+        <result property="status"                column="status"/>
+        <result property="summary"               column="summary"/>
+        <result property="activeRequestMessageId" column="active_request_message_id"/>
+        <result property="activeRequestStartedAt" column="active_request_started_at"/>
+        <result property="createdAt"             column="created_at"/>
+        <result property="updatedAt"             column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="conversationId">
+        INSERT INTO ai_conversations (
+            user_id,
+            scope,
+            course_id,
+            status
+        ) VALUES (
+            #{userId},
+            #{scope},
+            #{courseId},
+            #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="aiConversationResultMap">
+        SELECT *
+        FROM ai_conversations
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+    </select>
+
+    <resultMap id="aiConversationSummaryResultMap"
+               type="com.jungwoo.project.memo.ai.dto.AiConversationResponse">
+        <id     property="conversationId"       column="conversation_id"/>
+        <result property="scope"                column="scope"/>
+        <result property="courseId"             column="course_id"/>
+        <result property="status"               column="status"/>
+        <result property="createdAt"            column="created_at"/>
+        <result property="updatedAt"            column="updated_at"/>
+        <result property="title"                column="first_user_message"/>
+        <result property="lastMessageAt"        column="last_message_at"/>
+        <result property="pendingProposalCount" column="pending_proposal_count"/>
+    </resultMap>
+
+    <select id="findSummariesByUserId" resultMap="aiConversationSummaryResultMap">
+        SELECT
+            c.conversation_id,
+            c.scope,
+            c.course_id,
+            c.status,
+            c.created_at,
+            c.updated_at,
+            (SELECT m.content
+               FROM ai_messages m
+              WHERE m.conversation_id = c.conversation_id
+                AND m.role            = 'USER'
+              ORDER BY m.message_id ASC
+              LIMIT 1) AS first_user_message,
+            (SELECT MAX(m2.created_at)
+               FROM ai_messages m2
+              WHERE m2.conversation_id = c.conversation_id) AS last_message_at,
+            (SELECT COUNT(*)
+               FROM ai_proposals p
+              WHERE p.conversation_id = c.conversation_id
+                AND p.status          = 'PROPOSED') AS pending_proposal_count
+        FROM ai_conversations c
+        WHERE c.user_id = #{userId}
+          <!-- 사용자가 삭제한 대화는 목록에 다시 나타나지 않는다. 행은 남아 있으므로
+               메시지·제안·이미 반영된 장기 컨텍스트는 그대로다. -->
+          AND c.status  = 'ACTIVE'
+        <!--
+          courseId를 넘기면 그 프로젝트 대화만, 넘기지 않으면 전체.
+          onlyWithoutCourse=true면 프로젝트에 속하지 않은 대화만(오늘/일정/전체 상담 목록용) —
+          프로젝트 대화가 전역 목록에 섞여 나오지 않게 한다.
+        -->
+        <if test="courseId != null">
+            AND c.course_id = #{courseId}
+        </if>
+        <if test="onlyWithoutCourse">
+            AND c.course_id IS NULL
+        </if>
+        HAVING last_message_at IS NOT NULL
+        ORDER BY last_message_at DESC
+    </select>
+
+    <select id="findByIdAndUserIdForUpdate" resultMap="aiConversationResultMap">
+        SELECT *
+        FROM ai_conversations
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+        FOR UPDATE
+    </select>
+
+    <update id="updateStatus">
+        UPDATE ai_conversations
+        SET status = #{status}
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+    </update>
+
+    <update id="touchUpdatedAt">
+        UPDATE ai_conversations
+        SET updated_at = CURRENT_TIMESTAMP
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+    </update>
+
+    <update id="acquireActiveRequest">
+        UPDATE ai_conversations
+        SET active_request_message_id = #{requestMessageId},
+            active_request_started_at = CURRENT_TIMESTAMP
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+    </update>
+
+    <update id="releaseActiveRequest">
+        UPDATE ai_conversations
+        SET active_request_message_id = NULL,
+            active_request_started_at = NULL
+        WHERE conversation_id           = #{conversationId}
+          AND user_id                   = #{userId}
+          AND active_request_message_id = #{requestMessageId}
+    </update>
+
+</mapper>

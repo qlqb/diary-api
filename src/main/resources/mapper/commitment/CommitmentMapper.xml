@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  일회성 약속. 살아 있는 행의 조건은 is_deleted = 0 하나이고, 모든 조회가 그것과 user_id를
+  함께 건다 - FK가 없으므로 소유권은 쿼리 조건이 유일한 방어선이다.
+-->
+<mapper namespace="com.jungwoo.project.memo.commitment.CommitmentMapper">
+
+    <resultMap id="commitmentResultMap" type="com.jungwoo.project.memo.commitment.domain.Commitment">
+        <id     property="commitmentId" column="commitment_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="title"        column="title"/>
+        <result property="startAt"      column="start_at"/>
+        <result property="endAt"        column="end_at"/>
+        <result property="locationText" column="location_text"/>
+        <result property="sourceType"   column="source_type"/>
+        <result property="version"      column="version"/>
+        <result property="isDeleted"    column="is_deleted"/>
+        <result property="createdAt"    column="created_at"/>
+        <result property="updatedAt"    column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="commitmentId">
+        INSERT INTO one_off_commitments (
+            user_id, title, start_at, end_at, location_text, source_type
+        ) VALUES (
+            #{userId}, #{title}, #{startAt}, #{endAt}, #{locationText}, #{sourceType}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.commitment_id = #{commitmentId}
+           AND c.user_id = #{userId}
+           AND c.is_deleted = 0
+    </select>
+
+    <!--
+      겹침 조회다. start_at BETWEEN을 쓰면 전날 밤에 시작해 오늘 새벽에 끝나는 약속이
+      오늘 조회에서 빠지고, 배치가 그 시간을 비어 있다고 본다.
+      반열린 구간: [rangeStart, rangeEnd)
+    -->
+    <select id="findOverlapping" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.start_at &lt; #{rangeEnd}
+           AND c.end_at   &gt; #{rangeStart}
+         ORDER BY c.start_at, c.commitment_id
+    </select>
+
+    <update id="updateWithVersion">
+        UPDATE one_off_commitments
+           SET title         = #{title},
+               start_at      = #{startAt},
+               end_at        = #{endAt},
+               location_text = #{locationText},
+               version       = version + 1
+         WHERE commitment_id = #{commitmentId}
+           AND user_id = #{userId}
+           AND version = #{version}
+           AND is_deleted = 0
+    </update>
+
+    <update id="softDeleteWithVersion">
+        UPDATE one_off_commitments
+           SET is_deleted = 1,
+               version    = version + 1
+         WHERE commitment_id = #{commitmentId}
+           AND user_id = #{userId}
+           AND version = #{version}
+           AND is_deleted = 0
+    </update>
+</mapper>

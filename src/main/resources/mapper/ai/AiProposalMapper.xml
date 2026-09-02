@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.AiProposalMapper">
+
+    <resultMap id="aiProposalResultMap"
+               type="com.jungwoo.project.memo.ai.domain.AiProposal">
+        <id     property="proposalId"      column="proposal_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="conversationId"  column="conversation_id"/>
+        <result property="sourceMessageId" column="source_message_id"/>
+        <result property="targetScope"     column="target_scope"/>
+        <result property="unavailableWindows" column="unavailable_windows"/>
+        <result property="planStartDate"      column="plan_start_date"/>
+        <result property="planEndDate"        column="plan_end_date"/>
+        <result property="planIntensity"      column="plan_intensity"/>
+        <result property="planTargetMinutes"  column="plan_target_minutes"/>
+        <result property="status"          column="status"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="expiresAt"       column="expires_at"/>
+        <result property="respondedAt"     column="responded_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="proposalId">
+        INSERT INTO ai_proposals (
+            user_id,
+            conversation_id,
+            source_message_id,
+            target_scope,
+            unavailable_windows,
+            status,
+            expires_at
+        ) VALUES (
+            #{userId},
+            #{conversationId},
+            #{sourceMessageId},
+            #{targetScope},
+            #{unavailableWindows},
+            #{status},
+            #{expiresAt}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+    </select>
+
+    <select id="findByIdAndUserIdForUpdate" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+        FOR UPDATE
+    </select>
+
+    <update id="updateStatusAndRespondedAt">
+        UPDATE ai_proposals
+        SET status       = #{status},
+            responded_at = #{respondedAt}
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+    </update>
+
+    <select id="findBySourceMessageIdAndUserId" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE source_message_id = #{sourceMessageId}
+          AND user_id           = #{userId}
+        LIMIT 1
+    </select>
+
+
+    <!--
+      계획 초안 생성 직후 기간·강도·목표 시간을 붙인다.
+
+      insert에 넣지 않고 별도 UPDATE로 두는 이유: insert는 Today 상담 흐름과 공유하는
+      경로이고, 그쪽은 계획 메타가 없다. 공유 경로에 계획 전용 컬럼을 끼워 넣으면
+      "이 제안이 계획인가"를 insert 호출부마다 판단해야 한다.
+    -->
+    <update id="updatePlanMetadata">
+        UPDATE ai_proposals
+           SET plan_start_date     = #{planStartDate},
+               plan_end_date       = #{planEndDate},
+               plan_intensity      = #{planIntensity},
+               plan_target_minutes = #{planTargetMinutes}
+         WHERE proposal_id = #{proposalId}
+           AND user_id     = #{userId}
+    </update>
+
+</mapper>
