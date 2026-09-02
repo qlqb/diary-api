@@ -30,6 +30,8 @@ import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import com.jungwoo.project.memo.course.dto.CourseNoteResponse;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import java.time.DayOfWeek;
 import java.util.Set;
 import java.time.LocalDate;
@@ -172,10 +174,8 @@ class AiWorkspaceContextBuilderTest {
         assertThat(block).contains("[프로젝트] 활성 2개");
         assertThat(block).contains("#36 자료구조");
         assertThat(block).contains("#31 빅데이터분석");
-        // 계획을 짜려면 무엇이 남았는지를 알아야 한다.
-        assertThat(block).contains("학습 항목 5/12 완료");
-        assertThat(block).contains("다음 학습 항목: 연결 리스트");
-        assertThat(block).contains("수업: 화 14:00~17:00");
+        assertThat(block).contains("학습 항목 12개");
+        assertThat(block).contains("수업 화 14:00~17:00");
         // 학습 구조가 없는 프로젝트도 숨기지 않는다 — 없다는 것도 판단 재료다.
         assertThat(block).contains("학습 구조 아직 없음");
     }
@@ -187,12 +187,13 @@ class AiWorkspaceContextBuilderTest {
 
         String block = builder.build(todayConversation(), USER_ID, NOW);
 
-        // 이름과 진도는 항상 싣는다.
+        // 이름과 개수는 항상 싣는다.
         assertThat(block).contains("#36 자료구조");
-        assertThat(block).contains("학습 항목 5/12 완료");
-        // 오늘 대화에까지 학습 항목·수업 일정을 붙이면 예산만 쓴다.
-        assertThat(block).doesNotContain("다음 학습 항목:");
+        assertThat(block).contains("학습 항목 12개");
+        // 오늘 대화에까지 학습 항목 목록·수업 일정을 붙이면 예산만 쓴다.
+        assertThat(block).doesNotContain("학습 항목(");
         verify(routineService, never()).list(any());
+        verify(topicService, never()).getTopicTree(any(), any());
     }
 
     @Test
@@ -317,5 +318,127 @@ class AiWorkspaceContextBuilderTest {
 
         // 비어 있는 것과 모르는 것은 다르다 — 없다고 말해 줘야 되묻지 않는다.
         assertThat(block).contains("남는 시간이 없다고 추정된다");
+    }
+
+    /*
+     * "핵심 3개(배열·리스트·스택)" 같은 일반론이 나온 이유는 학습 항목이 개수로만 실렸기
+     * 때문이다. 이 강의계획서의 2주차는 ADT·Big-O였고, 그 값은 course_topics에 있었다.
+     */
+    @Test
+    void topicLines_areLoadedWithTheirWeek() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("추상데이터타입(ADT) 및 성능분석(시간복잡도, Big-O) (2주차)");
+    }
+
+    /*
+     * 개강일은 course_notes에 없다. 그 과목 수업(루틴)의 effective_from이 유일한 근거이고,
+     * 그게 있어야 모델이 "지금 몇 주차"를 계산할 수 있다.
+     */
+    @Test
+    void semesterStartAndCurrentWeek_areLoadedFromTheClassRoutine() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        // 개강 2026-08-25(화), 오늘 2026-08-15는 개강 전이라 주차가 없다 — 아래 테스트에서 확인.
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 2).atTime(15, 40));
+
+        assertThat(block).contains("개강 2026-08-25");
+        // 8/25가 속한 주(8/24 월요일)를 1주차로 세면 9/2는 2주차다.
+        assertThat(block).contains("오늘 2주차");
+    }
+
+    @Test
+    void topicLines_areNarrowedToTheWeeksAroundNow() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 2).atTime(15, 40));
+
+        assertThat(block).contains("학습 항목(이번 주 전후)");
+        // 2주차 기준 1~4주차만.
+        assertThat(block).contains("(1주차)");
+        assertThat(block).contains("(2주차)");
+        assertThat(block).contains("(4주차)");
+        // 한참 뒤 주차를 당겨오지 않게 애초에 싣지 않는다.
+        assertThat(block).doesNotContain("(10주차)");
+        assertThat(block).contains("나머지");
+    }
+
+    @Test
+    void topicLines_fallBackToTheFirstFew_whenTheWeekIsUnknown() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        // 수업 루틴이 없으면 개강일도 없고 지금 몇 주차인지 알 수 없다.
+        when(routineService.list(USER_ID)).thenReturn(List.of());
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("학습 항목(앞에서부터)");
+        assertThat(block).contains("자료구조 개요 (1주차)");
+    }
+
+    /*
+     * 평가 비율은 계획에 영향을 준다. 담당교수·연구실·수업도구는 아니다 — 실을 값을 고르지
+     * 않으면 예산만 먹고 정작 학습 항목이 잘린다.
+     */
+    @Test
+    void onlyAssessmentNotes_areLoaded() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of());
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(List.of());
+        when(courseNoteService.getByCourse(USER_ID, 36L)).thenReturn(List.of(
+                note("ASSESSMENT", "성적평가 비율", "중간 40%, 기말 40%, 출석 20%"),
+                note("COURSE_INFO", "담당교수", "최성연"),
+                note("COURSE_INFO", "연락처/연구실/이메일", "연구실: 2호관-403")));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("성적평가 비율: 중간 40%, 기말 40%, 출석 20%");
+        assertThat(block).doesNotContain("최성연");
+        assertThat(block).doesNotContain("2호관-403");
+    }
+
+    /** 실제 자료구조 데이터의 모양 그대로 — 루트가 주차 순이고 자식은 하위 항목이다. */
+    private List<TopicResponse> dataStructureTopics() {
+        return List.of(
+                topic(216L, "자료구조 개요", "1주차"),
+                topic(217L, "추상데이터타입(ADT) 및 성능분석(시간복잡도, Big-O)", "2주차"),
+                topic(218L, "재귀(순환) 및 재귀 알고리즘 예제", "3주차"),
+                topic(219L, "배열, 구조체, 포인터", "4주차"),
+                topic(220L, "리스트(정의와 구현)", "5주차"),
+                topic(221L, "스택(Stack) — 이해 및 구현", "9주차"),
+                topic(228L, "그래프(정의, 표현, 순회 알고리즘)", "10주차"));
+    }
+
+    private TopicResponse topic(Long id, String title, String locator) {
+        return TopicResponse.builder()
+                .topicId(id)
+                .title(title)
+                .sourceLocator(locator)
+                .children(List.of())
+                .build();
+    }
+
+    private CourseNoteResponse note(String category, String label, String detail) {
+        return CourseNoteResponse.builder()
+                .category(category)
+                .label(label)
+                .detail(detail)
+                .build();
     }
 }

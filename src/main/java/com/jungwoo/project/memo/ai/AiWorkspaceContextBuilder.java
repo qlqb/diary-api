@@ -41,6 +41,9 @@ import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
 import java.time.Duration;
 import java.util.ArrayList;
+import com.jungwoo.project.memo.course.domain.CourseNoteCategory;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.List;
@@ -125,7 +128,8 @@ public class AiWorkspaceContextBuilder {
              * 자세히 넣으면 토큰만 늘고 예산에 걸려 앞쪽만 살아남는다.
              */
             appendProjectsOverviewBlock(sb, userId,
-                    scope == AiProposalTargetScope.EXECUTION || scope == AiProposalTargetScope.MIXED);
+                    scope == AiProposalTargetScope.EXECUTION || scope == AiProposalTargetScope.MIXED,
+                    today);
         }
 
         // 오늘 상태는 프로젝트 대화에서도 함께 싣는다 — 프로젝트 안에서 "오늘 30분 하고 싶어"라고
@@ -150,16 +154,44 @@ public class AiWorkspaceContextBuilder {
 
     // ===== 프로젝트 =====
 
+    /** "2주차", "7주차 (원문에 '힢' 표기)" 어느 쪽에서도 숫자만 뽑는다. */
+    private static final Pattern WEEK_IN_LOCATOR = Pattern.compile("(\\d{1,2})\\s*주차");
+
+    /**
+     * 한 프로젝트에 실을 학습 항목 줄 수 상한.
+     *
+     * <p>계획 경로(PlanDraftService)는 한 과목만 다루므로 30줄까지 쓴다. 여기는 활성
+     * 프로젝트 전부가 한 예산(maxStateChars)을 나눠 쓴다 — 7과목이면 30줄씩 210줄이라
+     * 예산을 혼자 다 먹고 뒤쪽 프로젝트는 이름조차 못 실린다.
+     */
+    private static final int MAX_TOPIC_LINES_PER_COURSE = 6;
+
+    /** 평가·시험 줄 수 상한. 담당교수·연구실 같은 것은 계획에 영향을 주지 않아 싣지 않는다. */
+    private static final int MAX_ASSESSMENT_LINES_PER_COURSE = 3;
+
+    /**
+     * 상세를 붙이다가 이 길이를 넘으면 남은 프로젝트는 이름과 개수만 싣는다.
+     *
+     * <p>truncate가 뒤를 자르면 뒤쪽 프로젝트는 이름조차 사라진다. 그것보다는 "전부 이름은
+     * 있고 앞쪽만 자세한" 편이 낫다 — 모델이 프로젝트가 있다는 사실 자체는 알아야 한다.
+     */
+    private int detailBudgetChars() {
+        return Math.max(0, (int) (maxStateChars * 0.7));
+    }
+
     /**
      * 활성 프로젝트 목록. 보관된 프로젝트는 싣지 않는다 — 계획 대상이 아니다.
      *
      * <p>자료 본문도 싣지 않는다. 그건 프로젝트가 하나로 정해진 대화에서만 의미가 있고,
      * 여기서 전부 넣으면 예산을 혼자 다 쓴다.
      *
-     * <p>진도 요약은 CourseResponse가 이미 계산해 온다(topicCount/learnedTopicCount/
-     * currentTopicTitle). 프로젝트마다 따로 조회하지 않으므로 개수가 늘어도 조회 횟수는 그대로다.
+     * <p><b>학습 항목을 싣는 이유.</b> 전에는 개수만 실었다("학습 항목 0/16 완료"). 그래서
+     * 모델은 과목이 있다는 것만 알고 무엇을 할 차례인지는 몰랐고, "핵심 3개(배열·리스트·
+     * 스택)" 같은 일반 자료구조 지식을 지어냈다 — 이 강의계획서의 2주차는 ADT·Big-O였다.
+     * 계획 경로(PlanDraftService)는 c1be70c부터 이걸 싣고 있었고 대화 경로만 빠져 있었다.
      */
-    private void appendProjectsOverviewBlock(StringBuilder sb, Long userId, boolean detailed) {
+    private void appendProjectsOverviewBlock(StringBuilder sb, Long userId, boolean detailed,
+                                             LocalDate today) {
         List<CourseResponse> courses;
         try {
             courses = courseService.list(userId, CourseStatus.ACTIVE);
@@ -182,8 +214,10 @@ public class AiWorkspaceContextBuilder {
                 sb.append(" (").append(course.getGroupLabel()).append(')');
             }
             if (course.getTopicCount() > 0) {
-                sb.append(" · 학습 항목 ").append(course.getLearnedTopicCount())
-                        .append('/').append(course.getTopicCount()).append(" 완료");
+                sb.append(" · 학습 항목 ").append(course.getTopicCount()).append("개");
+                if (course.getLearnedTopicCount() > 0) {
+                    sb.append("(완료 ").append(course.getLearnedTopicCount()).append(')');
+                }
             } else {
                 sb.append(" · 학습 구조 아직 없음");
             }
@@ -192,19 +226,153 @@ public class AiWorkspaceContextBuilder {
             if (!detailed) {
                 continue;
             }
-            if (course.getCurrentTopicTitle() != null) {
-                sb.append("    다음 학습 항목: ").append(course.getCurrentTopicTitle()).append('\n');
+
+            List<RoutineResponse> routines = routinesByCourse.getOrDefault(course.getCourseId(), List.of());
+            LocalDate semesterStart = semesterStartOf(routines);
+            Integer currentWeek = weekNumberOf(semesterStart, today);
+
+            appendCourseHeadLine(sb, course, routines, semesterStart, currentWeek);
+
+            // 예산을 넘겼으면 남은 프로젝트는 이름과 개수까지만. 이름조차 잘리는 것보다 낫다.
+            if (sb.length() >= detailBudgetChars()) {
+                continue;
             }
-            if (course.getTextbookTitle() != null) {
-                sb.append("    교재: ").append(course.getTextbookTitle()).append('\n');
-            }
-            for (RoutineResponse routine : routinesByCourse.getOrDefault(course.getCourseId(), List.of())) {
-                sb.append("    수업: ").append(renderWeekdays(routine.daysOfWeek())).append(' ')
-                        .append(routine.startTime().format(TIME_FMT)).append('~')
-                        .append(routine.endTime().format(TIME_FMT)).append('\n');
-            }
+            appendCourseTopicLines(sb, userId, course.getCourseId(), currentWeek);
+            appendCourseAssessmentLines(sb, userId, course.getCourseId());
         }
         sb.append('\n');
+    }
+
+    /** 교재·수업 시간·개강일을 한 줄로. 개강일이 있어야 모델이 지금 몇 주차인지 계산할 수 있다. */
+    private void appendCourseHeadLine(StringBuilder sb, CourseResponse course,
+                                      List<RoutineResponse> routines, LocalDate semesterStart,
+                                      Integer currentWeek) {
+        List<String> parts = new ArrayList<>();
+        if (course.getTextbookTitle() != null) {
+            parts.add("교재 " + course.getTextbookTitle());
+        }
+        for (RoutineResponse routine : routines) {
+            parts.add("수업 " + renderWeekdays(routine.daysOfWeek()) + ' '
+                    + routine.startTime().format(TIME_FMT) + '~' + routine.endTime().format(TIME_FMT));
+        }
+        if (semesterStart != null) {
+            String weekPart = currentWeek != null ? " (오늘 " + currentWeek + "주차)" : "";
+            parts.add("개강 " + semesterStart.format(DATE_FMT) + weekPart);
+        }
+        if (!parts.isEmpty()) {
+            sb.append("    ").append(String.join(" · ", parts)).append('\n');
+        }
+    }
+
+    /**
+     * 학습 항목. 주차를 알면 이번 주 전후만, 모르면 앞에서부터 자른다.
+     *
+     * <p>source_locator에 "2주차"처럼 강의 진도 위치가 붙어 있다. 교재 목차가 아니라 강의
+     * 진도라서 이 값이 곧 "언제 배우는가"다. 지금 주차 근처만 실으면 모델이 한참 뒤 주차를
+     * 당겨오지 않는다 — 계획 경로에서 A/B로 확인된 것과 같은 이유다.
+     */
+    private void appendCourseTopicLines(StringBuilder sb, Long userId, Long courseId, Integer currentWeek) {
+        List<TopicResponse> tree;
+        try {
+            tree = topicService.getTopicTree(userId, courseId);
+        } catch (RuntimeException e) {
+            log.warn("학습 항목 컨텍스트 생략: userId={}, courseId={}", userId, courseId, e);
+            return;
+        }
+        if (tree == null || tree.isEmpty()) {
+            return;
+        }
+
+        List<String> all = new ArrayList<>();
+        List<String> nearby = new ArrayList<>();
+        collectTopicLines(tree, currentWeek, all, nearby);
+
+        List<String> chosen = !nearby.isEmpty() ? nearby : all;
+        int shown = Math.min(chosen.size(), MAX_TOPIC_LINES_PER_COURSE);
+        if (shown == 0) {
+            return;
+        }
+        sb.append("    학습 항목")
+                .append(!nearby.isEmpty() ? "(이번 주 전후)" : "(앞에서부터)").append(":\n");
+        for (int i = 0; i < shown; i++) {
+            sb.append("      ").append(chosen.get(i)).append('\n');
+        }
+        int hidden = all.size() - shown;
+        if (hidden > 0) {
+            sb.append("      (나머지 ").append(hidden).append("개는 생략)\n");
+        }
+    }
+
+    /** 트리를 줄 목록으로 펼치면서, 주차를 아는 경우 이번 주 전후만 따로 모은다. */
+    private void collectTopicLines(List<TopicResponse> nodes, Integer currentWeek,
+                                   List<String> all, List<String> nearby) {
+        for (TopicResponse node : nodes) {
+            StringBuilder line = new StringBuilder("- ").append(node.getTitle());
+            String locator = node.getSourceLocator();
+            if (locator != null && !locator.isBlank()) {
+                line.append(" (").append(locator).append(')');
+            }
+            all.add(line.toString());
+
+            Integer week = weekInLocator(locator);
+            if (currentWeek != null && week != null
+                    && week >= currentWeek - 1 && week <= currentWeek + 2) {
+                nearby.add(line.toString());
+            }
+            if (node.getChildren() != null) {
+                collectTopicLines(node.getChildren(), currentWeek, all, nearby);
+            }
+        }
+    }
+
+    /** 평가·시험만. 담당교수·연구실·수업도구는 계획에 영향을 주지 않는다. */
+    private void appendCourseAssessmentLines(StringBuilder sb, Long userId, Long courseId) {
+        List<CourseNoteResponse> notes;
+        try {
+            notes = courseNoteService.getByCourse(userId, courseId);
+        } catch (RuntimeException e) {
+            log.warn("과목 정보 컨텍스트 생략: userId={}, courseId={}", userId, courseId, e);
+            return;
+        }
+        List<String> lines = notes.stream()
+                .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
+                .map(note -> "- " + note.getLabel() + ": " + note.getDetail())
+                .distinct()
+                .limit(MAX_ASSESSMENT_LINES_PER_COURSE)
+                .toList();
+        if (lines.isEmpty()) {
+            return;
+        }
+        sb.append("    평가:\n");
+        for (String line : lines) {
+            sb.append("      ").append(line).append('\n');
+        }
+    }
+
+    /** 개강일. course_notes에는 없고 그 과목 수업(루틴)의 effective_from이 유일한 근거다. */
+    private LocalDate semesterStartOf(List<RoutineResponse> routines) {
+        return routines.stream()
+                .map(RoutineResponse::effectiveFrom)
+                .filter(java.util.Objects::nonNull)
+                .min(LocalDate::compareTo)
+                .orElse(null);
+    }
+
+    /** 개강일이 속한 주를 1주차로 센다. */
+    private Integer weekNumberOf(LocalDate semesterStart, LocalDate today) {
+        if (semesterStart == null || today == null || today.isBefore(semesterStart)) {
+            return null;
+        }
+        LocalDate startMonday = semesterStart.minusDays((semesterStart.getDayOfWeek().getValue() + 6L) % 7);
+        return (int) (java.time.temporal.ChronoUnit.WEEKS.between(startMonday, today) + 1);
+    }
+
+    private Integer weekInLocator(String locator) {
+        if (locator == null) {
+            return null;
+        }
+        Matcher matcher = WEEK_IN_LOCATOR.matcher(locator);
+        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
     }
 
     /** 아직 끝나지 않은 반복 일정 중 프로젝트에 묶인 것만. 알바·운동은 프로젝트가 없다. */
