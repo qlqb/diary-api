@@ -116,4 +116,22 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("번호나 쪽수처럼 거기 없는 값은 만들지 않는다");
         assertThat(prompt).contains("상상해 넣는 것도 지어내는 것이다");
     }
+
+    /*
+     * 학습 항목 제목을 카드 제목으로 옮긴 수준("교재 진도 복습 및 실습 · 90분")이 나왔다.
+     * 무엇을 하고 어디까지 하면 끝인지가 없고, 모델이 "교재의 같은 출처" 같은 근거를 지어냈다.
+     * 전용 계획 경로(PlanDraftService)와 같은 규칙을 대화 경로에도 싣는다 — 조각 목록은
+     * PlanItemPromptRules 한 곳에 있고 양쪽 테스트가 같은 목록을 본다.
+     */
+    @Test
+    void systemPrompt_requiresConcreteActionsAndCompletionCriteria_andForbidsInventedSourcesAndHousekeeping() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        PlanItemPromptRules.assertCarriesRules(prompt);
+        // 대화 경로에서 출처로 삼을 수 있는 것은 화면 블록에 실린 것뿐이다.
+        assertThat(prompt).contains("출처는 [프로젝트] 블록에 실린 학습 항목 제목과 그 옆 괄호의 위치만 쓴다");
+        // 스키마의 description 설명도 같은 형식을 가리켜야 한다 — 원칙만 있고 스키마가
+        // "설명 또는 null"이면 모델은 스키마 쪽을 따른다.
+        assertThat(prompt).contains("\"description\": \"실제로 할 행동 1~3개 · 완료: 확인 가능한 완료 기준 (원칙 19)");
+    }
 }

@@ -185,8 +185,8 @@ public class PlanDraftService {
               "targetMinutesReason": "기준선을 조정했을 때만 한 문장, 조정 안 했으면 null",
               "items": [
                 {
-                  "title": "한 번에 앉아서 할 만한 단위의 할 일",
-                  "description": "필요하면 한 문장, 아니면 null",
+                  "title": "과목·대상·행동이 드러나는, 한 번에 앉아서 할 만한 단위의 할 일",
+                  "description": "실제로 할 행동 1~3개 · 완료: 확인 가능한 완료 기준",
                   "expectedMinutes": 정수,
                   "priority": "MUST" | "SHOULD" | "OPTIONAL",
                   "courseId": 정수 또는 null,
@@ -201,6 +201,21 @@ public class PlanDraftService {
             - scheduledDate는 "반드시 그날 해야 하는" 항목에만 넣는다(마감·수업 연동 등).
               대부분은 null로 두어라 — 날짜는 나중에 사용자가 주 단위로 배치한다.
             - expectedMinutes는 %d~%d 사이여야 한다. 벗어나면 그 항목은 버려진다.
+            - 항목은 사용자가 앉아서 바로 시작할 수 있는 학습 행동이어야 한다. 제목에
+              과목·대상·행동이 드러나야 하고, description에는 실제로 할 행동 1~3개와
+              확인 가능한 완료 기준을 "행동 · 완료: 기준" 형식으로 적는다. "교재 진도 복습",
+              "개념 정리", "복습 및 실습"처럼 무엇을 할지 사용자가 다시 판단해야 하는 표현은
+              쓰지 않는다.
+              나쁜 예: 제목 "자료구조 핵심 복습", description "교재 진도 정리"
+              좋은 예: 제목 "자료구조 · 반복문 코드의 Big-O 판단", description "단일·중첩
+              반복문 코드 5개의 시간복잡도를 판단하고 이유를 한 줄씩 작성 · 완료: 5개 중
+              4개 이상 설명 가능"
+            - 출처는 [대상 프로젝트]에 실린 학습 항목 제목과 그 옆 괄호의 위치만 쓴다.
+              자료 파일명·교재 장·쪽수·"같은 출처"처럼 거기 없는 출처 표현을 만들지 않는다.
+              근거가 없으면 출처를 적지 않는다.
+            - "전체 학습 구조 설계", "기본 학습목록 만들기", "커리큘럼 정리", "공부 계획 다시
+              세우기" 같은 관리 작업은 사용자가 [사용자 지시]에서 그것을 요청했을 때만 만든다.
+              계획 요청은 학습 실행 항목을 달라는 뜻이다.
             - 사용자를 탓하거나 뒤처졌다는 식으로 쓰지 마라. 못 한 것은 "아직 시작하지
               않았어요" 정도로만 다룬다.
             """.formatted(AiStreamParser.DELIMITER, MIN_ITEM_MINUTES, MAX_ITEM_MINUTES);
@@ -437,6 +452,10 @@ public class PlanDraftService {
      * 대상이 정확히 하나일 때는 모델이 null을 줘도 그 프로젝트로 채운다. 후보가 하나뿐이면
      * 추측이 아니라 유일한 답이고, 비워두면 초안 검토 화면에서 전부 "기타"로 묶여 그룹핑이
      * 의미를 잃는다. 대상이 여럿이면 추측하지 않고 null로 둔다.
+     *
+     * 설명은 description을 우선하고 reason은 그것이 비었을 때만 쓴다. 프롬프트가 description에
+     * "행동 · 완료: 기준"을 요구하는데, 예전처럼 reason("왜 지금 하는지")을 우선하면 모델이
+     * 규칙을 지켜도 그 내용이 제안에 실리지 않는다 — reason은 거의 항상 채워지기 때문이다.
      */
     private List<ProposalItem> toProposalItems(
             PlanDraftAiResult ai, LocalDate start, LocalDate end, List<Course> targetCourses) {
@@ -454,7 +473,7 @@ public class PlanDraftService {
             LocalDate scheduled = parseDateInRange(raw.scheduledDate(), start, end);
             items.add(new ProposalItem(
                     raw.title(),
-                    blankToNull(raw.reason()) != null ? raw.reason() : blankToNull(raw.description()),
+                    blankToNull(raw.description()) != null ? raw.description() : blankToNull(raw.reason()),
                     raw.expectedMinutes(),
                     normalizePriority(raw.priority()),
                     scheduled != null ? PlacementType.DATE_ONLY : PlacementType.UNSCHEDULED,

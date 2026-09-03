@@ -319,6 +319,62 @@ class PlanDraftServiceTest {
         assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnlyNulls();
     }
 
+    /*
+     * 학습 항목 제목을 카드로 옮긴 수준("교재 진도 복습 및 실습")이 나왔다. 무엇을 하고 어디까지
+     * 하면 끝인지가 없었고, 근거 파일 대신 "교재의 같은 출처" 같은 표현을 모델이 만들었다.
+     * 규칙 조각은 PlanItemPromptRules 한 곳에 있고 대화 경로 테스트도 같은 목록을 본다 —
+     * 두 경로가 같은 규칙을 공유해야 하기 때문이다. 모델 준수 여부는 여기서 단정하지 않는다.
+     */
+    @Test
+    void systemPrompt_requiresConcreteActionsAndCompletionCriteria_andForbidsInventedSourcesAndHousekeeping() {
+        givenAiResponse(BASELINE, null);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> systemPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(systemPrompt.capture(), any(), anyInt());
+        com.jungwoo.project.memo.ai.PlanItemPromptRules.assertCarriesRules(systemPrompt.getValue());
+        // 이 경로에서 출처로 삼을 수 있는 것은 [대상 프로젝트]에 실린 것뿐이다.
+        assertThat(systemPrompt.getValue())
+                .contains("출처는 [대상 프로젝트]에 실린 학습 항목 제목과 그 옆 괄호의 위치만 쓴다")
+                .contains("\"description\": \"실제로 할 행동 1~3개 · 완료: 확인 가능한 완료 기준\"");
+    }
+
+    /*
+     * 프롬프트가 description에 "행동 · 완료: 기준"을 요구하는데 변환이 reason을 우선하면
+     * 모델이 규칙을 지켜도 제안에는 "왜 지금 하는지"만 남는다. description이 있으면 그것을,
+     * 없을 때만 reason을 쓴다.
+     */
+    @Test
+    void descriptionCarriesActionsAndCompletion_reasonIsOnlyAFallback() {
+        String json = """
+                {
+                  "title": "이번 주 계획", "goalSummary": null, "targetMinutes": 600, "targetMinutesReason": null,
+                  "items": [
+                    {"title":"자료구조 · 반복문 코드의 Big-O 판단",
+                     "description":"단일·중첩 반복문 코드 5개의 시간복잡도 판단 · 완료: 5개 중 4개 이상 설명 가능",
+                     "expectedMinutes":40,"priority":"MUST","courseId":6,"scheduledDate":null,
+                     "reason":"2주차 진도라서"},
+                    {"title":"과제 2번","description":null,
+                     "expectedMinutes":15,"priority":"SHOULD","courseId":6,"scheduledDate":null,
+                     "reason":"마감이 있어서"}
+                  ]
+                }
+                """;
+        when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
+                .thenReturn(Flux.just(chatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + json)));
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        assertThat(captor.getValue()).extracting(ProposalItem::description).containsExactly(
+                "단일·중첩 반복문 코드 5개의 시간복잡도 판단 · 완료: 5개 중 4개 이상 설명 가능",
+                "마감이 있어서");
+        // 짧은 항목(15분)은 이 경로에서 손대지 않고 그대로 넘긴다 — 범위 검사는 AiProposalService가 한다.
+        assertThat(captor.getValue()).extracting(ProposalItem::expectedMinutes).containsExactly(40, 15);
+    }
+
     // ===== fixture =====
 
     private PlanDraftRequest request(String instruction) {
