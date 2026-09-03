@@ -170,10 +170,13 @@ public class AiWorkspaceContextBuilder {
     private static final int MAX_ASSESSMENT_LINES_PER_COURSE = 3;
 
     /**
-     * 상세를 붙이다가 이 길이를 넘으면 남은 프로젝트는 이름과 개수만 싣는다.
+     * 프로젝트 상세(학습 항목·평가)에 쓸 수 있는 길이. 나머지는 오늘·이번 주 블록 몫이다.
      *
-     * <p>truncate가 뒤를 자르면 뒤쪽 프로젝트는 이름조차 사라진다. 그것보다는 "전부 이름은
-     * 있고 앞쪽만 자세한" 편이 낫다 — 모델이 프로젝트가 있다는 사실 자체는 알아야 한다.
+     * <p>이 예산을 프로젝트 순서대로 소비하면 앞쪽 프로젝트가 6줄씩 다 쓰고 뒤쪽 프로젝트는
+     * 이름만 남는다 — 실제로 활성 7개 중 마지막 자료구조가 그렇게 이름만 실렸고, 모델은
+     * 컨텍스트에 없는 "스택/큐/트리"를 일반 지식으로 지어냈다(2주차 진도는 ADT·Big-O였다).
+     * 그래서 두 단계로 나눈다: 1차로 모든 프로젝트에 현재 주차와 가장 가까운 항목 1개씩,
+     * 2차로 남는 예산을 돌아가며 나눈다({@link #appendProjectsOverviewBlock}).
      */
     private int detailBudgetChars() {
         return Math.max(0, (int) (maxStateChars * 0.7));
@@ -204,49 +207,175 @@ public class AiWorkspaceContextBuilder {
             return;
         }
 
-        Map<Long, List<RoutineResponse>> routinesByCourse = detailed
-                ? classSchedulesByCourse(userId) : Map.of();
-
         sb.append("[프로젝트] 활성 ").append(courses.size()).append("개 (#뒤는 courseId)\n");
-        for (CourseResponse course : courses) {
-            sb.append("- #").append(course.getCourseId()).append(' ').append(course.getTitle());
-            if (course.getGroupLabel() != null) {
-                sb.append(" (").append(course.getGroupLabel()).append(')');
-            }
-            if (course.getTopicCount() > 0) {
-                sb.append(" · 학습 항목 ").append(course.getTopicCount()).append("개");
-                if (course.getLearnedTopicCount() > 0) {
-                    sb.append("(완료 ").append(course.getLearnedTopicCount()).append(')');
-                }
-            } else {
-                sb.append(" · 학습 구조 아직 없음");
+        if (!detailed) {
+            for (CourseResponse course : courses) {
+                appendCourseNameLine(sb, course);
             }
             sb.append('\n');
+            return;
+        }
 
-            if (!detailed) {
-                continue;
-            }
-
+        Map<Long, List<RoutineResponse>> routinesByCourse = classSchedulesByCourse(userId);
+        List<CourseDetail> details = new ArrayList<>();
+        for (CourseResponse course : courses) {
             List<RoutineResponse> routines = routinesByCourse.getOrDefault(course.getCourseId(), List.of());
             LocalDate semesterStart = semesterStartOf(routines);
             Integer currentWeek = weekNumberOf(semesterStart, today);
+            details.add(new CourseDetail(
+                    course,
+                    courseHeadLine(course, routines, semesterStart, currentWeek),
+                    courseTopicLines(userId, course.getCourseId(), currentWeek),
+                    courseAssessmentLines(userId, course.getCourseId())));
+        }
 
-            appendCourseHeadLine(sb, course, routines, semesterStart, currentWeek);
-
-            // 예산을 넘겼으면 남은 프로젝트는 이름과 개수까지만. 이름조차 잘리는 것보다 낫다.
-            if (sb.length() >= detailBudgetChars()) {
-                continue;
+        /*
+         * 1차: 모든 프로젝트에 이름·머리줄·가장 가까운 항목 1개. 예산과 무관하게 싣는다 —
+         * 모델이 "무엇을 할 차례인지"를 프로젝트마다 하나는 알아야 지어내지 않는다.
+         */
+        int[] topicAlloc = new int[details.size()];
+        int[] assessmentAlloc = new int[details.size()];
+        int used = sb.length();
+        for (int i = 0; i < details.size(); i++) {
+            CourseDetail d = details.get(i);
+            used += d.fixedCost();
+            if (!d.topics().ordered().isEmpty()) {
+                topicAlloc[i] = 1;
+                used += d.topics().costOfHeader() + d.topics().costOf(0);
             }
-            appendCourseTopicLines(sb, userId, course.getCourseId(), currentWeek);
-            appendCourseAssessmentLines(sb, userId, course.getCourseId());
+        }
+
+        /*
+         * 2차: 남은 예산을 돌아가며 나눈다. 한 바퀴에 프로젝트당 항목 1줄씩, 상한 6줄까지.
+         * 그다음 평가 줄. 순서대로 채우면 앞쪽이 다 먹으므로 바퀴로 돈다.
+         */
+        int budget = detailBudgetChars();
+        boolean added = true;
+        while (added) {
+            added = false;
+            for (int i = 0; i < details.size(); i++) {
+                TopicLines t = details.get(i).topics();
+                int next = topicAlloc[i];
+                if (next >= Math.min(t.ordered().size(), MAX_TOPIC_LINES_PER_COURSE)) {
+                    continue;
+                }
+                int cost = t.costOf(next);
+                if (used + cost > budget) {
+                    continue;
+                }
+                topicAlloc[i] = next + 1;
+                used += cost;
+                added = true;
+            }
+        }
+        added = true;
+        while (added) {
+            added = false;
+            for (int i = 0; i < details.size(); i++) {
+                List<String> a = details.get(i).assessments();
+                int next = assessmentAlloc[i];
+                if (next >= Math.min(a.size(), MAX_ASSESSMENT_LINES_PER_COURSE)) {
+                    continue;
+                }
+                int cost = (next == 0 ? "    평가:\n".length() : 0) + 6 + a.get(next).length() + 1;
+                if (used + cost > budget) {
+                    continue;
+                }
+                assessmentAlloc[i] = next + 1;
+                used += cost;
+                added = true;
+            }
+        }
+
+        for (int i = 0; i < details.size(); i++) {
+            CourseDetail d = details.get(i);
+            appendCourseNameLine(sb, d.course());
+            if (d.headLine() != null) {
+                sb.append("    ").append(d.headLine()).append('\n');
+            }
+            d.topics().render(sb, topicAlloc[i]);
+            if (assessmentAlloc[i] > 0) {
+                sb.append("    평가:\n");
+                for (int k = 0; k < assessmentAlloc[i]; k++) {
+                    sb.append("      ").append(d.assessments().get(k)).append('\n');
+                }
+            }
         }
         sb.append('\n');
     }
 
+    private void appendCourseNameLine(StringBuilder sb, CourseResponse course) {
+        sb.append("- #").append(course.getCourseId()).append(' ').append(course.getTitle());
+        if (course.getGroupLabel() != null) {
+            sb.append(" (").append(course.getGroupLabel()).append(')');
+        }
+        if (course.getTopicCount() > 0) {
+            sb.append(" · 학습 항목 ").append(course.getTopicCount()).append("개");
+            if (course.getLearnedTopicCount() > 0) {
+                sb.append("(완료 ").append(course.getLearnedTopicCount()).append(')');
+            }
+        } else {
+            sb.append(" · 학습 구조 아직 없음");
+        }
+        sb.append('\n');
+    }
+
+    /** 한 프로젝트의 상세 재료. 예산 배분이 끝난 뒤에 한 번에 렌더한다. */
+    private record CourseDetail(CourseResponse course, String headLine, TopicLines topics,
+                                List<String> assessments) {
+        /** 이름 줄과 머리줄은 예산과 무관하게 항상 실린다. 그 길이. */
+        int fixedCost() {
+            int nameLine = 20 + course.getTitle().length()
+                    + (course.getGroupLabel() != null ? course.getGroupLabel().length() + 3 : 0);
+            return nameLine + (headLine != null ? headLine.length() + 5 : 0);
+        }
+    }
+
+    /**
+     * 한 프로젝트의 학습 항목 줄들.
+     *
+     * @param ordered   실을 후보를 "현재 주차와 가까운 순"으로 늘어놓은 것. 1차 배분은 이 첫
+     *                  줄을 집는다. 주차를 모르면 트리 순서 그대로다.
+     * @param treeIndex ordered의 각 줄이 트리에서 몇 번째였는지. 렌더는 트리 순서로 되돌린다 —
+     *                  모델이 읽는 것은 강의 진도 순이어야 한다.
+     * @param total     전체 항목 수. "(나머지 N개는 생략)"의 N을 정직하게 세기 위해서다.
+     */
+    private record TopicLines(List<String> ordered, List<Integer> treeIndex, int total, boolean nearby) {
+        static TopicLines empty() {
+            return new TopicLines(List.of(), List.of(), 0, false);
+        }
+
+        int costOfHeader() {
+            return "    학습 항목(이번 주 전후):\n".length() + "      (나머지 99개는 생략)\n".length();
+        }
+
+        int costOf(int index) {
+            return 6 + ordered.get(index).length() + 1;
+        }
+
+        void render(StringBuilder sb, int count) {
+            if (count <= 0) {
+                return;
+            }
+            sb.append("    학습 항목").append(nearby ? "(이번 주 전후)" : "(앞에서부터)").append(":\n");
+            List<Integer> picked = new ArrayList<>();
+            for (int i = 0; i < count; i++) {
+                picked.add(i);
+            }
+            picked.sort(java.util.Comparator.comparingInt(treeIndex::get));
+            for (int i : picked) {
+                sb.append("      ").append(ordered.get(i)).append('\n');
+            }
+            int hidden = total - count;
+            if (hidden > 0) {
+                sb.append("      (나머지 ").append(hidden).append("개는 생략)\n");
+            }
+        }
+    }
+
     /** 교재·수업 시간·개강일을 한 줄로. 개강일이 있어야 모델이 지금 몇 주차인지 계산할 수 있다. */
-    private void appendCourseHeadLine(StringBuilder sb, CourseResponse course,
-                                      List<RoutineResponse> routines, LocalDate semesterStart,
-                                      Integer currentWeek) {
+    private String courseHeadLine(CourseResponse course, List<RoutineResponse> routines,
+                                  LocalDate semesterStart, Integer currentWeek) {
         List<String> parts = new ArrayList<>();
         if (course.getTextbookTitle() != null) {
             parts.add("교재 " + course.getTextbookTitle());
@@ -259,53 +388,66 @@ public class AiWorkspaceContextBuilder {
             String weekPart = currentWeek != null ? " (오늘 " + currentWeek + "주차)" : "";
             parts.add("개강 " + semesterStart.format(DATE_FMT) + weekPart);
         }
-        if (!parts.isEmpty()) {
-            sb.append("    ").append(String.join(" · ", parts)).append('\n');
-        }
+        return parts.isEmpty() ? null : String.join(" · ", parts);
     }
 
     /**
-     * 학습 항목. 주차를 알면 이번 주 전후만, 모르면 앞에서부터 자른다.
+     * 학습 항목 후보. 주차를 알면 이번 주 전후([지금-1, 지금+2])만, 모르면 앞에서부터.
      *
      * <p>source_locator에 "2주차"처럼 강의 진도 위치가 붙어 있다. 교재 목차가 아니라 강의
      * 진도라서 이 값이 곧 "언제 배우는가"다. 지금 주차 근처만 실으면 모델이 한참 뒤 주차를
      * 당겨오지 않는다 — 계획 경로에서 A/B로 확인된 것과 같은 이유다.
+     *
+     * <p>후보는 "현재 주차와 가까운 순"으로 정렬해 돌려준다(같은 거리면 지난 주보다 다음 주,
+     * 그다음은 트리 순서). 1차 배분이 첫 줄 하나만 집어도 그것이 지금 할 차례인 항목이게
+     * 하기 위해서다. 렌더할 때는 다시 트리 순서로 되돌린다.
      */
-    private void appendCourseTopicLines(StringBuilder sb, Long userId, Long courseId, Integer currentWeek) {
+    private TopicLines courseTopicLines(Long userId, Long courseId, Integer currentWeek) {
         List<TopicResponse> tree;
         try {
             tree = topicService.getTopicTree(userId, courseId);
         } catch (RuntimeException e) {
             log.warn("학습 항목 컨텍스트 생략: userId={}, courseId={}", userId, courseId, e);
-            return;
+            return TopicLines.empty();
         }
         if (tree == null || tree.isEmpty()) {
-            return;
+            return TopicLines.empty();
         }
 
         List<String> all = new ArrayList<>();
-        List<String> nearby = new ArrayList<>();
-        collectTopicLines(tree, currentWeek, all, nearby);
+        List<Integer> nearbyIndex = new ArrayList<>();
+        List<Integer> nearbyWeek = new ArrayList<>();
+        collectTopicLines(tree, currentWeek, all, nearbyIndex, nearbyWeek);
 
-        List<String> chosen = !nearby.isEmpty() ? nearby : all;
-        int shown = Math.min(chosen.size(), MAX_TOPIC_LINES_PER_COURSE);
-        if (shown == 0) {
-            return;
+        if (nearbyIndex.isEmpty()) {
+            List<Integer> index = new ArrayList<>();
+            for (int i = 0; i < all.size(); i++) {
+                index.add(i);
+            }
+            return new TopicLines(all, index, all.size(), false);
         }
-        sb.append("    학습 항목")
-                .append(!nearby.isEmpty() ? "(이번 주 전후)" : "(앞에서부터)").append(":\n");
-        for (int i = 0; i < shown; i++) {
-            sb.append("      ").append(chosen.get(i)).append('\n');
+
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < nearbyIndex.size(); i++) {
+            order.add(i);
         }
-        int hidden = all.size() - shown;
-        if (hidden > 0) {
-            sb.append("      (나머지 ").append(hidden).append("개는 생략)\n");
+        final int week = currentWeek;
+        order.sort(java.util.Comparator
+                .comparingInt((Integer i) -> Math.abs(nearbyWeek.get(i) - week))
+                .thenComparingInt(i -> nearbyWeek.get(i) >= week ? 0 : 1)
+                .thenComparingInt(nearbyIndex::get));
+        List<String> ordered = new ArrayList<>();
+        List<Integer> treeIndex = new ArrayList<>();
+        for (int i : order) {
+            ordered.add(all.get(nearbyIndex.get(i)));
+            treeIndex.add(nearbyIndex.get(i));
         }
+        return new TopicLines(ordered, treeIndex, all.size(), true);
     }
 
-    /** 트리를 줄 목록으로 펼치면서, 주차를 아는 경우 이번 주 전후만 따로 모은다. */
+    /** 트리를 줄 목록으로 펼치면서, 주차를 아는 경우 이번 주 전후의 위치와 주차를 따로 모은다. */
     private void collectTopicLines(List<TopicResponse> nodes, Integer currentWeek,
-                                   List<String> all, List<String> nearby) {
+                                   List<String> all, List<Integer> nearbyIndex, List<Integer> nearbyWeek) {
         for (TopicResponse node : nodes) {
             StringBuilder line = new StringBuilder("- ").append(node.getTitle());
             String locator = node.getSourceLocator();
@@ -317,36 +459,30 @@ public class AiWorkspaceContextBuilder {
             Integer week = weekInLocator(locator);
             if (currentWeek != null && week != null
                     && week >= currentWeek - 1 && week <= currentWeek + 2) {
-                nearby.add(line.toString());
+                nearbyIndex.add(all.size() - 1);
+                nearbyWeek.add(week);
             }
             if (node.getChildren() != null) {
-                collectTopicLines(node.getChildren(), currentWeek, all, nearby);
+                collectTopicLines(node.getChildren(), currentWeek, all, nearbyIndex, nearbyWeek);
             }
         }
     }
 
     /** 평가·시험만. 담당교수·연구실·수업도구는 계획에 영향을 주지 않는다. */
-    private void appendCourseAssessmentLines(StringBuilder sb, Long userId, Long courseId) {
+    private List<String> courseAssessmentLines(Long userId, Long courseId) {
         List<CourseNoteResponse> notes;
         try {
             notes = courseNoteService.getByCourse(userId, courseId);
         } catch (RuntimeException e) {
             log.warn("과목 정보 컨텍스트 생략: userId={}, courseId={}", userId, courseId, e);
-            return;
+            return List.of();
         }
-        List<String> lines = notes.stream()
+        return notes.stream()
                 .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
                 .map(note -> "- " + note.getLabel() + ": " + note.getDetail())
                 .distinct()
                 .limit(MAX_ASSESSMENT_LINES_PER_COURSE)
                 .toList();
-        if (lines.isEmpty()) {
-            return;
-        }
-        sb.append("    평가:\n");
-        for (String line : lines) {
-            sb.append("      ").append(line).append('\n');
-        }
     }
 
     /** 개강일. course_notes에는 없고 그 과목 수업(루틴)의 effective_from이 유일한 근거다. */

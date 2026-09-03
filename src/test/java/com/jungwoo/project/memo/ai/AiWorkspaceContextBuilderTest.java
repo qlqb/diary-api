@@ -32,7 +32,9 @@ import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
 import com.jungwoo.project.memo.course.dto.CourseNoteResponse;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import org.springframework.test.util.ReflectionTestUtils;
 import java.time.DayOfWeek;
+import java.util.ArrayList;
 import java.util.Set;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -373,8 +375,75 @@ class AiWorkspaceContextBuilderTest {
         assertThat(block).contains("(2주차)");
         assertThat(block).contains("(4주차)");
         // 한참 뒤 주차를 당겨오지 않게 애초에 싣지 않는다.
+        assertThat(block).doesNotContain("(5주차)");
+        assertThat(block).doesNotContain("(9주차)");
         assertThat(block).doesNotContain("(10주차)");
         assertThat(block).contains("나머지");
+    }
+
+    /*
+     * 활성 7개 프로젝트에서 마지막 자료구조가 이름만 실렸다. 상세 예산(70%)을 프로젝트
+     * 순서대로 쓰다가 6번째에서 바닥났기 때문이다. 모델은 컨텍스트에 없는 "스택/큐/트리"를
+     * 일반 지식으로 지어냈다 — 2주차 진도는 ADT·Big-O였다. 이제 1차로 모든 프로젝트에
+     * 현재 주차 항목 1개씩을 먼저 배정하고, 남는 예산을 돌아가며 나눈다.
+     */
+    @Test
+    void sevenProjects_theLastOneStillCarriesItsCurrentWeekTopic() {
+        List<CourseResponse> courses = new ArrayList<>();
+        List<RoutineResponse> routines = new ArrayList<>();
+        for (long i = 1; i <= 7; i++) {
+            courses.add(course(i, "과목" + i, 14, 0, null));
+            routines.add(classRoutine(80 + i, i, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0)));
+            when(topicService.getTopicTree(USER_ID, i)).thenReturn(longSyllabus(i));
+            when(courseNoteService.getByCourse(USER_ID, i)).thenReturn(List.of(
+                    note("ASSESSMENT", "성적평가 비율", "중간 30%, 기말 30%, 과제 20%, 출석 20%")));
+        }
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(courses);
+        when(routineService.list(USER_ID)).thenReturn(routines);
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 4).atTime(2, 0));
+
+        for (long i = 1; i <= 7; i++) {
+            assertThat(block).contains("#" + i + " 과목" + i);
+            assertThat(block).as("과목%d의 현재 주차 항목", i)
+                    .contains("과목" + i + " 2주차 진도 항목의 긴 제목 (2주차)");
+        }
+        // 예산 상한은 그대로다. 프로젝트 상세가 이번 주 일정 블록을 밀어내지 않는다.
+        assertThat(block.length()).isLessThanOrEqualTo(3500);
+        assertThat(block).contains("[이번 주 일정]");
+        assertThat(block).doesNotContain("(10주차)");
+    }
+
+    /** 예산이 빠듯하면 프로젝트당 1줄만 남는데, 그 1줄은 앞에서부터가 아니라 지금 주차다. */
+    @Test
+    void underTightBudget_theOneLineKept_isTheCurrentWeekTopic() {
+        // 상세 예산(70%)이 1차 배분(이름·머리줄·항목 1줄씩)만으로 거의 차는 크기.
+        ReflectionTestUtils.setField(builder, "maxStateChars", 480);
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(1L, "과목1", 14, 0, null), course(2L, "과목2", 14, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(81L, 1L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0)),
+                classRoutine(82L, 2L, DayOfWeek.WEDNESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 1L)).thenReturn(longSyllabus(1L));
+        when(topicService.getTopicTree(USER_ID, 2L)).thenReturn(longSyllabus(2L));
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 4).atTime(2, 0));
+
+        assertThat(block).contains("과목1 2주차 진도 항목의 긴 제목 (2주차)");
+        assertThat(block).contains("과목2 2주차 진도 항목의 긴 제목 (2주차)");
+        assertThat(block).doesNotContain("(1주차)");
+        assertThat(block).doesNotContain("(3주차)");
+        assertThat(block).contains("(나머지 13개는 생략)");
+    }
+
+    /** 1~14주차, 한 줄이 길어서 예산을 실제로 압박하는 강의계획서 모양. */
+    private List<TopicResponse> longSyllabus(long courseNo) {
+        List<TopicResponse> topics = new ArrayList<>();
+        for (int week = 1; week <= 14; week++) {
+            topics.add(topic(courseNo * 100 + week,
+                    "과목" + courseNo + " " + week + "주차 진도 항목의 긴 제목", week + "주차"));
+        }
+        return topics;
     }
 
     @Test

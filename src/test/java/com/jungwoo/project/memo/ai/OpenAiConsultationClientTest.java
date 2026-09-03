@@ -118,6 +118,23 @@ class OpenAiConsultationClientTest {
     }
 
     /*
+     * 2주차인데 "스택/큐/트리"(5~10주차)가 나왔다. 컨텍스트에 그 과목의 학습 항목이 한 줄도
+     * 없었고(예산 순서 문제, AiWorkspaceContextBuilder에서 고침), 프롬프트에는 "없으면 넓게
+     * 잡으라"고만 있어 모델이 과목명으로 일반 커리큘럼을 채웠다. 컨텍스트 밖 진도 추측을
+     * 금지하고, 맞는 항목이 없으면 생략하거나 확인하게 한다.
+     */
+    @Test
+    void systemPrompt_confinesConversationPlansToTheWeeksInContext() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("주차가 표시된 학습 항목이 있으면 그 제목 범위 안에서만 계획한다");
+        assertThat(prompt).contains("컨텍스트에 없는 이후 주차 개념을 일반 지식으로 만들어내지 않는다");
+        assertThat(prompt).contains("스택·큐·트리 같은 일반적인 커리큘럼을 추측하지 않는다");
+        assertThat(prompt).contains("임의의 진도를 만들지 말고 그 과목을 생략하거나");
+        assertThat(prompt).contains("사용자에게 확인한다");
+    }
+
+    /*
      * 학습 항목 제목을 카드 제목으로 옮긴 수준("교재 진도 복습 및 실습 · 90분")이 나왔다.
      * 무엇을 하고 어디까지 하면 끝인지가 없고, 모델이 "교재의 같은 출처" 같은 근거를 지어냈다.
      * 전용 계획 경로(PlanDraftService)와 같은 규칙을 대화 경로에도 싣는다 — 조각 목록은
