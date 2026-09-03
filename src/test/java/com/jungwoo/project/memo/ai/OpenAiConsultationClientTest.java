@@ -118,6 +118,21 @@ class OpenAiConsultationClientTest {
     }
 
     /*
+     * 대화 경로 항목도 60분에 몰렸다. 여기에는 5~120이라는 범위 말고는 시간에 대한 말이 없었다.
+     * 전용 계획 경로와 같은 조각(PlanItemPromptRules.DURATION_PHRASES)을 싣는다. 대화 경로에서
+     * "채워야 할 양"으로 읽힐 수 있는 것은 [남는 시간(추정)]이라 그것도 예산이라고 못 박는다.
+     */
+    @Test
+    void systemPrompt_givesTaskSizedDurations_andTreatsRemainingTimeAsABudget() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        PlanItemPromptRules.assertCarriesDurationRules(prompt);
+        assertThat(prompt).contains("[남는 시간(추정)]도 예산이지 채워야 할 양이 아니다");
+        // 서버 검증 범위 안내는 그대로다.
+        assertThat(prompt).contains("\"expectedMinutes\": 5에서 120 사이의 양의 정수");
+    }
+
+    /*
      * 2주차인데 "스택/큐/트리"(5~10주차)가 나왔다. 컨텍스트에 그 과목의 학습 항목이 한 줄도
      * 없었고(예산 순서 문제, AiWorkspaceContextBuilder에서 고침), 프롬프트에는 "없으면 넓게
      * 잡으라"고만 있어 모델이 과목명으로 일반 커리큘럼을 채웠다. 컨텍스트 밖 진도 추측을

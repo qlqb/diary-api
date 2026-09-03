@@ -341,6 +341,32 @@ class PlanDraftServiceTest {
     }
 
     /*
+     * 수동 실행에서 5개 항목이 전부 60분이었다(합 300분 = 목표). [시간] 블록의 "합이 목표 근처가
+     * 되게 하라"와 "잘게 쪼개지 마라"가 합쳐진 결과다. 목표를 예산으로 읽게 하고 시스템
+     * 프롬프트에 작업 성격별 범위와 15분 우선을 넣는다. 5~120분 검증은 AiProposalService가
+     * 그대로 한다.
+     */
+    @Test
+    void prompts_treatTheTargetAsABudget_andGiveTaskSizedDurations() {
+        givenAiResponse(BASELINE, null);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> systemPrompt = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(systemPrompt.capture(), userPrompt.capture(), anyInt());
+        com.jungwoo.project.memo.ai.PlanItemPromptRules.assertCarriesDurationRules(systemPrompt.getValue());
+        assertThat(userPrompt.getValue())
+                .contains("이 목표는 계획 예산이지 소진할 할당량이 아니다")
+                .contains("목표를 채우려고 항목 시간을 늘리지 마라")
+                // 기존 규칙은 유지한다.
+                .contains("항목을 잘게 쪼개 개수를 늘리지 마라")
+                .doesNotContain("목표 근처가 되게");
+        // 5~120분 범위 안내도 그대로다.
+        assertThat(systemPrompt.getValue()).contains("expectedMinutes는 5~120 사이여야 한다");
+    }
+
+    /*
      * 프롬프트가 description에 "행동 · 완료: 기준"을 요구하는데 변환이 reason을 우선하면
      * 모델이 규칙을 지켜도 제안에는 "왜 지금 하는지"만 남는다. description이 있으면 그것을,
      * 없을 때만 reason을 쓴다.

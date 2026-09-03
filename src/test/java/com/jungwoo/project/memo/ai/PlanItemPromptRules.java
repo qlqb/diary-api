@@ -44,4 +44,33 @@ public final class PlanItemPromptRules {
             assertThat(prompt).as("프롬프트에 규칙 조각이 있어야 한다: %s", phrase).contains(phrase);
         }
     }
+
+    /**
+     * 소요 시간 규칙. 결과가 60·90분에 몰린 원인은 "목표 시간 합이 목표 근처가 되게 하라"와
+     * "잘게 쪼개지 마라"가 합쳐져 적은 개수로 목표를 채우게 한 데 있었다(5개 × 60분 = 목표
+     * 300분). 목표를 예산으로 읽게 하고, 작업 성격별 참고 범위와 15분 우선을 준다.
+     * 5~120분 서버 검증(AiProposalService)은 그대로다.
+     */
+    public static final List<String> DURATION_PHRASES = List.of(
+            "항목 길이는 실제 행동과 완료 기준에 필요한 시간으로 정한다",
+            // 목표 시간은 할당량이 아니라 예산
+            "소진할 할당량이 아니라 계획 예산이다",
+            "목표를 채우려고 개별 항목 시간을 늘리지",
+            // 의미 없는 쪼개기·억지 합치기 금지
+            "같은 행동을 의미 없이 쪼개 항목 수만 늘리지 않고",
+            "한 항목에 합치지도 않는다",
+            // 다양한 참고 범위
+            "짧은 회수·환경 확인 15~30분",
+            "수업 직후 핵심 복습 20~40분",
+            "실습 30~45분, 개념 이해와 문제 풀이 45~90분",
+            // 15분 우선
+            "15분을 우선한다",
+            "15분 미만은 사용자가 명시했거나 작업상 필요한 경우에만 쓴다"
+    );
+
+    public static void assertCarriesDurationRules(String prompt) {
+        for (String phrase : DURATION_PHRASES) {
+            assertThat(prompt).as("프롬프트에 소요 시간 규칙 조각이 있어야 한다: %s", phrase).contains(phrase);
+        }
+    }
 }
