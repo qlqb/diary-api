@@ -106,7 +106,7 @@ class AiConversationServiceTest {
         // clock 빈이 주입되지 않는다 — 고정 Clock을 직접 넣어 실제 서버 시각에 의존하지 않게 한다.
         ReflectionTestUtils.setField(service, "clock", FIXED_CLOCK);
         // 화면 상태 블록은 이 테스트의 관심사가 아니다 — 별도 테스트에서 다루고 여기서는 비운다.
-        lenient().when(aiWorkspaceContextBuilder.build(any(), any(), any())).thenReturn("");
+        lenient().when(aiWorkspaceContextBuilder.build(any(), any(), any(), any())).thenReturn("");
     }
 
     // ===== 기본 스트리밍/시간 블록 =====

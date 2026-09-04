@@ -2,6 +2,7 @@ package com.jungwoo.project.memo.ai;
 
 import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
+import com.jungwoo.project.memo.ai.dto.RequestedAction;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.domain.Course;
@@ -106,11 +107,22 @@ public class AiWorkspaceContextBuilder {
      */
     @Transactional(readOnly = true)
     public String build(AiConversation conversation, Long userId, LocalDateTime now) {
+        return build(conversation, userId, now, RequestedAction.AUTO);
+    }
+
+    /**
+     * @param requestedAction 이 턴의 요청 모드. 상세 여부를 대화의 scope(진입 탭)만으로
+     *                        정하지 않기 위해 받는다 — 아래 프로젝트 블록 주석 참고.
+     */
+    @Transactional(readOnly = true)
+    public String build(AiConversation conversation, Long userId, LocalDateTime now,
+                        RequestedAction requestedAction) {
         LocalDate today = now.toLocalDate();
         StringBuilder sb = new StringBuilder();
         AiProposalTargetScope scope = conversation.getScope() != null
                 ? conversation.getScope() : AiProposalTargetScope.TODAY;
         Long courseId = conversation.getCourseId();
+        boolean creatingProposal = requestedAction == RequestedAction.CREATE_PROPOSAL;
 
         if (courseId != null) {
             // 우선 프로젝트 — 학습 항목까지 자세히.
@@ -124,11 +136,18 @@ public class AiWorkspaceContextBuilder {
              * 0바이트였고, 과목 이름조차 모른 채 "다른 과목/활동 균형 잡기" 같은 일반론을
              * 내놓았다. 계획을 짜라면서 무엇을 계획할지는 안 알려준 셈이다.
              *
-             * 여러 프로젝트에 걸친 계획 요청(EXECUTION/MIXED)일 때만 자세히 싣는다. 전부
-             * 자세히 넣으면 토큰만 늘고 예산에 걸려 앞쪽만 살아남는다.
+             * 상세(학습 항목·평가)는 두 경우에 싣는다. 여러 프로젝트에 걸친 대화(EXECUTION/
+             * MIXED)이거나, 어느 탭에서 시작했든 사용자가 초안 생성 버튼을 눌렀을 때
+             * (CREATE_PROPOSAL)다. 오늘 탭(TODAY)에서 "피곤해"라고 말할 때 모든 과목의
+             * 항목을 실을 이유는 없지만, 같은 대화에서 "이번 주 계획 짜줘"로 생성을 누르면
+             * 학습 항목 없이는 모델이 과목명으로 진도를 지어낸다 — 실제로 2주차에
+             * "스택/큐/트리"가 나온 재현 대화가 TODAY였다. 계획 품질이 진입 탭에 따라
+             * 달라지면 안 된다.
              */
             appendProjectsOverviewBlock(sb, userId,
-                    scope == AiProposalTargetScope.EXECUTION || scope == AiProposalTargetScope.MIXED,
+                    creatingProposal
+                            || scope == AiProposalTargetScope.EXECUTION
+                            || scope == AiProposalTargetScope.MIXED,
                     today);
         }
 

@@ -347,7 +347,7 @@ public class AiConversationService {
 
         // 지금 화면의 실제 상태(오늘 실행/이번 주 일정/프로젝트 자료)를 가장 먼저 확보하고 그
         // 길이만큼 예산에서 뺀다 — 이 블록이 없으면 "오늘 줄여줘" 같은 요청의 근거 자체가 없다.
-        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime());
+        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(), request.getRequestedAction());
         int contextBudgetChars = Math.max(0, maxChars - currentMessageChars - workspaceBlock.length());
 
         // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
