@@ -1423,11 +1423,11 @@ class AiConversationServiceTest {
                 .lastMessageAt(LocalDateTime.of(2026, 8, 5, 10, 0))
                 .pendingProposalCount(2)
                 .build();
-        when(aiConversationMapper.findSummariesByUserId(USER_ID, null, true)).thenReturn(new ArrayList<>(List.of(raw)));
+        when(aiConversationMapper.findSummariesByUserId(USER_ID, null, true, null)).thenReturn(new ArrayList<>(List.of(raw)));
 
-        List<AiConversationResponse> result = service.listConversations(USER_ID, null, true);
+        List<AiConversationResponse> result = service.listConversations(USER_ID, null, true, null);
 
-        verify(aiConversationMapper).findSummariesByUserId(USER_ID, null, true);
+        verify(aiConversationMapper).findSummariesByUserId(USER_ID, null, true, null);
         assertThat(result).hasSize(1);
         // 줄바꿈·연속 공백이 하나로 정리되고, 24자를 넘으면 말줄임표가 붙는다.
         assertThat(result.get(0).getTitle()).doesNotContain("\n");
@@ -1444,11 +1444,26 @@ class AiConversationServiceTest {
                 .lastMessageAt(LocalDateTime.now())
                 .pendingProposalCount(0)
                 .build();
-        when(aiConversationMapper.findSummariesByUserId(USER_ID, null, true)).thenReturn(new ArrayList<>(List.of(raw)));
+        when(aiConversationMapper.findSummariesByUserId(USER_ID, null, true, null)).thenReturn(new ArrayList<>(List.of(raw)));
 
-        List<AiConversationResponse> result = service.listConversations(USER_ID, null, true);
+        List<AiConversationResponse> result = service.listConversations(USER_ID, null, true, null);
 
         assertThat(result.get(0).getTitle()).isEqualTo("안녕");
+    }
+
+    /*
+     * 오늘·일정·전체 탭은 전부 courseId가 없다. scope 없이 조회하면 일정 탭이 오늘 탭에서 만든
+     * 대화를 최근 것이라는 이유로 다시 열어, 화면은 일정인데 저장된 대화는 TODAY인 상태가 됐다.
+     * 화면이 보낸 scope를 그대로 조회 조건으로 넘긴다. 예전 클라이언트(scope 생략)는 그대로다.
+     */
+    @Test
+    void listConversations_filtersByScope_whenTheScreenSendsOne() {
+        when(aiConversationMapper.findSummariesByUserId(USER_ID, null, true, "EXECUTION"))
+                .thenReturn(new ArrayList<>());
+
+        service.listConversations(USER_ID, null, true, AiProposalTargetScope.EXECUTION);
+
+        verify(aiConversationMapper).findSummariesByUserId(USER_ID, null, true, "EXECUTION");
     }
 
     /*

@@ -229,11 +229,15 @@ public class AiConversationService {
     /**
      * @param courseId          지정하면 그 프로젝트의 대화만
      * @param onlyWithoutCourse true면 프로젝트에 속하지 않은 대화만(오늘/일정/전체 목록)
+     * @param scope             지정하면 그 화면 범위에서 만든 대화만. null이면 범위를 가리지 않는다
+     *                          (예전 클라이언트 호환). 오늘·일정·전체 탭은 전부 courseId가 없어서
+     *                          이 값 없이는 다른 탭의 대화를 다시 열게 된다.
      */
     @Transactional(readOnly = true)
-    public List<AiConversationResponse> listConversations(Long userId, Long courseId, boolean onlyWithoutCourse) {
-        List<AiConversationResponse> summaries =
-                aiConversationMapper.findSummariesByUserId(userId, courseId, onlyWithoutCourse);
+    public List<AiConversationResponse> listConversations(Long userId, Long courseId, boolean onlyWithoutCourse,
+                                                          AiProposalTargetScope scope) {
+        List<AiConversationResponse> summaries = aiConversationMapper.findSummariesByUserId(
+                userId, courseId, onlyWithoutCourse, scope != null ? scope.name() : null);
         for (AiConversationResponse summary : summaries) {
             summary.setTitle(buildConversationTitle(summary.getTitle()));
         }

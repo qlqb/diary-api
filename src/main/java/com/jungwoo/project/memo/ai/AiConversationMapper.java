@@ -22,10 +22,12 @@ public interface AiConversationMapper {
      *
      * @param courseId            지정하면 그 프로젝트 대화만
      * @param onlyWithoutCourse   true면 프로젝트에 속하지 않은 대화만
+     * @param scope               지정하면 그 화면 범위(AiProposalTargetScope 이름)에서 만든 대화만
      */
     List<AiConversationResponse> findSummariesByUserId(@Param("userId") Long userId,
                                                         @Param("courseId") Long courseId,
-                                                        @Param("onlyWithoutCourse") boolean onlyWithoutCourse);
+                                                        @Param("onlyWithoutCourse") boolean onlyWithoutCourse,
+                                                        @Param("scope") String scope);
 
     /**
      * 대화 상태 변경. 사용자가 대화를 삭제할 때 ARCHIVED로 내리는 데 쓴다 —

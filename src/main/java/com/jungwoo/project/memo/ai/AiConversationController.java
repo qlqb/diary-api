@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.ai;
 
+import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.dto.AiConversationCreateRequest;
 import com.jungwoo.project.memo.ai.dto.AiConversationResponse;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
@@ -59,14 +60,20 @@ public class AiConversationController {
      * courseId를 주면 그 프로젝트에서 나눈 대화만 돌려준다(프로젝트를 다시 열었을 때 이어가기).
      * courseId 없이 부르면 프로젝트에 속하지 않은 대화만 돌려준다 — 전역 상담 목록에 프로젝트
      * 대화가 섞이면 "지금 어느 맥락에서 이야기하고 있는지"가 흐려지기 때문이다.
+     *
+     * scope를 주면 그 화면 범위(TODAY/EXECUTION/MIXED/PLAN)에서 만든 대화만 돌려준다. 오늘·
+     * 일정·전체 탭은 모두 courseId가 없어서, scope 없이는 오늘 탭이 일정 탭에서 만든 대화를
+     * 최근 것이라는 이유로 다시 열었다 — 화면은 일정인데 저장된 대화는 TODAY인 상태가 생긴다.
+     * 예전 클라이언트를 위해 생략은 허용하지만 새 화면은 항상 보낸다.
      */
     @GetMapping
     public ResponseEntity<List<AiConversationResponse>> list(
             @AuthenticationPrincipal UserPrincipal principal,
-            @RequestParam(required = false) Long courseId
+            @RequestParam(required = false) Long courseId,
+            @RequestParam(required = false) AiProposalTargetScope scope
     ) {
         return ResponseEntity.ok(aiConversationService.listConversations(
-                principal.getUserId(), courseId, courseId == null));
+                principal.getUserId(), courseId, courseId == null, scope));
     }
 
     /**

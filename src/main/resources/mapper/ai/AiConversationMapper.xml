@@ -89,6 +89,13 @@
         <if test="onlyWithoutCourse">
             AND c.course_id IS NULL
         </if>
+        <!--
+          scope를 넘기면 그 화면 범위에서 만든 대화만. 오늘·일정·전체는 모두 course_id가 NULL이라
+          이 조건 없이는 서로의 대화를 최근 것이라는 이유로 다시 연다.
+        -->
+        <if test="scope != null">
+            AND c.scope = #{scope}
+        </if>
         HAVING last_message_at IS NOT NULL
         ORDER BY last_message_at DESC
     </select>
