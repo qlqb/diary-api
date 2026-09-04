@@ -24,8 +24,8 @@ public enum ErrorCode {
     MOVE_TARGET_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_006", "이동 대상 날짜가 현재 날짜와 같습니다"),
     PLAN_PLACEMENT_IN_PAST(HttpStatus.BAD_REQUEST, "E400_026",
             "이미 지난 시간에는 배치할 수 없습니다. 기간을 다시 잡아 주세요"),
-    PLAN_TARGET_EXCEEDS_ITEM_CAP(HttpStatus.BAD_REQUEST, "E400_027",
-            "이 기간의 학습 예산이 한 번에 계획할 수 있는 크기를 넘습니다. 기간을 주 단위로 나눠 주세요"),
+    // E400_027은 PLAN_TARGET_EXCEEDS_ITEM_CAP이었다. 예산이 항목 상한을 넘으면 거절하는 대신
+    // 상한으로 깎고 그 사실을 응답에 싣기로 해 제거했다(2026-09-04). 번호는 재사용하지 않는다.
     REDUCE_TITLE_UNCHANGED(HttpStatus.BAD_REQUEST, "E400_007", "줄인 후 제목이 기존 제목과 같습니다"),
     TIME_FIXED_REQUIRES_TIME(HttpStatus.BAD_REQUEST, "E400_008", "시간 고정 블록은 시작/종료 시각이 필요합니다"),
     PARTIAL_TIME_RANGE(HttpStatus.BAD_REQUEST, "E400_009", "시작/종료 시각은 함께 입력해야 합니다"),

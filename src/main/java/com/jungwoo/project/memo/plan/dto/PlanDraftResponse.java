@@ -57,6 +57,16 @@ public class PlanDraftResponse {
     private Integer reservedBufferMinutes;
 
     /**
+     * 강도 비율로 계산한 예산이 한 제안의 물리적 상한(항목 30개 × 120분 = 3,600분)을 넘어
+     * 상한으로 깎였다. 8일 이상 계획에서 나온다 — 화면은 "이 기간의 남는 시간을 다 담지는
+     * 못했다"고 말해야 한다. 실패가 아니다.
+     */
+    private boolean targetCappedByItemLimit;
+
+    /** targetCappedByItemLimit일 때 담지 못한 시간(분). 남는 시간 × 강도 − 실제 예산. */
+    private Integer uncoveredMinutes;
+
+    /**
      * 추정 남는 시간이 0이라 항목을 만들지 않았다. proposal은 null이다. 화면은 실패가 아니라
      * "현재 추정으로는 배치 가능한 시간이 없다"와 가용시간 수정 경로를 보여준다.
      */

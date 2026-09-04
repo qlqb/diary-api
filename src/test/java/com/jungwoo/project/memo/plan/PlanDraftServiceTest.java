@@ -200,19 +200,112 @@ class PlanDraftServiceTest {
         verify(aiProposalService, never()).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
     }
 
+    // ===== 항목 상한과 예산 =====
+
     /*
-     * 예산 > 항목 상한 × 120분이면 모델이 시간을 부풀리거나 결과가 잘린다. 둘 다 하지 않고
-     * 모델을 부르기 전에 멈춘다. 7일 FOCUSED에서 3,000분이 남으면 2,550 > 15×120=1,800이다.
+     * 7일 계획의 상한은 30개다. 15개였을 때는 강도 목표를 15로 나누면 항목당 평균 80~105분이
+     * 되어 "짧은 회수 15~30분"을 요구하는 프롬프트 규칙과 상한이 서로를 무효화했다. 아래 값은
+     * 기본 가용시간(평일 180분·주말 480분 → 7일 1,860분) 기준이다.
      */
     @Test
-    void targetAboveTheItemCap_isRejectedBeforeCallingTheModel() {
-        givenAvailableMinutes(3000);
+    void sevenDayPlan_capIsThirty_soEveryIntensityCanUseVariedLengths() {
+        givenAiResponse(null, null);
+        givenAvailableMinutes(1860);
+
+        record Case(PlanIntensity intensity, int target, double averageAtCap) { }
+        List<Case> cases = List.of(
+                new Case(PlanIntensity.LIGHT, 735, 24.5),
+                new Case(PlanIntensity.NORMAL, 1200, 40.0),
+                new Case(PlanIntensity.FOCUSED, 1575, 52.5));
+
+        for (Case c : cases) {
+            when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(c.intensity());
+
+            PlanDraftResponse draft = service.createDraft(USER_ID, request(null));
+
+            assertThat(draft.getTargetMinutes()).as("%s 목표", c.intensity()).isEqualTo(c.target());
+            assertThat(draft.isTargetCappedByItemLimit()).as("%s는 상한에 닿지 않는다", c.intensity()).isFalse();
+            // 상한 30개를 다 쓰면 항목당 평균이 이 값이다 — 참고 범위(15~90분) 안이다.
+            assertThat(c.target() / 30.0).as("%s 30개 평균", c.intensity())
+                    .isEqualTo(c.averageAtCap()).isBetween(15.0, 90.0);
+            // 최소 개수(항목 120분 상한 기준)도 30개 안이다 — 개수를 못 채워 실패하지 않는다.
+            assertThat((int) Math.ceil(c.target() / 120.0)).as("%s 최소 개수", c.intensity())
+                    .isLessThanOrEqualTo(30);
+        }
+        // 상한은 기간과 무관하게 하나다.
+        verify(aiProposalService, times(3))
+                .createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+    }
+
+    @Test
+    void thirtyDayPlan_usesTheSameCap() {
+        givenAiResponse(null, null);
+        givenAvailableMinutes(1860);
+
+        service.createDraft(USER_ID, PlanDraftRequest.builder()
+                .startDate(START).endDate(START.plusDays(29)).build());
+
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+    }
+
+    /*
+     * 예산이 "30개 × 120분 = 3,600분"을 넘으면 한 제안에 담기지 않는다. 거절하지 않고 예산을
+     * 상한으로 깎은 뒤 그 사실을 응답과 프롬프트에 싣는다 — 31일 집중은 정상적인 조합이고,
+     * 400을 내면 "긴 계획은 만들 수 없다"가 된다.
+     */
+    @Test
+    void budgetAboveTheCap_isClampedAndReported_notRejected() {
+        givenAiResponse(null, null);
+        givenAvailableMinutes(7980);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.FOCUSED);
 
-        assertThatThrownBy(() -> service.createDraft(USER_ID, request(null)))
-                .isInstanceOfSatisfying(BadRequestException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.PLAN_TARGET_EXCEEDS_ITEM_CAP));
-        verify(aiConsultationClient, never()).streamTurn(any(), any(), anyInt());
+        PlanDraftResponse draft = service.createDraft(USER_ID, PlanDraftRequest.builder()
+                .startDate(START).endDate(START.plusDays(30)).build());
+
+        // 7,980 × 85% = 6,783 → 15분 내림 6,780. 상한 3,600으로 깎인다.
+        assertThat(draft.getTargetMinutes()).isEqualTo(3600);
+        assertThat(draft.isTargetCappedByItemLimit()).isTrue();
+        assertThat(draft.getUncoveredMinutes()).isEqualTo(6780 - 3600);
+        assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(7980);
+        // 저장되는 목표도 깎인 값이다 — 스냅샷과 화면이 어긋나지 않는다.
+        verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), any(), any(),
+                eq(PlanIntensity.FOCUSED), eq(3600));
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        assertThat(userPrompt.getValue())
+                .contains("[분량 안내]")
+                .contains("기간 전체를 빈틈없이 채우려 하지 말고");
+    }
+
+    @Test
+    void budgetWithinTheCap_reportsNoCapping() {
+        givenAiResponse(null, null);
+        givenAvailableMinutes(1860);
+        when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.FOCUSED);
+
+        PlanDraftResponse draft = service.createDraft(USER_ID, request(null));
+
+        assertThat(draft.isTargetCappedByItemLimit()).isFalse();
+        // 0분을 담지 못했다는 줄을 그리지 않도록 null이다.
+        assertThat(draft.getUncoveredMinutes()).isNull();
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        assertThat(userPrompt.getValue()).doesNotContain("[분량 안내]");
+    }
+
+    @Test
+    void prompt_saysTheCapIsAMaximum_notATarget() {
+        givenAiResponse(null, null);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        assertThat(userPrompt.getValue())
+                .contains("항목은 최대 30개다. 이것은 만들어야 할 개수가 아니라 넘으면 안 되는 최대치다")
+                .contains("각 작업에 실제로 필요한 길이를 먼저 정한 다음 필요한 만큼만 만들어라")
+                .contains("15~30분짜리 짧은 항목을 넣기 위해 다른 항목을 길게 부풀리지 마라");
     }
 
     @Test
@@ -298,8 +391,8 @@ class PlanDraftServiceTest {
 
         service.createDraft(USER_ID, request(null));
 
-        // 7일 계획 → 15개. 개수는 주 제약이 아니라 폭주 방지선이다.
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(15));
+        // 기간과 무관하게 30개. 개수는 주 제약이 아니라 폭주 방지선이다.
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
     }
 
     @Test
@@ -471,7 +564,7 @@ class PlanDraftServiceTest {
         PeriodPlanDraftGenerator.Generated generated = service.generate(USER_ID, request("집중으로"));
         service.persist(USER_ID, generated, 42L, 4201L);
 
-        verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(15));
+        verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30));
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
                 eq(PlanIntensity.NORMAL), eq(BASELINE));
         // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.

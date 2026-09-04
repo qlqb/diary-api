@@ -117,9 +117,23 @@ public class PlanDraftService {
                 .availabilityConfidenceSummary(generated.availabilityConfidenceSummary())
                 .reservedBufferMinutes(generated.reservedBufferMinutes())
                 .noAvailableTime(false)
+                .targetCappedByItemLimit(generated.targetCappedByItemLimit())
+                .uncoveredMinutes(uncoveredMinutes(generated))
                 .suggestedTitle(generated.suggestedTitle())
                 .goalSummary(generated.goalSummary())
                 .proposal(proposal)
                 .build();
+    }
+
+    /**
+     * 강도대로라면 담겼어야 하는데 상한 때문에 못 담은 시간. 상한에 걸리지 않았으면 null이다 —
+     * 0을 보내면 화면이 "0분 못 담았다"는 줄을 그린다.
+     */
+    private Integer uncoveredMinutes(Generated generated) {
+        if (!generated.targetCappedByItemLimit()) {
+            return null;
+        }
+        int wanted = generated.spec().intensity().targetMinutesFor(generated.estimatedAvailableMinutes());
+        return Math.max(0, wanted - generated.targetMinutes());
     }
 }

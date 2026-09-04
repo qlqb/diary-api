@@ -74,11 +74,22 @@ public class PeriodPlanDraftGenerator {
     public static final int MAX_PLAN_DAYS = 31;
 
     /**
-     * 개수는 주 제약이 아니다(§5-1-1). "확실히 뭔가 잘못됐다"는 폭주 방지선으로만 둔다.
+     * 기간 계획의 항목 개수 안전 상한. 기간 길이와 무관하게 하나다.
+     *
+     * <p>개수는 주 제약이 아니다(§5-1-1). "확실히 뭔가 잘못됐다"는 폭주 방지선으로만 둔다.
      * 일반 단건·조정 제안의 5개와 다르다 — 기간 계획만 이 값을 쓴다.
+     *
+     * <p>7일 상한이 15였을 때는 강도 목표(가용시간의 65~85%)를 15개로 나누면 항목당 평균
+     * 80~105분이 되어, 다양한 길이를 요구하는 프롬프트 규칙과 상한이 서로를 무효화했다.
+     * 상한은 목표 개수가 아니라 폭주 방지선이다. (2026-09-04)
+     *
+     * <p>실측(기본 가용시간 기준 7일 1,860분): FOCUSED 목표 1,575분을 15개로 나누면 105분,
+     * 30개로 나누면 52.5분이다. NORMAL 1,200분은 40분, LIGHT 735분은 24.5분이 되어 프롬프트의
+     * 참고 범위(15~90분)와 맞는다.
      */
-    public static final int MAX_ITEMS_SHORT = 15;
-    public static final int MAX_ITEMS_LONG = 30;
+    public static final int MAX_ITEMS = 30;
+
+    /** 이 일수까지는 학습 예산이 상한 안에 들어온다. 넘으면 예산을 상한으로 깎는다. */
     public static final int SHORT_PLAN_DAYS = 7;
 
     /**
@@ -156,6 +167,9 @@ public class PeriodPlanDraftGenerator {
      * @param availabilityConfidenceSummary 그 추정의 근거 요약.
      * @param reservedBufferMinutes       남는 시간 − 학습 예산. 휴식·변동 여유.
      * @param noAvailableTime             남는 시간이 0이라 모델을 부르지 않았다. items는 비어 있다.
+     * @param targetCappedByItemLimit     강도 비율로 계산한 예산이 한 제안의 물리적 상한
+     *                                    (30개 × 120분)을 넘어 상한으로 깎였다. 8일 이상 계획에서
+     *                                    나온다 — 화면은 이 사실을 사용자에게 말해야 한다.
      */
     public record Generated(
             Spec spec,
@@ -169,13 +183,24 @@ public class PeriodPlanDraftGenerator {
             int estimatedAvailableMinutes,
             String availabilityConfidenceSummary,
             int reservedBufferMinutes,
-            boolean noAvailableTime
+            boolean noAvailableTime,
+            boolean targetCappedByItemLimit
     ) {
         /** 가용시간 정보가 없는 호출부(테스트 등)용. */
         public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
                          boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
-                    goalSummary, items, 0, null, 0, false);
+                    goalSummary, items, 0, null, 0, false, false);
+        }
+
+        /** 가용시간까지만 아는 호출부용(상한 조정 없음). */
+        public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
+                         boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items,
+                         int estimatedAvailableMinutes, String availabilityConfidenceSummary,
+                         int reservedBufferMinutes, boolean noAvailableTime) {
+            this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
+                    goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
+                    reservedBufferMinutes, noAvailableTime, false);
         }
     }
 
@@ -199,7 +224,12 @@ public class PeriodPlanDraftGenerator {
     }
 
     public static int maxItemsFor(int days) {
-        return days <= SHORT_PLAN_DAYS ? MAX_ITEMS_SHORT : MAX_ITEMS_LONG;
+        return MAX_ITEMS;
+    }
+
+    /** 한 제안에 담을 수 있는 학습 시간의 물리적 최대치. 항목 수 × 항목 최대 길이다. */
+    public static int maxPlannableMinutes() {
+        return MAX_ITEMS * MAX_ITEM_MINUTES;
     }
 
     /**
@@ -235,23 +265,34 @@ public class PeriodPlanDraftGenerator {
         }
 
         /*
-         * 예산이 항목 상한 × 항목 최대 길이를 넘으면 모델이 시간을 부풀리거나 결과가 잘린다.
-         * 둘 다 하지 않고 여기서 멈춘다. 7일 이하에서 이게 나오면 가용시간·비율·상한 계산이
-         * 잘못된 것이라 오류로 남기고, 8~31일은 기간을 주 단위로 나누라는 안내다.
+         * 예산이 "항목 30개 × 120분"을 넘으면 한 제안에 물리적으로 담기지 않는다. 이때 400으로
+         * 거절하지 않는다 — 사용자가 고를 수 있는 기간·강도의 조합에서 정상적으로 나오는 값이고
+         * (31일 FOCUSED는 6,780분, 상한은 3,600분), 거절하면 "긴 계획은 만들 수 없다"가 된다.
+         * 예산을 상한으로 깎고 그 사실을 응답과 프롬프트에 정직하게 싣는다.
+         *
+         * 이것은 8~31일 계획의 최종 도메인이 아니라 그 결정 전까지의 정의된 동작이다. 필요한
+         * 도메인(주차별 반복 생성 / 장기 개요와 첫 주 실행 분리 / 반복 실행 항목)은 별도 판단
+         * 대상이고, 그전까지 8일 이상 계획은 "이 기간에서 최대 60시간까지"로 잘려 나온다.
+         *
+         * 7일 이하는 실측상 이 선에 닿지 않는다(최대 FOCUSED 1,575분 < 3,600분). 그래도 계산이
+         * 어긋나면 조용히 넘기지 않고 오류 로그를 남긴다.
          */
-        int cap = maxItems * MAX_ITEM_MINUTES;
-        if (target > cap) {
+        int cap = maxPlannableMinutes();
+        boolean cappedByItemLimit = target > cap;
+        if (cappedByItemLimit) {
             if (days <= SHORT_PLAN_DAYS) {
-                log.error("기간 계획 예산이 항목 상한을 넘음(7일 이하): userId={}, days={}, available={}, "
-                        + "intensity={}, target={}, cap={}", spec.userId(), days, available, spec.intensity(), target, cap);
+                log.error("기간 계획 예산이 항목 상한을 넘음(7일 이하 — 계산 점검 필요): userId={}, days={}, "
+                                + "available={}, intensity={}, target={}, cap={}",
+                        spec.userId(), days, available, spec.intensity(), target, cap);
             } else {
-                log.warn("기간 계획 예산이 항목 상한을 넘음: userId={}, days={}, target={}, cap={} — 주 단위 분할 안내",
-                        spec.userId(), days, target, cap);
+                log.info("기간 계획 예산을 항목 상한으로 조정: userId={}, days={}, intensity={}, target={} -> {}",
+                        spec.userId(), days, spec.intensity(), target, cap);
             }
-            throw new BadRequestException(ErrorCode.PLAN_TARGET_EXCEEDS_ITEM_CAP);
+            target = cap;
         }
 
-        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence, maxItems);
+        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence,
+                maxItems, cappedByItemLimit);
 
         List<ProposalItem> items = toProposalItems(ai, spec.start(), spec.end(), courses);
         if (items.isEmpty()) {
@@ -260,7 +301,8 @@ public class PeriodPlanDraftGenerator {
 
         return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
-                blankToNull(ai.goalSummary()), items, available, confidence, available - target, false);
+                blankToNull(ai.goalSummary()), items, available, confidence, available - target, false,
+                cappedByItemLimit);
     }
 
     /** 가용 구간의 분 합계. 구간은 이미 겹치지 않게 계산돼 있다. */
@@ -350,9 +392,11 @@ public class PeriodPlanDraftGenerator {
             """.formatted(AiStreamParser.DELIMITER, MIN_ITEM_MINUTES, MAX_ITEM_MINUTES);
 
     private PlanDraftAiResult callAi(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
-                                     int days, int available, int target, String confidence, int maxItems) {
+                                     int days, int available, int target, String confidence, int maxItems,
+                                     boolean cappedByItemLimit) {
         Long userId = spec.userId();
-        String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence, maxItems);
+        String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence,
+                maxItems, cappedByItemLimit);
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         try {
@@ -387,7 +431,8 @@ public class PeriodPlanDraftGenerator {
     }
 
     private String buildUserPrompt(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
-                                   int days, int available, int target, String confidence, int maxItems) {
+                                   int days, int available, int target, String confidence, int maxItems,
+                                   boolean cappedByItemLimit) {
         Long userId = spec.userId();
         LocalDate start = spec.start();
         LocalDate end = spec.end();
@@ -409,7 +454,21 @@ public class PeriodPlanDraftGenerator {
                 .append("이 목표는 계획 예산이지 소진할 할당량이 아니다 — ")
                 .append("항목들의 예상 시간 합이 목표를 넘기지 않게 하되, 목표를 채우려고 항목 시간을 ")
                 .append("늘리지 마라. 항목을 잘게 쪼개 개수를 늘리지 마라. 채울 내용이 없으면 ")
-                .append("억지로 채우지 말고 적게 제안하라. 항목은 최대 ").append(maxItems).append("개다.\n\n");
+                .append("억지로 채우지 말고 적게 제안하라.\n")
+                // 개수 상한은 목표가 아니다. 15개였을 때는 상한이 사실상 "항목당 100분"을
+                // 강제해 길이 규칙을 무효화했다 — 그래서 상한을 올리고 그 의미를 명시한다.
+                .append("항목은 최대 ").append(maxItems).append("개다. 이것은 만들어야 할 개수가 아니라 ")
+                .append("넘으면 안 되는 최대치다. 개수를 채우려 하지 말고, 각 작업에 실제로 필요한 ")
+                .append("길이를 먼저 정한 다음 필요한 만큼만 만들어라. 15~30분짜리 짧은 항목을 넣기 위해 ")
+                .append("다른 항목을 길게 부풀리지 마라 — 남는 예산은 그대로 남겨도 된다.\n\n");
+        if (cappedByItemLimit) {
+            sb.append("[분량 안내]\n")
+                    .append("이 기간의 남는 시간에 강도를 적용한 값은 위 학습 예산보다 크지만, 한 번에 ")
+                    .append("계획할 수 있는 최대치(항목 ").append(maxItems).append("개 × ")
+                    .append(MAX_ITEM_MINUTES).append("분)에 맞춰 예산을 줄였다. ")
+                    .append("기간 전체를 빈틈없이 채우려 하지 말고, 이 예산 안에서 지금 가장 중요한 것부터 ")
+                    .append("담아라.\n\n");
+        }
 
         appendAvailabilityBlocks(sb, availability, available, confidence);
 
