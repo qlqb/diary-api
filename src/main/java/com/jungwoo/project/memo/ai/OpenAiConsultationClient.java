@@ -145,13 +145,31 @@ public class OpenAiConsultationClient implements AiConsultationClient {
             15. 계획 범위(기간)도 사용자가 말한 그대로만 따른다. "오늘"/"내일"/특정 날짜를
                 말했으면 하루(DAY) 범위로 보되, periodStartDate는 그 실제 날짜(오늘이면 오늘,
                 내일이면 내일, 특정 날짜면 그 날짜)를 그대로 담는다 — DAY라고 해서 항상 오늘을
-                뜻하지 않는다. "이번 주"/"주간"처럼 명시했을 때만 일주일(WEEK) 범위로,
-                "이번 달"/"월간"처럼 명시했을 때만 한 달(MONTH) 범위로 본다. 범위가
-                불명확하면(예: "앞으로 공부를 어떻게 해야 할까?") 임의로 WEEK나 MONTH를 고르지
-                말고 어느 기간을 계획할지 먼저 물어본다(decision=ASK_CLARIFICATION). 사용자가
-                하루 일정만 물었는데 여러 날에 걸친 제약 정보(예: 이번 주 알바 스케줄)를 알고
-                있다고 해서 자동으로 주간계획으로 넓히지 않는다 — 딱 요청받은 범위만큼만
-                만든다. planScope가 DAY여도 여러 날짜·요일별로 항목을 나눠 만들지 않는다 —
+                뜻하지 않는다. "이번 주"/"다음 주"처럼 하나의 달력 주를 명시했을 때만
+                일주일(WEEK) 범위로, "이번 달"/"월간"처럼 하나의 달력 월을 명시했을 때만
+                한 달(MONTH) 범위로 본다.
+                - 하나의 달력 주/달로 표현할 수 없는 기간은 RANGE다(최대 31일). 여러 기간
+                  표현이 합쳐졌거나("이번 주 토일이랑 다음 주까지", "이번 주 남은 기간 + 다음
+                  주"), 사용자가 시작·종료를 직접 지정했거나("9월 5일부터 13일까지", "오늘부터
+                  열흘", "이번 주말부터 다음 주 수요일") 하면 RANGE로 낸다. RANGE는 "장기
+                  계획"이라는 뜻이 아니라 "달력 단위에 맞지 않는 범위"라는 뜻이다.
+                - 기간 길이만 보고 WEEK/MONTH를 고르지 않는다. "앞으로 7일"은 우연히 7일이지
+                  달력 주가 아니므로 RANGE다. 반대로 "다음 주"는 WEEK다.
+                - ★ 사용자가 명시한 시작점을 그보다 앞선 달력 주 시작일(지난 월요일)로 넓히지
+                  않는다. 금요일에 "이번 주 토일이랑 다음 주까지"라고 했으면 시작은 그 토요일
+                  이고, "이번 주"라는 말이 들어 있다고 이번 주 월요일부터로 확장하지 않는다.
+                  기간을 오늘로 잘라내지도 않는다 — 요청 기간과 실제 배치 가능한 시간은 다른
+                  문제이고, 배치는 서버가 따로 제한한다.
+                - 한 번에 만드는 계획은 최대 31일이다. 그보다 긴 기간을 요청받으면 무리해서
+                  PROPOSAL_READY로 답하지 말고 ASK_CLARIFICATION으로 실제 날짜를 보여주며
+                  범위를 좁힌다(예: "한 번에 잡는 계획은 31일까지라, 우선 9/5~10/5로 할까요?").
+                범위가 불명확하면(예: "앞으로 공부를 어떻게 해야 할까?") 임의로 WEEK나 MONTH를
+                고르지 말고 어느 기간을 계획할지 먼저 물어본다(decision=ASK_CLARIFICATION).
+                다만 시작점과 종료점이 이미 충분히 정해진 요청("이번 주 토일이랑 다음 주까지")은
+                다시 묻지 않는다. 사용자가 하루 일정만 물었는데 여러 날에 걸친 제약 정보(예:
+                이번 주 알바 스케줄)를 알고 있다고 해서 자동으로 주간계획으로 넓히지 않는다 —
+                딱 요청받은 범위만큼만 만든다. planScope가 DAY여도 여러 날짜·요일별로
+                항목을 나눠 만들지 않는다 —
                 요청 범위를 넘어서는 단계나 요일별 항목을 임의로 만들지 않는다.
                 일반 제안(EXECUTION_CHANGE)의 OFFER_PROPOSAL 단계에서는 planScope/
                 periodStartDate/periodEndDate를 미리 확정하지 않는다 — 실제 기간은
@@ -302,15 +320,21 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               "targetCourseIds": [정수, ...] (proposalPurpose가 PERIOD_PLAN일 때 계획 대상
                 프로젝트. [프로젝트] 블록의 #번호만 쓴다. 사용자가 특정 과목을 말하지 않았으면
                 빈 배열 = 활성 전체),
-              "planScope": "DAY" 또는 "WEEK" 또는 "MONTH" 또는 null (decision이 PROPOSAL_READY이거나
-                proposalPurpose=PERIOD_PLAN인 OFFER_PROPOSAL일 때 채운다. 그 외에는 null이다),
+              "planScope": "DAY" 또는 "WEEK" 또는 "MONTH" 또는 "RANGE" 또는 null (decision이
+                PROPOSAL_READY이거나 proposalPurpose=PERIOD_PLAN인 OFFER_PROPOSAL일 때 채운다.
+                그 외에는 null이다. DAY=특정 하루, WEEK=사용자가 명시한 하나의 주간 범위,
+                MONTH=사용자가 명시한 하나의 월간 범위, RANGE=그 셋으로 표현할 수 없는 사용자
+                지정/혼합 기간. 기간 길이만 보고 WEEK/MONTH를 고르지 않는다 — 원칙 15),
               "periodStartDate": "YYYY-MM-DD" 또는 null (decision이 PROPOSAL_READY이거나
                 proposalPurpose=PERIOD_PLAN인 OFFER_PROPOSAL/ASK_CLARIFICATION일 때 채운다.
                 "오늘"이면 오늘 날짜를, "내일"이면 내일 날짜를, 사용자가 특정 날짜를 말했으면 그
                 날짜를 그대로 쓴다. 절대 무조건 오늘로 고정하지 않는다),
               "periodEndDate": "YYYY-MM-DD" 또는 null (periodStartDate와 같은 조건에서 채운다.
                 planScope가 DAY면 periodStartDate와 반드시 같다. WEEK면 periodStartDate로부터
-                최대 6일 뒤까지(최대 7일 범위). MONTH면 사용자가 말한 달 또는 기간에 맞게 정한다),
+                최대 6일 뒤까지(최대 7일 범위). MONTH면 사용자가 말한 달 또는 기간에 맞게 정한다.
+                RANGE면 사용자가 말한 실제 종료일이며 periodStartDate로부터 최대 30일 뒤까지
+                (시작·종료 포함 최대 31일 범위)다. 어느 값이든 이 범위를 넘으면 서버가 이
+                PROPOSAL 전체를 거부한다),
               "proposalItems": [
                 {
                   "title": "구체적인 행동 제목. 사용자가 직접 수행하고 완료하는 것만 여기 넣는다 —
@@ -431,7 +455,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               UNSCHEDULED로 내야 서버가 가용시간을 계산해 기간 안에 분산 배치한다(수업·알바·약속을
               피하고 지난 시간에는 놓지 않는다). DATE_ONLY로 내면 그 날 하루에 그대로 쌓인다.
 
-              여러 날에 걸친 계획(planScope=WEEK/MONTH)에서 날짜 지정이 없는 항목은 반드시
+              여러 날에 걸친 계획(planScope=WEEK/MONTH/RANGE)에서 날짜 지정이 없는 항목은 반드시
               UNSCHEDULED다. 특정 요일에만 하고 싶다고 말했으면 UNSCHEDULED로 두고
               earliestStartDate/deadlineDate를 그 날짜로 함께 지정한다.
             - scheduleSuggestions는 decision 값과 무관하게 아래 기준으로만 채운다(빈 배열이 기본값).

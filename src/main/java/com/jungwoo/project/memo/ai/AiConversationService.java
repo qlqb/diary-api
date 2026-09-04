@@ -152,6 +152,9 @@ public class AiConversationService {
             - proposalItems 1~5개 생성
             - planScope와 기간(periodStartDate/periodEndDate) 작성. 지금까지 대화에서
               정해진 기간과 일치해야 한다
+            - 사용자가 DAY/WEEK/MONTH 하나로 표현할 수 없는 기간을 말했다면 기간을 억지로
+              WEEK나 MONTH에 맞추지 말고 planScope=RANGE를 쓴다. 예: "이번 주 토일이랑
+              다음 주까지" -> RANGE, 실제 그 토요일부터 다음 주 일요일까지
 
             정보가 부족하면:
             - decision=ASK_CLARIFICATION
@@ -922,7 +925,11 @@ public class AiConversationService {
      * 경로로 호출되든 두 메서드의 계약이 어긋나지 않아야 한다.
      *
      * ChronoUnit.DAYS.between(start, end)는 두 날짜의 차이이지 포함 일수가 아니다 — 시작·종료를
-     * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH는 최대 31일(spanDays<=30)까지만 허용한다.
+     * 모두 포함해 WEEK는 최대 7일(spanDays<=6), MONTH/RANGE는 최대 31일(spanDays<=30)까지만
+     * 허용한다. RANGE는 하나의 달력 주/달로 표현할 수 없는 사용자 지정 기간이며, 상한은 기간형
+     * 계획 도메인(1~31일)과 같다 — 한 번에 잡는 계획의 상한을 AI 상담만 다르게 두지 않는다.
+     * WEEK의 7일 상한은 그대로 살려 둔다 — "이번 주"라고 말한 요청이 조용히 열흘로 부풀지
+     * 않게 하는 것이 이 검증의 목적이다.
      */
     private String periodViolationReason(AiPlanScope planScope, LocalDate start, LocalDate end,
                                           List<ProposalItem> items, List<ProposalAdjustment> adjustments,
@@ -948,14 +955,19 @@ public class AiConversationService {
             return "요청 기간(" + start + "~" + end + ")이 전부 지났음(오늘=" + today + ")";
         }
         long spanDays = ChronoUnit.DAYS.between(start, end);
-        if (planScope == AiPlanScope.DAY && !start.equals(end)) {
-            return "planScope=DAY인데 periodStartDate(" + start + ")와 periodEndDate(" + end + ")가 다름";
-        }
-        if (planScope == AiPlanScope.WEEK && spanDays > 6) {
-            return "planScope=WEEK인데 기간이 7일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
-        }
-        if (planScope == AiPlanScope.MONTH && spanDays > 30) {
-            return "planScope=MONTH인데 기간이 31일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
+        // enum switch라 값이 늘어나면 컴파일이 먼저 막는다 — 새 scope가 검증 없이 통과하지 않는다.
+        String scopeViolation = switch (planScope) {
+            case DAY -> start.equals(end) ? null
+                    : "planScope=DAY인데 periodStartDate(" + start + ")와 periodEndDate(" + end + ")가 다름";
+            case WEEK -> spanDays <= 6 ? null
+                    : "planScope=WEEK인데 기간이 7일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
+            case MONTH -> spanDays <= 30 ? null
+                    : "planScope=MONTH인데 기간이 31일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
+            case RANGE -> spanDays <= 30 ? null
+                    : "planScope=RANGE인데 기간이 31일(시작·종료 포함)을 넘음(" + start + "~" + end + ")";
+        };
+        if (scopeViolation != null) {
+            return scopeViolation;
         }
 
         List<ProposalItem> effectiveItems = items != null ? items : List.of();

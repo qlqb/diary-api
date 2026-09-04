@@ -252,4 +252,25 @@ class OpenAiConsultationClientTest {
         // "설명 또는 null"이면 모델은 스키마 쪽을 따른다.
         assertThat(prompt).contains("\"description\": \"실제로 할 행동 1~3개 · 완료: 확인 가능한 완료 기준 (원칙 19)");
     }
+
+    /*
+     * 2026-09-04(금) "이번 주 토일이랑 다음 주까지 계획하고 싶어"가 planScope=WEEK / 9일로
+     * 나와 서버의 WEEK 7일 계약에 걸려 턴 전체가 실패했다. 계약에 RANGE를 추가했으므로
+     * 프롬프트도 그 값을 알려주고, 혼합 기간을 WEEK로 밀어넣지 않게 해야 한다.
+     */
+    @Test
+    void systemPrompt_offersRangeScope_forPeriodsThatDoNotFitOneCalendarUnit() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        // 스키마가 RANGE를 허용해야 모델이 그 값을 낼 수 있다.
+        assertThat(prompt).contains("\"planScope\": \"DAY\" 또는 \"WEEK\" 또는 \"MONTH\" 또는 \"RANGE\"");
+        assertThat(prompt).contains("RANGE=그 셋으로 표현할 수 없는 사용자");
+        // 기간 길이가 우연히 7일이라고 WEEK가 되는 것이 아니다.
+        assertThat(prompt).contains("기간 길이만 보고 WEEK/MONTH를 고르지 않는다");
+        assertThat(prompt).contains("이번 주 토일이랑 다음 주까지");
+        // 사용자가 말한 시작점을 달력 주 시작으로 넓히지 않는다(9/5가 8/31로 밀리면 안 된다).
+        assertThat(prompt).contains("명시한 시작점을 그보다 앞선 달력 주 시작일(지난 월요일)로 넓히지");
+        // 31일 초과는 억지로 만들지 말고 되묻는다.
+        assertThat(prompt).contains("한 번에 만드는 계획은 최대 31일이다");
+    }
 }

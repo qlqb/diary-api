@@ -20,8 +20,12 @@ import java.util.List;
  * unavailableWindows는 decision=PROPOSAL_READY에서만 값을 가질 수 있는 대화 차원의 제약이다
  * (개별 항목이 아니라 이번 계획 전체에 적용된다).
  *
- * planScope는 모델이 판단한 이번 계획의 기간(DAY/WEEK/MONTH)이며, decision=PROPOSAL_READY일
- * 때만 값을 가진다. 모델이 값을 비워 보내면 서버가 가장 좁은 범위인 DAY로 취급한다.
+ * planScope는 모델이 판단한 이번 계획의 기간 성격(DAY/WEEK/MONTH/RANGE)이며,
+ * decision=PROPOSAL_READY일 때만 값을 가진다. 모델이 값을 비워 보내면 서버가 가장 좁은
+ * 범위인 DAY로 취급한다. RANGE는 하나의 달력 주/달로 표현할 수 없는 사용자 지정 기간
+ * (1~31일)이다 — "이번 주 토일이랑 다음 주까지"처럼 여러 기간 표현이 합쳐진 요청을
+ * 억지로 WEEK나 MONTH에 맞추지 않기 위한 값이다. planScope는 기간의 원본이 아니라
+ * periodStartDate/periodEndDate를 검증하기 위한 분류다.
  *
  * periodStartDate/periodEndDate는 모델이 판단한 이번 계획의 실제 대상 기간이다. "오늘"이면
  * 오늘 날짜를, "내일"이면 내일 날짜를 그대로 담아야 한다 — 서버가 무조건 오늘로 고정하지
