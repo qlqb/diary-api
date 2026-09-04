@@ -118,6 +118,30 @@ class OpenAiConsultationClientTest {
     }
 
     /*
+     * "11:00~12:00 이동시간으로 반영해둘게요"라고 답했는데 아무것도 저장되지 않았다. 이 앱에서
+     * 모델이 직접 저장하는 것은 없다 — 후보 카드를 띄우고 사용자가 승인해야 저장된다. 완료형만
+     * 막으면 부족하다. 실제 사고 문구는 미래 약속형("~해둘게요")이었다.
+     */
+    @Test
+    void systemPrompt_forbidsClaimingItSavedAnything_includingFuturePromises() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("네가 직접 저장하는 것은 없다");
+        assertThat(prompt).contains("사용자가 화면에서 승인해야 저장된다");
+        // 완료형
+        assertThat(prompt).contains("\"반영해뒀어요\", \"추가했어요\", \"등록해뒀어요\", \"저장했어요\"처럼 이미 한 것처럼");
+        // 미래 약속형 — 이번 사고의 실제 문구다.
+        assertThat(prompt).contains("\"반영해둘게요\", \"추가해둘게요\"처럼 네가 곧 저장할 것처럼 말하지도");
+        assertThat(prompt).contains("그 카드를 누르지 않으면");
+        assertThat(prompt).contains("아무 데도 저장되지 않은 적이 있다");
+        // 대신 무엇을 말해야 하는지
+        assertThat(prompt).contains("\"이렇게 추가할까요?\", \"이 내용으로 만들까요?\"처럼 승인을 구하는 형태로 말한다");
+        // 담을 곳이 없을 때
+        assertThat(prompt).contains("후보를 만들지 않는 턴에서는 저장을 약속하지 마라");
+        assertThat(prompt).contains("담을 곳이 없으면");
+    }
+
+    /*
      * "11시부터 12시까지는 이동시간이야"에 AI가 "반영해둘게요"라고 답했는데 후보 카드가 뜨지
      * 않았다. COMMITMENT 예시가 약속·병원뿐이라 모델이 이동을 "시간을 차지하는 현실 일정"으로
      * 보지 않았고, 다음 계획 생성 턴에서 unavailableWindows로만 냈다 — 그 값은 그 제안 하나에만
