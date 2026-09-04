@@ -87,14 +87,18 @@ class PlanDraftServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PlanDraftService(aiConsultationClient, aiProposalService, aiProposalMapper,
-                aiUsageLimitService, planVersionService, planReviewService, courseMapper,
-                topicService, courseNoteMapper, analysisMapper,
-                executionItemMapper, Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
-        ReflectionTestUtils.setField(service, "maxCompletionTokens", 2000);
-        ReflectionTestUtils.setField(service, "requestTimeoutSeconds", 90);
-        ReflectionTestUtils.setField(service, "modelName", "test-model");
-        ReflectionTestUtils.setField(service, "defaultTimeZoneId", "Asia/Seoul");
+        // 생성 규칙은 generator에, 저장은 service에 있다. 두 진입점(계획 화면·대화)이 같은
+        // generator를 지나므로 프롬프트 단언은 generator 쪽 mock(aiConsultationClient)에서 잡는다.
+        PeriodPlanDraftGenerator generator = new PeriodPlanDraftGenerator(aiConsultationClient,
+                aiUsageLimitService, planReviewService, courseMapper, topicService, courseNoteMapper,
+                analysisMapper, executionItemMapper,
+                Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
+        ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
+        ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
+        ReflectionTestUtils.setField(generator, "modelName", "test-model");
+        ReflectionTestUtils.setField(generator, "defaultTimeZoneId", "Asia/Seoul");
+        service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
+                planVersionService);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
