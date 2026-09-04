@@ -118,6 +118,42 @@ class OpenAiConsultationClientTest {
     }
 
     /*
+     * "11시부터 12시까지는 이동시간이야"에 AI가 "반영해둘게요"라고 답했는데 후보 카드가 뜨지
+     * 않았다. COMMITMENT 예시가 약속·병원뿐이라 모델이 이동을 "시간을 차지하는 현실 일정"으로
+     * 보지 않았고, 다음 계획 생성 턴에서 unavailableWindows로만 냈다 — 그 값은 그 제안 하나에만
+     * 붙는 일회성이라 약속으로 저장되지 않았다. 판단 기준을 "해야 할 일인가"가 아니라 "그 시간에
+     * 다른 걸 할 수 없는가"로 명시한다.
+     */
+    @Test
+    void systemPrompt_treatsAnythingThatOccupiesTime_asACommitmentCandidate() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("COMMITMENT는 한 번만 발생하며 그 시간에 다른 일을 할 수 없는 것이다");
+        assertThat(prompt).contains("약속·병원·면접뿐 아니라 이동·통학·행사·외출도 포함한다");
+        assertThat(prompt).contains("완료할 대상이 아니라");
+        assertThat(prompt).contains("\"해야 할 일인가\"가 아니라 \"그 시간에 다른");
+        assertThat(prompt).contains("걸 할 수 없는가\"다");
+        // 실제로 놓친 발화가 예시에 있어야 한다.
+        assertThat(prompt).contains("\"11시부터 12시까지는 이동시간이야\"      -> COMMITMENT 후보(제목 \"이동\")");
+        assertThat(prompt).contains("학과 행사");
+    }
+
+    @Test
+    void systemPrompt_keepsTravelTimeSeparate_andDoesNotSettleForUnavailableWindows() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        // 앞뒤 일정과 합치면 "병원 10~12시"가 되어 사실과 달라진다.
+        assertThat(prompt).contains("앞뒤 일정과 합치지 말고 별도 COMMITMENT로 낸다");
+        assertThat(prompt).contains("\"병원 10~12시\"가");
+        // unavailableWindows는 그 제안에만 붙는 일회성이라는 것을 모델도 알아야 한다.
+        assertThat(prompt).contains("unavailableWindows로만 처리하고 끝내지 마라");
+        assertThat(prompt).contains("이번 계획");
+        assertThat(prompt).contains("계산에만 쓰이는 일회성 값이라 다음 대화와 다른 계획에는 남지 않는다");
+        // 스키마 쪽 설명도 같은 범위를 말해야 한다 — 원칙만 고치면 모델이 스키마를 따른다.
+        assertThat(prompt).contains("약속·병원·면접·이동·통학·행사·외출");
+    }
+
+    /*
      * 진입 탭이 아니라 의도가 계획 경로를 정한다. 모델은 목적(PERIOD_PLAN/EXECUTION_CHANGE)을
      * 명시하고, 기간 계획이면 OFFER 단계에서 기간·강도·대상 프로젝트를 채운다. 강도를 모르면
      * 한 번 묻고, 자연어(가볍게/적당히/빡세게)를 세 강도로 읽는다. 항목은 만들지 않는다 — 서버의

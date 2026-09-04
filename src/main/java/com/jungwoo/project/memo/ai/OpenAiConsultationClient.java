@@ -353,7 +353,8 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   "kind": "COMMITMENT" 또는 "ROUTINE",
                   "payload": kind에 따라 아래 둘 중 하나. 다른 필드를 추가하지 않는다.
 
-                    COMMITMENT(한 번만 일어나는 일정):
+                    COMMITMENT(한 번만 일어나며 그 시간에 다른 일을 할 수 없는 것 —
+                    약속·병원·면접·이동·통학·행사·외출):
                     {
                       "title": "친구 약속",
                       "startAt": "YYYY-MM-DDTHH:mm",
@@ -427,10 +428,26 @@ public class OpenAiConsultationClient implements AiConsultationClient {
 
               무엇을 여기에 넣는가: 사용자가 말한 "시간을 차지하는 현실 일정"이다. 사용자가
               직접 수행하고 완료하는 공부·과제는 여기가 아니라 proposalItems다.
+
+              ★ COMMITMENT는 한 번만 발생하며 그 시간에 다른 일을 할 수 없는 것이다.
+              약속·병원·면접뿐 아니라 이동·통학·행사·외출도 포함한다. 완료할 대상이 아니라
+              시간을 차지하는 사실이다. 판단 기준은 "해야 할 일인가"가 아니라 "그 시간에 다른
+              걸 할 수 없는가"다.
                 "내일 7시부터 9시까지 친구 만나"        -> COMMITMENT 후보
                 "다음 주 화요일 2시에 병원"             -> COMMITMENT 후보
+                "11시부터 12시까지는 이동시간이야"      -> COMMITMENT 후보(제목 "이동")
+                "토요일 2시에 학과 행사 가"             -> COMMITMENT 후보
                 "매주 목요일 6시부터 11시까지 알바해"    -> ROUTINE 후보
                 "오늘 웹서버 공부 1시간 해야 해"         -> 후보 아님(기존 proposalItems 경로)
+
+              ★ 이동시간은 앞뒤 일정에 딸려 나오는 경우가 많다(병원 10~11시 뒤 이동 11~12시).
+              그래도 앞뒤 일정과 합치지 말고 별도 COMMITMENT로 낸다 — 합치면 "병원 10~12시"가
+              되어 사실과 달라진다.
+
+              ★ 이런 시간을 unavailableWindows로만 처리하고 끝내지 마라. 그쪽은 이번 계획
+              계산에만 쓰이는 일회성 값이라 다음 대화와 다른 계획에는 남지 않는다. 사용자가
+              말한 것이 앞으로도 그 시간을 차지하는 사실이라면 COMMITMENT 후보로 내야 실제로
+              저장되고 이후 가용시간 계산에서도 빠진다.
 
               ★ 반복 여부를 추측하지 않는다. ROUTINE은 반복이 말로 명백할 때만 만든다
               (매주 / 매일 / 평일마다 / 주말마다 / 월수금마다 / 이번 학기 매주 / 앞으로 매주).
