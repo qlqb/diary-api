@@ -24,6 +24,16 @@ import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.domain.BusyWindow;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.TextStyle;
+import java.util.Locale;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.metadata.Usage;
@@ -97,6 +107,7 @@ public class PeriodPlanDraftGenerator {
     private final CourseNoteMapper courseNoteMapper;
     private final CourseMaterialAnalysisMapper analysisMapper;
     private final ExecutionItemMapper executionItemMapper;
+    private final AvailabilityEstimateService availabilityEstimateService;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -136,7 +147,16 @@ public class PeriodPlanDraftGenerator {
         }
     }
 
-    /** 모델이 만든 결과를 검증·정규화한 것. 저장 전 상태다. */
+    /**
+     * 모델이 만든 결과를 검증·정규화한 것. 저장 전 상태다.
+     *
+     * @param baselineMinutes             예전 화면 호환. targetMinutes와 같다.
+     * @param targetMinutes               학습 예산. 추정 가용시간 × 강도 비율, 15분 단위 내림.
+     * @param estimatedAvailableMinutes   계획 기간의 추정 남는 시간(고정 일정·지난 시간 제외).
+     * @param availabilityConfidenceSummary 그 추정의 근거 요약.
+     * @param reservedBufferMinutes       남는 시간 − 학습 예산. 휴식·변동 여유.
+     * @param noAvailableTime             남는 시간이 0이라 모델을 부르지 않았다. items는 비어 있다.
+     */
     public record Generated(
             Spec spec,
             int baselineMinutes,
@@ -145,8 +165,18 @@ public class PeriodPlanDraftGenerator {
             boolean targetAdjusted,
             String suggestedTitle,
             String goalSummary,
-            List<ProposalItem> items
+            List<ProposalItem> items,
+            int estimatedAvailableMinutes,
+            String availabilityConfidenceSummary,
+            int reservedBufferMinutes,
+            boolean noAvailableTime
     ) {
+        /** 가용시간 정보가 없는 호출부(테스트 등)용. */
+        public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
+                         boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items) {
+            this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
+                    goalSummary, items, 0, null, 0, false);
+        }
     }
 
     public boolean isConfigured() {
@@ -181,27 +211,87 @@ public class PeriodPlanDraftGenerator {
         if (!aiConsultationClient.isConfigured()) {
             throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
         }
-        int baseline = spec.intensity().baselineMinutes(days);
         int maxItems = maxItemsFor(days);
         List<Course> courses = resolveCourses(spec.userId(), spec.courseIds());
 
-        PlanDraftAiResult ai = callAi(spec, courses, days, baseline, maxItems);
+        /*
+         * 학습 예산은 서버가 정한다 — 추정 남는 시간 × 강도 비율. 예전에는 고정 기준선을 주고
+         * 모델이 조정하게 했는데, 모델은 시간표를 못 보고 사용자는 왜 그 숫자인지 알 수 없었다.
+         * 가용시간은 기존 AvailabilityEstimateService 그대로다: 지난 시간, 수업·알바(routine),
+         * 약속(commitment), 시각이 박힌 실행 항목을 뺀 값이고, 근거가 없으면 기본 시간대다.
+         */
+        AvailabilityEstimateResult availability = availabilityEstimateService.estimate(
+                spec.userId(), spec.start(), spec.end(), List.of(), List.of());
+        int available = availableMinutes(availability.windows());
+        int target = spec.intensity().targetMinutesFor(available);
+        String confidence = confidenceSummary(availability.windows());
 
-        // 모델이 목표를 빼먹거나 말이 안 되는 값을 주면 기준선으로 되돌린다. 조정 권한을
-        // 주는 것과 출력을 그대로 믿는 것은 다르다.
-        Integer aiTarget = ai.targetMinutes();
-        boolean adjusted = aiTarget != null && aiTarget > 0 && aiTarget != baseline;
-        int targetMinutes = adjusted ? aiTarget : baseline;
-        String reason = adjusted ? blankToNull(ai.targetMinutesReason()) : null;
+        if (target <= 0) {
+            // 남는 시간이 없으면 항목을 억지로 만들지 않는다. 실패가 아니라 안내다.
+            log.info("기간 계획 초안: 추정 가용시간 0 — 모델을 부르지 않는다. userId={}, {}~{}",
+                    spec.userId(), spec.start(), spec.end());
+            return new Generated(spec, target, target, null, false, defaultTitle(spec.start(), spec.end()),
+                    null, List.of(), available, confidence, Math.max(0, available - target), true);
+        }
+
+        /*
+         * 예산이 항목 상한 × 항목 최대 길이를 넘으면 모델이 시간을 부풀리거나 결과가 잘린다.
+         * 둘 다 하지 않고 여기서 멈춘다. 7일 이하에서 이게 나오면 가용시간·비율·상한 계산이
+         * 잘못된 것이라 오류로 남기고, 8~31일은 기간을 주 단위로 나누라는 안내다.
+         */
+        int cap = maxItems * MAX_ITEM_MINUTES;
+        if (target > cap) {
+            if (days <= SHORT_PLAN_DAYS) {
+                log.error("기간 계획 예산이 항목 상한을 넘음(7일 이하): userId={}, days={}, available={}, "
+                        + "intensity={}, target={}, cap={}", spec.userId(), days, available, spec.intensity(), target, cap);
+            } else {
+                log.warn("기간 계획 예산이 항목 상한을 넘음: userId={}, days={}, target={}, cap={} — 주 단위 분할 안내",
+                        spec.userId(), days, target, cap);
+            }
+            throw new BadRequestException(ErrorCode.PLAN_TARGET_EXCEEDS_ITEM_CAP);
+        }
+
+        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence, maxItems);
 
         List<ProposalItem> items = toProposalItems(ai, spec.start(), spec.end(), courses);
         if (items.isEmpty()) {
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
-        return new Generated(spec, baseline, targetMinutes, reason, adjusted,
+        return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
-                blankToNull(ai.goalSummary()), items);
+                blankToNull(ai.goalSummary()), items, available, confidence, available - target, false);
+    }
+
+    /** 가용 구간의 분 합계. 구간은 이미 겹치지 않게 계산돼 있다. */
+    static int availableMinutes(List<AvailabilityWindow> windows) {
+        long total = 0;
+        for (AvailabilityWindow window : windows) {
+            total += Math.max(0, window.durationMinutes());
+        }
+        return Math.toIntExact(total);
+    }
+
+    /**
+     * 추정 근거 요약. 기본 시간대(근거 없음, LOW)가 섞여 있으면 그 사실을 말한다 — 화면과
+     * 모델 모두 이 값을 확정 사실처럼 다루면 안 된다.
+     */
+    static String confidenceSummary(List<AvailabilityWindow> windows) {
+        if (windows.isEmpty()) {
+            return "배치할 수 있는 시간이 없음";
+        }
+        boolean anyDefault = windows.stream()
+                .anyMatch(w -> w.source() == AvailabilitySource.DEFAULT_INFERENCE
+                        || w.confidence() == AvailabilityConfidence.LOW);
+        boolean allDefault = windows.stream()
+                .allMatch(w -> w.source() == AvailabilitySource.DEFAULT_INFERENCE);
+        if (allDefault) {
+            return "기본 시간대(평일 19~22시, 주말 10~18시)를 사용한 추정";
+        }
+        if (anyDefault) {
+            return "일부는 기본 시간대를 사용한 추정";
+        }
+        return "사용자가 확인한 시간 기준";
     }
 
     // ===== AI 호출 =====
@@ -215,8 +305,6 @@ public class PeriodPlanDraftGenerator {
             {
               "title": "계획 제목 (짧게)",
               "goalSummary": "이 기간에 무엇을 이루려는지 한 문장 (없으면 null)",
-              "targetMinutes": 정수,
-              "targetMinutesReason": "기준선을 조정했을 때만 한 문장, 조정 안 했으면 null",
               "items": [
                 {
                   "title": "과목·대상·행동이 드러나는, 한 번에 앉아서 할 만한 단위의 할 일",
@@ -261,9 +349,10 @@ public class PeriodPlanDraftGenerator {
               않았어요" 정도로만 다룬다.
             """.formatted(AiStreamParser.DELIMITER, MIN_ITEM_MINUTES, MAX_ITEM_MINUTES);
 
-    private PlanDraftAiResult callAi(Spec spec, List<Course> courses, int days, int baseline, int maxItems) {
+    private PlanDraftAiResult callAi(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
+                                     int days, int available, int target, String confidence, int maxItems) {
         Long userId = spec.userId();
-        String userPrompt = buildUserPrompt(spec, courses, days, baseline, maxItems);
+        String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence, maxItems);
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         try {
@@ -297,7 +386,8 @@ public class PeriodPlanDraftGenerator {
         }
     }
 
-    private String buildUserPrompt(Spec spec, List<Course> courses, int days, int baseline, int maxItems) {
+    private String buildUserPrompt(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
+                                   int days, int available, int target, String confidence, int maxItems) {
         Long userId = spec.userId();
         LocalDate start = spec.start();
         LocalDate end = spec.end();
@@ -308,15 +398,20 @@ public class PeriodPlanDraftGenerator {
                 .append(start).append(" ~ ").append(end)
                 .append(" (").append(days).append("일, 오늘은 ").append(today).append(")\n\n");
 
-        // ★ 기준선으로 제시한다. 고정값이 아니다 — 프리셋 숫자에 실사용 근거가 없으므로
-        //   상황을 더 많이 아는 모델에게 조정 권한을 준다.
+        // ★ 예산은 서버가 정했다. 모델은 이 안에서 무엇을 할지만 정한다 — 숫자를 다시 정하지
+        //   않는다. 예전의 "기준선을 조정하라"는 시간표를 못 보는 모델에게 숫자를 맡기는 것이었다.
         sb.append("[시간]\n")
-                .append("이 기간의 기준 학습 시간은 약 ").append(baseline).append("분이다. ")
-                .append("사용자 상황(아래 지시, 고정 일정, 직전 회고)상 조정이 필요하면 조정하고 ")
-                .append("이유를 한 문장으로 밝혀라. 이 목표는 계획 예산이지 소진할 할당량이 아니다 — ")
+                .append("이 기간의 추정 남는 시간은 약 ").append(available).append("분이다")
+                .append("(고정 일정과 지난 시간을 뺀 값, ").append(confidence).append("). ")
+                .append("강도 ").append(spec.intensity().name()).append("(남는 시간의 ")
+                .append(spec.intensity().getFillPercent()).append("%) 기준 학습 예산은 ")
+                .append(target).append("분이다. ")
+                .append("이 목표는 계획 예산이지 소진할 할당량이 아니다 — ")
                 .append("항목들의 예상 시간 합이 목표를 넘기지 않게 하되, 목표를 채우려고 항목 시간을 ")
                 .append("늘리지 마라. 항목을 잘게 쪼개 개수를 늘리지 마라. 채울 내용이 없으면 ")
                 .append("억지로 채우지 말고 적게 제안하라. 항목은 최대 ").append(maxItems).append("개다.\n\n");
+
+        appendAvailabilityBlocks(sb, availability, available, confidence);
 
         /*
           학습 항목과 일정을 줘도 어디까지가 "지금"인지는 따로 말해주지 않으면 모른다.
@@ -372,6 +467,62 @@ public class PeriodPlanDraftGenerator {
         }
         return sb.toString();
     }
+
+    /** 한 블록에 실을 일정·가용 구간 줄 수 상한. 31일 계획이면 하루 한두 줄로도 이 근처다. */
+    private static final int MAX_WINDOW_LINES = 40;
+
+    /**
+     * 기간 안의 고정 일정과 남는 시간. 계획 화면에서든 대화에서든 같은 재료다 — 대화의
+     * [이번 주 일정]/[남는 시간(추정)]과 같은 뜻이지만 여기서는 기간 전체를 본다.
+     */
+    private void appendAvailabilityBlocks(StringBuilder sb, AvailabilityEstimateResult availability,
+                                          int available, String confidence) {
+        sb.append("[이번 기간에 이미 등록된 일정]\n");
+        List<BusyWindow> busy = new ArrayList<>(availability.busyWindows());
+        busy.sort(java.util.Comparator.comparing(BusyWindow::startAt));
+        if (busy.isEmpty()) {
+            sb.append("(없음)\n");
+        }
+        int shown = 0;
+        for (BusyWindow window : busy) {
+            if (shown++ >= MAX_WINDOW_LINES) {
+                sb.append("- … 외 ").append(busy.size() - MAX_WINDOW_LINES).append("건\n");
+                break;
+            }
+            sb.append("- ").append(renderSpan(window.startAt(), window.endAt())).append(' ')
+                    .append(window.label()).append('\n');
+        }
+        sb.append("이 시간은 새로 만들 대상이 아니다. 계획은 이 시간을 피해 잡힌다.\n\n");
+
+        sb.append("[남는 시간(추정)]\n");
+        List<AvailabilityWindow> windows = availability.windows();
+        if (windows.isEmpty()) {
+            sb.append("(없음)\n");
+        }
+        shown = 0;
+        for (AvailabilityWindow window : windows) {
+            if (shown++ >= MAX_WINDOW_LINES) {
+                sb.append("- … 외 ").append(windows.size() - MAX_WINDOW_LINES).append("구간\n");
+                break;
+            }
+            sb.append("- ").append(renderSpan(window.startAt(), window.endAt()))
+                    .append(" (").append(window.durationMinutes()).append("분)\n");
+        }
+        sb.append("합계 약 ").append(available).append("분 · ").append(confidence)
+                .append(". 사용자가 확정한 값이 아니라 추정이므로 확정된 것처럼 말하지 않는다.\n\n");
+    }
+
+    private static String renderSpan(LocalDateTime startAt, LocalDateTime endAt) {
+        LocalDate date = startAt.toLocalDate();
+        String day = date.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.KOREAN);
+        String end = endAt.toLocalDate().equals(date)
+                ? endAt.toLocalTime().format(TIME_FMT)
+                : endAt.getMonthValue() + "/" + endAt.getDayOfMonth() + " " + endAt.toLocalTime().format(TIME_FMT);
+        return date.getMonthValue() + "/" + date.getDayOfMonth() + " " + day + " "
+                + startAt.toLocalTime().format(TIME_FMT) + "~" + end;
+    }
+
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
     /**
      * 프로젝트 한 줄 + 그 프로젝트에 대해 자료에서 뽑아 둔 것.

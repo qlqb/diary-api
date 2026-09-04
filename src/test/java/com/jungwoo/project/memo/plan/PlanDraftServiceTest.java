@@ -10,6 +10,14 @@ import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import static org.mockito.Mockito.never;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
@@ -58,8 +66,9 @@ class PlanDraftServiceTest {
     private static final Long USER_ID = 1L;
     private static final LocalDate START = LocalDate.of(2026, 8, 24);
     private static final LocalDate END = LocalDate.of(2026, 8, 30);
-    /** NORMAL × 7일 = 600분. 기준선. */
+    /** 기본 stub 가용 925분 × NORMAL 65% = 601.25 → 15분 내림 600분. */
     private static final int BASELINE = 600;
+    private static final int DEFAULT_AVAILABLE = 925;
 
     @Mock
     private AiConsultationClient aiConsultationClient;
@@ -83,6 +92,8 @@ class PlanDraftServiceTest {
     private com.jungwoo.project.memo.course.CourseNoteMapper courseNoteMapper;
     @Mock
     private com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper analysisMapper;
+    @Mock
+    private AvailabilityEstimateService availabilityEstimateService;
 
     private PlanDraftService service;
 
@@ -92,7 +103,7 @@ class PlanDraftServiceTest {
         // generator를 지나므로 프롬프트 단언은 generator 쪽 mock(aiConsultationClient)에서 잡는다.
         PeriodPlanDraftGenerator generator = new PeriodPlanDraftGenerator(aiConsultationClient,
                 aiUsageLimitService, planReviewService, courseMapper, topicService, courseNoteMapper,
-                analysisMapper, executionItemMapper,
+                analysisMapper, executionItemMapper, availabilityEstimateService,
                 Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
@@ -114,61 +125,98 @@ class PlanDraftServiceTest {
         when(analysisMapper.findAppliedByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
         when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt()))
                 .thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
+        givenAvailableMinutes(DEFAULT_AVAILABLE);
     }
 
+    /** 기간 안에 이만큼 남는다고 가용시간 서비스가 답한다. 0이면 구간이 없다. */
+    private void givenAvailableMinutes(int minutes) {
+        List<AvailabilityWindow> windows = minutes <= 0 ? List.of() : List.of(new AvailabilityWindow(
+                START.atTime(9, 0), START.atTime(9, 0).plusMinutes(minutes),
+                AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW, "기본 시간대"));
+        when(availabilityEstimateService.estimate(anyLong(), any(), any(), any(), any()))
+                .thenReturn(new AvailabilityEstimateResult(windows, List.of()));
+    }
+
+    // ===== 강도: 추정 가용시간의 비율 =====
+
+    /*
+     * 예전에는 고정 기준선을 모델에게 주고 조정하게 했다. 모델은 시간표를 못 보고, 사용자는 왜
+     * 그 숫자인지 알 수 없었다. 이제 학습 예산은 서버가 추정 남는 시간 × 강도 비율로 정한다.
+     * 모델이 targetMinutes를 적어 보내도 무시한다.
+     */
     @Test
-    void aiLowersTheBaseline_thatAdjustedValueIsStored_withReason() {
-        givenAiResponse(390, "알바 일정을 고려해 낮게 잡았어요");
+    void targetIsComputedFromAvailability_andTheModelCannotOverrideIt() {
+        givenAvailableMinutes(600);
+        givenAiResponse(555, "모델이 마음대로 정한 값");
 
-        PlanDraftResponse draft = service.createDraft(USER_ID, request("이번 주 알바가 많아서 시간이 없어"));
+        PlanDraftResponse draft = service.createDraft(USER_ID, request(null));
 
-        assertThat(draft.getBaselineMinutes()).isEqualTo(BASELINE);
-        assertThat(draft.getTargetMinutes()).as("AI가 정한 값이 최종 목표다").isEqualTo(390);
-        assertThat(draft.getTargetMinutes()).isLessThan(draft.getBaselineMinutes());
-        assertThat(draft.getTargetMinutesReason()).isEqualTo("알바 일정을 고려해 낮게 잡았어요");
-
-        // ★ 저장되는 값은 기준선이 아니라 조정된 값이다.
+        assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(600);
+        assertThat(draft.getTargetMinutes()).as("NORMAL 65% of 600").isEqualTo(390);
+        assertThat(draft.getBaselineMinutes()).isEqualTo(390);
+        assertThat(draft.getReservedBufferMinutes()).isEqualTo(210);
+        assertThat(draft.getTargetMinutesReason()).isNull();
+        assertThat(draft.getAvailabilityConfidenceSummary()).contains("기본 시간대");
         verify(aiProposalMapper).updatePlanMetadata(
                 eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390));
     }
 
     @Test
-    void aiRaisesTheBaseline_isAlsoAccepted() {
-        // 조정은 양방향이다. 낮추는 것만 허용하면 "여유가 있다"를 표현할 수 없다.
-        givenAiResponse(900, "이번 주는 일정이 비어 여유가 있어요");
+    void intensityRatios_light40_normal65_focused85() {
+        givenAvailableMinutes(600);
+        givenAiResponse(null, null);
+
+        when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.LIGHT);
+        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(240);
+        when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
+        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(390);
+        when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.FOCUSED);
+        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(510);
+    }
+
+    @Test
+    void targetIsFlooredToFifteenMinutes_andShrinksWhenBusyWindowsGrow() {
+        givenAiResponse(null, null);
+
+        givenAvailableMinutes(925);
+        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(600);
+        // 수업·알바가 늘어 남는 시간이 줄면 예산도 준다 — 고정 기준선에는 없던 성질이다.
+        givenAvailableMinutes(600);
+        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(390);
+    }
+
+    @Test
+    void zeroAvailability_doesNotCallTheModel_andReturnsGuidanceInsteadOfAnEmptyDraft() {
+        givenAvailableMinutes(0);
 
         PlanDraftResponse draft = service.createDraft(USER_ID, request(null));
 
-        assertThat(draft.getTargetMinutes()).isEqualTo(900).isGreaterThan(BASELINE);
-        assertThat(draft.getTargetMinutesReason()).isNotBlank();
+        assertThat(draft.isNoAvailableTime()).isTrue();
+        assertThat(draft.getProposal()).isNull();
+        assertThat(draft.getProposalId()).isNull();
+        assertThat(draft.getTargetMinutes()).isZero();
+        assertThat(draft.getAvailabilityConfidenceSummary()).isEqualTo("배치할 수 있는 시간이 없음");
+        verify(aiConsultationClient, never()).streamTurn(any(), any(), anyInt());
+        verify(aiProposalService, never()).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
+    /*
+     * 예산 > 항목 상한 × 120분이면 모델이 시간을 부풀리거나 결과가 잘린다. 둘 다 하지 않고
+     * 모델을 부르기 전에 멈춘다. 7일 FOCUSED에서 3,000분이 남으면 2,550 > 15×120=1,800이다.
+     */
+    @Test
+    void targetAboveTheItemCap_isRejectedBeforeCallingTheModel() {
+        givenAvailableMinutes(3000);
+        when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.FOCUSED);
+
+        assertThatThrownBy(() -> service.createDraft(USER_ID, request(null)))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.PLAN_TARGET_EXCEEDS_ITEM_CAP));
+        verify(aiConsultationClient, never()).streamTurn(any(), any(), anyInt());
     }
 
     @Test
-    void aiKeepsTheBaseline_hasNoReason() {
-        givenAiResponse(BASELINE, "조정 안 함");
-
-        PlanDraftResponse draft = service.createDraft(USER_ID, request(null));
-
-        assertThat(draft.getTargetMinutes()).isEqualTo(BASELINE);
-        assertThat(draft.getTargetMinutesReason())
-                .as("조정이 없으면 이유 줄을 그리지 않아야 하므로 null이다").isNull();
-    }
-
-    @Test
-    void aiOmitsOrCorruptsTargetMinutes_fallsBackToBaseline() {
-        // 조정 권한을 주는 것과 출력을 그대로 믿는 것은 다르다.
-        givenAiResponse(null, "이유만 있고 값이 없음");
-        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(BASELINE);
-
-        givenAiResponse(0, "0분");
-        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(BASELINE);
-
-        givenAiResponse(-100, "음수");
-        assertThat(service.createDraft(USER_ID, request(null)).getTargetMinutes()).isEqualTo(BASELINE);
-    }
-
-    @Test
-    void promptCarriesTheBaselineAsAReferencePoint_notAsAFixedTarget() {
+    void promptCarriesTheAvailabilityAndTheBudget_asABudgetNotAQuota() {
         givenAiResponse(BASELINE, null);
 
         service.createDraft(USER_ID, request("시험 전까지 자료구조 위주로"));
@@ -176,10 +224,15 @@ class PlanDraftServiceTest {
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
         assertThat(userPrompt.getValue())
-                .contains("기준 학습 시간은 약 600분")
-                .contains("조정이 필요하면 조정하고")
+                .contains("추정 남는 시간은 약 925분")
+                .contains("강도 NORMAL(남는 시간의 65%) 기준 학습 예산은 600분")
+                .contains("[이번 기간에 이미 등록된 일정]")
+                .contains("[남는 시간(추정)]")
+                .contains("합계 약 925분")
                 .contains("억지로 채우지 말고 적게 제안하라")
-                .contains("시험 전까지 자료구조 위주로");
+                .contains("시험 전까지 자료구조 위주로")
+                // 모델에게 숫자를 다시 정하라고 하지 않는다.
+                .doesNotContain("조정이 필요하면 조정하고");
     }
 
     /**

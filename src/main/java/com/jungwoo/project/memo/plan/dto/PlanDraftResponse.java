@@ -12,6 +12,9 @@ import java.time.LocalDate;
 /**
  * 계획 초안. 아직 execution_items도 plan_versions도 만들어지지 않았다 — 사용자가 확정해야
  * 실제 데이터가 생긴다.
+ *
+ * <p>계획 화면(/api/plans/draft)과 AI 대화(period_plan.ready)가 같은 모양을 쓴다. 어느 탭에서
+ * 만들었든 같은 검토·확정 화면이 받는다.
  */
 @Data
 @NoArgsConstructor
@@ -29,22 +32,40 @@ public class PlanDraftResponse {
 
     private PlanIntensity intensity;
 
-    /** 프리셋이 제시한 기준선. 화면이 "조정됐다"를 판단하는 기준이다. */
+    /**
+     * 예전 화면 호환용. 지금은 targetMinutes와 같은 값이다 — 학습 예산은 서버가 가용시간과
+     * 강도로 계산하고 모델이 조정하지 않는다.
+     */
     private Integer baselineMinutes;
 
-    /** AI가 정한 최종 목표. 조정이 없었으면 baselineMinutes와 같다. */
+    /** 학습 예산(분). 추정 가용시간 × 강도 비율을 15분 단위로 내린 값. 소진할 할당량이 아니다. */
     private Integer targetMinutes;
 
-    /**
-     * 기준선을 조정한 이유. 조정이 없었으면 null이고, 그때 화면은 이유 줄을 그리지 않는다.
-     * 영속하지 않는 값이라 초안 응답에서만 볼 수 있다.
-     */
+    /** 예전 화면 호환용. 서버가 예산을 정하므로 항상 null이다. */
     private String targetMinutesReason;
+
+    /** 계획 기간에서 고정 일정·지난 시간을 뺀 추정 남는 시간(분). */
+    private Integer estimatedAvailableMinutes;
+
+    /**
+     * 남는 시간 추정의 근거 요약. 근거가 없어 기본 시간대(평일 19~22시, 주말 10~18시)를 쓴
+     * 부분이 있으면 그 사실을 말한다 — 확정 사실처럼 보이지 않게 하기 위해서다.
+     */
+    private String availabilityConfidenceSummary;
+
+    /** 추정 남는 시간에서 학습 예산을 뺀 여유(분). 휴식·변동에 남겨 둔 시간이다. */
+    private Integer reservedBufferMinutes;
+
+    /**
+     * 추정 남는 시간이 0이라 항목을 만들지 않았다. proposal은 null이다. 화면은 실패가 아니라
+     * "현재 추정으로는 배치 가능한 시간이 없다"와 가용시간 수정 경로를 보여준다.
+     */
+    private boolean noAvailableTime;
 
     private String suggestedTitle;
 
     private String goalSummary;
 
-    /** 항목 목록. 사용자는 여기서 체크를 풀어 부하를 조절한다. */
+    /** 항목 목록. 사용자는 여기서 체크를 풀어 부하를 조절한다. noAvailableTime이면 null. */
     private AiProposalResponse proposal;
 }

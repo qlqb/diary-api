@@ -75,6 +75,21 @@ public class PlanDraftService {
         int days = spec.days();
         int maxItems = spec.maxItems();
 
+        if (generated.noAvailableTime()) {
+            // 남는 시간이 없으면 제안을 만들지 않는다. 실패가 아니라 "현재 추정으로는 배치할
+            // 시간이 없다"는 안내이고, 화면이 가용시간 수정 경로를 보여준다.
+            log.info("기간 계획 초안: 가용시간 0으로 제안을 만들지 않음. userId={}, {}~{}", userId, spec.start(), spec.end());
+            return PlanDraftResponse.builder()
+                    .startDate(spec.start()).endDate(spec.end()).days(days).intensity(spec.intensity())
+                    .baselineMinutes(0).targetMinutes(0)
+                    .estimatedAvailableMinutes(generated.estimatedAvailableMinutes())
+                    .availabilityConfidenceSummary(generated.availabilityConfidenceSummary())
+                    .reservedBufferMinutes(0)
+                    .noAvailableTime(true)
+                    .suggestedTitle(generated.suggestedTitle())
+                    .build();
+        }
+
         AiProposalResponse proposal = aiProposalService.createFromItems(
                 userId, conversationId, sourceMessageId, generated.items(), List.of(), spec.start(), List.of(),
                 maxItems);
@@ -98,6 +113,10 @@ public class PlanDraftService {
                 .baselineMinutes(generated.baselineMinutes())
                 .targetMinutes(generated.targetMinutes())
                 .targetMinutesReason(generated.targetMinutesReason())
+                .estimatedAvailableMinutes(generated.estimatedAvailableMinutes())
+                .availabilityConfidenceSummary(generated.availabilityConfidenceSummary())
+                .reservedBufferMinutes(generated.reservedBufferMinutes())
+                .noAvailableTime(false)
                 .suggestedTitle(generated.suggestedTitle())
                 .goalSummary(generated.goalSummary())
                 .proposal(proposal)
