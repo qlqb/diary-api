@@ -88,6 +88,71 @@ class SchedulingConstraintProviderTest {
                 .penalizesBy(0);
     }
 
+    // ===== 항목 사이 여유(휴식) =====
+
+    /*
+     * 시작 후보는 15분 격자인데 여유 선호는 10분이었다. 10분은 격자 위에 없어서, 붙여 놓은
+     * 것과 15분 띄운 것 사이에 솔버가 고를 수 있는 값이 없었다. 여유는 15분으로, 격자와 같은
+     * 값으로 맞춘다. 여전히 SOFT다 — 여유를 위해 MUST 항목을 버리지 않는다(그쪽은 MEDIUM).
+     * 휴식은 실행 조각으로 저장되지 않는다. 이 제약은 빈 구간을 남길 뿐이다.
+     */
+    @Test
+    void preferBuffer_penalizesBackToBackTasks_onTheSameDay() {
+        SchedulingTask a = scheduledTask(1, BASE, 60);
+        SchedulingTask b = scheduledTask(2, BASE.plusMinutes(60), 30);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferBufferBetweenTasks)
+                .given(a, b)
+                .penalizesBy(1);
+    }
+
+    @Test
+    void preferBuffer_penalizesTenMinuteGap_becauseItIsBelowTheGrid() {
+        SchedulingTask a = scheduledTask(1, BASE, 60);
+        SchedulingTask b = scheduledTask(2, BASE.plusMinutes(70), 30);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferBufferBetweenTasks)
+                .given(a, b)
+                .penalizesBy(1);
+    }
+
+    @Test
+    void preferBuffer_isSatisfiedByExactlyFifteenMinutes_matchingTheStartGrid() {
+        SchedulingTask a = scheduledTask(1, BASE, 60);
+        SchedulingTask b = scheduledTask(2, BASE.plusMinutes(75), 30);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferBufferBetweenTasks)
+                .given(a, b)
+                .penalizesBy(0);
+    }
+
+    @Test
+    void preferBuffer_ignoresTasksOnDifferentDays_andUnscheduledOnes() {
+        SchedulingTask a = scheduledTask(1, BASE, 60);
+        SchedulingTask nextDay = scheduledTask(2, BASE.plusDays(1), 30);
+        SchedulingTask unscheduled = unscheduledTask(3, ExecutionPriority.MUST);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferBufferBetweenTasks)
+                .given(a, nextDay, unscheduled)
+                .penalizesBy(0);
+    }
+
+    @Test
+    void preferBuffer_isSoft_whileUnscheduledMustIsMedium_soBufferNeverDropsAMust() {
+        // 여유 부족 한 쌍 = SOFT 1. MUST 미배치 = MEDIUM 5. 레벨이 다르므로 어떤 배수로도 여유가
+        // MUST 배치를 이기지 못한다.
+        SchedulingTask a = scheduledTask(1, BASE, 60);
+        SchedulingTask b = scheduledTask(2, BASE.plusMinutes(60), 30);
+        SchedulingTask must = unscheduledTask(3, ExecutionPriority.MUST);
+
+        verifier.verifyThat(SchedulingConstraintProvider::preferBufferBetweenTasks)
+                .given(a, b, must)
+                .penalizesBy(1);
+        verifier.verifyThat(SchedulingConstraintProvider::preferHighPriorityScheduled)
+                .given(must)
+                .penalizesBy(5);
+    }
+
     @Test
     void taskOutsideHorizon_penalizesTaskEndingAfterHorizon() {
         SchedulingContext context = new SchedulingContext(

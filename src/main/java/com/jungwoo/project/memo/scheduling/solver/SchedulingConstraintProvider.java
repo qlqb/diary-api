@@ -26,8 +26,14 @@ public class SchedulingConstraintProvider implements ConstraintProvider {
     /** 하루에 이 개수를 넘는 새 후보가 몰리면 소프트 페널티를 준다. */
     private static final int DAILY_LOAD_SOFT_LIMIT = 3;
 
-    /** 같은 날 두 후보 사이 이 여유(분) 미만이면 소프트 페널티를 준다. */
-    private static final int PREFERRED_BUFFER_MINUTES = 10;
+    /**
+     * 같은 날 두 후보 사이 이 여유(분) 미만이면 소프트 페널티를 준다.
+     *
+     * <p>시작 후보 격자(15분)와 같은 값이다. 예전 10분은 격자 위에 없어서 "붙이지 마라"와
+     * 구분되지 않았다. 휴식은 실행 조각으로 저장되지 않는다 — 이 제약이 남기는 빈 구간이 전부다.
+     * SOFT라서 여유를 위해 MUST 항목(MEDIUM)을 버리는 일은 없다.
+     */
+    private static final int PREFERRED_BUFFER_MINUTES = 15;
 
     /**
      * 순서가 뒤집힌 쌍 하나당 페널티.
