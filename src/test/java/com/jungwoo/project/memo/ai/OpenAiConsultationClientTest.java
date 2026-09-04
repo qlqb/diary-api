@@ -118,6 +118,32 @@ class OpenAiConsultationClientTest {
     }
 
     /*
+     * 진입 탭이 아니라 의도가 계획 경로를 정한다. 모델은 목적(PERIOD_PLAN/EXECUTION_CHANGE)을
+     * 명시하고, 기간 계획이면 OFFER 단계에서 기간·강도·대상 프로젝트를 채운다. 강도를 모르면
+     * 한 번 묻고, 자연어(가볍게/적당히/빡세게)를 세 강도로 읽는다. 항목은 만들지 않는다 — 서버의
+     * 계획 생성기가 만든다.
+     */
+    @Test
+    void systemPrompt_routesByProposalPurpose_andAsksIntensityOnce() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("\"proposalPurpose\": \"PERIOD_PLAN\" 또는 \"EXECUTION_CHANGE\" 또는 null");
+        assertThat(prompt).contains("\"planIntensity\": \"LIGHT\" 또는 \"NORMAL\" 또는 \"FOCUSED\" 또는 null");
+        assertThat(prompt).contains("\"targetCourseIds\"");
+        assertThat(prompt).contains("어느 탭에서 말했는지가 아니라 사용자의");
+        assertThat(prompt).contains("PERIOD_PLAN(기간 계획)");
+        assertThat(prompt).contains("EXECUTION_CHANGE(실행 조정·단건)");
+        assertThat(prompt).contains("missingInformation=[\"PLAN_INTENSITY\"]");
+        assertThat(prompt).contains("\"조금만·핵심만·가볍게\" → LIGHT");
+        assertThat(prompt).contains("\"적당히·균형 있게·알아서\" → NORMAL");
+        assertThat(prompt).contains("\"빡세게·가능한 만큼·거의 꽉 채워\" → FOCUSED");
+        assertThat(prompt).contains("이미 말했으면 다시 묻지 않는다");
+        assertThat(prompt).contains("기간 계획과 기존 항목 조정을 한 번에 섞지 않는다");
+        assertThat(prompt).contains("PERIOD_PLAN에서");
+        assertThat(prompt).contains("proposalItems를 미리 채우지 않는다");
+    }
+
+    /*
      * 대화 경로 항목도 60분에 몰렸다. 여기에는 5~120이라는 범위 말고는 시간에 대한 말이 없었다.
      * 전용 계획 경로와 같은 조각(PlanItemPromptRules.DURATION_PHRASES)을 싣는다. 대화 경로에서
      * "채워야 할 양"으로 읽힐 수 있는 것은 [남는 시간(추정)]이라 그것도 예산이라고 못 박는다.

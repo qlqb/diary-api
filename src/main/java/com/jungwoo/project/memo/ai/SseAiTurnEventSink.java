@@ -84,6 +84,11 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     }
 
     @Override
+    public void onPeriodPlanReady(com.jungwoo.project.memo.plan.dto.PlanDraftResponse draft) {
+        send("period_plan.ready", draft);
+    }
+
+    @Override
     public void onCompleted(AiTurnCompletedPayload payload) {
         if (!markTerminatedOnce()) {
             return;

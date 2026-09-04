@@ -21,6 +21,8 @@ import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
+import com.jungwoo.project.memo.ai.dto.PeriodPlanRequest;
+import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseService;
@@ -93,6 +95,7 @@ class AiConversationServiceTest {
     @Mock private ScheduleSuggestionService scheduleSuggestionService;
     @Mock private AiWorkspaceContextBuilder aiWorkspaceContextBuilder;
     @Mock private CourseService courseService;
+    @Mock private com.jungwoo.project.memo.plan.PlanDraftService planDraftService;
 
     @InjectMocks
     private AiConversationService service;
@@ -657,6 +660,184 @@ class AiConversationServiceTest {
 
         assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_GENERATION_FAILED);
         verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ===== 기간 계획: 진입 탭이 아니라 의도가 경로를 정한다 =====
+
+    /*
+     * "이번 주 계획 짜줘"는 오늘 탭에서 말해도 기간 계획이다. 모델이 proposalPurpose=PERIOD_PLAN과
+     * 기간·강도·대상 프로젝트를 명시하면 서버가 검증해 CREATE_PERIOD_PLAN 버튼을 만든다. 버튼
+     * 자체는 여전히 서버가 만든다 — 모델 JSON에는 offerAction 필드가 없다.
+     */
+    @Test
+    void auto_periodPlanOffer_buildsCreatePeriodPlanAction_withValidatedFields() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        when(courseService.list(USER_ID, com.jungwoo.project.memo.course.domain.CourseStatus.ACTIVE)).thenReturn(List.of(
+                com.jungwoo.project.memo.course.dto.CourseResponse.builder().courseId(31L).title("빅데이터분석").build(),
+                com.jungwoo.project.memo.course.dto.CourseResponse.builder().courseId(36L).title("자료구조").build()));
+        String raw = "이번 주 남은 기간을 집중 강도로 잡아볼까요?\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalPurpose\":\"PERIOD_PLAN\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-09\",\"planScope\":\"WEEK\","
+                + "\"planIntensity\":\"FOCUSED\",\"targetCourseIds\":[36,999],"
+                + "\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 계획 짜줘", "k-pp"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.offerAction.type()).isEqualTo("CREATE_PERIOD_PLAN");
+        assertThat(sink.offerAction.periodStartDate()).isEqualTo(LocalDate.of(2026, 8, 5));
+        assertThat(sink.offerAction.periodEndDate()).isEqualTo(LocalDate.of(2026, 8, 9));
+        assertThat(sink.offerAction.intensity()).isEqualTo(com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED);
+        // 남의 것이거나 없는 프로젝트(999)는 서버가 걸러낸다.
+        assertThat(sink.offerAction.courseIds()).containsExactly(36L);
+        verify(aiProposalService, never()).createFromItems(any(), any(), any(), any(), any(), any());
+    }
+
+    /*
+     * 강도를 모르면 기간 계획을 제안하지 않고 한 번 묻는다. 서버가 세 선택지를 붙인다 — 모델이
+     * 강도를 추측해 채우는 것도, 계약 위반으로 503을 내는 것도 아니다.
+     */
+    @Test
+    void auto_periodPlanOfferWithoutIntensity_asksOnce_withThreeQuickReplies() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "만들어볼까요?\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalPurpose\":\"PERIOD_PLAN\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-05\",\"planScope\":\"DAY\","
+                + "\"planIntensity\":null,\"targetCourseIds\":[],"
+                + "\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 공부 계획 짜줘", "k-pi"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.reply()).isEqualTo(AiConversationService.INTENSITY_QUESTION);
+        assertThat(sink.completed.quickReplies()).containsExactly("가볍게", "보통", "집중");
+        assertThat(sink.offerAction).isNull();
+    }
+
+    /** 모델이 스스로 강도를 되물을 때(missingInformation=PLAN_INTENSITY)도 같은 선택지가 붙는다. */
+    @Test
+    void auto_modelAsksIntensity_getsQuickReplies() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "어느 정도로 채울까요?\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"ASK_CLARIFICATION\",\"proposalPurpose\":\"PERIOD_PLAN\","
+                + "\"clarifyingQuestion\":\"이번 기간의 남는 시간 중 어느 정도를 공부로 채울까요? 가볍게 / 보통 / 집중\","
+                + "\"periodStartDate\":\"2026-08-05\",\"periodEndDate\":\"2026-08-09\","
+                + "\"missingInformation\":[\"PLAN_INTENSITY\"],\"proposalItems\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("이번 주 계획 짜줘", "k-ask"), sink);
+        awaitTerminal(sink, d);
+
+        // 기간 계획이 강도를 되물을 때는 이미 아는 기간이 붙어 있어도 계약 위반이 아니다.
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        assertThat(sink.completed.quickReplies()).containsExactly("가볍게", "보통", "집중");
+        verify(aiTurnLifecycleService, never()).completeTurnFailure(any(), any(), any());
+    }
+
+    /** 목적이 실행 조정이거나 예전 출력처럼 비어 있으면 기존 일반 제안 버튼 그대로다. */
+    @Test
+    void auto_executionChangeOffer_keepsTheLegacyCreateProposalAction() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "30분 추가해볼까요?\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalPurpose\":\"EXECUTION_CHANGE\","
+                + "\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(201L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("자료구조 30분 추가해줘", "k-ec"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.offerAction.type()).isEqualTo("CREATE_PROPOSAL");
+        assertThat(sink.offerAction.periodStartDate()).isNull();
+    }
+
+    /*
+     * 기간 계획 버튼(CREATE_PERIOD_PLAN)은 상담 모델을 부르지 않는다. 계획 화면과 같은
+     * PlanDraftService가 한 번 생성하고(generate), 그 결과를 이 턴의 ASSISTANT 메시지와 같은
+     * 트랜잭션에 저장한다(completePeriodPlanTurn). 생성 버튼 한 번에 모델 두 번은 없다.
+     */
+    @Test
+    void createPeriodPlan_usesThePlanDraftService_notTheConsultationModel() {
+        when(courseService.list(USER_ID, com.jungwoo.project.memo.course.domain.CourseStatus.ACTIVE)).thenReturn(List.of(
+                com.jungwoo.project.memo.course.dto.CourseResponse.builder().courseId(31L).title("빅데이터분석").build()));
+        when(aiMessageMapper.findRecentByConversationIdAndUserId(any(), any(), anyInt(), any())).thenReturn(List.of(
+                AiMessage.builder().messageId(150L).role(MessageRole.USER).content("이번 주 계획 짜줘").build(),
+                AiMessage.builder().messageId(151L).role(MessageRole.ASSISTANT).content("강도는요?").build(),
+                AiMessage.builder().messageId(152L).role(MessageRole.USER).content("집중으로, 자료구조 위주로").build()));
+        PeriodPlanDraftGenerator.Spec spec = new PeriodPlanDraftGenerator.Spec(USER_ID,
+                LocalDate.of(2026, 8, 5), LocalDate.of(2026, 8, 9),
+                com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED, "지시", null, List.of(31L));
+        PeriodPlanDraftGenerator.Generated generated = new PeriodPlanDraftGenerator.Generated(
+                spec, 600, 510, null, false, "이번 주 집중", null, List.of());
+        when(planDraftService.generate(eq(USER_ID), any())).thenReturn(generated);
+        com.jungwoo.project.memo.plan.dto.PlanDraftResponse draft = com.jungwoo.project.memo.plan.dto.PlanDraftResponse.builder()
+                .proposalId(77L).targetMinutes(510)
+                .proposal(AiProposalResponse.builder().proposalId(77L).items(List.of()).build())
+                .build();
+        when(aiTurnLifecycleService.completePeriodPlanTurn(eq(CONVERSATION_ID), eq(USER_ID), eq(REQUEST_MESSAGE_ID), any(), eq(generated)))
+                .thenReturn(new AiTurnLifecycleService.PeriodPlanCompletion(assistantMessage(201L), draft));
+
+        AiMessageRequest request = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PERIOD_PLAN)
+                .sourceMessageId(150L)
+                .idempotencyKey("k-cpp")
+                .periodPlan(new PeriodPlanRequest(LocalDate.of(2026, 8, 5), LocalDate.of(2026, 8, 9),
+                        com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED, List.of(31L, 999L)))
+                .build();
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request, sink);
+        awaitTerminal(sink, d);
+
+        verifyNoInteractions(aiConsultationClient);
+        ArgumentCaptor<com.jungwoo.project.memo.plan.dto.PlanDraftRequest> captor =
+                ArgumentCaptor.forClass(com.jungwoo.project.memo.plan.dto.PlanDraftRequest.class);
+        verify(planDraftService).generate(eq(USER_ID), captor.capture());
+        // 화면이 되돌려 보낸 값 그대로가 아니라 서버가 다시 검증한 값으로 만든다.
+        assertThat(captor.getValue().getIntensity()).isEqualTo(com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED);
+        assertThat(captor.getValue().getCourseIds()).containsExactly(31L);
+        // 대화에서 정한 것이 [사용자 지시]로 넘어간다 — 사용자 발언만, 오래된 것부터.
+        assertThat(captor.getValue().getInstruction())
+                .contains("이번 주 계획 짜줘").contains("집중으로, 자료구조 위주로").doesNotContain("강도는요?");
+        assertThat(sink.periodPlanReady).isSameAs(draft);
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.PROPOSAL);
+        assertThat(sink.completed.periodPlanDraft().getProposalId()).isEqualTo(77L);
+        assertThat(sink.completed.offerAction()).isNull();
+        verify(aiTurnLifecycleService, never()).completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void createPeriodPlan_failureReleasesTheTurn_withTheBusinessErrorCode() {
+        when(planDraftService.generate(eq(USER_ID), any()))
+                .thenThrow(new com.jungwoo.project.memo.common.exception.ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED));
+
+        AiMessageRequest request = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PERIOD_PLAN)
+                .idempotencyKey("k-cpp-fail")
+                .periodPlan(new PeriodPlanRequest(LocalDate.of(2026, 8, 5), LocalDate.of(2026, 8, 9),
+                        com.jungwoo.project.memo.plan.domain.PlanIntensity.NORMAL, List.of()))
+                .build();
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request, sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.errorCode).isEqualTo(ErrorCode.AI_NOT_CONFIGURED);
+        verify(aiTurnLifecycleService).completeTurnFailure(CONVERSATION_ID, USER_ID, REQUEST_MESSAGE_ID);
+        verifyNoInteractions(aiConsultationClient);
     }
 
     // ===== 서버가 offerAction/responseType을 직접 만든다는 것을 확인 =====
@@ -1853,6 +2034,7 @@ class AiConversationServiceTest {
         ErrorCode errorCode;
         OfferAction offerAction;
         AiProposalResponse proposalReady;
+        com.jungwoo.project.memo.plan.dto.PlanDraftResponse periodPlanReady;
         List<ContextSuggestionResponse> contextSuggestionsReady;
         List<ScheduleSuggestionResponse> scheduleSuggestionsReady;
         AtomicInteger startedCount = new AtomicInteger(0);
@@ -1862,6 +2044,7 @@ class AiConversationServiceTest {
         @Override public void onDelta(String text) { deltas.append(text); }
         @Override public void onOfferReady(OfferAction offerAction) { this.offerAction = offerAction; }
         @Override public void onProposalReady(AiProposalResponse proposal) { this.proposalReady = proposal; }
+        @Override public void onPeriodPlanReady(com.jungwoo.project.memo.plan.dto.PlanDraftResponse draft) { this.periodPlanReady = draft; }
         @Override public void onContextSuggestionsReady(List<ContextSuggestionResponse> suggestions) { this.contextSuggestionsReady = suggestions; }
         @Override public void onScheduleSuggestionsReady(List<ScheduleSuggestionResponse> suggestions) { this.scheduleSuggestionsReady = suggestions; }
         @Override public void onCompleted(AiTurnCompletedPayload payload) { this.completed = payload; }

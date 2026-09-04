@@ -126,6 +126,44 @@ class AiTurnLifecycleServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
     }
 
+    /*
+     * 기간 계획 버튼은 기간과 강도를 들고 와야 한다. 없으면 대화방을 잠그거나 PROCESSING 행을
+     * 만들기 전에 거른다 — 실패할 요청이 고아 행을 남기지 않는다.
+     */
+    @Test
+    void prepareTurn_throwsBadRequest_whenCreatePeriodPlanLacksPeriodOrIntensity() {
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());
+
+        AiMessageRequest noPlan = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PERIOD_PLAN)
+                .idempotencyKey("k-pp1")
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, noPlan))
+                .isInstanceOf(BadRequestException.class);
+
+        AiMessageRequest noIntensity = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PERIOD_PLAN)
+                .idempotencyKey("k-pp2")
+                .periodPlan(new com.jungwoo.project.memo.ai.dto.PeriodPlanRequest(
+                        java.time.LocalDate.of(2026, 8, 5), java.time.LocalDate.of(2026, 8, 9), null, List.of()))
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, noIntensity))
+                .isInstanceOf(BadRequestException.class);
+
+        AiMessageRequest tooLong = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PERIOD_PLAN)
+                .idempotencyKey("k-pp3")
+                .periodPlan(new com.jungwoo.project.memo.ai.dto.PeriodPlanRequest(
+                        java.time.LocalDate.of(2026, 8, 5), java.time.LocalDate.of(2026, 9, 10),
+                        com.jungwoo.project.memo.plan.domain.PlanIntensity.NORMAL, List.of()))
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, tooLong))
+                .isInstanceOf(BadRequestException.class);
+
+        verify(aiMessageMapper, never()).insert(any());
+        verify(aiConversationMapper, never()).acquireActiveRequest(any(), any(), any());
+    }
+
     @Test
     void prepareTurn_replays_whenIdempotencyKeyMatchesCompletedMessage_noNewInsert() {
         when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());

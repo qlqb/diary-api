@@ -41,6 +41,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -403,6 +404,25 @@ class PlanDraftServiceTest {
                 "마감이 있어서");
         // 짧은 항목(15분)은 이 경로에서 손대지 않고 그대로 넘긴다 — 범위 검사는 AiProposalService가 한다.
         assertThat(captor.getValue()).extracting(ProposalItem::expectedMinutes).containsExactly(40, 15);
+    }
+
+    /*
+     * 대화 경로는 generate와 persist를 나눠 부른다. persist가 제안을 그 대화와 ASSISTANT 메시지에
+     * 연결하고, 상한(15/30)과 계획 메타데이터는 계획 화면과 같은 값이어야 한다 — 어느 탭에서
+     * 시작하든 같은 제안이다.
+     */
+    @Test
+    void persist_fromAConversation_linksTheProposal_andKeepsThePlanCapAndMetadata() {
+        givenAiResponse(BASELINE, null);
+
+        PeriodPlanDraftGenerator.Generated generated = service.generate(USER_ID, request("집중으로"));
+        service.persist(USER_ID, generated, 42L, 4201L);
+
+        verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(15));
+        verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
+                eq(PlanIntensity.NORMAL), eq(BASELINE));
+        // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.
+        verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
     }
 
     // ===== fixture =====

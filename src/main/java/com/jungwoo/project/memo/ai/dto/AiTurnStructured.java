@@ -2,6 +2,8 @@ package com.jungwoo.project.memo.ai.dto;
 
 import com.jungwoo.project.memo.ai.domain.AiModelDecision;
 import com.jungwoo.project.memo.ai.domain.AiPlanScope;
+import com.jungwoo.project.memo.ai.domain.ProposalPurpose;
+import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -50,6 +52,17 @@ public record AiTurnStructured(
         LocalDate periodStartDate,
         LocalDate periodEndDate,
         List<ContextChangeSuggestion> contextChanges,
+        /**
+         * 이번 제안의 목적. PERIOD_PLAN이면 서버가 기간·강도·대상 프로젝트를 검증한 뒤 기간 계획
+         * OFFER(CREATE_PERIOD_PLAN)를 만들고, 실제 생성은 계획 화면과 같은 PlanDraftService가
+         * 한다. EXECUTION_CHANGE나 null이면 기존 일반 제안 경로다. 진입 탭이 아니라 이 값이
+         * 계획 경로를 정한다.
+         */
+        ProposalPurpose proposalPurpose,
+        /** PERIOD_PLAN일 때 사용자가 말했거나 되물어 확인한 강도. 모르면 null이고 서버가 되묻는다. */
+        PlanIntensity planIntensity,
+        /** PERIOD_PLAN의 대상 프로젝트. 비어 있으면 활성 전체. 서버가 소유 여부를 다시 확인한다. */
+        List<Long> targetCourseIds,
         /**
          * 대화에서 사용자가 말한 "시간을 차지하는 현실"을 구조화한 후보(약속·반복 일정).
          * contextChanges와 같은 sidecar다 — decision과 무관하게 어디에든 붙을 수 있고,

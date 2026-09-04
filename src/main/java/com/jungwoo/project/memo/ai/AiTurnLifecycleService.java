@@ -12,9 +12,13 @@ import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
 import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
+import com.jungwoo.project.memo.ai.dto.PeriodPlanRequest;
 import com.jungwoo.project.memo.ai.dto.ProposalAdjustment;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.ai.dto.RequestedAction;
+import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator;
+import com.jungwoo.project.memo.plan.PlanDraftService;
+import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import com.jungwoo.project.memo.ai.dto.UnavailableWindowSpec;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
@@ -49,10 +53,12 @@ import java.util.List;
 public class AiTurnLifecycleService {
 
     private static final String CREATE_PROPOSAL_PLACEHOLDER_CONTENT = "(계획 초안 생성 요청)";
+    private static final String CREATE_PERIOD_PLAN_PLACEHOLDER_CONTENT = "(기간 계획 초안 생성 요청)";
 
     private final AiMessageMapper aiMessageMapper;
     private final AiConversationMapper aiConversationMapper;
     private final AiProposalService aiProposalService;
+    private final PlanDraftService planDraftService;
     private final AiConsultationClient aiConsultationClient;
     private final AiUsageLimitService aiUsageLimitService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
@@ -101,6 +107,16 @@ public class AiTurnLifecycleService {
         if (createProposalWithoutText && request.getSourceMessageId() == null) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
+        // 기간 계획 버튼은 기간·강도를 들고 와야 한다. 잠그기 전에 거른다 — 여기서 걸리면
+        // 아직 OpenAI도 안 불렀고 PROCESSING 행도 없다.
+        boolean createPeriodPlan = request.getRequestedAction() == RequestedAction.CREATE_PERIOD_PLAN;
+        if (createPeriodPlan) {
+            PeriodPlanRequest plan = request.getPeriodPlan();
+            if (plan == null || plan.getIntensity() == null) {
+                throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+            }
+            PeriodPlanDraftGenerator.validatePeriod(plan.getPeriodStartDate(), plan.getPeriodEndDate());
+        }
 
         // AI 미설정·사용량 한도 초과는 진행 중 표시를 만들기 전에 걸러낸다 — 실패할 요청 때문에
         // 대화방을 잠그거나 고아 PROCESSING 행을 남기지 않는다.
@@ -115,7 +131,9 @@ public class AiTurnLifecycleService {
             throw new ConflictException(ErrorCode.AI_CONVERSATION_BUSY);
         }
 
-        String content = createProposalWithoutText ? CREATE_PROPOSAL_PLACEHOLDER_CONTENT : request.getMessage();
+        String content = createPeriodPlan && (request.getMessage() == null || request.getMessage().isBlank())
+                ? CREATE_PERIOD_PLAN_PLACEHOLDER_CONTENT
+                : createProposalWithoutText ? CREATE_PROPOSAL_PLACEHOLDER_CONTENT : request.getMessage();
 
         AiMessage requestMessage = AiMessage.builder()
                 .conversationId(conversationId)
@@ -239,6 +257,44 @@ public class AiTurnLifecycleService {
     }
 
     /**
+     * 기간 계획 턴의 마무리. 모델 호출(PlanDraftService.generate)은 이 트랜잭션 밖에서 이미
+     * 끝났고, 여기서는 선점 → ASSISTANT 메시지 → 제안·계획 메타데이터 저장(PlanDraftService
+     * .persist, 계획 화면과 같은 저장) → 잠금 해제를 한 트랜잭션에 묶는다. 하나라도 실패하면
+     * 메시지도 제안도 남지 않는다.
+     */
+    @Transactional
+    public PeriodPlanCompletion completePeriodPlanTurn(
+            Long conversationId, Long userId, Long requestMessageId, String replyContent,
+            PeriodPlanDraftGenerator.Generated generated
+    ) {
+        int claimed = aiMessageMapper.updateStatusIfCurrent(
+                requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
+        if (claimed != 1) {
+            log.warn("기간 계획 턴 성공 처리 중단: requestMessageId={}가 더 이상 PROCESSING이 아님", requestMessageId);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+
+        AiMessage assistantMessage = AiMessage.builder()
+                .conversationId(conversationId)
+                .userId(userId)
+                .role(MessageRole.ASSISTANT)
+                .content(replyContent)
+                .responseType(AiResponseType.PROPOSAL)
+                .replyToMessageId(requestMessageId)
+                .status(MessageStatus.COMPLETED)
+                .build();
+        aiMessageMapper.insert(assistantMessage);
+
+        PlanDraftResponse draft = planDraftService.persist(userId, generated, conversationId,
+                assistantMessage.getMessageId());
+
+        aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
+        aiConversationMapper.touchUpdatedAt(conversationId, userId);
+
+        return new PeriodPlanCompletion(assistantMessage, draft);
+    }
+
+    /**
      * 오류·타임아웃·연결 종료 시 호출한다. requestMessageId가 여전히 PROCESSING일 때만
      * FAILED로 바꾸고 잠금을 회수한다(가드된 전이) — 완료 처리와 경합해도 한쪽만 반영된다.
      */
@@ -273,5 +329,9 @@ public class AiTurnLifecycleService {
             List<ContextSuggestionResponse> contextSuggestions,
             List<ScheduleSuggestionResponse> scheduleSuggestions
     ) {
+    }
+
+    /** 기간 계획 턴의 결과. draft는 계획 화면의 /api/plans/draft 응답과 같은 모양이다. */
+    public record PeriodPlanCompletion(AiMessage assistantMessage, PlanDraftResponse periodPlanDraft) {
     }
 }

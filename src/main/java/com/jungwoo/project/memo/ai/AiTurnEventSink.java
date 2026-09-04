@@ -6,6 +6,7 @@ import com.jungwoo.project.memo.ai.dto.ContextSuggestionResponse;
 import com.jungwoo.project.memo.ai.dto.OfferAction;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 
 import java.util.List;
 
@@ -37,6 +38,14 @@ public interface AiTurnEventSink {
      * 아직 원본에는 아무것도 저장되지 않은 PROPOSED 상태다.
      */
     void onScheduleSuggestionsReady(List<ScheduleSuggestionResponse> suggestions);
+
+    /**
+     * 기간 계획 초안(requestedAction=CREATE_PERIOD_PLAN). proposal.ready와 다른 이벤트다 — 저쪽은
+     * 일반 제안(적용 바)이고 이쪽은 계획 화면과 같은 검토·확정(PlanConfirmService) 대상이다.
+     * 기본 구현이 비어 있는 이유는 기존 싱크 구현(테스트 포함)을 깨지 않기 위해서다.
+     */
+    default void onPeriodPlanReady(PlanDraftResponse draft) {
+    }
 
     void onCompleted(AiTurnCompletedPayload payload);
 

@@ -4,6 +4,19 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiConversation;
 import com.jungwoo.project.memo.ai.domain.AiMessage;
 import com.jungwoo.project.memo.ai.domain.AiModelDecision;
+import com.jungwoo.project.memo.ai.domain.ProposalPurpose;
+import com.jungwoo.project.memo.ai.dto.PeriodPlanRequest;
+import com.jungwoo.project.memo.common.exception.BusinessException;
+import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.course.dto.CourseResponse;
+import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator;
+import com.jungwoo.project.memo.plan.PlanDraftService;
+import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
+import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import com.jungwoo.project.memo.ai.domain.AiPlanScope;
 import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.ai.domain.AiResponseType;
@@ -77,6 +90,20 @@ public class AiConversationService {
 
     private static final String DEFAULT_OFFER_LABEL = "이 내용으로 계획 초안 만들기";
 
+    /**
+     * 기간 계획인데 강도를 모를 때 서버가 되묻는 문장. 모델이 ASK를 낼 때도 같은 취지로 묻고
+     * missingInformation에 {@link #PLAN_INTENSITY_MISSING}을 적으면 화면이 세 선택지를 붙인다.
+     */
+    static final String INTENSITY_QUESTION =
+            "이번 기간의 남는 시간 중 어느 정도를 공부로 채울까요? 가볍게 / 보통 / 집중 중에 골라주세요.";
+    static final String PERIOD_QUESTION =
+            "어느 기간의 계획을 만들까요? 오늘, 이번 주 남은 기간, 다음 주처럼 실제 날짜로 말해주세요.";
+    static final String PLAN_INTENSITY_MISSING = "PLAN_INTENSITY";
+    static final List<String> INTENSITY_QUICK_REPLIES = List.of("가볍게", "보통", "집중");
+
+    /** 기간 계획 초안 지시에 넣을 최근 사용자 발언 수. 기간·우선순위·제외 조건을 담기에 충분하다. */
+    private static final int RECENT_USER_MESSAGES_FOR_PLAN = 8;
+
     /** AUTO 요청이 OFFER로 끝날 때 서버가 직접 붙이는 고정 reply(모델의 UI 문구를 신뢰하지 않는다). */
     private static final String AUTO_OFFER_REPLY = "말해준 내용을 바탕으로 계획 초안을 만들어볼까요?";
 
@@ -146,6 +173,7 @@ public class AiConversationService {
     private final AiUsageLimitService aiUsageLimitService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final ScheduleSuggestionService scheduleSuggestionService;
+    private final PlanDraftService planDraftService;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -339,6 +367,10 @@ public class AiConversationService {
         Long userId = conversation.getUserId();
         Long requestMessageId = prepared.requestMessageId();
 
+        if (request.getRequestedAction() == RequestedAction.CREATE_PERIOD_PLAN) {
+            return runPeriodPlanTurn(prepared, request, sink);
+        }
+
         // 이 턴 전체에서 "지금"은 이 시점 하나뿐이다 — 스트리밍 도중 다시 계산하지 않는다.
         ZoneId userZone = resolveUserZone(userId);
         ZonedDateTime requestMoment = ZonedDateTime.now(clock).withZoneSameInstant(userZone);
@@ -415,6 +447,118 @@ public class AiConversationService {
     }
 
     /**
+     * 기간 계획 생성 턴. 상담 모델을 부르지 않는다 — 계획 화면과 같은 PlanDraftService가 한 번만
+     * 모델을 부르고(generate, 트랜잭션 밖), 그 결과를 이 턴의 ASSISTANT 메시지와 같은 트랜잭션에
+     * 저장한다(completePeriodPlanTurn → persist). 생성 버튼 한 번에 계획 모델을 두 번 부르지
+     * 않는다. 어느 탭에서 시작했든 기간·강도·항목 상한(15/30)·계획 메타데이터가 계획 화면과 같다.
+     *
+     * <p>대화에서 정한 우선순위·제외 조건은 최근 사용자 발언을 [사용자 지시]로 넘겨 전한다.
+     * 컨텍스트(프로젝트·학습 항목·기간 안의 기존 일정·회고)는 PlanDraftService가 기간 기준으로
+     * 스스로 조립하므로 여기서 화면 상태 블록을 따로 만들지 않는다.
+     */
+    private Disposable runPeriodPlanTurn(
+            AiTurnLifecycleService.PreparedTurn prepared, AiMessageRequest request, AiTurnEventSink sink
+    ) {
+        AiConversation conversation = prepared.conversation();
+        Long conversationId = conversation.getConversationId();
+        Long userId = conversation.getUserId();
+        Long requestMessageId = prepared.requestMessageId();
+        PeriodPlanRequest periodPlan = request.getPeriodPlan();
+
+        sink.onStarted(requestMessageId);
+
+        return Mono.fromCallable(() -> {
+                    PlanDraftRequest draftRequest = PlanDraftRequest.builder()
+                            .startDate(periodPlan.getPeriodStartDate())
+                            .endDate(periodPlan.getPeriodEndDate())
+                            .intensity(periodPlan.getIntensity())
+                            .courseIds(ownedCourseIds(userId, periodPlan.getCourseIds()))
+                            .instruction(conversationInstruction(conversationId, userId, requestMessageId,
+                                    request.getMessage()))
+                            .build();
+                    PeriodPlanDraftGenerator.Generated generated = planDraftService.generate(userId, draftRequest);
+                    return aiTurnLifecycleService.completePeriodPlanTurn(
+                            conversationId, userId, requestMessageId, periodPlanReply(generated), generated);
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .subscribe(
+                        completion -> {
+                            PlanDraftResponse draft = completion.periodPlanDraft();
+                            sink.onDelta(completion.assistantMessage().getContent());
+                            sink.onPeriodPlanReady(draft);
+                            sink.onCompleted(new AiTurnCompletedPayload(
+                                    AiResponseType.PROPOSAL, completion.assistantMessage().getContent(),
+                                    draft.getProposalId(),
+                                    draft.getProposal() != null ? draft.getProposal().getItems() : List.of(),
+                                    null, requestMessageId, completion.assistantMessage().getMessageId(),
+                                    draft, List.of()));
+                        },
+                        error -> {
+                            ErrorCode errorCode = error instanceof BusinessException business
+                                    ? business.getErrorCode() : ErrorCode.AI_GENERATION_FAILED;
+                            log.warn("기간 계획 턴 실패: conversationId={}, code={}", conversationId, errorCode, error);
+                            sink.onError(errorCode);
+                            aiTurnLifecycleService.completeTurnFailure(conversationId, userId, requestMessageId);
+                        });
+    }
+
+    /** 대화에서 정한 것을 계획 생성기의 [사용자 지시]로 넘긴다. 오래된 발언부터, 사용자 것만. */
+    private String conversationInstruction(Long conversationId, Long userId, Long requestMessageId, String message) {
+        List<AiMessage> recent = aiMessageMapper.findRecentByConversationIdAndUserId(
+                conversationId, userId, RECENT_USER_MESSAGES_FOR_PLAN * 2, requestMessageId);
+        List<String> lines = new ArrayList<>();
+        recent.stream()
+                .filter(m -> m.getRole() == MessageRole.USER && hasText(m.getContent()))
+                .sorted(java.util.Comparator.comparing(AiMessage::getMessageId))
+                .map(AiMessage::getContent)
+                .forEach(lines::add);
+        if (hasText(message)) {
+            lines.add(message);
+        }
+        if (lines.size() > RECENT_USER_MESSAGES_FOR_PLAN) {
+            lines = lines.subList(lines.size() - RECENT_USER_MESSAGES_FOR_PLAN, lines.size());
+        }
+        if (lines.isEmpty()) {
+            return null;
+        }
+        StringBuilder sb = new StringBuilder("아래는 이 계획을 요청하기까지 사용자가 대화에서 말한 것이다(오래된 것부터). ")
+                .append("여기서 정한 우선순위·제외 조건·집중할 과목을 따른다.\n");
+        for (String line : lines) {
+            sb.append("- ").append(line.strip()).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * 화면이나 모델이 준 courseIds 중 이 사용자의 활성 프로젝트만 남긴다. 비어 있거나 하나도
+     * 남지 않으면 null(=활성 전체). 남의 id나 사라진 프로젝트는 조용히 떨어진다 — 그 항목이
+     * 남의 프로젝트에 붙는 것보다 낫다.
+     */
+    private List<Long> ownedCourseIds(Long userId, List<Long> requested) {
+        if (requested == null || requested.isEmpty()) {
+            return null;
+        }
+        java.util.Set<Long> owned = courseService.list(userId, CourseStatus.ACTIVE).stream()
+                .map(CourseResponse::getCourseId)
+                .collect(java.util.stream.Collectors.toSet());
+        List<Long> kept = requested.stream().filter(owned::contains).distinct().toList();
+        if (kept.size() != requested.size()) {
+            log.warn("기간 계획 대상 프로젝트 일부 제외: userId={}, 요청={}, 유지={}", userId, requested, kept);
+        }
+        return kept.isEmpty() ? null : kept;
+    }
+
+    private String periodPlanReply(PeriodPlanDraftGenerator.Generated generated) {
+        LocalDate start = generated.spec().start();
+        LocalDate end = generated.spec().end();
+        String period = start.equals(end)
+                ? start.getMonthValue() + "/" + start.getDayOfMonth()
+                : start.getMonthValue() + "/" + start.getDayOfMonth() + "~" + end.getMonthValue() + "/" + end.getDayOfMonth();
+        return period + " 계획 초안을 만들었어요. 항목 " + generated.items().size() + "개, 학습 목표 약 "
+                + generated.targetMinutes() + "분이에요. 검토하고 확정해 주세요.";
+    }
+
+    /**
      * 취소(브라우저 연결 종료)·서버 재시작 등으로 이 메서드에 도달하지 못한 턴은 대화방 잠금이
      * 남아있을 수 있다 — 이후 요청이 stale-lock 회수 로직으로 정리하거나, 이 메서드가 아직
      * PROCESSING이면 실패로 정리한다. 재호출은 하지 않는다.
@@ -446,7 +590,8 @@ public class AiConversationService {
                 result.structuredJson() == null ? 0 : result.structuredJson().length(),
                 structured != null ? structured.decision() : null);
 
-        ResolvedTurn resolved = resolveTurn(requestedAction, structured, result.reply(), todayDate);
+        ResolvedTurn resolved = resolveTurn(conversation.getUserId(), requestedAction, structured, result.reply(),
+                todayDate);
 
         /*
          * 일정 후보는 ResolvedTurn을 거치지 않고 구조화 출력에서 바로 꺼낸다. decision과
@@ -489,7 +634,7 @@ public class AiConversationService {
 
         sink.onCompleted(new AiTurnCompletedPayload(
                 resolved.responseType(), resolved.reply(), proposalId, proposalItemResponses, offerAction,
-                requestMessageId, completion.assistantMessage().getMessageId()));
+                requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies()));
     }
 
     private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,
@@ -529,15 +674,24 @@ public class AiConversationService {
             List<UnavailableWindowSpec> unavailableWindows,
             LocalDate targetDate,
             OfferAction offerAction,
-            List<ContextChangeSuggestion> contextChanges
+            List<ContextChangeSuggestion> contextChanges,
+            /** 되묻는 질문에 붙일 짧은 선택지. 강도 질문에서만 값이 있다. */
+            List<String> quickReplies
     ) {
         /** 새 후보도 조정 후보도 만들지 않는 턴(CHAT/OFFER 등)에서 쓰는 축약 생성자. */
         static ResolvedTurn withoutProposal(
                 AiResponseType responseType, String reply, LocalDate targetDate,
                 OfferAction offerAction, List<ContextChangeSuggestion> contextChanges
         ) {
+            return withoutProposal(responseType, reply, targetDate, offerAction, contextChanges, List.of());
+        }
+
+        static ResolvedTurn withoutProposal(
+                AiResponseType responseType, String reply, LocalDate targetDate,
+                OfferAction offerAction, List<ContextChangeSuggestion> contextChanges, List<String> quickReplies
+        ) {
             return new ResolvedTurn(responseType, reply, List.of(), List.of(), List.of(),
-                    targetDate, offerAction, contextChanges);
+                    targetDate, offerAction, contextChanges, quickReplies);
         }
     }
 
@@ -562,7 +716,8 @@ public class AiConversationService {
      * Context 후보를 또 만들면 중복이 생기기 때문이다.
      */
     private ResolvedTurn resolveTurn(
-            RequestedAction requestedAction, AiTurnStructured structured, String originalReply, LocalDate todayDate
+            Long userId, RequestedAction requestedAction, AiTurnStructured structured, String originalReply,
+            LocalDate todayDate
     ) {
         if (structured == null || structured.decision() == null) {
             if (requestedAction == RequestedAction.AUTO) {
@@ -581,27 +736,30 @@ public class AiConversationService {
 
         if (requestedAction == RequestedAction.AUTO && structured.decision() == AiModelDecision.PROPOSAL_READY) {
             log.warn("AI 응답 강등: AUTO 요청인데 decision=PROPOSAL_READY - OFFER로 대체 "
-                    + "(계획 초안 생성 권한은 CREATE_PROPOSAL 요청에만 있음)");
-            return ResolvedTurn.withoutProposal(AiResponseType.OFFER, AUTO_OFFER_REPLY, todayDate,
-                    OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
+                    + "(계획 초안 생성 권한은 CREATE_PROPOSAL/CREATE_PERIOD_PLAN 요청에만 있음)");
+            return resolveOffer(userId, structured, AUTO_OFFER_REPLY, todayDate, contextChanges);
         }
 
         validateDecisionContract(structured);
 
         return requestedAction == RequestedAction.CREATE_PROPOSAL
                 ? resolveCreateProposalTurn(structured, originalReply, todayDate, contextChanges)
-                : resolveAutoTurn(structured, originalReply, todayDate, contextChanges);
+                : resolveAutoTurn(userId, structured, originalReply, todayDate, contextChanges);
     }
 
     private ResolvedTurn resolveAutoTurn(
-            AiTurnStructured structured, String originalReply, LocalDate todayDate, List<ContextChangeSuggestion> contextChanges
+            Long userId, AiTurnStructured structured, String originalReply, LocalDate todayDate,
+            List<ContextChangeSuggestion> contextChanges
     ) {
         if (structured.decision() == AiModelDecision.CHAT) {
             return ResolvedTurn.withoutProposal(AiResponseType.CHAT, originalReply, todayDate, null, contextChanges);
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
             return ResolvedTurn.withoutProposal(AiResponseType.CHAT, structured.clarifyingQuestion(), todayDate, null,
-                    contextChanges);
+                    contextChanges, quickRepliesFor(structured));
+        }
+        if (structured.proposalPurpose() == ProposalPurpose.PERIOD_PLAN) {
+            return resolveOffer(userId, structured, originalReply, todayDate, contextChanges);
         }
         // decision == OFFER_PROPOSAL (PROPOSAL_READY는 resolveTurn에서 이미 처리됐다).
         //
@@ -640,16 +798,60 @@ public class AiConversationService {
             List<ProposalAdjustment> adjustments = structured.adjustments() != null
                     ? structured.adjustments() : List.of();
             return new ResolvedTurn(AiResponseType.PROPOSAL, originalReply, proposalItems, adjustments,
-                    unavailableWindows, structured.periodStartDate(), null, contextChanges);
+                    unavailableWindows, structured.periodStartDate(), null, contextChanges, List.of());
         }
         if (structured.decision() == AiModelDecision.ASK_CLARIFICATION) {
             // 정보 부족은 정상적인 상담 흐름이다 — 실패(503)가 아니라 CHAT으로 정상 완료한다.
             return ResolvedTurn.withoutProposal(AiResponseType.CHAT, structured.clarifyingQuestion(), todayDate, null,
-                    contextChanges);
+                    contextChanges, quickRepliesFor(structured));
         }
         // decision == CHAT 또는 OFFER_PROPOSAL — CREATE_PROPOSAL에서는 계약 위반이다.
         log.warn("AI 턴 실패 처리: CREATE_PROPOSAL인데 decision={}", structured.decision());
         throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+    }
+
+    /**
+     * OFFER 버튼을 만든다. 진입 탭이 아니라 모델이 명시한 목적(proposalPurpose)이 경로를 정한다.
+     *
+     * <p>PERIOD_PLAN이면 기간 계획 OFFER(CREATE_PERIOD_PLAN)다. 서버가 기간(1~31일, 오늘 이전에
+     * 끝나지 않음)·강도·대상 프로젝트(소유 확인)를 검증한 값만 버튼에 싣는다. 기간이 없거나
+     * 틀리면 기간을, 강도를 모르면 강도를 되묻는다 — 모델이 계약을 어겼다고 503을 내지 않는다.
+     * 강도 질문에는 세 선택지가 붙는다. 앱이 이미 아는 일정·가용시간은 되묻지 않는다.
+     *
+     * <p>그 외(EXECUTION_CHANGE, 또는 목적을 안 적은 예전 출력)는 기존 일반 제안 OFFER다.
+     */
+    private ResolvedTurn resolveOffer(
+            Long userId, AiTurnStructured structured, String reply, LocalDate todayDate,
+            List<ContextChangeSuggestion> contextChanges
+    ) {
+        String offerReply = hasText(reply) ? reply : AUTO_OFFER_REPLY;
+        if (structured.proposalPurpose() != ProposalPurpose.PERIOD_PLAN) {
+            return ResolvedTurn.withoutProposal(AiResponseType.OFFER, offerReply, todayDate,
+                    OfferAction.createProposal(DEFAULT_OFFER_LABEL), contextChanges);
+        }
+        LocalDate start = structured.periodStartDate();
+        LocalDate end = structured.periodEndDate();
+        boolean periodValid = start != null && end != null && !end.isBefore(start) && !end.isBefore(todayDate)
+                && ChronoUnit.DAYS.between(start, end) + 1 <= PeriodPlanDraftGenerator.MAX_PLAN_DAYS;
+        if (!periodValid) {
+            log.warn("기간 계획 OFFER인데 기간이 없거나 틀림({}~{}) — 기간을 되묻는다", start, end);
+            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, PERIOD_QUESTION, todayDate, null, contextChanges);
+        }
+        if (structured.planIntensity() == null) {
+            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, INTENSITY_QUESTION, todayDate, null,
+                    contextChanges, INTENSITY_QUICK_REPLIES);
+        }
+        List<Long> courseIds = ownedCourseIds(userId, structured.targetCourseIds());
+        PeriodPlanRequest plan = new PeriodPlanRequest(start, end, structured.planIntensity(),
+                courseIds != null ? courseIds : List.of());
+        return ResolvedTurn.withoutProposal(AiResponseType.OFFER, offerReply, todayDate,
+                OfferAction.createPeriodPlan(DEFAULT_OFFER_LABEL, plan), contextChanges);
+    }
+
+    /** 모델이 강도를 되물을 때(missingInformation에 PLAN_INTENSITY) 화면에 붙일 선택지. */
+    private static List<String> quickRepliesFor(AiTurnStructured structured) {
+        List<String> missing = structured.missingInformation() != null ? structured.missingInformation() : List.of();
+        return missing.contains(PLAN_INTENSITY_MISSING) ? INTENSITY_QUICK_REPLIES : List.of();
     }
 
     /**
@@ -674,16 +876,20 @@ public class AiConversationService {
         boolean hasPeriod = structured.periodStartDate() != null || structured.periodEndDate() != null;
         boolean hasUnavailableWindows = !unavailableWindows.isEmpty();
         boolean hasAdjustments = !adjustments.isEmpty();
+        // 기간 계획은 OFFER 단계에서 기간을 확정해 버튼에 싣고, 강도를 되물을 때도 이미 아는
+        // 기간을 함께 낼 수 있다. 그 목적일 때만 ASK/OFFER의 기간 필드를 허용한다.
+        boolean periodPlan = structured.proposalPurpose() == ProposalPurpose.PERIOD_PLAN;
+        boolean strayPeriod = !periodPlan && (hasPlanScope || hasPeriod);
 
         boolean violated = switch (structured.decision()) {
             case CHAT -> hasClarifyingQuestion || !missingInformation.isEmpty() || !proposalItems.isEmpty()
                     || hasAdjustments || hasUnavailableWindows || hasPlanScope || hasPeriod;
             // missingInformation은 선택 정보라 비어 있어도 위반이 아니다.
             case ASK_CLARIFICATION -> !hasClarifyingQuestion || !proposalItems.isEmpty()
-                    || hasAdjustments || hasUnavailableWindows || hasPlanScope || hasPeriod;
+                    || hasAdjustments || hasUnavailableWindows || strayPeriod;
             case OFFER_PROPOSAL -> hasClarifyingQuestion || !missingInformation.isEmpty()
                     || !proposalItems.isEmpty() || hasAdjustments || hasUnavailableWindows
-                    || hasPlanScope || hasPeriod;
+                    || strayPeriod;
             // unavailableWindows는 PROPOSAL_READY에서 있어도 없어도 된다 — 검사하지 않는다.
             // 새 후보와 조정 후보 중 적어도 하나는 있어야 한다 — 조정만 있는 제안도 유효하다
             // ("오늘 피곤해, 줄여줘"는 새로 만들 것이 없고 줄이기만 있다).
