@@ -102,9 +102,31 @@ public class AiTurnLifecycleService {
             }
         }
 
-        boolean createProposalWithoutText = request.getRequestedAction() == RequestedAction.CREATE_PROPOSAL
+        boolean createProposal = request.getRequestedAction() == RequestedAction.CREATE_PROPOSAL;
+        boolean createProposalWithoutText = createProposal
                 && (request.getMessage() == null || request.getMessage().isBlank());
         if (createProposalWithoutText && request.getSourceMessageId() == null) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        /*
+         * 계획 초안 버튼은 OFFER 카드가 보여준 기간을 그대로 들고 와야 한다. 이 두 날짜가
+         * 이번 계획의 확정 기간이고, 모델은 CREATE_PROPOSAL 단계에서 기간을 다시 판단하지
+         * 않는다 — 없으면 만들 범위 자체를 모르는 요청이므로 잠그기 전에 400으로 막는다.
+         *
+         * 기간이 전부 지났는지는 여기서 보지 않는다. "오늘"이 언제인지는 사용자 시간대에
+         * 달려 있고 그 계산은 턴 실행부(AiConversationService)에 있다.
+         */
+        if (createProposal) {
+            if (request.getPeriodStartDate() == null || request.getPeriodEndDate() == null) {
+                throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+            }
+            // 기간형 계획과 같은 상한(1~31일)을 쓴다 — 한 번에 잡는 계획의 길이를 상담만
+            // 다르게 두지 않는다.
+            PeriodPlanDraftGenerator.validatePeriod(request.getPeriodStartDate(), request.getPeriodEndDate());
+        } else if (request.getPeriodStartDate() != null || request.getPeriodEndDate() != null) {
+            // AUTO/CREATE_PERIOD_PLAN이 기간을 실어 보내면 조용히 무시하지 않는다. 무시하면
+            // 클라이언트는 자기가 보낸 기간이 반영된 줄 알고, 어느 단계가 기간을 정하는지가
+            // 흐려진다(기간 계획은 periodPlan 쪽에 담는다).
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
         // 기간 계획 버튼은 기간·강도를 들고 와야 한다. 잠그기 전에 거른다 — 여기서 걸리면

@@ -432,7 +432,7 @@ class PeriodPlanConversationIntegrationTest {
     private String offerJson() {
         return "이번 주로 잡아볼까요?\n" + AiStreamParser.DELIMITER + "\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalPurpose\":\"PERIOD_PLAN\","
-                + "\"planScope\":\"WEEK\",\"planIntensity\":\"NORMAL\","
+                + "\"planIntensity\":\"NORMAL\","
                 + "\"periodStartDate\":\"" + today() + "\","
                 + "\"periodEndDate\":\"" + today().plusDays(6) + "\","
                 + "\"targetCourseIds\":[],\"proposalItems\":[],\"adjustments\":[],"

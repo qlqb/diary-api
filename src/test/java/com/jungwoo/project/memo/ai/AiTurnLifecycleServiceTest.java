@@ -118,12 +118,93 @@ class AiTurnLifecycleServiceTest {
 
         AiMessageRequest request = AiMessageRequest.builder()
                 .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .periodStartDate(LocalDate.of(2026, 9, 5))
+                .periodEndDate(LocalDate.of(2026, 9, 13))
                 .idempotencyKey("k1")
                 .build();
 
         assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, request))
                 .isInstanceOfSatisfying(BadRequestException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
+    }
+
+    /*
+     * 계획 초안 버튼은 OFFER 카드가 보여준 기간을 그대로 들고 와야 한다. 그 두 날짜가 이번
+     * 계획의 확정 기간이고 모델은 이 단계에서 기간을 다시 판단하지 않으므로, 없으면 무엇을
+     * 만들어야 하는지 모르는 요청이다. 잠그기 전에 거른다.
+     */
+    @Test
+    void prepareTurn_throwsBadRequest_whenCreateProposalLacksTheConfirmedPeriod() {
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());
+
+        AiMessageRequest noPeriod = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .sourceMessageId(42L)
+                .idempotencyKey("k-cp-noperiod")
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, noPeriod))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
+
+        AiMessageRequest onlyStart = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .sourceMessageId(42L)
+                .periodStartDate(LocalDate.of(2026, 9, 5))
+                .idempotencyKey("k-cp-halfperiod")
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, onlyStart))
+                .isInstanceOf(BadRequestException.class);
+
+        // 잠그지도, PROCESSING 행을 만들지도 않는다.
+        verify(aiMessageMapper, never()).insert(any());
+    }
+
+    /** 한 번에 만드는 계획의 상한은 기간형 계획과 같은 31일이다. 32일은 요청 단계에서 막는다. */
+    @Test
+    void prepareTurn_throwsBadRequest_whenCreateProposalPeriodIsTooLongOrReversed() {
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());
+
+        AiMessageRequest tooLong = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .sourceMessageId(42L)
+                .periodStartDate(LocalDate.of(2026, 9, 5))
+                .periodEndDate(LocalDate.of(2026, 10, 6))
+                .idempotencyKey("k-cp-toolong")
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, tooLong))
+                .isInstanceOf(BadRequestException.class);
+
+        AiMessageRequest reversed = AiMessageRequest.builder()
+                .requestedAction(RequestedAction.CREATE_PROPOSAL)
+                .sourceMessageId(42L)
+                .periodStartDate(LocalDate.of(2026, 9, 13))
+                .periodEndDate(LocalDate.of(2026, 9, 5))
+                .idempotencyKey("k-cp-reversed")
+                .build();
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, reversed))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    /*
+     * AUTO가 기간을 실어 보내면 조용히 무시하지 않는다. 무시하면 클라이언트는 자기가 보낸
+     * 기간이 반영된 줄 알고, 어느 단계가 기간을 정하는지가 흐려진다.
+     */
+    @Test
+    void prepareTurn_throwsBadRequest_whenAutoCarriesAPeriod() {
+        when(aiConversationMapper.findByIdAndUserIdForUpdate(CONVERSATION_ID, USER_ID)).thenReturn(freeConversation());
+
+        AiMessageRequest request = AiMessageRequest.builder()
+                .message("이번 주 계획 짜줘")
+                .requestedAction(RequestedAction.AUTO)
+                .periodStartDate(LocalDate.of(2026, 9, 5))
+                .periodEndDate(LocalDate.of(2026, 9, 13))
+                .idempotencyKey("k-auto-period")
+                .build();
+
+        assertThatThrownBy(() -> service.prepareTurn(CONVERSATION_ID, USER_ID, request))
+                .isInstanceOfSatisfying(BadRequestException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_INPUT_VALUE));
+        verify(aiMessageMapper, never()).insert(any());
     }
 
     /*
@@ -326,6 +407,8 @@ class AiTurnLifecycleServiceTest {
         AiMessageRequest request = AiMessageRequest.builder()
                 .requestedAction(RequestedAction.CREATE_PROPOSAL)
                 .sourceMessageId(42L)
+                .periodStartDate(LocalDate.of(2026, 9, 5))
+                .periodEndDate(LocalDate.of(2026, 9, 13))
                 .idempotencyKey("k1")
                 .build();
 

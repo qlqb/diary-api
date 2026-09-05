@@ -254,23 +254,41 @@ class OpenAiConsultationClientTest {
     }
 
     /*
-     * 2026-09-04(금) "이번 주 토일이랑 다음 주까지 계획하고 싶어"가 planScope=WEEK / 9일로
-     * 나와 서버의 WEEK 7일 계약에 걸려 턴 전체가 실패했다. 계약에 RANGE를 추가했으므로
-     * 프롬프트도 그 값을 알려주고, 혼합 기간을 WEEK로 밀어넣지 않게 해야 한다.
+     * 2026-09-04(금) "이번 주 토일이랑 다음 주까지 계획하고 싶어"가 계획 기간 종류(WEEK)의
+     * 7일 계약에 걸려 턴 전체가 실패했다. 기간 종류를 없애고 기간 결정을 OFFER 한 곳으로
+     * 옮겼으므로, 프롬프트도 그 구조를 그대로 말해야 한다.
      */
     @Test
-    void systemPrompt_offersRangeScope_forPeriodsThatDoNotFitOneCalendarUnit() {
+    void systemPrompt_describesPeriodsAsTwoDates_withNoPeriodKinds() {
         String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
 
-        // 스키마가 RANGE를 허용해야 모델이 그 값을 낼 수 있다.
-        assertThat(prompt).contains("\"planScope\": \"DAY\" 또는 \"WEEK\" 또는 \"MONTH\" 또는 \"RANGE\"");
-        assertThat(prompt).contains("RANGE=그 셋으로 표현할 수 없는 사용자");
-        // 기간 길이가 우연히 7일이라고 WEEK가 되는 것이 아니다.
-        assertThat(prompt).contains("기간 길이만 보고 WEEK/MONTH를 고르지 않는다");
+        // 기간은 날짜 두 개뿐이다 — 스키마에 기간 종류 필드가 남아 있으면 안 된다.
+        assertThat(prompt).doesNotContain("planScope");
+        assertThat(prompt).contains("계획 기간은 실제 날짜 두 개(periodStartDate/periodEndDate)로만 표현한다");
+        assertThat(prompt).contains("기간 종류는 없다");
+        // 달력 단위에 맞지 않는 범위도 그대로 담는다(이번 장애의 원인).
         assertThat(prompt).contains("이번 주 토일이랑 다음 주까지");
         // 사용자가 말한 시작점을 달력 주 시작으로 넓히지 않는다(9/5가 8/31로 밀리면 안 된다).
         assertThat(prompt).contains("명시한 시작점을 그보다 앞선 달력 주 시작일(지난 월요일)로 넓히지");
         // 31일 초과는 억지로 만들지 말고 되묻는다.
-        assertThat(prompt).contains("한 번에 만드는 계획은 최대 31일이다");
+        assertThat(prompt).contains("최대 31일이다");
+    }
+
+    /*
+     * 기간을 정하는 자리는 OFFER 한 곳이다. 그 뒤 초안 생성 단계에서 모델이 같은 사실을
+     * 다시 판단하면 사용자가 카드에서 승인한 날짜가 조용히 달라질 수 있다.
+     */
+    @Test
+    void systemPrompt_putsPeriodDecisionInTheOfferStep_andForbidsRedecidingIt() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("기간을 정하는 것은 decision=OFFER_PROPOSAL 한 곳뿐이다");
+        assertThat(prompt).contains("사용자가 그것을 보고 버튼을 누르면 확정된다");
+        // OFFER는 기간 없이 성립하지 않는다.
+        assertThat(prompt).contains("OFFER는 \"이 기간으로 만들까요?\"라는 뜻이라 기간");
+        assertThat(prompt).contains("기간이 아직 모호하면 OFFER가 아니라 ASK_CLARIFICATION이다");
+        // PROPOSAL_READY에서는 기간을 다시 적지 않는다.
+        assertThat(prompt).contains("periodStartDate/periodEndDate는 반드시 null이다");
+        assertThat(prompt).contains("[확정된 계획 기간]");
     }
 }

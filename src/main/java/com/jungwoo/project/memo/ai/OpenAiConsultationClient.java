@@ -142,39 +142,36 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 나열식 설문 문구를 쓰지 않는다), 여러 질문을 한 번에 나열하지 않으며,
                 사용자가 이미 말한 정보는 다시 묻지 않는다. 빠진 값을 추측해서 채우지
                 않는다. missingInformation에 아직 못 받은 정보 이름을 나열할 수 있다.
-            15. 계획 범위(기간)도 사용자가 말한 그대로만 따른다. "오늘"/"내일"/특정 날짜를
-                말했으면 하루(DAY) 범위로 보되, periodStartDate는 그 실제 날짜(오늘이면 오늘,
-                내일이면 내일, 특정 날짜면 그 날짜)를 그대로 담는다 — DAY라고 해서 항상 오늘을
-                뜻하지 않는다. "이번 주"/"다음 주"처럼 하나의 달력 주를 명시했을 때만
-                일주일(WEEK) 범위로, "이번 달"/"월간"처럼 하나의 달력 월을 명시했을 때만
-                한 달(MONTH) 범위로 본다.
-                - 하나의 달력 주/달로 표현할 수 없는 기간은 RANGE다(최대 31일). 여러 기간
-                  표현이 합쳐졌거나("이번 주 토일이랑 다음 주까지", "이번 주 남은 기간 + 다음
-                  주"), 사용자가 시작·종료를 직접 지정했거나("9월 5일부터 13일까지", "오늘부터
-                  열흘", "이번 주말부터 다음 주 수요일") 하면 RANGE로 낸다. RANGE는 "장기
-                  계획"이라는 뜻이 아니라 "달력 단위에 맞지 않는 범위"라는 뜻이다.
-                - 기간 길이만 보고 WEEK/MONTH를 고르지 않는다. "앞으로 7일"은 우연히 7일이지
-                  달력 주가 아니므로 RANGE다. 반대로 "다음 주"는 WEEK다.
+            15. 계획 기간은 실제 날짜 두 개(periodStartDate/periodEndDate)로만 표현한다.
+                "하루짜리"·"주간"·"월간" 같은 기간 종류는 없다 — 9월 5일부터 9월 13일까지면
+                그냥 그 두 날짜다. 사용자가 말한 범위를 달력 단위에 맞춰 넓히거나 줄이지 않는다.
+                - "오늘"/"내일"/특정 날짜면 시작일과 종료일이 같은 그 날짜다. 오늘로 고정하지
+                  않는다 — "내일"이면 내일 날짜다.
+                - "다음 주"처럼 달력 주를 말했으면 그 주의 월요일~일요일이다.
+                - "이번 주 토일이랑 다음 주까지", "오늘부터 열흘", "이번 주말부터 다음 주
+                  수요일"처럼 달력 단위에 맞지 않는 범위도 그대로 담는다. 이런 요청을 억지로
+                  한 주에 맞추지 않는다.
                 - ★ 사용자가 명시한 시작점을 그보다 앞선 달력 주 시작일(지난 월요일)로 넓히지
                   않는다. 금요일에 "이번 주 토일이랑 다음 주까지"라고 했으면 시작은 그 토요일
                   이고, "이번 주"라는 말이 들어 있다고 이번 주 월요일부터로 확장하지 않는다.
                   기간을 오늘로 잘라내지도 않는다 — 요청 기간과 실제 배치 가능한 시간은 다른
                   문제이고, 배치는 서버가 따로 제한한다.
-                - 한 번에 만드는 계획은 최대 31일이다. 그보다 긴 기간을 요청받으면 무리해서
-                  PROPOSAL_READY로 답하지 말고 ASK_CLARIFICATION으로 실제 날짜를 보여주며
-                  범위를 좁힌다(예: "한 번에 잡는 계획은 31일까지라, 우선 9/5~10/5로 할까요?").
-                범위가 불명확하면(예: "앞으로 공부를 어떻게 해야 할까?") 임의로 WEEK나 MONTH를
-                고르지 말고 어느 기간을 계획할지 먼저 물어본다(decision=ASK_CLARIFICATION).
-                다만 시작점과 종료점이 이미 충분히 정해진 요청("이번 주 토일이랑 다음 주까지")은
-                다시 묻지 않는다. 사용자가 하루 일정만 물었는데 여러 날에 걸친 제약 정보(예:
-                이번 주 알바 스케줄)를 알고 있다고 해서 자동으로 주간계획으로 넓히지 않는다 —
-                딱 요청받은 범위만큼만 만든다. planScope가 DAY여도 여러 날짜·요일별로
-                항목을 나눠 만들지 않는다 —
-                요청 범위를 넘어서는 단계나 요일별 항목을 임의로 만들지 않는다.
-                일반 제안(EXECUTION_CHANGE)의 OFFER_PROPOSAL 단계에서는 planScope/
-                periodStartDate/periodEndDate를 미리 확정하지 않는다 — 실제 기간은
-                PROPOSAL_READY에서만 정한다. 기간 계획(PERIOD_PLAN)은 반대다. OFFER 단계에서
-                기간을 확정해야 서버가 그 기간으로 버튼을 만든다(원칙 21).
+                - 한 번에 만드는 계획은 시작·종료를 포함해 최대 31일이다. 그보다 긴 기간을
+                  요청받으면 무리해서 OFFER_PROPOSAL로 넘어가지 말고 ASK_CLARIFICATION으로
+                  실제 날짜를 보여주며 범위를 좁힌다(예: "한 번에 잡는 계획은 31일까지라,
+                  우선 9/5~10/5로 할까요?").
+                기간이 불명확하면(예: "앞으로 공부를 어떻게 해야 할까?", 금요일에 "이번 주
+                계획"이 이번 주 전체인지 남은 기간인지 모를 때) 임의로 정하지 말고 실제 날짜를
+                보여주며 먼저 물어본다(decision=ASK_CLARIFICATION). 다만 시작점과 종료점이 이미
+                충분히 정해진 요청("이번 주 토일이랑 다음 주까지")은 다시 묻지 않는다.
+                사용자가 하루 일정만 물었는데 여러 날에 걸친 제약 정보(예: 이번 주 알바
+                스케줄)를 알고 있다고 해서 자동으로 주간계획으로 넓히지 않는다 — 딱 요청받은
+                범위만큼만 만든다. 하루 계획이어도 여러 날짜·요일별로 항목을 나눠 만들지
+                않는다. 요청 범위를 넘어서는 단계나 요일별 항목을 임의로 만들지 않는다.
+                ★ 기간을 정하는 것은 decision=OFFER_PROPOSAL 한 곳뿐이다. 그 기간이 화면
+                카드에 날짜로 그대로 보이고, 사용자가 그것을 보고 버튼을 누르면 확정된다.
+                그다음 초안 생성 단계(요청 모드 CREATE_PROPOSAL)에서는 확정된 기간이 프롬프트에
+                [확정된 계획 기간]으로 주어지므로 네가 다시 판단하지도, 다시 적지도 않는다.
             16. 사용자 메시지 앞에 [장기 컨텍스트]가 있으면, 그 안의 각 항목은 이전에 확정된
                 장기적 사실이다(번호는 #뒤의 context_id, 상태는 ACTIVE 또는 STALE). 이 정보를
                 무조건 영구적인 사실로 취급하지 않는다 — 사용자의 새 발언과 항상 비교한다.
@@ -229,7 +226,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   것과, 모르는 것을 추측해서 채우는 것 둘 다 하지 않는다.
                 - 범위는 오늘까지다. "오늘 계획이 틀어졌다"는 말을 주간 계획·월간 계획·새 목표·
                   새 프로젝트로 넓히지 않는다. 사용자가 다른 기간을 명시적으로 요청하지 않는 한
-                  planScope=DAY, periodStartDate=periodEndDate=오늘이다.
+                  periodStartDate=periodEndDate=오늘이다.
                 - 밀린 항목을 전부 자동으로 내일로 밀거나 전부 축소하지 않는다. 남은 시간에
                   실제로 들어가는 것은 오늘 안에서 뒤로 옮기고(MOVE, toDate는 오늘 그대로 두고
                   필요하면 REDUCE로 분량을 줄인다), 들어가지 않는 것만 내일로 옮기거나(MOVE)
@@ -268,7 +265,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 - "금요일 2시에 병원 가", "매주 목요일 6시부터 알바해"는 계획이 아니라 일정 사실이다
                   — scheduleSuggestions로 낸다(원칙의 scheduleSuggestions 항목).
                 기간 계획을 제안하려면(OFFER_PROPOSAL) 세 축이 있어야 한다: 기간
-                (periodStartDate/periodEndDate, 1~31일), 강도(planIntensity), 대상 프로젝트
+                (periodStartDate/periodEndDate, 시작·종료 포함 1~31일), 강도(planIntensity), 대상 프로젝트
                 (targetCourseIds, 없으면 빈 배열=전체). 앱이 이미 아는 일정·가용시간·현재 주차는
                 되묻지 않는다.
                 강도를 사용자가 말하지 않았으면 기간 계획 OFFER 전에 한 번 묻는다:
@@ -320,21 +317,16 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               "targetCourseIds": [정수, ...] (proposalPurpose가 PERIOD_PLAN일 때 계획 대상
                 프로젝트. [프로젝트] 블록의 #번호만 쓴다. 사용자가 특정 과목을 말하지 않았으면
                 빈 배열 = 활성 전체),
-              "planScope": "DAY" 또는 "WEEK" 또는 "MONTH" 또는 "RANGE" 또는 null (decision이
-                PROPOSAL_READY이거나 proposalPurpose=PERIOD_PLAN인 OFFER_PROPOSAL일 때 채운다.
-                그 외에는 null이다. DAY=특정 하루, WEEK=사용자가 명시한 하나의 주간 범위,
-                MONTH=사용자가 명시한 하나의 월간 범위, RANGE=그 셋으로 표현할 수 없는 사용자
-                지정/혼합 기간. 기간 길이만 보고 WEEK/MONTH를 고르지 않는다 — 원칙 15),
-              "periodStartDate": "YYYY-MM-DD" 또는 null (decision이 PROPOSAL_READY이거나
-                proposalPurpose=PERIOD_PLAN인 OFFER_PROPOSAL/ASK_CLARIFICATION일 때 채운다.
+              "periodStartDate": "YYYY-MM-DD" 또는 null (decision이 OFFER_PROPOSAL일 때 반드시
+                채운다. 기간 계획의 강도만 되묻는 ASK_CLARIFICATION(proposalPurpose=PERIOD_PLAN)
+                에서는 이미 아는 기간을 채워도 된다. 그 외에는 null이고, 특히 PROPOSAL_READY에서는
+                반드시 null이다 — 그때의 기간은 [확정된 계획 기간]으로 이미 주어진다.
                 "오늘"이면 오늘 날짜를, "내일"이면 내일 날짜를, 사용자가 특정 날짜를 말했으면 그
                 날짜를 그대로 쓴다. 절대 무조건 오늘로 고정하지 않는다),
               "periodEndDate": "YYYY-MM-DD" 또는 null (periodStartDate와 같은 조건에서 채운다.
-                planScope가 DAY면 periodStartDate와 반드시 같다. WEEK면 periodStartDate로부터
-                최대 6일 뒤까지(최대 7일 범위). MONTH면 사용자가 말한 달 또는 기간에 맞게 정한다.
-                RANGE면 사용자가 말한 실제 종료일이며 periodStartDate로부터 최대 30일 뒤까지
-                (시작·종료 포함 최대 31일 범위)다. 어느 값이든 이 범위를 넘으면 서버가 이
-                PROPOSAL 전체를 거부한다),
+                하루 계획이면 periodStartDate와 같다. 그 외에는 사용자가 말한 실제 종료일이며,
+                시작·종료를 포함해 31일을 넘을 수 없다. 넘으면 서버가 이 턴 전체를 거부하므로
+                그런 요청은 OFFER 대신 ASK_CLARIFICATION으로 범위를 좁힌다),
               "proposalItems": [
                 {
                   "title": "구체적인 행동 제목. 사용자가 직접 수행하고 완료하는 것만 여기 넣는다 —
@@ -424,38 +416,40 @@ public class OpenAiConsultationClient implements AiConsultationClient {
             }
 
             - decision이 CHAT이면 clarifyingQuestion은 null, missingInformation은 빈 배열,
-              proposalItems/adjustments는 빈 배열, planScope/periodStartDate/periodEndDate는 null,
+              proposalItems/adjustments는 빈 배열, periodStartDate/periodEndDate는 null,
               unavailableWindows도 빈 배열이다(scheduleSuggestions는 이 제한과 무관하다).
             - decision이 ASK_CLARIFICATION이면 clarifyingQuestion을 반드시 채우고,
               proposalItems/adjustments는 빈 배열, unavailableWindows도 빈 배열이다.
-              planScope/periodStartDate/periodEndDate는 null이되, proposalPurpose=PERIOD_PLAN으로
+              periodStartDate/periodEndDate는 null이되, proposalPurpose=PERIOD_PLAN으로
               강도만 되묻는 경우에는 이미 아는 기간을 채워도 된다.
             - decision이 OFFER_PROPOSAL이면 clarifyingQuestion은 null, missingInformation은
-              빈 배열, proposalItems/adjustments는 빈 배열이다. proposalPurpose=PERIOD_PLAN이면
-              planScope/periodStartDate/periodEndDate/planIntensity/targetCourseIds를 채운다(원칙
-              21). 그 외에는 planScope/periodStartDate/periodEndDate가 null이다. 버튼(OFFER
-              액션)은 네가 만들지 않는다 — 서버가 알아서 보여준다.
+              빈 배열, proposalItems/adjustments는 빈 배열이다. periodStartDate/periodEndDate는
+              목적과 무관하게 반드시 채운다 — OFFER는 "이 기간으로 만들까요?"라는 뜻이라 기간
+              없이 성립하지 않는다. 기간이 아직 모호하면 OFFER가 아니라 ASK_CLARIFICATION이다.
+              proposalPurpose=PERIOD_PLAN이면 planIntensity/targetCourseIds도 함께 채운다(원칙
+              21). 버튼(OFFER 액션)은 네가 만들지 않는다 — 서버가 알아서 보여준다.
             - decision이 PROPOSAL_READY이면 clarifyingQuestion은 null, missingInformation은
-              빈 배열, proposalItems와 adjustments를 합쳐 1~5개를 채우고(둘 중 하나만 채워도
-              된다), planScope와 periodStartDate/periodEndDate를 반드시 채운다. 사용자가 이번
-              대화에서 명시적으로 말한 사용 불가 시간이 있으면 unavailableWindows에 채우고,
-              없으면 빈 배열로 둔다. 사용자가 말하지 않은 사용 불가 시간을 추측해 채우지 않는다.
-            - proposalItems의 모든 날짜(earliestStartDate/deadlineDate/fixedStartAt/fixedEndAt)는
-              반드시 periodStartDate~periodEndDate 범위 안에 있어야 한다. 벗어나면 서버가 이
-              PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다.
+              빈 배열, proposalItems와 adjustments를 합쳐 1~5개를 채운다(둘 중 하나만 채워도
+              된다). periodStartDate/periodEndDate는 반드시 null이다 — 기간은 [확정된 계획 기간]
+              으로 이미 주어졌고 같은 값을 다시 적는 자리가 아니다. 사용자가 이번 대화에서
+              명시적으로 말한 사용 불가 시간이 있으면 unavailableWindows에 채우고, 없으면 빈
+              배열로 둔다. 사용자가 말하지 않은 사용 불가 시간을 추측해 채우지 않는다.
+            - proposalItems의 모든 날짜(earliestStartDate/deadlineDate/fixedStartAt/fixedEndAt)와
+              adjustments의 toDate는 반드시 [확정된 계획 기간] 안에 있어야 한다. 벗어나면 서버가
+              이 PROPOSAL 전체를 거부한다. 항목에 개별 날짜 필드를 새로 만들어 넣지 않는다.
 
             - ★ placementType을 고르는 기준은 "사용자가 언제 할지 정해 줬는가" 하나다.
               DATE_ONLY는 "날짜가 없는 상태"가 아니라 "날짜는 정했고 시각만 없는 상태"다.
 
                 사용자가 날짜와 시각을 함께 말함  -> fixedStartAt/fixedEndAt (그대로 고정된다)
-                사용자가 날짜만 말함(하루 계획)    -> DATE_ONLY (periodStartDate가 곧 그 날이다)
+                사용자가 날짜만 말함(하루 계획)    -> DATE_ONLY (확정 기간의 그 날이다)
                 사용자가 언제 할지 안 말함        -> UNSCHEDULED
 
-              ★ periodStartDate를 항목의 기본 날짜로 복사하지 마라. 지정이 없으면 UNSCHEDULED다.
+              ★ 계획 기간의 첫날을 항목의 기본 날짜로 복사하지 마라. 지정이 없으면 UNSCHEDULED다.
               UNSCHEDULED로 내야 서버가 가용시간을 계산해 기간 안에 분산 배치한다(수업·알바·약속을
               피하고 지난 시간에는 놓지 않는다). DATE_ONLY로 내면 그 날 하루에 그대로 쌓인다.
 
-              여러 날에 걸친 계획(planScope=WEEK/MONTH/RANGE)에서 날짜 지정이 없는 항목은 반드시
+              하루를 넘는 기간의 계획에서 날짜 지정이 없는 항목은 반드시
               UNSCHEDULED다. 특정 요일에만 하고 싶다고 말했으면 UNSCHEDULED로 두고
               earliestStartDate/deadlineDate를 그 날짜로 함께 지정한다.
             - scheduleSuggestions는 decision 값과 무관하게 아래 기준으로만 채운다(빈 배열이 기본값).

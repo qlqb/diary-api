@@ -1,7 +1,6 @@
 package com.jungwoo.project.memo.ai.dto;
 
 import com.jungwoo.project.memo.ai.domain.AiModelDecision;
-import com.jungwoo.project.memo.ai.domain.AiPlanScope;
 import com.jungwoo.project.memo.ai.domain.ProposalPurpose;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 
@@ -20,17 +19,16 @@ import java.util.List;
  * unavailableWindows는 decision=PROPOSAL_READY에서만 값을 가질 수 있는 대화 차원의 제약이다
  * (개별 항목이 아니라 이번 계획 전체에 적용된다).
  *
- * planScope는 모델이 판단한 이번 계획의 기간 성격(DAY/WEEK/MONTH/RANGE)이며,
- * decision=PROPOSAL_READY일 때만 값을 가진다. 모델이 값을 비워 보내면 서버가 가장 좁은
- * 범위인 DAY로 취급한다. RANGE는 하나의 달력 주/달로 표현할 수 없는 사용자 지정 기간
- * (1~31일)이다 — "이번 주 토일이랑 다음 주까지"처럼 여러 기간 표현이 합쳐진 요청을
- * 억지로 WEEK나 MONTH에 맞추지 않기 위한 값이다. planScope는 기간의 원본이 아니라
- * periodStartDate/periodEndDate를 검증하기 위한 분류다.
+ * periodStartDate/periodEndDate는 모델이 자연어에서 읽어낸 이번 계획의 대상 기간이며,
+ * <b>decision=OFFER_PROPOSAL일 때만</b> 값을 가진다. "오늘"이면 오늘 날짜를, "내일"이면 내일
+ * 날짜를 그대로 담는다 — 서버가 무조건 오늘로 고정하지 않는다. 기간이 모호하면 OFFER가 아니라
+ * ASK_CLARIFICATION으로 실제 날짜를 보여주며 되물어야 한다.
  *
- * periodStartDate/periodEndDate는 모델이 판단한 이번 계획의 실제 대상 기간이다. "오늘"이면
- * 오늘 날짜를, "내일"이면 내일 날짜를 그대로 담아야 한다 — 서버가 무조건 오늘로 고정하지
- * 않는다. decision=PROPOSAL_READY일 때만 값이 필요하며, proposalItems의 모든 날짜는 이 범위
- * 안에 있어야 한다(범위를 벗어나면 서버가 PROPOSAL 전체를 계약 위반으로 처리한다).
+ * decision=PROPOSAL_READY에서는 두 값이 반드시 null이다. 그 단계의 기간은 모델이 아니라
+ * 사용자가 OFFER 카드에서 날짜를 보고 누른 CREATE_PROPOSAL 요청(AiMessageRequest의
+ * periodStartDate/periodEndDate)이 정한다 — 같은 사실을 모델이 두 번 판단하게 두지 않는다.
+ * 그래서 계획 기간의 "종류"를 나타내던 AiPlanScope(DAY/WEEK/MONTH)도 없앴다. 기간은 언제나
+ * 실제 날짜 두 개이고, 그것을 몇 일짜리로 부를지는 서버가 알 필요가 없다.
  *
  * contextChanges는 decision과 완전히 독립된 sidecar다 — 이 필드가 있다고 responseType이
  * 바뀌지 않는다(CHAT/ASK_CLARIFICATION/OFFER_PROPOSAL/PROPOSAL_READY 어디에도 붙을 수 있다).
@@ -52,7 +50,6 @@ public record AiTurnStructured(
          */
         List<ProposalAdjustment> adjustments,
         List<UnavailableWindowSpec> unavailableWindows,
-        AiPlanScope planScope,
         LocalDate periodStartDate,
         LocalDate periodEndDate,
         List<ContextChangeSuggestion> contextChanges,
