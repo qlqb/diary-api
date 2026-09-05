@@ -78,4 +78,12 @@ public class PlanDraftResponse {
 
     /** 항목 목록. 사용자는 여기서 체크를 풀어 부하를 조절한다. noAvailableTime이면 null. */
     private AiProposalResponse proposal;
+
+    /**
+     * 계획을 만들기 전에 물어볼 것이 있을 때만 값이 있다. 이때 proposal은 null이다.
+     *
+     * <p>화면은 선택지를 버튼으로 그리고, 고른 답을 지시문에 이어 붙여 다시 요청한다. 기존
+     * 상담의 ASK_CLARIFICATION과 같은 패턴이며 새 상태 개념을 만들지 않는다.
+     */
+    private PlanJudgmentResult.Ask ask;
 }

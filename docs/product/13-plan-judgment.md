@@ -1,6 +1,6 @@
 # 13. 기간 학습 계획 판단층
 
-> 상태: 커밋 1 완료 (2026-09-06)
+> 상태: 커밋 2 완료 (2026-09-06). 판단층 품질 판정은 §8.2 지표 측정 후
 > 선행: 11-period-plan.md (기간형 계획), 03-planning-system.md
 > 이 문서가 판단층의 기준이다. 대화로 오간 인수인계는 이 문서로 대체한다.
 
@@ -109,7 +109,9 @@
 안에서 스스로 추측한 것을 근거로 적어 SKIM을 정당화하는 통로가 된다. 근거가 없으면 FULL이다.
 같은 이유로 `EvidenceType`은 닫힌 집합이고, 모르는 타입이 오면 그 근거를 버린다.
 
-## 5. 커밋 1에서 만든 것
+## 5. 만든 것
+
+### 커밋 1: 마감 체인과 v0
 
 ```text
 PlanningContextBuilder     DB의 현실을 한 곳에서 모은다 → PlanningContext
@@ -165,20 +167,53 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
 적어 두고, 실제로 문제가 되면(같은 자료 앞부분을 반복해서 잡는 일이 눈에 띄면) 그때
 관찰층에서 물어보는 쪽을 먼저 시도한다.
 
+### 커밋 2: 판단층
+
+```text
+PlanJudgmentService   PlanningContext → PlanStrategy 또는 되묻기 (AI 1회)
+PlanBlockGeneratorV0  전략을 받으면 그 취급을 따른다 (plan.draft.generator=JUDGMENT)
+```
+
+**JUDGMENT 모드는 판단만 모델에게 맡기고 조각은 v0와 같은 방식으로 만든다.** 조각을 만드는
+방식이 같으니 V0와의 차이는 전부 판단에서 온 것이고, 그래서 §8.2의 지표를 같은 자로 잴 수
+있다. 조각의 내용(자료 anchor, 완료 기준, 행동 종류)은 커밋 3의 몫이다.
+
+**서버가 대조하는 것과 모델이 주장하는 것의 경계.** 서버는 근거가 **실재하는지**를 본다 —
+그 맥락 행이 있는지, 아직 유효한지(ACTIVE/STALE), 그 학습 항목이 컨텍스트에 있는지. 없는
+맥락을 가리키는 근거는 버려지고, 근거가 없어진 항목은 FULL로 되돌아간다. 반면 그 맥락이 이
+항목의 범위를 **직접 덮는지**(scopeMatch=DIRECT)는 의미의 문제라 서버가 대조할 수 없고
+모델의 주장으로 남는다. 그 주장은 반드시 실재하는 ACTIVE 맥락에 붙어 있어야만 SKIP까지
+갈 수 있다.
+
+**모델이 언급하지 않은 항목은 FULL로 채운다.** 빼면 "모델이 언급을 안 했다"가 "이건 안 해도
+된다"가 된다. 근거 없음은 FULL이다.
+
+**되묻기에는 절대 문턱도 있다.** 비율(총량의 25%)만 보면 항목이 하나뿐인 초안은 늘 33%라
+언제나 걸린다. 15분을 아끼려고 질문을 하나 더 던지는 것은 남는 장사가 아니라, 차이가 블록
+하나(45분)는 돼야 묻는다. 그리고 "근거 없음"은 **익숙함에 대한** 근거가 없다는 뜻이다 —
+다음 수업 시각이나 기한은 언제까지 해야 하는지를 말할 뿐 얼마나 아는지를 말하지 않는다.
+
+**전략 재사용은 판정과 변환만 있다.** `PlanJudgmentService.reuse()`가 새 기간이 원본 버전의
+`end_date` 안이면 REUSED로 표시된 전략을 돌려준다. 이것을 언제 부를지(재계획 오케스트레이션)는
+아직 없다.
+
 ## 6. 다음 커밋
 
 | 커밋 | 내용 | 검증 |
 |------|------|------|
-| 2 | `PlanJudgmentService` — 전략 생성, 근거 등급 강제, 되묻기(MULTI_PERIOD / UNKNOWN_FAMILIARITY), `user_mark` 읽기 | GD-*, ASK-*, ST-2(전략 재사용) |
 | 3 | `PlanItemService` — 자료 anchor 조각, `doneCriteria`, `actionType`, `estimateConfidence`, `items:regenerate` 엔드포인트 | 전략-조각 모순 warn, 수동 eval |
 | 4 | `PlanCreateView` — 판단 근거 표시, 「이미 알아요」/「이번엔 빼기」, topic 트리 mark | Vitest, 수동 |
 
 ### 되묻기 조건 (코드로 판정, 모델 재량 아님)
 
-- **MULTI_PERIOD**: 모델이 목표 기간을 둘 이상 냈거나 지시에 "~까지 … 그 후" 패턴 → 계획을
-  만들지 않고 ASK
-- **UNKNOWN_FAMILIARITY**: 근거가 전혀 없는 topic이고 FULL vs SKIM 시간 차가 초안 총량의
-  25% 이상일 때만. **초안당 최대 1회**
+- **MULTI_PERIOD**: 지시문에 "~까지 … 그 후" 패턴이 있으면 모델을 부르지도 않고 ASK.
+  모델이 `goals`를 둘 이상 냈어도 ASK — 개수를 세는 것은 서버다.
+  "까지"와 "그 후"가 **둘 다** 있어야 한다. 마감만 말하는 "금요일까지 끝내줘"는 되묻지
+  않는다 — 잘못 되물으면 사용자는 계획 대신 질문을 받는다.
+- **UNKNOWN_FAMILIARITY**: 익숙함에 대한 근거(맥락·표식·진행 상태)가 없는 topic이고,
+  FULL vs SKIM 시간 차가 **초안 총량의 25% 이상이면서 동시에 45분(블록 하나) 이상**일 때만.
+  비율만 보면 항목 하나짜리 초안은 늘 33%라 언제나 걸린다. **초안당 최대 1회**(판단은 초안당
+  한 번 돌므로 그 자체로 보장된다).
 
 응답은 기존 상담의 `ASK_CLARIFICATION`과 같은 패턴을 쓴다. 새 상태 개념을 만들지 않는다.
 
@@ -213,7 +248,8 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
 | 주차 파싱(실데이터 변종 포함) | `TopicLocatorsTest` |
 | 요일별 가용시간 접기, 자정 넘김 분리 | `AvailabilityDaySummaryTest` |
 | 과목 순서·주차 창·맥락 정렬·현재 시각 | `PlanningContextBuilderTest` |
-| v0 취급 규칙, 마감, 블록 길이, 상한 | `PlanBlockGeneratorV0Test` |
+| v0 취급 규칙, 마감, 블록 길이, 상한, 전략 준수 | `PlanBlockGeneratorV0Test` |
+| 근거 등급 강제, 되묻기, 전략 재사용, 프롬프트 | `PlanJudgmentServiceTest` |
 | 마감 체인(제안→확정→스냅샷→배치) | `PlanDeadlineChainIntegrationTest` (로컬 DB) |
 
 **기존 테스트가 덮는 것.** 아래 둘은 이번에 새로 짜지 않았다. 리팩토링으로 이 테스트들이
@@ -250,6 +286,11 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
 
 셋이 오르지 않으면 커밋 2는 "말을 그럴싸하게 하는 기능"이고 되돌린다. 이 기준이 없으면
 판단 결과를 보고 "괜찮아 보이네"로 넘어가게 된다.
+
+**재는 방법.** 같은 기간·같은 사용자로 `plan.draft.generator`를 `V0`와 `JUDGMENT`로 각각
+돌린다. 조각을 만드는 코드가 같으므로 두 결과의 차이는 전부 판단에서 온 것이다. 지표는
+확정 후 롤링 배치까지 돌려서 센다 — "무엇을 만들었는가"가 아니라 "무엇이 실제로 자리를
+잡았는가"가 계획의 값이기 때문이다.
 
 ### 8.3 수동 eval (모델, 회귀 아님)
 

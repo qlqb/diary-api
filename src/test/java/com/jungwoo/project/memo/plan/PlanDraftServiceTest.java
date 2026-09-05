@@ -97,9 +97,16 @@ class PlanDraftServiceTest {
     private com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper analysisMapper;
     @Mock
     private AvailabilityEstimateService availabilityEstimateService;
-    /** 기본 경로(AI)만 검증하는 스위트다 — v0는 PlanBlockGeneratorV0Test가 따로 본다. */
+    /**
+     * 기본 경로(AI)만 검증하는 스위트다. v0는 PlanBlockGeneratorV0Test가, 판단은
+     * PlanJudgmentServiceTest가 따로 본다 — 여기서는 그 경로들이 켜지지 않는다.
+     */
     @Mock
     private PlanBlockGeneratorV0 blockGeneratorV0;
+    @Mock
+    private PlanningContextBuilder planningContextBuilder;
+    @Mock
+    private PlanJudgmentService planJudgmentService;
 
     private PlanDraftService service;
 
@@ -116,7 +123,8 @@ class PlanDraftServiceTest {
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
         ReflectionTestUtils.setField(generator, "defaultTimeZoneId", "Asia/Seoul");
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
-                planVersionService, new PlanStrategyCodec(), blockGeneratorV0);
+                planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
+                planningContextBuilder, planJudgmentService);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);

@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Spec;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
+import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,13 +43,21 @@ public class PlanDraftService {
     private final PlanVersionService planVersionService;
     private final PlanStrategyCodec strategyCodec;
     private final PlanBlockGeneratorV0 blockGeneratorV0;
+    private final PlanningContextBuilder planningContextBuilder;
+    private final PlanJudgmentService planJudgmentService;
 
     /**
-     * 어느 생성기로 초안을 만들 것인가. AI(기본) 또는 V0.
+     * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT.
      *
-     * <p>V0는 모델을 부르지 않는 결정적 생성기다. 마감이 제안→확정→Timefold까지 살아남는지
-     * 확인할 때 켠다 — 모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을 안 냈다"로
-     * 갈려 재현되지 않는다. 운영 기본값은 AI다.
+     * <p><b>V0</b>는 모델을 부르지 않는 결정적 생성기다. 마감이 제안→확정→Timefold까지
+     * 살아남는지 확인할 때 켠다 — 모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을
+     * 안 냈다"로 갈려 재현되지 않는다.
+     *
+     * <p><b>JUDGMENT</b>는 판단만 모델에게 맡기고 조각은 v0와 같은 방식으로 만든다. 조각을
+     * 만드는 방식이 같으니 V0와의 차이는 전부 판단에서 온 것이고, 그래서 판단층이 실제로
+     * 값을 하는지를 같은 자로 잴 수 있다(13-plan-judgment.md §8.2).
+     *
+     * <p>운영 기본값은 AI다.
      */
     @Value("${plan.draft.generator:AI}")
     private String generatorMode = "AI";
@@ -71,10 +80,13 @@ public class PlanDraftService {
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
                 request.getInstruction(), request.getTitle(), request.getCourseIds());
 
-        if (useBlockGeneratorV0()) {
+        if ("V0".equalsIgnoreCase(generatorMode)) {
             log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}",
                     userId, spec.start(), spec.end());
             return blockGeneratorV0.generate(spec);
+        }
+        if ("JUDGMENT".equalsIgnoreCase(generatorMode)) {
+            return generateWithJudgment(spec);
         }
         // 모델이 설정돼 있어야 하는 것은 AI 경로뿐이다. v0는 모델을 부르지 않는다.
         if (!aiConsultationClient.isConfigured()) {
@@ -83,8 +95,22 @@ public class PlanDraftService {
         return generator.generate(spec);
     }
 
-    private boolean useBlockGeneratorV0() {
-        return "V0".equalsIgnoreCase(generatorMode);
+    /**
+     * 판단 → 조각. 서버 코드가 순서를 부른다 — 오케스트레이터도, 서로를 부르는 Agent도 없다.
+     *
+     * <p>되물어야 하면 조각을 만들지 않고 질문만 돌려준다. 일단 만들어 놓고 "이게 맞나요?"라고
+     * 묻는 것과 다르다 — 만들어진 계획은 그 자체로 화면의 기준점이 되어, 사용자가 답을 고르기
+     * 전에 이미 대답을 유도한다.
+     */
+    private Generated generateWithJudgment(Spec spec) {
+        PlanningContext context = planningContextBuilder.build(spec);
+        PlanJudgmentResult judgment = planJudgmentService.judge(context);
+        if (judgment.isAsk()) {
+            log.info("기간 계획 초안: 되묻고 끝낸다. userId={}, reason={}",
+                    spec.userId(), judgment.ask().reason());
+            return Generated.asking(spec, judgment.ask());
+        }
+        return blockGeneratorV0.generate(spec, context, judgment.strategy());
     }
 
     /**
@@ -98,6 +124,17 @@ public class PlanDraftService {
         Spec spec = generated.spec();
         int days = spec.days();
         int maxItems = spec.maxItems();
+
+        if (generated.ask() != null) {
+            // 되묻는 중이다. 제안을 만들지 않는다 — 만들어진 계획은 사용자가 답을 고르기 전에
+            // 이미 화면의 기준점이 되어 대답을 유도한다.
+            log.info("기간 계획 초안: 되묻기로 종료. userId={}, reason={}", userId, generated.ask().reason());
+            return PlanDraftResponse.builder()
+                    .startDate(spec.start()).endDate(spec.end()).days(days).intensity(spec.intensity())
+                    .noAvailableTime(false)
+                    .ask(generated.ask())
+                    .build();
+        }
 
         if (generated.noAvailableTime()) {
             // 남는 시간이 없으면 제안을 만들지 않는다. 실패가 아니라 "현재 추정으로는 배치할

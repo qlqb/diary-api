@@ -25,6 +25,7 @@ import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
+import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
@@ -180,6 +181,9 @@ public class PeriodPlanDraftGenerator {
      *                                    나온다 — 화면은 이 사실을 사용자에게 말해야 한다.
      * @param strategy                    이 초안을 만든 판단. 판단층을 거치지 않은 경로는 null이고,
      *                                    그때 ai_proposals.plan_strategy_json도 NULL로 남는다.
+     * @param ask                         판단이 되물어야 한다고 본 경우의 질문. 이 값이 있으면
+     *                                    items는 비어 있고 제안도 만들어지지 않는다 —
+     *                                    noAvailableTime과 같은 성격의 "초안 없음"이다.
      */
     public record Generated(
             Spec spec,
@@ -195,13 +199,20 @@ public class PeriodPlanDraftGenerator {
             int reservedBufferMinutes,
             boolean noAvailableTime,
             boolean targetCappedByItemLimit,
-            PlanStrategy strategy
+            PlanStrategy strategy,
+            PlanJudgmentResult.Ask ask
     ) {
+        /** 되물어야 해서 초안을 만들지 않은 경우. */
+        public static Generated asking(Spec spec, PlanJudgmentResult.Ask ask) {
+            return new Generated(spec, 0, 0, null, false, null, null, List.of(),
+                    0, null, 0, false, false, null, ask);
+        }
+
         /** 가용시간 정보가 없는 호출부(테스트 등)용. */
         public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
                          boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
-                    goalSummary, items, 0, null, 0, false, false, null);
+                    goalSummary, items, 0, null, 0, false, false, null, null);
         }
 
         /** 가용시간까지만 아는 호출부용(상한 조정 없음). */
@@ -211,7 +222,7 @@ public class PeriodPlanDraftGenerator {
                          int reservedBufferMinutes, boolean noAvailableTime) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
                     goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
-                    reservedBufferMinutes, noAvailableTime, false, null);
+                    reservedBufferMinutes, noAvailableTime, false, null, null);
         }
 
         /** 판단 없이 만든 초안(모델 경로). 상한 조정 여부까지 아는 호출부용. */
@@ -221,7 +232,7 @@ public class PeriodPlanDraftGenerator {
                          int reservedBufferMinutes, boolean noAvailableTime, boolean targetCappedByItemLimit) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
                     goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
-                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, null);
+                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, null, null);
         }
     }
 

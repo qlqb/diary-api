@@ -202,6 +202,75 @@ class PlanBlockGeneratorV0Test {
         assertThat(generated.strategy().topics()).hasSize(PeriodPlanDraftGenerator.MAX_ITEMS + 5);
     }
 
+    // ===== 판단을 받았을 때 =====
+
+    @Test
+    @DisplayName("판단이 있으면 v0 규칙 대신 그 취급을 따른다")
+    void judgmentOverridesTheV0Rules() {
+        PlanningContext context = context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(216L, "이미 아는 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(217L, "훑을 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(218L, "제대로 볼 내용", TopicProgressStatus.NOT_STARTED, null)));
+
+        Generated generated = generator.generate(spec(), context, judgment(
+                new PlanStrategy.TopicTreatment(216L, Treatment.SKIP, 1, "이미 안다고 하셨어요", List.of()),
+                new PlanStrategy.TopicTreatment(217L, Treatment.SKIM, 2, "겹치는 내용이에요", List.of()),
+                new PlanStrategy.TopicTreatment(218L, Treatment.FULL, 3, "다음 수업에 필요해요", List.of())));
+
+        assertThat(generated.items()).extracting(ProposalItem::title)
+                .as("v0 규칙이라면 셋 다 FULL로 만들었을 것이다")
+                .containsExactly("자료구조 · 훑을 내용", "자료구조 · 제대로 볼 내용");
+    }
+
+    @Test
+    @DisplayName("훑기로 정해진 항목은 짧게 잡는다 — 아니면 판단이 총량에 반영되지 않는다")
+    void skimBlocksAreShorter() {
+        PlanningContext context = context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(217L, "훑을 내용", TopicProgressStatus.NOT_STARTED, null)));
+
+        Generated generated = generator.generate(spec(), context, judgment(
+                new PlanStrategy.TopicTreatment(217L, Treatment.SKIM, 1, "겹치는 내용", List.of())));
+
+        ProposalItem item = generated.items().get(0);
+        assertThat(item.expectedMinutes()).isEqualTo(30);
+        assertThat(item.description()).contains("훑어보기").contains("이미 아는 부분을 확인함");
+    }
+
+    @Test
+    @DisplayName("저장되는 전략은 판단이 낸 것 그대로다 — v0가 자기 판단을 덧씌우지 않는다")
+    void theJudgmentIsTheStrategy() {
+        PlanningContext context = context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(217L, "내용", TopicProgressStatus.NOT_STARTED, null)));
+        PlanStrategy given = judgment(
+                new PlanStrategy.TopicTreatment(217L, Treatment.FULL, 1, "다음 수업에 필요해요", List.of()));
+
+        assertThat(generator.generate(spec(), context, given).strategy()).isSameAs(given);
+    }
+
+    @Test
+    @DisplayName("판단이 정한 과목 순서를 따른다 — 언급되지 않은 과목은 뒤에 그대로 남는다")
+    void judgmentDecidesCourseOrder() {
+        PlanningContext context = context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(217L, "자료구조 내용", TopicProgressStatus.NOT_STARTED, null)),
+                course(32L, "웹서버프로그래밍", WEB_SERVER_CLASS,
+                        topic(500L, "웹서버 내용", TopicProgressStatus.NOT_STARTED, null)),
+                course(90L, "언급 안 된 과목", null,
+                        topic(600L, "다른 내용", TopicProgressStatus.NOT_STARTED, null)));
+
+        PlanStrategy given = new PlanStrategy("목표", "요약", StrategySource.NEW, null, List.of(),
+                List.of(new PlanStrategy.CourseStrategy(32L, 1, "먼저", "선수지식"),
+                        new PlanStrategy.CourseStrategy(36L, 2, "다음", "수업이 늦다")),
+                List.of(), List.of());
+
+        assertThat(generator.generate(spec(), context, given).items()).extracting(ProposalItem::title)
+                .containsExactly("웹서버프로그래밍 · 웹서버 내용", "자료구조 · 자료구조 내용",
+                        "언급 안 된 과목 · 다른 내용");
+    }
+
     @Test
     @DisplayName("만들 블록이 없으면 빈 초안이지만 실패는 아니다")
     void noBlocksIsNotAFailure() {
@@ -221,6 +290,12 @@ class PlanBlockGeneratorV0Test {
                 .filter(t -> t.topicId().equals(topicId))
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("전략에 topicId=" + topicId + " 판단이 없다"));
+    }
+
+    private static PlanStrategy judgment(PlanStrategy.TopicTreatment... topics) {
+        return new PlanStrategy("다음 수업 따라가기", "필요한 것만", StrategySource.NEW, null, List.of(),
+                List.of(new PlanStrategy.CourseStrategy(36L, 1, "화요일 전까지", "가장 빠른 수업")),
+                List.of(topics), List.of());
     }
 
     private static Spec spec() {

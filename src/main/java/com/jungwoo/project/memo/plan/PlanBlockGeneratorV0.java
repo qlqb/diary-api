@@ -23,7 +23,9 @@ import org.springframework.stereotype.Component;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 모델 없이 계획 초안을 만드는 결정적 생성기.
@@ -64,6 +66,14 @@ public class PlanBlockGeneratorV0 {
     private int blockMinutes = 45;
 
     /**
+     * 훑기(SKIM)로 판단된 항목의 길이 상한. 조각 생성이 SKIM에 두는 값과 같다.
+     *
+     * <p>설정값이 아니다 — SKIM의 뜻이 "짧게 본다"이므로 이 값이 blockMinutes를 넘으면 취급이
+     * 뜻을 잃는다. 그래서 둘 중 작은 쪽을 쓴다.
+     */
+    private static final int SKIM_BLOCK_MINUTES = 30;
+
+    /**
      * 컨텍스트를 모아 초안을 만든다. 모델을 부르지 않으므로 가용시간이 0이어도 실패하지
      * 않는다 — 다만 그때는 기존 경로와 같이 항목 없이 안내만 돌려준다.
      */
@@ -73,8 +83,21 @@ public class PlanBlockGeneratorV0 {
         return generate(spec, context);
     }
 
-    /** 컨텍스트를 이미 가진 호출부(테스트, 이후의 판단 경로)용. */
+    /** 컨텍스트를 이미 가진 호출부(테스트)용. 판단 없이 v0 자신의 규칙만 쓴다. */
     public Generated generate(Spec spec, PlanningContext context) {
+        return generate(spec, context, null);
+    }
+
+    /**
+     * 판단(전략)이 있으면 그것을 따르고, 없으면 v0 자신의 규칙을 쓴다.
+     *
+     * <p>블록을 만드는 방식은 두 경우가 같다 — 학습 항목 하나가 블록 하나이고 길이는 설정값이다.
+     * 달라지는 것은 <b>무엇을 만들고 어떤 순서로 두는가</b>뿐이다. 그래서 v0 결과와 판단 결과를
+     * 같은 자로 잴 수 있다: 조각을 만드는 방식이 같으니 차이는 전부 판단에서 온 것이다.
+     *
+     * @param judgment {@link PlanJudgmentService}가 낸 전략. null이면 v0 규칙
+     */
+    public Generated generate(Spec spec, PlanningContext context, PlanStrategy judgment) {
         int available = PeriodPlanDraftGenerator.availableMinutes(context.availability().windows());
         int target = spec.intensity().targetMinutesFor(available);
         String confidence = PeriodPlanDraftGenerator.confidenceSummary(context.availability().windows());
@@ -83,13 +106,15 @@ public class PlanBlockGeneratorV0 {
         List<TopicTreatment> treatments = new ArrayList<>();
         List<CourseStrategy> courses = new ArrayList<>();
 
+        Map<Long, TopicTreatment> judged = judgedTopics(judgment);
         int maxItems = spec.maxItems();
         int rank = 0;
         /*
-         * 과목 순서는 컨텍스트가 이미 다음 수업이 빠른 순으로 맞춰 두었다. 여기서 다시
-         * 정렬하지 않는다 — 같은 규칙을 두 곳에 두면 한쪽만 바뀐다.
+         * 판단이 없으면 컨텍스트가 맞춰 둔 순서(다음 수업이 빠른 순)를 그대로 쓴다 — 같은
+         * 규칙을 두 곳에 두면 한쪽만 바뀐다. 판단이 있으면 그쪽 rank를 따른다. 과목 순서를
+         * 정하는 것이 판단의 일이기 때문이다.
          */
-        for (CourseContext course : context.courses()) {
+        for (CourseContext course : orderedCourses(context, judgment)) {
             rank++;
             courses.add(new CourseStrategy(course.courseId(), rank,
                     course.nextClassAt() != null
@@ -100,9 +125,12 @@ public class PlanBlockGeneratorV0 {
                             : "수업 시각을 몰라 뒤에 두었어요"));
 
             for (TopicContext topic : inProgressFirst(course.topics())) {
-                Treatment treatment = treatmentOf(topic);
-                treatments.add(new TopicTreatment(topic.topicId(), treatment, treatments.size() + 1,
-                        reasonFor(topic, treatment), evidenceFor(topic, course)));
+                TopicTreatment decided = judged.get(topic.topicId());
+                Treatment treatment = decided != null ? decided.treatment() : treatmentOf(topic);
+                if (decided == null) {
+                    treatments.add(new TopicTreatment(topic.topicId(), treatment, treatments.size() + 1,
+                            reasonFor(topic, treatment), evidenceFor(topic, course)));
+                }
                 if (treatment == Treatment.SKIP) {
                     continue;
                 }
@@ -114,7 +142,7 @@ public class PlanBlockGeneratorV0 {
                 if (items.size() >= maxItems) {
                     continue;
                 }
-                items.add(blockOf(course, topic));
+                items.add(blockOf(course, topic, treatment));
             }
         }
 
@@ -127,7 +155,9 @@ public class PlanBlockGeneratorV0 {
                     available, target, treatments.size());
         }
 
-        PlanStrategy strategy = new PlanStrategy(
+        // 판단이 있으면 그것이 곧 이 초안의 전략이다. v0가 자기 판단을 덧씌우지 않는다 —
+        // 저장되는 것은 "왜 그렇게 했는가"이고 그것을 정한 것은 판단층이다.
+        PlanStrategy strategy = judgment != null ? judgment : new PlanStrategy(
                 GOAL,
                 "학습 항목을 하나씩 블록으로 만들고 각 과목의 다음 수업 시작을 마감으로 삼았어요.",
                 StrategySource.NEW, null, List.of(), courses, treatments, List.of());
@@ -136,7 +166,39 @@ public class PlanBlockGeneratorV0 {
                 "v0 생성기는 예산을 조정하지 않아요", false,
                 defaultTitle(spec), GOAL, items,
                 available, confidence, Math.max(0, available - target), items.isEmpty(),
-                false, strategy);
+                false, strategy, null);
+    }
+
+    /**
+     * 판단이 정한 과목 순서. 판단이 없거나 판단이 언급하지 않은 과목은 컨텍스트 순서
+     * (다음 수업이 빠른 순) 그대로 뒤에 붙는다 — 언급되지 않았다는 것이 빼도 된다는 뜻은 아니다.
+     */
+    private List<CourseContext> orderedCourses(PlanningContext context, PlanStrategy judgment) {
+        if (judgment == null || judgment.courses() == null || judgment.courses().isEmpty()) {
+            return context.courses();
+        }
+        Map<Long, Integer> rankByCourse = new HashMap<>();
+        for (CourseStrategy course : judgment.courses()) {
+            if (course != null && course.courseId() != null) {
+                rankByCourse.putIfAbsent(course.courseId(), course.rank());
+            }
+        }
+        List<CourseContext> ordered = new ArrayList<>(context.courses());
+        ordered.sort(Comparator.comparingInt(c -> rankByCourse.getOrDefault(c.courseId(), Integer.MAX_VALUE)));
+        return ordered;
+    }
+
+    private Map<Long, TopicTreatment> judgedTopics(PlanStrategy judgment) {
+        if (judgment == null || judgment.topics() == null) {
+            return Map.of();
+        }
+        Map<Long, TopicTreatment> byTopic = new HashMap<>();
+        for (TopicTreatment topic : judgment.topics()) {
+            if (topic != null && topic.topicId() != null) {
+                byTopic.putIfAbsent(topic.topicId(), topic);
+            }
+        }
+        return byTopic;
     }
 
     /**
@@ -207,18 +269,28 @@ public class PlanBlockGeneratorV0 {
      * <p>마감은 그 과목의 다음 수업 시작 시각이다. 수업이 없으면 마감도 없다 — 근거 없는
      * 마감을 붙이면 배치가 이유 없이 좁아지고, 왜 좁아졌는지 아무도 설명할 수 없다.
      */
-    private ProposalItem blockOf(CourseContext course, TopicContext topic) {
+    private ProposalItem blockOf(CourseContext course, TopicContext topic, Treatment treatment) {
         String where = topic.sourceLocator() != null && !topic.sourceLocator().isBlank()
                 ? " (" + topic.sourceLocator() + ")"
                 : "";
-        String description = "학습 항목 '" + topic.title() + "'" + where + " 학습하기"
-                + " · 완료: 내용을 자료 없이 한 문단으로 설명할 수 있음"
-                + " · 분량 정보 없음 · 기본 " + blockMinutes + "분";
+        /*
+         * SKIM은 짧게 잡는다. 훑기로 정해 놓고 제대로 볼 때와 같은 시간을 주면 그 판단이
+         * 계획에 반영되지 않는다 — 이유 문구만 바뀌고 총량은 그대로다.
+         */
+        boolean skim = treatment == Treatment.SKIM;
+        int minutes = skim ? Math.min(SKIM_BLOCK_MINUTES, blockMinutes) : blockMinutes;
+        String description = skim
+                ? "학습 항목 '" + topic.title() + "'" + where + " 훑어보기"
+                        + " · 완료: 무엇을 다루는지와 이미 아는 부분을 확인함"
+                        + " · 분량 정보 없음 · 기본 " + minutes + "분"
+                : "학습 항목 '" + topic.title() + "'" + where + " 학습하기"
+                        + " · 완료: 내용을 자료 없이 한 문단으로 설명할 수 있음"
+                        + " · 분량 정보 없음 · 기본 " + minutes + "분";
 
         return new ProposalItem(
                 course.title() + " · " + topic.title(),
                 description,
-                blockMinutes,
+                minutes,
                 "SHOULD",
                 PlacementType.UNSCHEDULED,
                 null, null,
