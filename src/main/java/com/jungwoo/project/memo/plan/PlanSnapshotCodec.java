@@ -43,7 +43,8 @@ public class PlanSnapshotCodec {
                 item.getScheduledEndAt(),
                 item.getPlanningStartDate(),
                 item.getPlanningEndDate(),
-                reason
+                reason,
+                item.getDeadlineAt()
         );
     }
 

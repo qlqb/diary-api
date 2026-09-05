@@ -20,6 +20,7 @@
         <result property="planningEndDate"       column="planning_end_date"/>
         <result property="scheduledStartAt"      column="scheduled_start_at"/>
         <result property="scheduledEndAt"        column="scheduled_end_at"/>
+        <result property="deadlineAt"            column="deadline_at"/>
         <result property="expectedMinutes"       column="expected_minutes"/>
         <result property="status"                column="status"/>
         <result property="priority"              column="priority"/>
@@ -47,6 +48,7 @@
             planning_end_date,
             scheduled_start_at,
             scheduled_end_at,
+            deadline_at,
             expected_minutes,
             status,
             priority,
@@ -69,6 +71,7 @@
             #{planningEndDate},
             #{scheduledStartAt},
             #{scheduledEndAt},
+            #{deadlineAt},
             #{expectedMinutes},
             #{status},
             #{priority},
@@ -321,6 +324,23 @@
          WHERE execution_item_id = #{executionItemId}
            AND user_id           = #{userId}
            AND placement_type    = 'UNSCHEDULED'
+    </update>
+
+    <!--
+      확정: 이 조각의 마감 시각을 기록한다.
+
+      제안 payload에만 있던 마감이 확정에서 버려지던 자리다. 값이 있는 항목에만 호출하므로
+      영향 행 수는 항상 1이어야 하고, 호출자가 그것을 확인한다.
+
+      deadline_at IS NULL 조건을 두지 않는다 — assignPlanVersionId의 "출처는 한 번만"과
+      달리 마감은 나중에 사용자가 고칠 수 있는 값이고, 그 경로를 지금 막아둘 이유가 없다.
+    -->
+    <update id="assignDeadlineAt">
+        UPDATE execution_items
+           SET deadline_at = #{deadlineAt}
+         WHERE execution_item_id = #{executionItemId}
+           AND user_id           = #{userId}
+           AND is_deleted        = 0
     </update>
 
     <!--

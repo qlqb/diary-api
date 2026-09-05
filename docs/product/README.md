@@ -20,9 +20,10 @@
 | 10 | 제품 경험 | [10-core-experience.md](10-core-experience.md) | 자료·상태·AI 대화가 계획 초안과 실제 실행으로 이어지는 핵심 사용자 경험과 컨텍스트 경계 |
 | 11 | 설계 | [11-period-plan.md](11-period-plan.md) | 기간형 계획(plan_versions). Project / PlanVersion / ExecutionItem / ExecutionRecord 네 층의 책임 — 기간형 계획의 기준 문서다 |
 | 12 | 제품 가설 | [12-product-thesis.md](12-product-thesis.md) | 무엇을 만드는 것이고 무엇은 아닌지 — 4층 구조, 현실층 갱신 원칙, 확장 순서 |
-| 13 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
-| 14 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
-| 15 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
+| 13 | 설계 | [13-plan-judgment.md](13-plan-judgment.md) | 기간 학습 계획의 판단층. 현실 수집 → 전략 → 조각 → 배치, 마감 체인과 근거 등급 — 판단층의 기준 문서다 |
+| 14 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
+| 15 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
+| 16 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
 
 ---
 

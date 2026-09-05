@@ -16,6 +16,7 @@
         <result property="planEndDate"        column="plan_end_date"/>
         <result property="planIntensity"      column="plan_intensity"/>
         <result property="planTargetMinutes"  column="plan_target_minutes"/>
+        <result property="planStrategyJson"   column="plan_strategy_json"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -86,7 +87,8 @@
            SET plan_start_date     = #{planStartDate},
                plan_end_date       = #{planEndDate},
                plan_intensity      = #{planIntensity},
-               plan_target_minutes = #{planTargetMinutes}
+               plan_target_minutes = #{planTargetMinutes},
+               plan_strategy_json  = #{planStrategyJson}
          WHERE proposal_id = #{proposalId}
            AND user_id     = #{userId}
     </update>

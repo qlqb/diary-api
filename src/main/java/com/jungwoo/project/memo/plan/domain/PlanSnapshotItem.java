@@ -40,6 +40,27 @@ public record PlanSnapshotItem(
         LocalDateTime scheduledEndAt,
         LocalDate planningStartDate,
         LocalDate planningEndDate,
-        String reason
+        String reason,
+
+        /**
+         * 확정 당시의 마감 시각. 현재 값은 execution_items가 갖고 여기에는 "그때 이 조각을
+         * 언제까지로 잡았는가"만 남는다 — 나중에 마감이 바뀌어도 이 값은 그대로다.
+         *
+         * 이 필드가 생기기 전에 저장된 스냅샷은 null로 읽힌다(@JsonIgnoreProperties와 같은
+         * 이유로, 과거 스냅샷이 통째로 안 읽히는 상황을 만들지 않는다).
+         */
+        LocalDateTime deadlineAt
 ) {
+
+    /** deadlineAt 없이 만드는 기존 경로. 테스트 픽스처가 쓴다. */
+    public PlanSnapshotItem(
+            Long executionItemId, String title, Integer expectedMinutes, String priority,
+            Long courseId, String courseTitle, Long topicId, PlacementType placementType,
+            LocalDate scheduledDate, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate planningStartDate, LocalDate planningEndDate, String reason
+    ) {
+        this(executionItemId, title, expectedMinutes, priority, courseId, courseTitle, topicId,
+                placementType, scheduledDate, scheduledStartAt, scheduledEndAt,
+                planningStartDate, planningEndDate, reason, null);
+    }
 }

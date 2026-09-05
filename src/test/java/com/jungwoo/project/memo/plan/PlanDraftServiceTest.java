@@ -51,6 +51,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -96,6 +97,9 @@ class PlanDraftServiceTest {
     private com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper analysisMapper;
     @Mock
     private AvailabilityEstimateService availabilityEstimateService;
+    /** 기본 경로(AI)만 검증하는 스위트다 — v0는 PlanBlockGeneratorV0Test가 따로 본다. */
+    @Mock
+    private PlanBlockGeneratorV0 blockGeneratorV0;
 
     private PlanDraftService service;
 
@@ -112,7 +116,7 @@ class PlanDraftServiceTest {
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
         ReflectionTestUtils.setField(generator, "defaultTimeZoneId", "Asia/Seoul");
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
-                planVersionService);
+                planVersionService, new PlanStrategyCodec(), blockGeneratorV0);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
@@ -160,7 +164,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getTargetMinutesReason()).isNull();
         assertThat(draft.getAvailabilityConfidenceSummary()).contains("기본 시간대");
         verify(aiProposalMapper).updatePlanMetadata(
-                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390));
+                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), isNull());
     }
 
     @Test
@@ -271,7 +275,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(7980);
         // 저장되는 목표도 깎인 값이다 — 스냅샷과 화면이 어긋나지 않는다.
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), any(), any(),
-                eq(PlanIntensity.FOCUSED), eq(3600));
+                eq(PlanIntensity.FOCUSED), eq(3600), isNull());
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
@@ -568,7 +572,7 @@ class PlanDraftServiceTest {
 
         verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30));
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
-                eq(PlanIntensity.NORMAL), eq(BASELINE));
+                eq(PlanIntensity.NORMAL), eq(BASELINE), isNull());
         // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.
         verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
     }

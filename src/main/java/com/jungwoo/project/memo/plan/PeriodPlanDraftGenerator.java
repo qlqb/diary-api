@@ -23,6 +23,7 @@ import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
 import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
+import com.jungwoo.project.memo.plan.domain.PlanStrategy;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
@@ -177,6 +178,8 @@ public class PeriodPlanDraftGenerator {
      * @param targetCappedByItemLimit     강도 비율로 계산한 예산이 한 제안의 물리적 상한
      *                                    (30개 × 120분)을 넘어 상한으로 깎였다. 8일 이상 계획에서
      *                                    나온다 — 화면은 이 사실을 사용자에게 말해야 한다.
+     * @param strategy                    이 초안을 만든 판단. 판단층을 거치지 않은 경로는 null이고,
+     *                                    그때 ai_proposals.plan_strategy_json도 NULL로 남는다.
      */
     public record Generated(
             Spec spec,
@@ -191,13 +194,14 @@ public class PeriodPlanDraftGenerator {
             String availabilityConfidenceSummary,
             int reservedBufferMinutes,
             boolean noAvailableTime,
-            boolean targetCappedByItemLimit
+            boolean targetCappedByItemLimit,
+            PlanStrategy strategy
     ) {
         /** 가용시간 정보가 없는 호출부(테스트 등)용. */
         public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
                          boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
-                    goalSummary, items, 0, null, 0, false, false);
+                    goalSummary, items, 0, null, 0, false, false, null);
         }
 
         /** 가용시간까지만 아는 호출부용(상한 조정 없음). */
@@ -207,7 +211,17 @@ public class PeriodPlanDraftGenerator {
                          int reservedBufferMinutes, boolean noAvailableTime) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
                     goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
-                    reservedBufferMinutes, noAvailableTime, false);
+                    reservedBufferMinutes, noAvailableTime, false, null);
+        }
+
+        /** 판단 없이 만든 초안(모델 경로). 상한 조정 여부까지 아는 호출부용. */
+        public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
+                         boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items,
+                         int estimatedAvailableMinutes, String availabilityConfidenceSummary,
+                         int reservedBufferMinutes, boolean noAvailableTime, boolean targetCappedByItemLimit) {
+            this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
+                    goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
+                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, null);
         }
     }
 

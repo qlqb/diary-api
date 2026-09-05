@@ -79,6 +79,8 @@ public class AiProposalPersistenceService {
                     .courseId(payload.courseId())
                     .scheduledStartAt(payload.scheduledStartAt())
                     .scheduledEndAt(payload.scheduledEndAt())
+                    .deadlineAt(payload.deadlineAt())
+                    .deadlineDate(payload.deadlineDate())
                     .modified(false)
                     .operation(payload.effectiveOperation())
                     .targetExecutionItemId(payload.targetExecutionItemId())

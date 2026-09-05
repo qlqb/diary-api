@@ -113,9 +113,25 @@ public class PlanPlacementService {
         List<SchedulingTask> tasks = new ArrayList<>();
         for (ExecutionItem item : targets) {
             int duration = item.getExpectedMinutes() != null ? item.getExpectedMinutes() : 30;
+            /*
+             * 마감은 후보 생성과 제약 양쪽에 준다. 후보에서 거르면 애초에 마감을 넘는 시각이
+             * 값 범위에 들어오지 않고, 제약은 그 불변식을 솔버 쪽에서 한 번 더 못박는다
+             * (SchedulePreviewService가 쓰는 방식과 같다).
+             *
+             * 마감 안에 넣을 후보가 하나도 없으면 미배치로 남긴다 — 마감을 넘겨 배치하면
+             * "수업 전에 끝낸다"는 계획의 전제가 조용히 깨지고, 사용자는 그 사실을 배치
+             * 결과에서 알아차릴 방법이 없다.
+             */
+            LocalDateTime deadline = item.getDeadlineAt();
             List<TimeSlotOption> candidates = buildCandidates(
-                    availability.windows(), duration, now, windowEnd);
+                    availability.windows(), duration, now, windowEnd, deadline);
             if (candidates.isEmpty()) {
+                // 왜 못 넣었는지는 응답에 담지 않는다(UnplacedItem에 자리가 없다). 마감
+                // 때문인지 시간이 없어서인지는 운영에서 갈리는 질문이라 로그로만 남긴다.
+                if (deadline != null) {
+                    log.info("롤링 배치: 마감 전에 넣을 후보가 없어 미배치. executionItemId={}, deadline={}, duration={}분",
+                            item.getExecutionItemId(), deadline, duration);
+                }
                 unplaced.add(toUnplaced(item));
                 continue;
             }
@@ -123,7 +139,7 @@ public class PlanPlacementService {
             // 안에서 계획이 나열한 순서를 배치가 뒤집지 않게 하기 위한 값이다.
             tasks.add(new SchedulingTask(item.getExecutionItemId(), item.getTitle(), duration,
                     item.getPriority() != null ? item.getPriority() : ExecutionPriority.SHOULD,
-                    null, item.getCourseId(), item.getOrderIndex(), candidates));
+                    deadline, item.getCourseId(), item.getOrderIndex(), candidates));
         }
 
         if (!tasks.isEmpty()) {
@@ -164,7 +180,7 @@ public class PlanPlacementService {
      */
     private List<TimeSlotOption> buildCandidates(
             List<AvailabilityWindow> windows, int durationMinutes,
-            LocalDateTime earliest, LocalDate windowEnd
+            LocalDateTime earliest, LocalDate windowEnd, LocalDateTime deadline
     ) {
         LocalDateTime windowEndExclusive = windowEnd.plusDays(1).atStartOfDay();
         List<TimeSlotOption> options = new ArrayList<>();
@@ -177,7 +193,10 @@ public class PlanPlacementService {
             LocalDateTime cursor = window.startAt().isBefore(earliest) ? earliest : window.startAt();
             cursor = roundUpToGranularity(cursor);
             while (!cursor.isAfter(latestStart)) {
-                if (!cursor.plusMinutes(durationMinutes).isAfter(windowEndExclusive) && seen.add(cursor)) {
+                LocalDateTime end = cursor.plusMinutes(durationMinutes);
+                boolean withinWindow = !end.isAfter(windowEndExclusive);
+                boolean withinDeadline = deadline == null || !end.isAfter(deadline);
+                if (withinWindow && withinDeadline && seen.add(cursor)) {
                     options.add(new TimeSlotOption(cursor, window.confidence()));
                 }
                 cursor = cursor.plusMinutes(slotGranularityMinutes);

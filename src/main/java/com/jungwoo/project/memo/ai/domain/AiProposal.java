@@ -63,6 +63,15 @@ public class AiProposal {
 
     private Integer planTargetMinutes;
 
+    /**
+     * 초안 시점의 판단(PlanStrategy)의 JSON. 확정이 이 값을 읽어
+     * plan_versions.strategy_json으로 복사한다.
+     *
+     * 확정 요청은 전략을 받지 않는다 — plan_intensity/plan_target_minutes와 같은 이유로,
+     * 클라이언트가 다시 보내면 사용자가 화면에서 본 판단과 저장되는 판단이 달라질 수 있다.
+     */
+    private String planStrategyJson;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

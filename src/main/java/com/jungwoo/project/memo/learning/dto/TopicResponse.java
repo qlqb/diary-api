@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.learning.domain.CourseTopic;
 import com.jungwoo.project.memo.learning.domain.TopicProgress;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.domain.TopicSourceType;
+import com.jungwoo.project.memo.learning.domain.TopicUserMark;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.MaterialStatus;
 import lombok.Builder;
@@ -34,6 +35,8 @@ public class TopicResponse {
     private LocalDateTime lastStudiedAt;
     private LocalDateTime lastReviewedAt;
     private int reviewCount;
+    /** 사용자가 직접 말한 사실(KNOWN/DEFER). 없으면 null. progressStatus와 다른 축이다. */
+    private TopicUserMark userMark;
     private List<TopicResponse> children;
 
     public static TopicResponse of(CourseTopic topic, TopicProgress progress, List<TopicResponse> children,
@@ -52,6 +55,7 @@ public class TopicResponse {
                 .lastStudiedAt(progress != null ? progress.getLastStudiedAt() : null)
                 .lastReviewedAt(progress != null ? progress.getLastReviewedAt() : null)
                 .reviewCount(progress != null && progress.getReviewCount() != null ? progress.getReviewCount() : 0)
+                .userMark(topic.getUserMark())
                 .children(children)
                 .build();
     }

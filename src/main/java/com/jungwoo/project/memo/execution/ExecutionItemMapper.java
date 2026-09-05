@@ -81,6 +81,16 @@ public interface ExecutionItemMapper {
             @Param("planningEndDate") LocalDate planningEndDate
     );
 
+    /**
+     * 확정 시점에 마감 시각을 채운다. 제안 payload에만 있던 마감이 여기서 execution_items로
+     * 넘어오고, 그때부터 롤링 배치가 Timefold에 HARD 제약으로 전달한다.
+     */
+    int assignDeadlineAt(
+            @Param("userId") Long userId,
+            @Param("executionItemId") Long executionItemId,
+            @Param("deadlineAt") LocalDateTime deadlineAt
+    );
+
     /** 확정 트랜잭션이 생성 출처를 한 번만 기록한다. plan_version_id IS NULL 조건이 그 강제다. */
     int assignPlanVersionId(
             @Param("userId") Long userId,

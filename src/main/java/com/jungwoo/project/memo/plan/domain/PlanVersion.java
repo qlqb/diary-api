@@ -67,6 +67,15 @@ public class PlanVersion {
     private String itemsSnapshot;
 
     /**
+     * 이 버전을 만든 판단(PlanStrategy)의 JSON. items_snapshot과 같은 성격의 불변 역사다 —
+     * "무엇을 하기로 했는가" 옆의 "왜 그렇게 하기로 했는가".
+     *
+     * 판단 없이 만든 계획이 있을 수 있으므로 null 허용이다. 구조화된 접근은
+     * PlanStrategyCodec으로 얻는다.
+     */
+    private String strategyJson;
+
+    /**
      * 이 계획을 만들어낸 ai_proposals.proposal_id. UNIQUE 제약이 걸려 있어 같은 제안을
      * 두 번 확정할 수 없다. 제안 없이 만든 계획은 null이다.
      */

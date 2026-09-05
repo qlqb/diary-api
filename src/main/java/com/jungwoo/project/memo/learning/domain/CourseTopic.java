@@ -39,6 +39,12 @@ public class CourseTopic {
 
     private TopicStatus status;
 
+    /**
+     * 사용자가 이 항목에 대해 직접 말한 사실. 없으면 null이고 그것이 기본이다.
+     * "모른다"와 "모른다고 답했다"를 구분하지 않는다 — 둘 다 근거 없음이고 판단이 같다.
+     */
+    private TopicUserMark userMark;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

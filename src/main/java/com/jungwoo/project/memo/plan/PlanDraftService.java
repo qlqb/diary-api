@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +40,18 @@ public class PlanDraftService {
     private final AiProposalService aiProposalService;
     private final AiProposalMapper aiProposalMapper;
     private final PlanVersionService planVersionService;
+    private final PlanStrategyCodec strategyCodec;
+    private final PlanBlockGeneratorV0 blockGeneratorV0;
+
+    /**
+     * 어느 생성기로 초안을 만들 것인가. AI(기본) 또는 V0.
+     *
+     * <p>V0는 모델을 부르지 않는 결정적 생성기다. 마감이 제안→확정→Timefold까지 살아남는지
+     * 확인할 때 켠다 — 모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을 안 냈다"로
+     * 갈려 재현되지 않는다. 운영 기본값은 AI다.
+     */
+    @Value("${plan.draft.generator:AI}")
+    private String generatorMode = "AI";
 
     /** 계획 화면의 요청. 생성과 저장을 한 번에 한다. */
     @Transactional
@@ -54,13 +67,24 @@ public class PlanDraftService {
      */
     public Generated generate(Long userId, PlanDraftRequest request) {
         PeriodPlanDraftGenerator.validatePeriod(request.getStartDate(), request.getEndDate());
-        if (!aiConsultationClient.isConfigured()) {
-            throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
-        }
         PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
                 request.getInstruction(), request.getTitle(), request.getCourseIds());
+
+        if (useBlockGeneratorV0()) {
+            log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}",
+                    userId, spec.start(), spec.end());
+            return blockGeneratorV0.generate(spec);
+        }
+        // 모델이 설정돼 있어야 하는 것은 AI 경로뿐이다. v0는 모델을 부르지 않는다.
+        if (!aiConsultationClient.isConfigured()) {
+            throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
+        }
         return generator.generate(spec);
+    }
+
+    private boolean useBlockGeneratorV0() {
+        return "V0".equalsIgnoreCase(generatorMode);
     }
 
     /**
@@ -94,9 +118,11 @@ public class PlanDraftService {
                 userId, conversationId, sourceMessageId, generated.items(), List.of(), spec.start(), List.of(),
                 maxItems);
 
+        // 판단은 제안에 얹어 둔다. 확정이 여기서 읽어 plan_versions로 옮기므로 클라이언트가
+        // 다시 보낼 필요가 없고, 사용자가 화면에서 본 판단과 저장되는 판단이 갈라지지 않는다.
         aiProposalMapper.updatePlanMetadata(
                 proposal.getProposalId(), userId, spec.start(), spec.end(), spec.intensity(),
-                generated.targetMinutes());
+                generated.targetMinutes(), strategyCodec.toJson(generated.strategy()));
 
         log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, "
                         + "baseline={}분, target={}분, 조정={}, 항목={}개, conversationId={}",

@@ -35,14 +35,20 @@ public interface AiProposalMapper {
             @Param("respondedAt") LocalDateTime respondedAt
     );
 
-    /** 계획 초안 생성 직후 기간·강도·목표 시간을 붙인다. 계획 경로 전용. */
+    /**
+     * 계획 초안 생성 직후 기간·강도·목표 시간과 판단을 붙인다. 계획 경로 전용.
+     *
+     * planStrategyJson은 판단층을 거치지 않은 초안이면 null이다 — 그때는 컬럼도 NULL로
+     * 남고 확정이 복사할 것도 없다.
+     */
     int updatePlanMetadata(
             @Param("proposalId") Long proposalId,
             @Param("userId") Long userId,
             @Param("planStartDate") LocalDate planStartDate,
             @Param("planEndDate") LocalDate planEndDate,
             @Param("planIntensity") PlanIntensity planIntensity,
-            @Param("planTargetMinutes") Integer planTargetMinutes
+            @Param("planTargetMinutes") Integer planTargetMinutes,
+            @Param("planStrategyJson") String planStrategyJson
     );
 
     /** 이 ASSISTANT 메시지가 만든 제안(있으면 하나뿐). 대화 이력 표시·idempotency 재생용. */

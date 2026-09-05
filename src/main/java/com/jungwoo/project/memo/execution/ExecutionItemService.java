@@ -802,7 +802,12 @@ public class ExecutionItemService {
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }
 
-    /** 남은 분량을 담은 새 조각. 원본과 같은 프로젝트/주제를 그대로 잇는다. */
+    /**
+     * 남은 분량을 담은 새 조각. 원본과 같은 프로젝트/주제를 그대로 잇는다.
+     *
+     * 마감도 잇는다 — 절반만 한 조각의 나머지는 여전히 같은 수업 전에 끝나야 한다.
+     * 여기서 비우면 "일부 수행"을 누른 순간 마감이 조용히 사라진다.
+     */
     private ExecutionItem createRemainderItem(ExecutionItem source, Long userId, int donePercent) {
         Integer sourceMinutes = source.getExpectedMinutes();
         Integer remainingMinutes = sourceMinutes != null
@@ -818,6 +823,7 @@ public class ExecutionItemService {
                 .description(source.getDescription())
                 .placementType(PlacementType.DATE_ONLY)
                 .scheduledDate(source.getScheduledDate())
+                .deadlineAt(source.getDeadlineAt())
                 .expectedMinutes(remainingMinutes)
                 .status(ExecutionStatus.PLANNED)
                 .priority(source.getPriority())

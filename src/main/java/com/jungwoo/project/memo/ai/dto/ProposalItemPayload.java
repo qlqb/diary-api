@@ -25,6 +25,10 @@ import java.time.LocalDateTime;
  * 선택적 힌트다. AI_INFERRED 값이며 사용자가 직접 확정한 사실이 아니므로 HARD 제약으로
  * 승격하지 않는다(마감일만 예외 — 사용자가 명시한 마감은 강한 제약으로 다룬다).
  *
+ * deadlineAt은 그 힌트와 다른 값이다. 근거가 있을 때만 채워지는 시각이고, 확정 시
+ * execution_items.deadline_at으로 복사돼 롤링 배치까지 살아남는다. deadlineDate는
+ * 확정에서 끊기므로 둘의 수명이 다르다 — 둘 다 있으면 deadlineAt이 이긴다.
+ *
  * operation부터 뒤쪽 필드는 기존 조각을 조정하는 제안(REDUCE/MOVE/DROP) 전용이다. 이 값들이
  * 없는(=이 기능 이전에 저장된) JSON은 Jackson이 전부 null로 읽고, operation이 null이면
  * CREATE로 취급하므로 기존 제안이 그대로 동작한다. before* 값은 화면에 "30분 -> 20분"처럼
@@ -54,7 +58,13 @@ public record ProposalItemPayload(
          * 이 항목이 속한 프로젝트. 기간 계획 경로에서만 값이 있고, 없으면(=이 필드가 생기기
          * 전에 저장된 JSON 포함) 적용 시 제안이 달린 대화의 프로젝트를 따른다.
          */
-        Long courseId
+        Long courseId,
+
+        /**
+         * 근거 있는 마감 시각. 확정 시 execution_items.deadline_at으로 복사된다.
+         * 이 필드가 생기기 전에 저장된 JSON은 Jackson이 null로 읽는다.
+         */
+        LocalDateTime deadlineAt
 ) {
 
     /** 새 실행 조각을 만드는(기존 흐름 그대로인) 후보. */
@@ -64,7 +74,7 @@ public record ProposalItemPayload(
             LocalDate earliestStartDate, LocalDate deadlineDate
     ) {
         return create(title, description, expectedMinutes, priority, targetDate,
-                placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, null);
+                placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, null, null);
     }
 
     /** 프로젝트가 지정된 새 후보(기간 계획 경로). */
@@ -73,9 +83,20 @@ public record ProposalItemPayload(
             PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
             LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId
     ) {
+        return create(title, description, expectedMinutes, priority, targetDate,
+                placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
+                courseId, null);
+    }
+
+    /** 마감 시각까지 가진 새 후보(판단층 경로). */
+    public static ProposalItemPayload create(
+            String title, String description, Integer expectedMinutes, String priority, LocalDate targetDate,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt
+    ) {
         return new ProposalItemPayload(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                ProposalOperation.CREATE, null, null, null, null, null, null, courseId);
+                ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt);
     }
 
     /** 기존 조각을 조정하는 후보. */
@@ -102,7 +123,7 @@ public record ProposalItemPayload(
         return new ProposalItemPayload(title, null, expectedMinutes, priority, targetDate,
                 null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
-                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null);
+                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null);
     }
 
     /**

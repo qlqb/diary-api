@@ -319,6 +319,7 @@ public class AiProposalService {
             LocalDateTime scheduledEndAt = null;
             LocalDate earliestStartDate = null;
             LocalDate deadlineDate = null;
+            LocalDateTime deadlineAt = null;
 
             if (item.fixedStartAt() != null || item.fixedEndAt() != null) {
                 // 사용자가 명확한 날짜+시각을 함께 말한 경우 — 이 후보를 그 시각에 고정한다.
@@ -363,6 +364,16 @@ public class AiProposalService {
                     earliestStartDate = null;
                     deadlineDate = null;
                 }
+                // deadlineAt은 힌트가 아니라 확정 이후까지 살아남는 값이라 조금 더 본다.
+                // 다만 여기서도 전체 PROPOSAL을 실패시키지 않는다 — 마감이 없는 조각은
+                // 배치가 자유로워질 뿐이고, 마감이 잘못 붙은 조각은 배치를 망가뜨린다.
+                deadlineAt = item.deadlineAt();
+                if (deadlineAt != null && earliestStartDate != null
+                        && deadlineAt.isBefore(earliestStartDate.atStartOfDay())) {
+                    log.warn("AI 제안: 항목 '{}'의 deadlineAt({})이 earliestStartDate({})보다 이르러 버림",
+                            item.title(), deadlineAt, earliestStartDate);
+                    deadlineAt = null;
+                }
             }
 
             /*
@@ -402,7 +413,7 @@ public class AiProposalService {
             result.add(ProposalItemPayload.create(
                     item.title(), item.description(), expectedMinutes, item.priority(), itemTargetDate,
                     placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                    item.courseId()));
+                    item.courseId(), deadlineAt));
         }
         return result;
     }
@@ -611,10 +622,14 @@ public class AiProposalService {
             AiProposalItemStatus newStatus = modified
                     ? AiProposalItemStatus.MODIFIED_APPLIED
                     : AiProposalItemStatus.APPLIED;
+            // 편집본에도 마감을 옮긴다. earliestStartDate/deadlineDate는 예전부터 여기서
+            // 비워졌는데, 그 둘은 제안 단계에서만 쓰이는 힌트라 편집 이후 쓰일 곳이 없다.
+            // deadlineAt은 다르다 — 확정이 이 값을 읽어 execution_items에 남기므로, 여기서
+            // 비우면 "제목만 고쳤는데 마감이 사라지는" 조용한 손실이 된다.
             String editedJson = modified
                     ? toJson(ProposalItemPayload.create(title, description, expectedMinutes, priority,
                             scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null,
-                            original.courseId()))
+                            original.courseId(), original.deadlineAt()))
                     : null;
 
             aiProposalItemMapper.updateAfterApply(
@@ -633,6 +648,8 @@ public class AiProposalService {
                     .courseId(original.courseId())
                     .scheduledStartAt(scheduledStartAt)
                     .scheduledEndAt(scheduledEndAt)
+                    .deadlineAt(original.deadlineAt())
+                    .deadlineDate(original.deadlineDate())
                     .modified(modified)
                     .createdItemId(createdItem.getExecutionItemId())
                     .build());
@@ -788,6 +805,7 @@ public class AiProposalService {
                 .courseId(payload.courseId())
                 .scheduledStartAt(payload.scheduledStartAt())
                 .scheduledEndAt(payload.scheduledEndAt())
+                .deadlineAt(payload.deadlineAt())
                 .modified(false)
                 .createdItemId(null)
                 .operation(payload.effectiveOperation())
@@ -842,6 +860,7 @@ public class AiProposalService {
                 .courseId(effective.courseId())
                 .scheduledStartAt(effective.scheduledStartAt())
                 .scheduledEndAt(effective.scheduledEndAt())
+                .deadlineAt(effective.deadlineAt())
                 .modified(item.getEditedPayload() != null)
                 .createdItemId(item.getCreatedItemId())
                 .operation(effective.effectiveOperation())

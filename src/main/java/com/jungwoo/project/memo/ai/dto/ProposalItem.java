@@ -18,6 +18,10 @@ import java.time.LocalTime;
  * 제한하는 선택적 힌트이고, fixedStartAt/fixedEndAt은 사용자가 명확한 날짜+시각을 말했을
  * 때만 채워지는 값으로 해당 후보를 그 시각에 그대로 고정한다(Timefold가 움직이지 않는다).
  * 서버는 이 값들도 최종적으로 검증·클램프하며 모델 출력을 그대로 신뢰하지 않는다.
+ *
+ * deadlineAt은 deadlineDate보다 강한 값이다 — 날짜가 아니라 시각이고, 근거("다음 수업
+ * 시작")가 있을 때만 채워지며 확정 이후 execution_items까지 살아남는다. 둘 다 있으면
+ * deadlineAt이 이긴다.
  */
 public record ProposalItem(
         String title,
@@ -35,6 +39,28 @@ public record ProposalItem(
          * 이 후보가 속한 프로젝트. 기간 계획처럼 여러 프로젝트를 한 제안에 담는 경로에서만
          * 값이 있다. null이면 기존처럼 제안이 달린 대화의 프로젝트를 따른다.
          */
-        Long courseId
+        Long courseId,
+
+        /**
+         * 근거 있는 마감 시각. 다음 수업 시작·시험·과제 마감·사용자 명시처럼 실제 사건이
+         * 있을 때만 채운다. deadlineDate와 달리 확정 이후에도 execution_items.deadline_at으로
+         * 남아 롤링 배치의 HARD 제약이 된다.
+         */
+        LocalDateTime deadlineAt
 ) {
+
+    /**
+     * deadlineAt 없이 만드는 기존 경로. 필드를 뒤에 붙이고 이 생성자를 남긴 것은 호출부
+     * 스무 곳을 건드리지 않기 위해서다 — deadlineAt은 계획 경로만 채우고 나머지 경로에는
+     * 채울 근거가 없다.
+     */
+    public ProposalItem(
+            String title, String description, Integer expectedMinutes, String priority,
+            PlacementType placementType, LocalTime startTime, LocalTime endTime,
+            LocalDate earliestStartDate, LocalDate deadlineDate,
+            LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId
+    ) {
+        this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null);
+    }
 }

@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -78,18 +79,36 @@ public class PlanConfirmService {
                         .build());
 
         List<Long> createdIds = new ArrayList<>();
+        Map<Long, LocalDateTime> deadlines = new HashMap<>();
         for (AiProposalItemResponse item : applied.getItems()) {
             // created_item_id를 그대로 쓴다 — 추측하지 않는다. 조정 항목은 이 컬럼에 "바뀐
             // 대상"을 남기지만 계획 경로의 제안에는 조정 항목이 없다.
-            if (item.getCreatedItemId() != null) {
-                createdIds.add(item.getCreatedItemId());
+            if (item.getCreatedItemId() == null) {
+                continue;
+            }
+            createdIds.add(item.getCreatedItemId());
+            LocalDateTime deadline = resolveDeadline(item);
+            if (deadline != null) {
+                deadlines.put(item.getCreatedItemId(), deadline);
             }
         }
         if (createdIds.isEmpty()) {
             throw new BadRequestException(ErrorCode.INVALID_PROPOSAL_ITEM_SELECTION);
         }
 
-        // 2. 미배치 항목에 계획 기간을 채우고 스냅샷을 조립한다.
+        // 2. 마감 시각을 옮긴다. 제안 payload에만 있던 값이 execution_items로 넘어오는
+        //    유일한 지점이고, 여기서부터 롤링 배치가 Timefold에 HARD 제약으로 전달한다.
+        //    조각을 만든 것도 이 트랜잭션이므로 대상 행이 없을 수 없다 — 0행이면 조각과
+        //    마감이 어긋난 채 커밋되는 것이므로 전체를 되돌린다.
+        for (Map.Entry<Long, LocalDateTime> entry : deadlines.entrySet()) {
+            int updated = executionItemMapper.assignDeadlineAt(userId, entry.getKey(), entry.getValue());
+            if (updated != 1) {
+                throw new IllegalStateException(
+                        "마감 시각 기록 행 수 불일치: executionItemId=" + entry.getKey() + ", 실제=" + updated);
+            }
+        }
+
+        // 3. 미배치 항목에 계획 기간을 채우고 스냅샷을 조립한다.
         List<ExecutionItem> created = executionItemMapper.findByIdsForReview(userId, createdIds);
         Map<Long, String> courseTitles = courseTitles(userId, created);
         List<PlanSnapshotItem> snapshotItems = new ArrayList<>();
@@ -105,7 +124,7 @@ public class PlanConfirmService {
             snapshotItems.add(snapshotCodec.toSnapshotItem(item, courseTitle, item.getDescription()));
         }
 
-        // 3. plan_versions INSERT. plan_key는 항상 새 UUID이고 version은 1이다 — 재계획은
+        // 4. plan_versions INSERT. plan_key는 항상 새 UUID이고 version은 1이다 — 재계획은
         //    1차 범위 밖이라 MAX(version)+1 경합이 발생하지 않는다.
         PlanVersion planVersion = PlanVersion.builder()
                 .userId(userId)
@@ -119,11 +138,15 @@ public class PlanConfirmService {
                 .intensity(proposal.getPlanIntensity())
                 .targetMinutes(proposal.getPlanTargetMinutes())
                 .itemsSnapshot(snapshotCodec.toJson(snapshotItems))
+                // 초안 시점의 판단을 그대로 옮긴다. 확정 요청은 전략을 받지 않는다 —
+                // 기간·강도와 같은 이유로, 클라이언트가 다시 보내면 사용자가 승인한 판단과
+                // 저장되는 판단이 달라질 수 있다.
+                .strategyJson(proposal.getPlanStrategyJson())
                 .sourceProposalId(proposalId)
                 .build();
         planVersionMapper.insert(planVersion);
 
-        // 4. 생성 출처를 한 번만 기록한다. plan_version_id IS NULL 조건이 그 강제다.
+        // 5. 생성 출처를 한 번만 기록한다. plan_version_id IS NULL 조건이 그 강제다.
         int assigned = executionItemMapper.assignPlanVersionId(
                 userId, createdIds, planVersion.getPlanVersionId());
         if (assigned != createdIds.size()) {
@@ -138,6 +161,24 @@ public class PlanConfirmService {
                 planVersion.getStartDate(), planVersion.getEndDate(), createdIds.size(),
                 planVersion.getIntensity(), planVersion.getTargetMinutes());
         return planVersion;
+    }
+
+    /**
+     * 이 항목이 execution_items에 남길 마감 시각.
+     *
+     * deadlineAt이 있으면 그대로 쓴다 — 근거("다음 수업 시작")가 있을 때만 채워지는 시각이다.
+     * 없고 deadlineDate만 있으면 다음날 00:00으로 바꾼다. "9/9까지"는 9/9 안에 끝내면
+     * 된다는 뜻이므로 경계는 9/10 00:00이고, 미리보기(SchedulePreviewService)가 쓰는 변환과
+     * 같은 규칙이다. 이 변환 덕분에 예전부터 있던 날짜 마감도 확정 이후까지 살아남는다.
+     */
+    private LocalDateTime resolveDeadline(AiProposalItemResponse item) {
+        if (item.getDeadlineAt() != null) {
+            return item.getDeadlineAt();
+        }
+        if (item.getDeadlineDate() != null) {
+            return item.getDeadlineDate().plusDays(1).atStartOfDay();
+        }
+        return null;
     }
 
     private Map<Long, String> courseTitles(Long userId, List<ExecutionItem> items) {

@@ -39,6 +39,17 @@ public class AiProposalItemResponse {
     private Long courseId;
     private LocalDateTime scheduledStartAt;
     private LocalDateTime scheduledEndAt;
+    /**
+     * 근거 있는 마감 시각. 확정(PlanConfirmService)이 이 값을 execution_items.deadline_at에
+     * 옮긴다 — 그래서 응답에 실린다. 초안 화면도 "수업 전"을 이 값으로 표시한다.
+     */
+    private LocalDateTime deadlineAt;
+    /**
+     * 날짜 단위 마감 힌트(모델이 낸 값). 확정은 deadlineAt이 없을 때만 이 값을 쓰고,
+     * 그때 다음날 00:00으로 바꿔 deadline_at에 넣는다 — 미리보기가 쓰던 변환과 같은
+     * 규칙이다("9/9까지"는 9/9 안에 끝내면 된다는 뜻이므로 경계는 9/10 00:00이다).
+     */
+    private LocalDate deadlineDate;
     private Boolean modified;
     private Long createdItemId;
 
