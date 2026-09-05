@@ -439,7 +439,7 @@ public class AiConversationService {
                             if (usage != null) {
                                 lastUsage.set(usage);
                             }
-                            String finishReason = extractFinishReason(chatResponse);
+                            String finishReason = AiChatResponseUtils.extractFinishReason(chatResponse);
                             if (finishReason != null) {
                                 lastFinishReason.set(finishReason);
                             }
@@ -1191,20 +1191,6 @@ public class AiConversationService {
             return null;
         }
         return chatResponse.getMetadata().getUsage();
-    }
-
-    /**
-     * OpenAI 스트리밍은 마지막 청크에만 finishReason을 채운다(그 전 청크는 null) — 내부
-     * 클래스를 캐스팅하지 않고 Spring AI의 공개 인터페이스(ChatGenerationMetadata)만으로
-     * "STOP"/"LENGTH"/"CONTENT_FILTER" 등을 그대로 받는다.
-     */
-    private String extractFinishReason(ChatResponse chatResponse) {
-        if (chatResponse == null || chatResponse.getResult() == null
-                || chatResponse.getResult().getMetadata() == null) {
-            return null;
-        }
-        String reason = chatResponse.getResult().getMetadata().getFinishReason();
-        return (reason != null && !reason.isBlank()) ? reason : null;
     }
 
     private Integer safeTokenCount(Usage usage, boolean prompt) {

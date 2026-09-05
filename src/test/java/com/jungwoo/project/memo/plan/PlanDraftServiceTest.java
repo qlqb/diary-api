@@ -32,6 +32,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -578,6 +580,34 @@ class PlanDraftServiceTest {
                 .startDate(START).endDate(END).instruction(instruction).build();
     }
 
+    /*
+     * 2026-09-05: 항목 상한을 15 -> 30으로 올린 뒤 9일짜리 계획 요청이 items[5]에서 잘렸다.
+     * 그때는 잘린 JSON이 그냥 Jackson 파싱 실패로만 보고돼, 실제 원인(토큰 예산)이 스택트레이스
+     * 뒤에 숨었다. 이제는 finishReason=LENGTH를 먼저 보고 "잘렸다"고 말한다.
+     */
+    @Test
+    void createDraft_whenModelOutputIsTruncatedByTokenLimit_failsWithoutPretendingItIsBadJson() {
+        String truncated = """
+                {
+                  "title": "이번 주 계획",
+                  "goalSummary": "3장까지 훑기",
+                  "targetMinutes": 600,
+                  "items": [
+                    {"title":"연결 리스트 구현","expectedMinutes":40,"priority":"MUST","courseId":6,
+                     "scheduledDate":null,"reason":"포인터를 이미 아니까"},
+                    {"title":"과제 2번","expectedMinutes":60,"priority":"SHOULD","courseId":6,
+                     "scheduledDate":"2026-08-26","reason":"마감이""";
+        when(aiConsultationClient.streamTurn(any(), any(), anyInt())).thenReturn(Flux.just(
+                truncatedChatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + truncated)));
+
+        assertThatThrownBy(() -> service.createDraft(USER_ID, request(null)))
+                .isInstanceOf(ServiceUnavailableException.class);
+
+        // 잘린 응답으로 반쪽짜리 계획을 저장하지 않는다.
+        verify(aiProposalService, never()).createFromItems(
+                anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
     private void givenAiResponse(Integer targetMinutes, String reason) {
         givenAiResponse(targetMinutes, reason, 6L);
     }
@@ -607,5 +637,11 @@ class PlanDraftServiceTest {
 
     private ChatResponse chatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
+    }
+
+    /** 출력이 상한에서 끊긴 응답. OpenAI는 마지막 청크의 finishReason에만 LENGTH를 채운다. */
+    private ChatResponse truncatedChatResponse(String text) {
+        return new ChatResponse(List.of(new Generation(new AssistantMessage(text),
+                ChatGenerationMetadata.builder().finishReason("LENGTH").build())));
     }
 }

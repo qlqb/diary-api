@@ -122,8 +122,15 @@ public class PeriodPlanDraftGenerator {
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
-    @Value("${ai.planning.max-completion-tokens:2000}")
-    private int maxCompletionTokens = 2000;
+    /**
+     * 계획 초안 한 번의 출력 상한. 이 값은 {@link #MAX_ITEMS}에 묶여 있다 — 항목 상한을
+     * 올리면 여기도 함께 올려야 한다. 항목 하나가 제목·description(행동 1~3개 + 완료 기준)·
+     * reason까지 한국어로 150~200토큰이라, 30개면 그것만 5,000토큰 안팎이다. 여기에 title/
+     * goalSummary와 gpt-5 계열의 reasoning 토큰까지 같은 상한을 나눠 쓴다.
+     * (2026-09-05: 상한이 2,000이던 동안 9일짜리 계획이 items[5]에서 잘려 실패했다.)
+     */
+    @Value("${ai.planning.max-completion-tokens:8000}")
+    private int maxCompletionTokens = 8000;
 
     @Value("${ai.request.timeout-seconds:90}")
     private int requestTimeoutSeconds = 90;
@@ -399,6 +406,7 @@ public class PeriodPlanDraftGenerator {
                 maxItems, cappedByItemLimit);
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
+        AtomicReference<String> lastFinishReason = new AtomicReference<>();
         try {
             aiConsultationClient.streamTurn(SYSTEM_PROMPT, userPrompt, maxCompletionTokens)
                     .timeout(Duration.ofSeconds(requestTimeoutSeconds))
@@ -407,6 +415,10 @@ public class PeriodPlanDraftGenerator {
                         Usage usage = AiChatResponseUtils.extractUsage(chatResponse);
                         if (usage != null) {
                             lastUsage.set(usage);
+                        }
+                        String finishReason = AiChatResponseUtils.extractFinishReason(chatResponse);
+                        if (finishReason != null) {
+                            lastFinishReason.set(finishReason);
                         }
                     })
                     .blockLast();
@@ -418,14 +430,28 @@ public class PeriodPlanDraftGenerator {
         recordUsage(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null);
 
         AiStreamParser.Result result = parser.finish();
+        /*
+         * 출력이 상한에서 잘렸으면 JSON도 반드시 중간에서 끊긴다. 이걸 먼저 잡지 않으면
+         * 아래 파싱 실패로만 보고돼 "모델이 이상한 JSON을 냈다"로 읽히고, 실제 원인인 토큰
+         * 예산이 스택트레이스 뒤에 숨는다(2026-09-05에 실제로 그렇게 한 번 헤맸다).
+         * gpt-5 계열은 reasoning 토큰도 이 상한을 함께 쓰므로 여유가 생각보다 적다.
+         */
+        String finishReason = lastFinishReason.get();
+        if (AiChatResponseUtils.isTruncatedByTokenLimit(finishReason)) {
+            log.warn("계획 초안 생성: 출력이 토큰 상한({})에서 잘림 — 항목 상한({})을 담기에 예산이 "
+                            + "부족하다. userId={}, days={}, maxItems={}, outputTokens={}",
+                    maxCompletionTokens, MAX_ITEMS, userId, days, maxItems,
+                    AiChatResponseUtils.safeTokenCount(lastUsage.get(), false));
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
         if (result.structuredJson() == null) {
-            log.warn("계획 초안 생성: 구조화 JSON이 없음. userId={}", userId);
+            log.warn("계획 초안 생성: 구조화 JSON이 없음. userId={}, finishReason={}", userId, finishReason);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
         try {
             return objectMapper.readValue(result.structuredJson(), PlanDraftAiResult.class);
         } catch (Exception e) {
-            log.warn("계획 초안 생성: 구조화 JSON 파싱 실패. userId={}", userId, e);
+            log.warn("계획 초안 생성: 구조화 JSON 파싱 실패. userId={}, finishReason={}", userId, finishReason, e);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
     }
