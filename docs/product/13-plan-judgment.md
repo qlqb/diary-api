@@ -135,7 +135,10 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
 ### v0 규칙
 
 1. 과목 순서: 다음 수업이 빠른 순 (컨텍스트가 이미 정렬해 준다)
-2. 취급: `user_mark KNOWN/DEFER → SKIP`, `NOT_STARTED → FULL`, 나머지 `SKIP`
+2. 취급: `user_mark KNOWN/DEFER → SKIP`, `LEARNED → SKIP`, 나머지(`NOT_STARTED`,
+   `IN_PROGRESS`) `FULL`. 과목 안에서는 `IN_PROGRESS`를 앞에 두고 그 뒤는 주차 순 그대로다 —
+   "LEARNED는 다시 시키지 않는다"의 짝이 "시작한 것은 이어간다"이고, 반쯤 열어 둔 항목이
+   여럿 쌓이는 것이 새 항목 하나를 늦게 시작하는 것보다 나쁘다
 3. 블록: **학습 항목 하나 = 블록 하나**, 길이는 설정값(`plan.v0.block-minutes`, 기본 45분).
    자료 분량을 모르므로 항목마다 다르게 줄 근거가 없고, 그 사실을 조각 설명에 적는다
 4. 마감: 그 과목의 다음 수업 시작 시각. 수업이 없으면 마감도 없다
@@ -152,12 +155,15 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
   전제가 조용히 깨지고 사용자는 그것을 배치 결과에서 알아차릴 방법이 없다
 - 일부 수행 후 남은 분량 조각도 마감을 잇는다
 
-### 커밋 1 검증 결과 (실데이터, 2026-09-07 ~ 09-13)
+### 알려진 한계: IN_PROGRESS에는 "어디까지"가 없다
 
-7과목 46개 항목을 판단해 30개 블록(상한)을 만들었고, 30개 전부 마감이
-`execution_items.deadline_at`과 스냅샷까지 도달했다. 롤링 배치는 11개를 마감 전에 넣고
-19개를 미배치로 남겼다 — 마감이 실제로 배치를 제약한다는 뜻이다. 센서활용프로그래밍(마감
-9/9 14:00)은 그 전에 남는 시간이 이미 자료구조·웹서버로 차서 통째로 미배치가 됐다.
+`topic_progress`는 상태만 갖고 위치를 갖지 않는다. 그래서 시작한 항목을 이어갈 때 조각
+생성이 그 자료를 **처음부터** 다시 anchor할 수 있다.
+
+**progress 모델에 위치를 추가하지 않는다.** "어디까지 봤는가"를 정확히 유지하려면 사용자가
+매번 그것을 입력해야 하고, 그 입력을 강제하는 순간 이 앱은 진도 관리 도구가 된다. 한계로
+적어 두고, 실제로 문제가 되면(같은 자료 앞부분을 반복해서 잡는 일이 눈에 띄면) 그때
+관찰층에서 물어보는 쪽을 먼저 시도한다.
 
 ## 6. 다음 커밋
 
@@ -198,7 +204,69 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
 - (O) "화요일 재귀 수업 전에 필요한 내용이고, 아직 학습 기록이 없어요"
 - (X) "기반이 부족합니다"
 
-## 8. 완료 기준
+## 8. 검증
+
+### 8.1 결정적 (CI, 모델 없음)
+
+| 대상 | 테스트 |
+|------|--------|
+| 주차 파싱(실데이터 변종 포함) | `TopicLocatorsTest` |
+| 요일별 가용시간 접기, 자정 넘김 분리 | `AvailabilityDaySummaryTest` |
+| 과목 순서·주차 창·맥락 정렬·현재 시각 | `PlanningContextBuilderTest` |
+| v0 취급 규칙, 마감, 블록 길이, 상한 | `PlanBlockGeneratorV0Test` |
+| 마감 체인(제안→확정→스냅샷→배치) | `PlanDeadlineChainIntegrationTest` (로컬 DB) |
+
+**기존 테스트가 덮는 것.** 아래 둘은 이번에 새로 짜지 않았다. 리팩토링으로 이 테스트들이
+사라지면 회귀가 조용히 빠지므로 이름을 적어 둔다.
+
+| 보장 | 덮는 테스트 |
+|------|------------|
+| 알바·수업 등 기존 고정 일정과 겹치지 않는다 | `PlanConfirmAndPlacementIntegrationTest.place_doesNotOverlapExistingTimeFixedItems` |
+| 같은 과목의 `orderIndex` 순서를 배치가 뒤집지 않는다 | `SchedulingConstraintProviderTest.preferOrderIndexSequence_*` (4건) |
+| 마감을 넘겨 끝나면 HARD 위반 | `SchedulingConstraintProviderTest.taskPastDeadline_*` (2건) |
+| 배치 길이 불변식 | `PlacementDuration` 스위트 |
+| 기간 초과 사유(anti-inflation guard) | `periodViolationReason` 테스트 — **건드리지 않는다** |
+
+### 8.2 v0 baseline과 판단층 비교 지표
+
+커밋 1의 v0를 실데이터에 돌린 결과가 기준선이다 (user 2, 7과목, 2026-09-07 ~ 09-13,
+가용 1,710분 / 예산 1,110분):
+
+```text
+후보 46  →  생성 30  →  배치 11  ·  미배치 19
+```
+
+30개 전부 마감이 `execution_items.deadline_at`과 스냅샷까지 도달했다. 미배치 19개가 이
+커밋의 증거다 — 마감을 넘겨 억지로 넣지 않았다는 뜻이고, 센서활용프로그래밍(마감 9/9 14:00)은
+그 전 남는 시간이 이미 자료구조·웹서버로 차서 통째로 미배치가 됐다.
+
+판단층(커밋 2)은 **같은 가용시간에서** 아래 셋이 v0보다 올라야 한다.
+
+| 지표 | 뜻 |
+|------|-----|
+| 선수 topic 배치 커버율 | 다음 수업을 이해하는 데 필요한 topic 중 마감 전에 실제로 배치된 비율 |
+| 근거 있는 SKIM/SKIP 수 | `evidence`가 붙은 압축·제외의 개수. 근거 없는 것은 세지 않는다 |
+| MUST 배치율 | MUST로 낸 조각 중 배치된 비율 |
+
+셋이 오르지 않으면 커밋 2는 "말을 그럴싸하게 하는 기능"이고 되돌린다. 이 기준이 없으면
+판단 결과를 보고 "괜찮아 보이네"로 넘어가게 된다.
+
+### 8.3 수동 eval (모델, 회귀 아님)
+
+같은 픽스처 + 지시 "1~2주차를 제대로 못 했어. 다음 주 수업을 알아들을 정도로 따라잡는 계획을
+짜줘."
+
+- 목표가 "전부 정독"이 아니라 "다음 수업 복귀"로 잡히는가
+- 자료구조가 rank 1인가 · Big-O가 ADT보다 앞서는가 (선수지식 선택)
+- `USER_CONFIRMED` "Python 기본 문법 익숙" 맥락을 주입하면 Python topic이 SKIM인가 (압축)
+- 조각에 READ 외 PRACTICE/RECALL이 있는가 (행동 다양화)
+- 전략-조각 모순 warn이 0인가
+
+**`LEARNED` 경로는 eval 항목에서 뺀다** — `topic_progress`가 0행이라 실사용에서는 보이지
+않는다. 픽스처(`PlanBlockGeneratorV0Test`)로만 검증한다. "Python 기본 문법 익숙" 맥락은
+eval 전에 `user_contexts`에 직접 넣고 끝나면 지운다.
+
+## 9. 완료 기준
 
 JSON 필드가 늘어난 것은 완료가 아니다. "1~2주차를 제대로 못 했어. 다음 주 수업을 알아들을
 정도로 따라잡는 계획을 짜줘"를 넣었을 때:

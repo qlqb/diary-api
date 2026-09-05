@@ -104,6 +104,34 @@ class PlanBlockGeneratorV0Test {
     }
 
     @Test
+    @DisplayName("이미 시작한 항목은 이어간다 — 빼면 반쯤 열어 둔 것이 계획에서 조용히 사라진다")
+    void inProgressTopicsAreContinued() {
+        Generated generated = generator.generate(spec(), context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(217L, "ADT와 성능분석", TopicProgressStatus.IN_PROGRESS, null))));
+
+        assertThat(generated.items()).hasSize(1);
+        assertThat(treatment(generated, 217L).treatment()).isEqualTo(Treatment.FULL);
+        assertThat(treatment(generated, 217L).reason()).isEqualTo("이어서 진행");
+    }
+
+    @Test
+    @DisplayName("과목 안에서 시작한 항목이 앞에 온다 — 나머지는 주차 순 그대로")
+    void inProgressTopicsComeFirstWithinACourse() {
+        Generated generated = generator.generate(spec(), context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(216L, "1주차 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(217L, "2주차 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(218L, "3주차 내용", TopicProgressStatus.IN_PROGRESS, null))));
+
+        assertThat(generated.items()).extracting(ProposalItem::title)
+                .containsExactly("자료구조 · 3주차 내용", "자료구조 · 1주차 내용", "자료구조 · 2주차 내용");
+        assertThat(generated.strategy().topics()).extracting(PlanStrategy.TopicTreatment::topicId)
+                .as("판단 순서도 같아야 한다 — rank가 곧 그 순서다")
+                .containsExactly(218L, 216L, 217L);
+    }
+
+    @Test
     @DisplayName("마감은 그 과목의 다음 수업 시작 시각이다")
     void deadlineIsTheNextClass() {
         Generated generated = generator.generate(spec(), context(

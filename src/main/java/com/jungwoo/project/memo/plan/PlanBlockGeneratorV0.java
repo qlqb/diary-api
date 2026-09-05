@@ -22,6 +22,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -98,7 +99,7 @@ public class PlanBlockGeneratorV0 {
                             ? "다음 수업이 가장 빠른 순서로 놓았어요"
                             : "수업 시각을 몰라 뒤에 두었어요"));
 
-            for (TopicContext topic : course.topics()) {
+            for (TopicContext topic : inProgressFirst(course.topics())) {
                 Treatment treatment = treatmentOf(topic);
                 treatments.add(new TopicTreatment(topic.topicId(), treatment, treatments.size() + 1,
                         reasonFor(topic, treatment), evidenceFor(topic, course)));
@@ -139,23 +140,44 @@ public class PlanBlockGeneratorV0 {
     }
 
     /**
+     * 과목 안에서 <b>이미 시작한 것</b>을 앞에 둔다. 그 뒤는 컨텍스트가 준 순서(주차 순)
+     * 그대로다 — List.sort가 안정 정렬이라 같은 그룹 안의 순서는 보존된다.
+     *
+     * <p>시작해 둔 것을 새로 시작하는 것보다 먼저 잇는 것은 "LEARNED는 다시 시키지 않는다"의
+     * 짝이다. 반쯤 열어 둔 것이 여럿 쌓이는 것이 새 항목 하나를 늦게 시작하는 것보다 나쁘다.
+     */
+    private List<TopicContext> inProgressFirst(List<TopicContext> topics) {
+        List<TopicContext> ordered = new ArrayList<>(topics);
+        ordered.sort(Comparator.comparingInt(t ->
+                t.progressStatus() == TopicProgressStatus.IN_PROGRESS ? 0 : 1));
+        return ordered;
+    }
+
+    /**
      * 사전식 규칙. 순서가 곧 우선순위다.
      *
      * <p>사용자가 말한 사실(user_mark)이 앱이 관찰한 사실(progress)보다 앞선다 — 앱을 쓰기
      * 전부터 알던 내용은 progress로 표현할 방법이 없기 때문이다.
+     *
+     * <p>SKIP은 <b>LEARNED</b>와 사용자 표식뿐이다. 시작한 것(IN_PROGRESS)은 빼지 않는다 —
+     * 빼면 반쯤 열어 둔 항목이 계획에서 조용히 사라지고, 사용자는 그것을 계획 화면에서
+     * 알아차릴 방법이 없다.
+     *
+     * <p>훑기(SKIM)는 내지 않는다. 그러려면 "얼마나 아는가"를 알아야 하는데 그 판단은
+     * 규칙이 아니라 판단층의 몫이다.
      */
     private Treatment treatmentOf(TopicContext topic) {
         if (topic.userMark() == TopicUserMark.KNOWN || topic.userMark() == TopicUserMark.DEFER) {
             return Treatment.SKIP;
         }
-        // v0는 아직 시작하지 않은 것만 다룬다. 훑기(SKIM)를 정하려면 "얼마나 아는가"를
-        // 알아야 하는데, 그 판단은 규칙이 아니라 판단층의 몫이다.
-        return topic.progressStatus() == TopicProgressStatus.NOT_STARTED ? Treatment.FULL : Treatment.SKIP;
+        return topic.progressStatus() == TopicProgressStatus.LEARNED ? Treatment.SKIP : Treatment.FULL;
     }
 
     private String reasonFor(TopicContext topic, Treatment treatment) {
         if (treatment != Treatment.SKIP) {
-            return "아직 시작하지 않은 내용이에요";
+            return topic.progressStatus() == TopicProgressStatus.IN_PROGRESS
+                    ? "이어서 진행"
+                    : "아직 시작하지 않은 내용이에요";
         }
         if (topic.userMark() == TopicUserMark.KNOWN) {
             return "이미 알고 있다고 알려주셨어요";
@@ -163,10 +185,7 @@ public class PlanBlockGeneratorV0 {
         if (topic.userMark() == TopicUserMark.DEFER) {
             return "이번에는 빼기로 하셨어요";
         }
-        if (topic.progressStatus() == TopicProgressStatus.LEARNED) {
-            return "한 번 마친 내용이에요";
-        }
-        return "이미 시작한 내용이라 v0에서는 새로 잡지 않아요";
+        return "한 번 마친 내용이에요";
     }
 
     private List<Evidence> evidenceFor(TopicContext topic, CourseContext course) {
