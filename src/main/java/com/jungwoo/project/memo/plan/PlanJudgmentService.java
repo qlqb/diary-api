@@ -14,6 +14,7 @@ import com.jungwoo.project.memo.learning.domain.TopicUserMark;
 import com.jungwoo.project.memo.plan.PlanningContext.ContextLine;
 import com.jungwoo.project.memo.plan.PlanningContext.CourseContext;
 import com.jungwoo.project.memo.plan.PlanningContext.TopicContext;
+import com.jungwoo.project.memo.plan.domain.AdjustedBy;
 import com.jungwoo.project.memo.plan.domain.AskReason;
 import com.jungwoo.project.memo.plan.domain.EvidenceType;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy;
@@ -179,6 +180,52 @@ public class PlanJudgmentService {
                 StrategySource.REUSED, source.getPlanVersionId(),
                 sourceStrategy.referencedContextIds(), sourceStrategy.courses(), sourceStrategy.topics(),
                 sourceStrategy.planningRules()));
+    }
+
+    /**
+     * 저장된 판단에 사용자의 표식을 덧입힌다. 모델을 부르지 않는다.
+     *
+     * <p>「이미 알아요」를 누른 뒤 조각만 다시 만들 때 쓴다. 판단을 다시 하면 목표와 과목
+     * 순서까지 흔들려, 사용자가 고친 것과 무관한 변화가 함께 와서 무엇 때문에 계획이
+     * 바뀌었는지 알 수 없게 된다. 그래서 판단은 그대로 두고 <b>표식이 가리키는 항목의 취급만</b>
+     * SKIP으로 내린다.
+     *
+     * <p>내리기만 한다. 표식을 지웠다고 해서 모델이 냈던 SKIP을 FULL로 되돌리지는 않는다 —
+     * 그 SKIP에는 다른 근거가 있었을 수 있고, 그것을 여기서 판단할 방법이 없다. 표식 해제
+     * 후의 재판단은 후속(「다시 포함」)이다.
+     *
+     * @return 바뀐 것이 없으면 받은 전략을 그대로 돌려준다
+     */
+    public PlanStrategy applyUserMarks(PlanStrategy strategy, PlanningContext context) {
+        if (strategy == null || strategy.topics().isEmpty()) {
+            return strategy;
+        }
+        Map<Long, TopicContext> topicsById = topicsById(context);
+        List<TopicTreatment> adjusted = new ArrayList<>();
+        int changed = 0;
+        for (TopicTreatment topic : strategy.topics()) {
+            TopicContext fact = topicsById.get(topic.topicId());
+            TopicUserMark mark = fact == null ? null : fact.userMark();
+            if (mark == null || topic.treatment() == Treatment.SKIP) {
+                adjusted.add(topic);
+                continue;
+            }
+            List<Evidence> evidence = new ArrayList<>(topic.evidence());
+            evidence.removeIf(one -> one.type() == EvidenceType.USER_MARK);
+            evidence.add(new Evidence(EvidenceType.USER_MARK, mark.name(), topic.topicId()));
+            adjusted.add(topic.withTreatment(Treatment.SKIP,
+                    mark == TopicUserMark.KNOWN ? "이미 알고 있다고 표시했어요" : "이번에는 빼기로 표시했어요",
+                    evidence, AdjustedBy.SERVER));
+            changed++;
+        }
+        if (changed == 0) {
+            return strategy;
+        }
+        log.info("사용자 표식으로 취급 조정: userId={}, {}개 항목을 이번 계획에서 뺀다",
+                context.userId(), changed);
+        return new PlanStrategy(strategy.goal(), strategy.strategySummary(), strategy.strategySource(),
+                strategy.reusedFromVersionId(), strategy.referencedContextIds(), strategy.courses(),
+                adjusted, strategy.planningRules());
     }
 
     // ===== 되묻기 =====
@@ -399,7 +446,8 @@ public class PlanJudgmentService {
                     reason = (blankToNull(reason) == null ? "" : reason + " ") + "(서버 조정)";
                 }
                 int rank = raw.rank() == null || raw.rank() < 1 ? topics.size() + 1 : raw.rank();
-                topics.add(new TopicTreatment(raw.topicId(), finalTreatment, rank, reason, evidence));
+                topics.add(new TopicTreatment(raw.topicId(), finalTreatment, rank, reason, evidence,
+                        topic.title(), finalTreatment != claimed ? AdjustedBy.SERVER : null));
             }
         }
 
@@ -416,7 +464,7 @@ public class PlanJudgmentService {
                 Treatment cap = cap(topic, List.of(), contextStatuses);
                 topics.add(new TopicTreatment(topic.topicId(), weaker(Treatment.FULL, cap),
                         topics.size() + 1, "판단에 언급되지 않아 그대로 두었어요",
-                        verifiedEvidence(List.of(), topic, contextStatuses)));
+                        verifiedEvidence(List.of(), topic, contextStatuses), topic.title(), null));
                 filled++;
             }
         }

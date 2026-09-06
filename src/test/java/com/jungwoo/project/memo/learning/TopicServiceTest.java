@@ -8,6 +8,9 @@ import com.jungwoo.project.memo.learning.domain.TopicLearningEvent;
 import com.jungwoo.project.memo.learning.domain.TopicProgress;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.domain.TopicSourceType;
+import com.jungwoo.project.memo.learning.domain.TopicUserMark;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -19,6 +22,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -135,5 +139,42 @@ class TopicServiceTest {
         verify(topicLearningEventMapper).insert(eventCaptor.capture());
         assertThat(eventCaptor.getValue().getEventType()).isEqualTo(LearningEventType.EXECUTION_COMPLETED);
         assertThat(eventCaptor.getValue().getToStatus()).isEqualTo(TopicProgressStatus.LEARNED);
+    }
+
+    // ===== 익숙함 표식 =====
+
+    @Test
+    void updateUserMark_savesTheMark_andLeavesProgressAlone() {
+        when(courseTopicMapper.findByIdAndUserId(TOPIC_ID, USER_ID)).thenReturn(
+                CourseTopic.builder().topicId(TOPIC_ID).userId(USER_ID).courseId(COURSE_ID)
+                        .title("ADT").orderIndex(0).userMark(TopicUserMark.KNOWN).build());
+
+        TopicResponse response = service.updateUserMark(USER_ID, TOPIC_ID, TopicUserMark.KNOWN);
+
+        verify(courseTopicMapper).updateUserMark(TOPIC_ID, USER_ID, TopicUserMark.KNOWN);
+        assertThat(response.getUserMark()).isEqualTo(TopicUserMark.KNOWN);
+        // 진행 상태는 다른 축이다. "이미 안다"가 "이 앱에서 학습했다"가 되면 안 된다.
+        verify(topicProgressMapper, never()).updateProgress(any(), any(), any(), any(), any(), anyBoolean());
+        // 학습 이벤트도 남기지 않는다 — 표식은 상태 전이가 아니라 사용자의 진술이다.
+        verify(topicLearningEventMapper, never()).insert(any());
+    }
+
+    @Test
+    void updateUserMark_null_clearsTheMark() {
+        when(courseTopicMapper.findByIdAndUserId(TOPIC_ID, USER_ID)).thenReturn(
+                CourseTopic.builder().topicId(TOPIC_ID).userId(USER_ID).courseId(COURSE_ID)
+                        .title("ADT").orderIndex(0).userMark(null).build());
+
+        assertThat(service.updateUserMark(USER_ID, TOPIC_ID, null).getUserMark()).isNull();
+        verify(courseTopicMapper).updateUserMark(TOPIC_ID, USER_ID, null);
+    }
+
+    @Test
+    void updateUserMark_rejectsSomeoneElsesTopic() {
+        when(courseTopicMapper.findByIdAndUserId(TOPIC_ID, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.updateUserMark(USER_ID, TOPIC_ID, TopicUserMark.KNOWN))
+                .isInstanceOf(NotFoundException.class);
+        verify(courseTopicMapper, never()).updateUserMark(any(), any(), any());
     }
 }

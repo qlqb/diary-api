@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.plan.PlanningContext.CourseContext;
 import com.jungwoo.project.memo.plan.PlanningContext.TopicContext;
 import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 import com.jungwoo.project.memo.plan.domain.EstimateConfidence;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy;
@@ -139,7 +140,31 @@ class PlanItemServiceTest {
 
         assertThat(draft.doneCriteria())
                 .as("조각을 버리면 그 학습 항목이 계획에서 통째로 사라진다")
-                .isEqualTo("ADT 관련 문제를 스스로 풀어 답을 확인함");
+                .isEqualTo("자료를 덮고 ADT의 핵심을 말로 설명한다");
+        assertThat(draft.doneCriteriaSource())
+                .as("서버가 채웠다는 사실을 숨기지 않는다 — 화면이 `기본` 라벨을 붙인다")
+                .isEqualTo(DoneCriteriaSource.DEFAULT);
+    }
+
+    @Test
+    @DisplayName("기본 완료 기준은 자료에 무엇이 있는지 전제하지 않는다")
+    void defaultDoneCriteriaAssumesNothingAboutTheMaterial() {
+        givenAi(itemJson(217L, "자료구조 · ADT", "LAB", "공부하기", 45));
+
+        assertThat(service.generate(strategy(treatment(217L, Treatment.FULL)),
+                context(topic(217L, "ADT")), 30).get(0).doneCriteria())
+                .as("문제가 없는 자료일 때 '문제를 푼다'는 없는 것을 찾게 만든다")
+                .isEqualTo("자료를 덮고 ADT의 핵심을 말로 설명한다");
+    }
+
+    @Test
+    @DisplayName("모델이 제대로 쓴 완료 기준은 MODEL로 남는다")
+    void modelWrittenDoneCriteriaKeepsItsSource() {
+        givenAi(itemJson(217L, "자료구조 · ADT", "READ", "표를 보고 복잡도를 말할 수 있음", 45));
+
+        assertThat(service.generate(strategy(treatment(217L, Treatment.FULL)),
+                context(topic(217L, "ADT")), 30).get(0).doneCriteriaSource())
+                .isEqualTo(DoneCriteriaSource.MODEL);
     }
 
     @Test
@@ -149,7 +174,7 @@ class PlanItemServiceTest {
 
         assertThat(service.generate(strategy(treatment(217L, Treatment.FULL)),
                 context(topic(217L, "ADT")), 30).get(0).doneCriteria())
-                .isEqualTo("ADT의 내용을 자료 없이 한 문단으로 설명할 수 있음");
+                .isEqualTo("자료를 덮고 ADT의 핵심을 말로 설명한다");
     }
 
     @Test

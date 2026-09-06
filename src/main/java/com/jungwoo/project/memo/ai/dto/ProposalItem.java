@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.ai.dto;
 
 import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -54,7 +56,19 @@ public record ProposalItem(
          * <p>이 값이 있어야 나중에 「이미 알아요」와 진행 상태가 이 조각을 되짚을 수 있다.
          * 없으면 조각과 학습 항목의 연결이 제목 문자열뿐이고, 제목은 사용자가 고칠 수 있다.
          */
-        Long topicId
+        Long topicId,
+
+        /**
+         * 계획 경로가 채우는 학습 정보. 다른 제안 경로에는 채울 근거가 없어 전부 null이다.
+         *
+         * <p>doneCriteria와 sourceLocator는 description에도 합쳐져 저장되지만(스냅샷 보존),
+         * 화면이 그 문자열을 다시 쪼개게 두지 않으려고 따로 싣는다 — 표시 형식이 바뀔 때마다
+         * 파싱이 깨지는 계약은 계약이 아니다.
+         */
+        ActionType actionType,
+        String doneCriteria,
+        DoneCriteriaSource doneCriteriaSource,
+        String sourceLocator
 ) {
 
     /**
@@ -69,7 +83,8 @@ public record ProposalItem(
             LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId
     ) {
         this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
-                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null, null);
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null, null,
+                null, null, null, null);
     }
 
     /** 마감까지만 아는 경로(v0 블록 생성기). */
@@ -80,6 +95,7 @@ public record ProposalItem(
             LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId, LocalDateTime deadlineAt
     ) {
         this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
-                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, deadlineAt, null);
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, deadlineAt, null,
+                null, null, null, null);
     }
 }

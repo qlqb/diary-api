@@ -129,7 +129,7 @@ public class PlanBlockGeneratorV0 {
                 Treatment treatment = decided != null ? decided.treatment() : treatmentOf(topic);
                 if (decided == null) {
                     treatments.add(new TopicTreatment(topic.topicId(), treatment, treatments.size() + 1,
-                            reasonFor(topic, treatment), evidenceFor(topic, course)));
+                            reasonFor(topic, treatment), evidenceFor(topic, course), topic.title(), null));
                 }
                 if (treatment == Treatment.SKIP) {
                     continue;

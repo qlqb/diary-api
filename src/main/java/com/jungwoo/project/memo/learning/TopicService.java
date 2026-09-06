@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.learning.domain.TopicLearningEvent;
 import com.jungwoo.project.memo.learning.domain.TopicProgress;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.domain.TopicSourceType;
+import com.jungwoo.project.memo.learning.domain.TopicUserMark;
 import com.jungwoo.project.memo.learning.domain.TopicStatus;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
@@ -178,6 +179,29 @@ public class TopicService {
                 .build());
         log.info("topic 진행 상태 변경: userId={}, topicId={}, {} -> {}", userId, topicId, before.getStatus(), newStatus);
         return topicProgressMapper.findByUserIdAndTopicId(userId, topicId);
+    }
+
+    /**
+     * 사용자가 남긴 익숙함 표식을 저장한다. 「이미 알아요」/「나중에」와 그 해제.
+     *
+     * <p>진행 상태(topic_progress)와 다른 축이다. progress는 "이 앱에서 학습했는가"이고
+     * 여기는 "이미 알고 있는가"다 — 앱을 쓰기 전부터 알던 내용은 progress로 표현할 방법이
+     * 없다. 그래서 둘을 한 컬럼에 합치지 않았고, 여기서도 progress를 건드리지 않는다.
+     *
+     * <p>학습 이벤트를 남기지 않는다. TopicLearningEvent는 진행 상태의 전이를 기록하는
+     * 자리이고, 익숙함 표식은 전이가 아니라 사용자의 진술이다. 섞으면 회고에서 "언제
+     * 학습했는가"를 세는 값이 오염된다.
+     *
+     * @param userMark null이면 표식을 지운다("모른다"로 되돌린다)
+     */
+    @Transactional
+    public TopicResponse updateUserMark(Long userId, Long topicId, TopicUserMark userMark) {
+        getOwnedTopic(userId, topicId);
+        courseTopicMapper.updateUserMark(topicId, userId, userMark);
+        CourseTopic updated = courseTopicMapper.findByIdAndUserId(topicId, userId);
+        log.info("topic 익숙함 표식: userId={}, topicId={}, mark={}", userId, topicId, userMark);
+        return TopicResponse.of(updated, topicProgressMapper.findByUserIdAndTopicId(userId, topicId),
+                List.of(), null);
     }
 
     /**

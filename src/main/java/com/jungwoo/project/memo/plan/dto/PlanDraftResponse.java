@@ -80,6 +80,15 @@ public class PlanDraftResponse {
     private AiProposalResponse proposal;
 
     /**
+     * 이 초안을 만든 판단. 판단층을 거치지 않은 경로(AI·V0)는 null이다.
+     *
+     * <p>화면이 "이번 계획은 이렇게 봤어요"를 그리고, 조각의 취급을 topicId로 이어 붙인다.
+     * 취급을 조각에 복사하지 않는 이유는 원본이 하나여야 하기 때문이다 — 두 곳에 두면
+     * 조각 편집이 판단과 어긋나도 아무도 모른다.
+     */
+    private PlanStrategyResponse strategy;
+
+    /**
      * 계획을 만들기 전에 물어볼 것이 있을 때만 값이 있다. 이때 proposal은 null이다.
      *
      * <p>화면은 선택지를 버튼으로 그리고, 고른 답을 지시문에 이어 붙여 다시 요청한다. 기존

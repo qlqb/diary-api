@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.plan.PlanningContext.CourseContext;
 import com.jungwoo.project.memo.plan.PlanningContext.TopicContext;
 import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 import com.jungwoo.project.memo.plan.domain.EstimateConfidence;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy.CourseStrategy;
@@ -200,7 +201,8 @@ public class PlanItemService {
             }
 
             String doneCriteria = usableDoneCriteria(raw.doneCriteria(), target, actionType);
-            if (!doneCriteria.equals(blankToNull(raw.doneCriteria()))) {
+            boolean filledIn = !doneCriteria.equals(blankToNull(raw.doneCriteria()));
+            if (filledIn) {
                 repaired++;
             }
 
@@ -210,6 +212,7 @@ public class PlanItemService {
                     title(raw.title(), target),
                     blankToNull(raw.description()),
                     doneCriteria,
+                    filledIn ? DoneCriteriaSource.DEFAULT : DoneCriteriaSource.MODEL,
                     actionType,
                     minutes(raw.expectedMinutes(), target.treatment()),
                     priority(raw.priority()),
@@ -227,6 +230,13 @@ public class PlanItemService {
             log.info("조각 정규화: 만든 조각={}개, 버린 것={}개, 고쳐 쓴 것={}개",
                     drafts.size(), dropped, repaired);
         }
+        long defaulted = drafts.stream()
+                .filter(d -> d.doneCriteriaSource() == DoneCriteriaSource.DEFAULT).count();
+        if (defaulted > 0) {
+            // 기본 문장은 항목 제목에서 기계적으로 뽑은 것이라 모델 문장보다 덜 구체적이다.
+            // 잦으면 프롬프트를 손봐야 한다는 신호라 개수를 남긴다.
+            log.warn("완료 기준을 서버가 채운 조각: {}/{}", defaulted, drafts.size());
+        }
         return drafts;
     }
 
@@ -241,15 +251,17 @@ public class PlanItemService {
         if (value != null && !isVague(value)) {
             return value;
         }
+        /*
+         * ★ 자료에 무엇이 들어 있는지 전제하지 않는다. "관련 문제를 풀어 본다"고 써 놓으면
+         * 문제가 없는 자료일 때 사용자는 없는 것을 찾게 된다. 어떤 자료에도 성립하는 것은
+         * "덮고 말로 설명한다"뿐이라 그것을 기본으로 둔다 — 밋밋하지만 틀리지는 않는다.
+         * 구체적인 완료 기준은 모델의 몫이고, 이 문장이 자주 나오면 프롬프트를 손봐야 한다.
+         */
         String what = target.topic().title();
-        return switch (actionType) {
-            case READ -> target.treatment() == Treatment.SKIM
-                    ? what + "에서 무엇을 다루는지와 이미 아는 부분을 말할 수 있음"
-                    : what + "의 내용을 자료 없이 한 문단으로 설명할 수 있음";
-            case PRACTICE -> what + " 관련 문제를 스스로 풀어 답을 확인함";
-            case RECALL -> what + "의 핵심을 자료를 덮고 다시 적어 봄";
-            case LAB -> what + "을 실제로 동작시켜 결과를 확인함";
-        };
+        if (target.treatment() == Treatment.SKIM) {
+            return what + "에서 무엇을 다루는지와 이미 아는 부분을 확인한다";
+        }
+        return "자료를 덮고 " + what + "의 핵심을 말로 설명한다";
     }
 
     private boolean isVague(String value) {

@@ -30,6 +30,17 @@
         )
     </insert>
 
+    <!--
+      사용자가 남긴 익숙함 표식. 소유자 조건이 유일한 방어선이라 여기에만 둔다.
+      status 조건을 걸지 않는다 — 보관된(ARCHIVED) 항목에 표식을 남기는 것이 틀린 일은 아니다.
+    -->
+    <update id="updateUserMark">
+        UPDATE course_topics
+           SET user_mark = #{userMark}
+         WHERE topic_id = #{topicId}
+           AND user_id  = #{userId}
+    </update>
+
     <select id="findByIdAndUserId" resultMap="courseTopicResultMap">
         SELECT * FROM course_topics WHERE topic_id = #{topicId} AND user_id = #{userId}
     </select>

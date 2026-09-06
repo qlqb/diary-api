@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.plan.dto;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 import com.jungwoo.project.memo.plan.domain.EstimateConfidence;
 
 import java.time.LocalDateTime;
@@ -27,6 +28,8 @@ public record PlanItemDraft(
         String title,
         String description,
         String doneCriteria,
+        /** 그 완료 기준을 누가 썼는가. 서버가 채웠으면 DEFAULT — 화면이 `기본` 라벨을 붙인다. */
+        DoneCriteriaSource doneCriteriaSource,
         ActionType actionType,
         Integer expectedMinutes,
         String priority,
@@ -77,6 +80,7 @@ public record PlanItemDraft(
                 null, null,
                 null, null,
                 null, null,
-                courseId, deadlineAt, topicId);
+                courseId, deadlineAt, topicId,
+                actionType, doneCriteria, doneCriteriaSource, sourceLocator);
     }
 }

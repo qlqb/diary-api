@@ -17,8 +17,13 @@ import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.never;
+import com.jungwoo.project.memo.ai.domain.AiProposal;
+import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
+import com.jungwoo.project.memo.plan.domain.PlanStrategy;
+import com.jungwoo.project.memo.plan.domain.StrategySource;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import org.junit.jupiter.api.BeforeEach;
@@ -659,5 +664,54 @@ class PlanDraftServiceTest {
     private ChatResponse truncatedChatResponse(String text) {
         return new ChatResponse(List.of(new Generation(new AssistantMessage(text),
                 ChatGenerationMetadata.builder().finishReason("LENGTH").build())));
+    }
+
+    // ===== 조각만 재생성 =====
+
+    @Test
+    void regenerateItems_doesNotRunTheJudgmentAgain() {
+        AiProposal proposal = new AiProposal();
+        proposal.setProposalId(77L);
+        proposal.setStatus(AiProposalStatus.PROPOSED);
+        proposal.setPlanStartDate(START);
+        proposal.setPlanEndDate(END);
+        proposal.setPlanIntensity(PlanIntensity.NORMAL);
+        proposal.setPlanStrategyJson(new PlanStrategyCodec().toJson(
+                new PlanStrategy("목표", "요약", StrategySource.NEW, null, List.of(), List.of(),
+                        List.of(), List.of())));
+        when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(proposal);
+        when(planningContextBuilder.build(any())).thenReturn(emptyContext());
+        when(planJudgmentService.applyUserMarks(any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(planItemService.generate(any(), any(), anyInt())).thenReturn(List.of());
+
+        service.regenerateItems(USER_ID, 77L);
+
+        // 사용자가 가정 하나를 고쳤을 뿐인데 목표와 과목 순서까지 흔들리면, 무엇 때문에
+        // 계획이 바뀌었는지 알 수 없게 된다.
+        verify(planJudgmentService, never()).judge(any());
+        verify(planJudgmentService, never()).judge(any(), anyBoolean());
+        verify(planJudgmentService).applyUserMarks(any(), any());
+        verify(planItemService).generate(any(), any(), anyInt());
+    }
+
+    @Test
+    void regenerateItems_rejectsADraftThatHasNoJudgment() {
+        AiProposal proposal = new AiProposal();
+        proposal.setProposalId(77L);
+        proposal.setStatus(AiProposalStatus.PROPOSED);
+        proposal.setPlanStartDate(START);
+        proposal.setPlanEndDate(END);
+        when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(proposal);
+
+        // 다시 만들 근거가 없다. 새 초안을 만들어야 한다.
+        assertThatThrownBy(() -> service.regenerateItems(USER_ID, 77L))
+                .isInstanceOf(BadRequestException.class);
+    }
+
+    private PlanningContext emptyContext() {
+        return new PlanningContext(USER_ID, START.atStartOfDay(), START, END, PlanIntensity.NORMAL,
+                List.of(), List.of(), new AvailabilityEstimateResult(List.of(), List.of()),
+                List.of(), null, null);
     }
 }

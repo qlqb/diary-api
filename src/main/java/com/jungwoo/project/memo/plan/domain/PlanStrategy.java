@@ -62,15 +62,36 @@ public record PlanStrategy(
     ) {
     }
 
-    /** 학습 항목 하나의 취급과 그 근거. */
+    /**
+     * 학습 항목 하나의 취급과 그 근거.
+     *
+     * @param topicTitle 그때 그 항목의 이름. 표시용 복사본이다 — 항목 이름이 나중에 바뀌어도
+     *                   이 판단은 그때 이름을 유지한다(PlanSnapshotItem.courseTitle과 같은 이유).
+     *                   화면이 제외 사유를 보여줄 때 이 값을 쓴다
+     * @param adjustedBy 모델이 낸 취급을 서버가 되돌렸으면 SERVER. 화면이 "당신이 표시해서
+     *                   이렇게 됐다"와 "모델이 그렇게 봤다"를 구분해 말하는 데 쓴다
+     */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record TopicTreatment(
             Long topicId,
             Treatment treatment,
             int rank,
             String reason,
-            List<Evidence> evidence
+            List<Evidence> evidence,
+            String topicTitle,
+            AdjustedBy adjustedBy
     ) {
+
+        /** 이름·조정 주체 없이 만드는 경로. 이 필드가 생기기 전 코드와 테스트가 쓴다. */
+        public TopicTreatment(Long topicId, Treatment treatment, int rank, String reason,
+                              List<Evidence> evidence) {
+            this(topicId, treatment, rank, reason, evidence, null, null);
+        }
+
+        public TopicTreatment withTreatment(Treatment newTreatment, String newReason,
+                                            List<Evidence> newEvidence, AdjustedBy by) {
+            return new TopicTreatment(topicId, newTreatment, rank, newReason, newEvidence, topicTitle, by);
+        }
     }
 
     /**

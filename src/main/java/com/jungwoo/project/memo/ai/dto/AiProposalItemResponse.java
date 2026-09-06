@@ -3,6 +3,8 @@ package com.jungwoo.project.memo.ai.dto;
 import com.jungwoo.project.memo.ai.domain.AiProposalItemStatus;
 import com.jungwoo.project.memo.ai.domain.ProposalOperation;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -50,6 +52,19 @@ public class AiProposalItemResponse {
      * 규칙이다("9/9까지"는 9/9 안에 끝내면 된다는 뜻이므로 경계는 9/10 00:00이다).
      */
     private LocalDate deadlineDate;
+    /**
+     * 계획 경로가 채우는 학습 정보. 다른 제안 경로에서는 전부 null이다.
+     *
+     * <p>doneCriteria와 sourceLocator는 description에도 합쳐져 있지만 화면이 그 문자열을
+     * 다시 쪼개게 두지 않으려고 따로 싣는다. topicId는 화면이 이 조각을
+     * strategy.topics[]의 취급과 이어 붙이는 열쇠다.
+     */
+    private Long topicId;
+    private ActionType actionType;
+    private String doneCriteria;
+    private DoneCriteriaSource doneCriteriaSource;
+    private String sourceLocator;
+
     private Boolean modified;
     private Long createdItemId;
 

@@ -635,7 +635,9 @@ public class AiProposalService {
             String editedJson = modified
                     ? toJson(ProposalItemPayload.create(title, description, expectedMinutes, priority,
                             scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null,
-                            original.courseId(), original.deadlineAt(), original.topicId()))
+                            original.courseId(), original.deadlineAt(), original.topicId(),
+                            original.actionType(), original.doneCriteria(),
+                            original.doneCriteriaSource(), original.sourceLocator()))
                     : null;
 
             aiProposalItemMapper.updateAfterApply(
@@ -656,6 +658,11 @@ public class AiProposalService {
                     .scheduledEndAt(scheduledEndAt)
                     .deadlineAt(original.deadlineAt())
                     .deadlineDate(original.deadlineDate())
+                    .topicId(original.topicId())
+                    .actionType(original.actionType())
+                    .doneCriteria(original.doneCriteria())
+                    .doneCriteriaSource(original.doneCriteriaSource())
+                    .sourceLocator(original.sourceLocator())
                     .modified(modified)
                     .createdItemId(createdItem.getExecutionItemId())
                     .build());
@@ -812,6 +819,11 @@ public class AiProposalService {
                 .scheduledStartAt(payload.scheduledStartAt())
                 .scheduledEndAt(payload.scheduledEndAt())
                 .deadlineAt(payload.deadlineAt())
+                .topicId(payload.topicId())
+                .actionType(payload.actionType())
+                .doneCriteria(payload.doneCriteria())
+                .doneCriteriaSource(payload.doneCriteriaSource())
+                .sourceLocator(payload.sourceLocator())
                 .modified(false)
                 .createdItemId(null)
                 .operation(payload.effectiveOperation())
@@ -867,6 +879,11 @@ public class AiProposalService {
                 .scheduledStartAt(effective.scheduledStartAt())
                 .scheduledEndAt(effective.scheduledEndAt())
                 .deadlineAt(effective.deadlineAt())
+                .topicId(effective.topicId())
+                .actionType(effective.actionType())
+                .doneCriteria(effective.doneCriteria())
+                .doneCriteriaSource(effective.doneCriteriaSource())
+                .sourceLocator(effective.sourceLocator())
                 .modified(item.getEditedPayload() != null)
                 .createdItemId(item.getCreatedItemId())
                 .operation(effective.effectiveOperation())

@@ -21,6 +21,7 @@ import com.jungwoo.project.memo.plan.domain.PlanStrategy;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import com.jungwoo.project.memo.plan.dto.PlanItemDraft;
+import com.jungwoo.project.memo.plan.dto.PlanStrategyResponse;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -206,7 +207,9 @@ public class PlanDraftService {
                 proposal.getPlanIntensity(), null, null, List.of());
         // 컨텍스트는 다시 모은다 — 그 사이 「이미 알아요」가 눌렸다면 그것이 반영돼야 한다.
         PlanningContext context = planningContextBuilder.build(spec);
-        Generated generated = withItems(spec, context, strategy);
+        // 판단은 다시 하지 않고, 표식이 가리키는 항목의 취급만 서버가 내린다.
+        Generated generated = withItems(spec, context,
+                planJudgmentService.applyUserMarks(strategy, context));
 
         log.info("조각만 재생성: userId={}, 원본 proposalId={}", userId, proposalId);
         return persist(userId, generated, null, null, proposalId);
@@ -299,6 +302,7 @@ public class PlanDraftService {
                 .suggestedTitle(generated.suggestedTitle())
                 .goalSummary(generated.goalSummary())
                 .proposal(proposal)
+                .strategy(PlanStrategyResponse.from(generated.strategy()))
                 .build();
     }
 

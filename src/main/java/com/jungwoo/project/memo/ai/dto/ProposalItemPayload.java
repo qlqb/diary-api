@@ -4,6 +4,8 @@ import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.jungwoo.project.memo.ai.domain.ProposalOperation;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.plan.domain.ActionType;
+import com.jungwoo.project.memo.plan.domain.DoneCriteriaSource;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -67,7 +69,19 @@ public record ProposalItemPayload(
         LocalDateTime deadlineAt,
 
         /** 이 항목이 다루는 학습 항목. 확정 시 execution_items.topic_id로 남는다. */
-        Long topicId
+        Long topicId,
+
+        /**
+         * 계획 경로가 채우는 학습 정보. 다른 제안 경로에는 채울 근거가 없어 전부 null이다.
+         *
+         * <p>doneCriteria와 sourceLocator는 description에도 합쳐져 저장되지만(스냅샷 보존),
+         * 화면이 그 문자열을 다시 쪼개게 두지 않으려고 따로 싣는다 — 표시 형식이 바뀔 때마다
+         * 파싱이 깨지는 계약은 계약이 아니다.
+         */
+        ActionType actionType,
+        String doneCriteria,
+        DoneCriteriaSource doneCriteriaSource,
+        String sourceLocator
 ) {
 
     /** 새 실행 조각을 만드는(기존 흐름 그대로인) 후보. */
@@ -88,7 +102,7 @@ public record ProposalItemPayload(
     ) {
         return create(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                courseId, null, null);
+                courseId, null, null, null, null, null, null);
     }
 
     /** 마감 시각까지 가진 새 후보(판단층 경로). */
@@ -108,9 +122,23 @@ public record ProposalItemPayload(
             LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt,
             Long topicId
     ) {
+        return create(title, description, expectedMinutes, priority, targetDate, placementType,
+                scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, courseId, deadlineAt,
+                topicId, null, null, null, null);
+    }
+
+    /** 조각 생성이 채운 학습 정보까지 담은 후보. */
+    public static ProposalItemPayload create(
+            String title, String description, Integer expectedMinutes, String priority, LocalDate targetDate,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt,
+            Long topicId, ActionType actionType, String doneCriteria,
+            DoneCriteriaSource doneCriteriaSource, String sourceLocator
+    ) {
         return new ProposalItemPayload(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt, topicId);
+                ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt, topicId,
+                actionType, doneCriteria, doneCriteriaSource, sourceLocator);
     }
 
     /** 기존 조각을 조정하는 후보. */
@@ -137,7 +165,8 @@ public record ProposalItemPayload(
         return new ProposalItemPayload(title, null, expectedMinutes, priority, targetDate,
                 null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
-                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null, null);
+                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null, null,
+                null, null, null, null);
     }
 
     /**
