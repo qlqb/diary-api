@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.ai.scheduleimport.dto.ScheduleExtractionResponse
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -22,17 +23,33 @@ import java.util.stream.Stream;
  * 수동 프로브. 단정문이 없다 — 확인할 것은 "값이 맞는가"가 아니라 "모델이 해석을 시작하지
  * 않는가"이고, 그건 원문을 사람이 읽어야 안다.
  *
- * <p>이미지가 없으면 통째로 건너뛴다. 이미지는 저장소에 넣지 않는다(동료들의 실명과 근무
- * 시간이 들어 있다). 확인하려면 아래 경로에 직접 놓고 돌린다.
+ * <p><b>{@code SCHEDULE_IMPORT_PROBE=1}일 때만 돈다.</b> 평소 {@code ./gradlew test}에
+ * 섞이면 안 되는 이유가 셋이다. (1) 확률적인 외부 호출이 스위트 안에 있으면 무관한 변경이
+ * 빨갛게 뜬다 — 오늘 3/3이어도 언젠가 이름 한 글자가 흔들린다. (2) 이 저장소는 공개라
+ * API 키 없이 클론한 사람에게는 그냥 실패로 보인다. (3) 호출마다 돈이 나간다.
+ *
+ * <p>결정적 검증은 늘 돌고(픽스처), 확률적 검증은 명시적으로만 돈다. 그 분리가 이 기능의
+ * 검증 구조다.
+ *
+ * <p>이미지가 없어도 건너뛴다. 이미지는 저장소에 넣지 않는다 — 동료들의 실명과 근무 시간이
+ * 들어 있다. 경로는 {@code SCHEDULE_IMPORT_IMAGE}로 저장소 밖을 가리킬 수 있다.
  *
  * <p>3회 돌리는 이유는 1회로는 흔들림을 볼 수 없기 때문이다. 같은 이미지에서 같은 셀이
  * 매번 다르게 나오면 그건 프롬프트가 아직 덜 조여진 것이다.
  */
 @SpringBootTest
+@EnabledIfEnvironmentVariable(named = "SCHEDULE_IMPORT_PROBE", matches = "1",
+        disabledReason = "실제 모델을 호출하는 관측용 프로브. SCHEDULE_IMPORT_PROBE=1일 때만 돈다")
 @EnabledIf("imageExists")
 class ScheduleImageVisionProbe {
 
-    private static final Path DIR = Path.of("src/test/resources/schedule-import");
+    /**
+     * 이미지를 둘 곳. {@code SCHEDULE_IMPORT_IMAGE}로 저장소 밖 경로를 줄 수 있다 —
+     * 근무표에는 동료 실명과 근무 시간이 있어서 저장소 안에 두지 않는 편이 낫다.
+     */
+    private static final Path DIR = Path.of(
+            System.getenv().getOrDefault("SCHEDULE_IMPORT_IMAGE", "src/test/resources/schedule-import"));
+
     private static final int RUNS = 3;
 
     /**
