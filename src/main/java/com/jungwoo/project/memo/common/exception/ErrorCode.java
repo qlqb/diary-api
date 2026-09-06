@@ -47,6 +47,19 @@ public enum ErrorCode {
     ROUTINE_RANGE_INVALID(HttpStatus.BAD_REQUEST, "E400_023", "반복 일정의 종료일은 시작일과 같거나 이후여야 합니다"),
     ROUTINE_EXCEPTION_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_024",
             "예외 날짜가 이 반복 일정의 기간이나 요일에 맞지 않습니다"),
+    /** 이미지 가져오기: 형식·크기가 허용 범위 밖. */
+    INVALID_IMAGE(HttpStatus.BAD_REQUEST, "E400_026",
+            "jpg, png, webp 이미지만 5MB까지 올릴 수 있습니다"),
+    /** 이미지 가져오기: 모델이 일정표로 읽지 못했다. 실패가 아니라 "이건 표가 아니다"는 답이다. */
+    NOT_A_SCHEDULE_IMAGE(HttpStatus.BAD_REQUEST, "E400_027",
+            "이 이미지에서는 일정표를 찾지 못했어요"),
+    /** 이미지 가져오기: 뜻을 모르는 칸이 남았다. 추측해 채우지 않고 사용자에게 묻는다. */
+    UNRESOLVED_CELLS_REMAIN(HttpStatus.BAD_REQUEST, "E400_028",
+            "아직 해석하지 못한 칸이 있어요. 시간을 알려주시면 마저 만들게요"),
+    /** 이미지 가져오기: 어느 행이 본인인지 정해지지 않았다. 서버가 대신 고르지 않는다. */
+    SCHEDULE_IMPORT_ROW_REQUIRED(HttpStatus.BAD_REQUEST, "E400_029",
+            "표에서 어느 줄이 본인인지 골라주세요"),
+
     ROUTINE_EXCEPTION_MOVED_INVALID(HttpStatus.BAD_REQUEST, "E400_025",
             "옮기려면 옮길 날짜가 필요하고, 옮길 시각은 둘 다 있거나 둘 다 없어야 합니다"),
 
