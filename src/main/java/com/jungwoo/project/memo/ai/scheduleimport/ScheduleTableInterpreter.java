@@ -63,7 +63,7 @@ public final class ScheduleTableInterpreter {
      */
     public static ScheduleExtractionResponse interpret(RawScheduleTable raw, LocalDate today, String displayName) {
         List<RawScheduleTable.Row> rawRows = raw.safeRows();
-        List<String> rawColumns = raw.safeColumns();
+        List<String> rawColumns = raw.safeScheduleColumns();
 
         /*
          * 머리글에서 일정 열만 골라낸다. 실제로 받아쓴 표의 머리글 줄에는 "이름", "세부" 같은

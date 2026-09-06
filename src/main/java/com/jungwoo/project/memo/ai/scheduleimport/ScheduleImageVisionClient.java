@@ -25,6 +25,10 @@ import org.springframework.util.MimeTypeUtils;
  * {@link ScheduleTableInterpreter}). 모델이 {@code "17:00"}을 내면 그것이 표에서 읽은 것인지
  * 지어낸 것인지 서버가 구분할 수 없다.
  *
+ * <p>{@code scheduleColumns}라는 이름은 {@code columns}였다. 그때는 "표의 열 머리글"로만
+ * 읽혀서, 모델이 이름·세부 칸까지 성실히 담아 왔고 셀 수와 어긋나 전 행이 무효가 되었다
+ * (같은 이미지 3회 중 2회). 이름이 계약을 말하지 않으면 주석은 읽히지 않는다.
+ *
  * <p>구조화 출력은 이 저장소의 다른 AI 경로와 같은 방식을 쓴다 — 시스템 프롬프트가 구분자
  * 뒤에만 JSON을 쓰게 하고 {@link AiStreamParser}가 그 경계를 찾는다. Spring AI의
  * {@code .entity()}를 쓰면 코드는 짧아지지만 이 저장소에 두 번째 패턴이 생기고, 실패 모드
@@ -51,8 +55,12 @@ public class ScheduleImageVisionClient {
               그대로 두세요. 무슨 뜻일지 짐작해서 채우지 마세요.
             - 연도가 표에 적혀 있지 않으면 year는 null입니다. 오늘 날짜로 추측하지 마세요.
             - 합계/Total/누계 행은 rows에 넣지 마세요.
-            - columns는 표의 열 머리글을 그대로 씁니다(월, 화 / Mon, Tue 등).
-            - 각 행의 cells 길이는 columns 길이와 같아야 합니다. 빈 칸은 빈 문자열로 둡니다.
+            - scheduleColumns에는 하루씩을 가리키는 열만 넣으세요(월, 화 / Mon, Tue / 9/7 /
+              7(월) 등). 이름, 세부, 직급, 총 근무시간, 비고처럼 사람을 가리키거나 한 줄을
+              요약하는 열은 표에 있더라도 넣지 마세요. 그 열들은 name, tag로 갑니다.
+            - scheduleColumns의 길이와 각 행 cells의 길이는 반드시 같아야 합니다. 두 배열은
+              같은 열을 순서대로 가리킵니다. 빈 칸은 빈 문자열로 둡니다.
+            - 2주치 표처럼 같은 요일이 두 번 나오면 두 번 다 씁니다. 중복을 지우지 마세요.
             - 일정표가 아니면 isScheduleTable을 false로 하고 rows를 빈 배열로 둡니다.
 
             먼저 이 표가 무엇인지 한 문장으로 쓰고, 그 다음 줄에 %s 를 쓰고, 그 아래에 아래
@@ -63,9 +71,9 @@ public class ScheduleImageVisionClient {
               "title": "표 제목(없으면 null)",
               "period": {"startMonth": 9, "startDay": 7, "endMonth": 9, "endDay": 13, "year": null},
               "legend": {"OP": "14~23", "CL": "15~00"},
-              "columns": ["월", "화", "수", "목", "금", "토", "일"],
+              "scheduleColumns": ["월", "화", "수", "목", "금", "토", "일"],
               "rows": [
-                {"name": "이정우", "tag": "PT", "cells": ["17~23","18~23","D/O","17~22","18~23","D/O","D/O"]}
+                {"name": "홍길동", "tag": "PT", "cells": ["17~23","18~23","D/O","17~22","18~23","D/O","D/O"]}
               ]
             }
             """.formatted(AiStreamParser.DELIMITER);

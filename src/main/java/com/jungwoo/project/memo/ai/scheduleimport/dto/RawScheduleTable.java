@@ -21,7 +21,11 @@ import java.util.Map;
  * @param period          표에 적힌 기간. 적혀 있지 않은 필드는 null이고, <b>연도는 거의 항상
  *                        null</b>이다 — 모델이 연도를 추측하면 안 된다
  * @param legend          표 안이나 아래의 범례. 없으면 빈 맵
- * @param columns         요일 원문(월/Mon/MON). 정규화는 서버가 한다
+ * @param scheduleColumns 일정 열의 머리글 원문. {@code rows[].cells}와 <b>1:1로 대응</b>하는
+ *                        열만 들어간다 — 이름·세부·직급·총근무시간 같은 행 식별·요약 열은
+ *                        여기 넣지 않는다. 개수가 어긋나면 어느 셀이 어느 날인지 셀 수 없어
+ *                        그 행 전체를 버리게 된다(실제로 3회 중 2회 그렇게 죽었다).
+ *                        표기 정규화는 서버가 한다(월/Mon/MON, 9/7, 7(월) 모두 그대로 둔다)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record RawScheduleTable(
@@ -29,7 +33,7 @@ public record RawScheduleTable(
         String title,
         Period period,
         Map<String, String> legend,
-        List<String> columns,
+        List<String> scheduleColumns,
         List<Row> rows
 ) {
 
@@ -45,7 +49,7 @@ public record RawScheduleTable(
      * 표의 한 줄.
      *
      * @param tag   직급·구분 표기(SR, PT). 화면이 행을 고를 때 이름만으로 헷갈리지 않게 돕는다
-     * @param cells 요일 수와 길이가 같아야 한다. 다르면 그 행만 제외하고 나머지는 살린다
+     * @param cells scheduleColumns와 길이가 같아야 한다. 다르면 그 행만 제외하고 나머지는 살린다
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Row(String name, String tag, List<String> cells) {
@@ -55,8 +59,8 @@ public record RawScheduleTable(
         return rows == null ? List.of() : rows;
     }
 
-    public List<String> safeColumns() {
-        return columns == null ? List.of() : columns;
+    public List<String> safeScheduleColumns() {
+        return scheduleColumns == null ? List.of() : scheduleColumns;
     }
 
     public Map<String, String> safeLegend() {

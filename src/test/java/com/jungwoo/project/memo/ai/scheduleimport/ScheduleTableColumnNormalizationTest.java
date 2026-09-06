@@ -54,7 +54,7 @@ class ScheduleTableColumnNormalizationTest {
     void nineColumnHeaderIsNormalized() {
         ScheduleExtractionResponse result = interpret("run1-9columns.json");
 
-        assertThat(result.raw().safeColumns()).as("원문은 손대지 않는다").hasSize(9);
+        assertThat(result.raw().safeScheduleColumns()).as("원문은 손대지 않는다").hasSize(9);
         assertThat(result.columnsNormalized()).isTrue();
         assertThat(result.columnsUnrecognized()).isFalse();
         assertThat(result.rows()).extracting(RowView::rowInvalid).containsOnly(false);
