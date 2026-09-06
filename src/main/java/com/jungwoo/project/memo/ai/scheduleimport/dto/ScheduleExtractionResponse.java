@@ -17,7 +17,10 @@ import java.util.List;
  * @param periodMissing          날짜가 아예 없는 표(요일만 있는 강의 시간표). 사용자가 주를 골라야 한다
  * @param periodWeekdayMismatch  보정한 시작일의 요일이 표의 첫 요일과 다르다. 후보는 만들되
  *                               화면이 강조하고 사용자가 주를 다시 고르게 한다
- * @param columnsUnrecognized    요일로 읽지 못한 열이 있다
+ * @param columnsUnrecognized    일정 열로 읽지 못한 열이 있다
+ * @param columnsNormalized      머리글에 "이름"·"세부" 같은 식별 열이 섞여 있어 일정 열만
+ *                               골라 썼다. 관측값이다 — 이 값이 자주 true면 모델이 계약을
+ *                               지키지 않고 있다는 뜻이고, 보정에 기대는 상태다
  * @param matchedRowIndex        이름이 하나만 일치한 행. 미리 선택일 뿐이고 화면은 늘 목록을 보여준다
  * @param unresolvedCodes        범례에 없어 시간을 모르는 코드들. 사용자가 채워야 확정할 수 있다
  */
@@ -27,6 +30,7 @@ public record ScheduleExtractionResponse(
         boolean periodMissing,
         boolean periodWeekdayMismatch,
         boolean columnsUnrecognized,
+        boolean columnsNormalized,
         Integer matchedRowIndex,
         List<RowView> rows,
         List<String> unresolvedCodes

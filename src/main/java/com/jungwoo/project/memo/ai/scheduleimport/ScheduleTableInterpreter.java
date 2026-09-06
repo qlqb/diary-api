@@ -12,8 +12,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * 받아쓴 표를 날짜와 시간으로 옮긴다. 순수 함수이고 LLM에 의존하지 않는다.
@@ -39,6 +41,18 @@ public final class ScheduleTableInterpreter {
             Map.entry("FRIDAY", DayOfWeek.FRIDAY), Map.entry("SATURDAY", DayOfWeek.SATURDAY),
             Map.entry("SUNDAY", DayOfWeek.SUNDAY));
 
+    /**
+     * 날짜 표기 열. {@code 9/7}, {@code 09-07}, {@code 9.7}, {@code 7(월)}, {@code 9/7(월)},
+     * {@code 7일}까지 본다. 맨 숫자 하나({@code 7})는 일부러 뺐다 — 근무일수·시간 합계 열이
+     * 그렇게 생겼고, 그것을 일정 열로 세면 셀이 한 칸씩 밀린다.
+     */
+    private static final Pattern DATE_COLUMN = Pattern.compile(
+            "^\\d{1,2}\\s*(?:[./\\-]\\s*\\d{1,2}|일)\\s*(?:[(\\[][^)\\]]*[)\\]])?$");
+
+    /** {@code 7(월)}처럼 괄호 안에 요일을 단 날짜 열. */
+    private static final Pattern DAY_WITH_WEEKDAY = Pattern.compile(
+            "^\\d{1,2}\\s*[(\\[]\\s*\\S+\\s*[)\\]]$");
+
     private ScheduleTableInterpreter() {
     }
 
@@ -48,9 +62,36 @@ public final class ScheduleTableInterpreter {
      * @param displayName 본인 행을 미리 골라 볼 이름. 없으면 null
      */
     public static ScheduleExtractionResponse interpret(RawScheduleTable raw, LocalDate today, String displayName) {
-        List<String> columns = raw.safeColumns();
+        List<RawScheduleTable.Row> rawRows = raw.safeRows();
+        List<String> rawColumns = raw.safeColumns();
+
+        /*
+         * 머리글에서 일정 열만 골라낸다. 실제로 받아쓴 표의 머리글 줄에는 "이름", "세부" 같은
+         * 행 식별 칸이 함께 있고(모델이 지어낸 게 아니라 표에 정말 있다), 그러면 머리글 수와
+         * 셀 수가 어긋나 전 행이 무효가 된다 — 같은 이미지 3회 중 2회가 그렇게 죽었다.
+         *
+         * 자를 때 앞뒤 위치를 가정하지 않는다. 합계 열이 가운데 끼는 표가 있고, 위치로 자르면
+         * 그런 표에서 조용히 한 칸씩 밀린다. 순서는 보존하고 중복도 지운다 — 2주짜리 표는
+         * "월"이 두 번 나오는 게 정상이고, 중복을 지우면 개수가 안 맞아 도로 무효가 된다.
+         */
+        List<String> scheduleColumns = rawColumns.stream()
+                .filter(ScheduleTableInterpreter::isScheduleColumn)
+                .toList();
+
+        /*
+         * 골라낸 개수가 셀 수와 정확히 같을 때만 채택한다. 이 조건이 없으면 머리글을 잘못
+         * 읽은 표에서도 "맞을 때까지" 자르게 되고, 그건 어긋난 걸 어긋난 채로 밀어 넣는 것이다.
+         * 기준이 되는 셀 수는 가장 흔한 행의 것이다 — 깨진 행 하나가 표 전체의 열 배치를
+         * 정하면 안 된다.
+         */
+        int cellCount = modalCellCount(rawRows);
+        boolean columnsNormalized = scheduleColumns.size() != rawColumns.size()
+                && !scheduleColumns.isEmpty()
+                && scheduleColumns.size() == cellCount;
+        List<String> columns = columnsNormalized ? scheduleColumns : rawColumns;
+
         boolean columnsUnrecognized = columns.isEmpty()
-                || columns.stream().anyMatch(column -> weekdayOf(column) == null);
+                || columns.stream().anyMatch(column -> !isScheduleColumn(column));
 
         LocalDate startDate = resolveStartDate(raw.period(), today);
         boolean periodMissing = startDate == null;
@@ -69,7 +110,6 @@ public final class ScheduleTableInterpreter {
 
         List<RowView> rows = new ArrayList<>();
         Set<String> unresolved = new LinkedHashSet<>();
-        List<RawScheduleTable.Row> rawRows = raw.safeRows();
         for (int index = 0; index < rawRows.size(); index++) {
             RawScheduleTable.Row row = rawRows.get(index);
             List<String> cells = row.cells() == null ? List.of() : row.cells();
@@ -95,10 +135,56 @@ public final class ScheduleTableInterpreter {
         return new ScheduleExtractionResponse(
                 raw,
                 startDate == null ? null : new ResolvedPeriod(startDate, endDate),
-                periodMissing, mismatch, columnsUnrecognized,
+                periodMissing, mismatch, columnsUnrecognized, columnsNormalized,
                 matchRow(rawRows, displayName),
                 rows,
                 new ArrayList<>(unresolved));
+    }
+
+    /**
+     * 이 머리글이 <b>일정 열</b>인가. 즉 그 아래 칸이 어느 하루의 근무를 담는 열인가.
+     *
+     * <p>인정하는 것은 요일 단독({@code 월}, {@code 화요일}, {@code (수)}, {@code Mon},
+     * {@code Sat.})과 날짜 표기({@code 9/7}, {@code 09-07}, {@code 9.7}, {@code 7일},
+     * {@code 7(월)}, {@code 9/7(월)})뿐이다. "이름"·"세부"·"총 근무시간"은 여기서 떨어진다.
+     *
+     * <p>맨 숫자 하나는 일부러 인정하지 않는다 — 근무일수 합계 열이 그렇게 생겼다.
+     */
+    public static boolean isScheduleColumn(String column) {
+        if (column == null) {
+            return false;
+        }
+        String trimmed = column.trim();
+        if (trimmed.isEmpty()) {
+            return false;
+        }
+        return weekdayOf(trimmed) != null
+                || DATE_COLUMN.matcher(trimmed).matches()
+                || DAY_WITH_WEEKDAY.matcher(trimmed).matches();
+    }
+
+    /**
+     * 행들이 가진 가장 흔한 셀 수. 열 정규화를 채택할지 판단하는 기준이다.
+     *
+     * <p>첫 행이 아니라 최빈값을 쓰는 이유는 깨진 행이 맨 앞에 올 수 있기 때문이다. 그
+     * 한 줄이 표 전체의 열 배치를 정하면, 정상인 나머지 행들이 그 줄에 맞춰 무효가 된다.
+     */
+    private static int modalCellCount(List<RawScheduleTable.Row> rows) {
+        Map<Integer, Integer> counts = new HashMap<>();
+        int best = 0;
+        int bestCount = 0;
+        for (RawScheduleTable.Row row : rows) {
+            int size = row.cells() == null ? 0 : row.cells().size();
+            if (size == 0) {
+                continue;
+            }
+            int seen = counts.merge(size, 1, Integer::sum);
+            if (seen > bestCount) {
+                best = size;
+                bestCount = seen;
+            }
+        }
+        return best;
     }
 
     /** 요일 하나를 읽는다. 못 읽으면 null — 추측하지 않는다. */
@@ -117,6 +203,17 @@ public final class ScheduleTableInterpreter {
         }
         if (cleaned.endsWith("요일")) {
             return WEEKDAYS.get(cleaned.substring(0, cleaned.length() - 2));
+        }
+        /*
+         * "7(월)"·"9/7(월)"은 괄호를 떼면 "7월"·"9/7월"이 되어 앞글자로는 읽히지 않는다.
+         * 끝글자를 보되 숫자가 섞인 머리글에서만 그렇게 한다 — 조건 없이 끝글자를 보면
+         * "휴일"이 일요일이 되고 "총일수"가 수요일이 된다.
+         */
+        if (cleaned.chars().anyMatch(Character::isDigit)) {
+            DayOfWeek trailing = WEEKDAYS.get(cleaned.substring(cleaned.length() - 1));
+            if (trailing != null) {
+                return trailing;
+            }
         }
         return WEEKDAYS.get(cleaned.substring(0, 1));
     }
