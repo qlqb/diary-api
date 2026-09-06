@@ -39,6 +39,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
@@ -77,6 +78,13 @@ import static org.mockito.Mockito.when;
  *
  * <p>스키마가 레포에 없어 CI에서는 -PexcludeDbTests로 제외된다(build.gradle 참고).
  */
+/*
+ * ★ 생성 경로를 고정한다. plan.draft.generator는 application-local.properties(gitignore)에서
+ * 바뀔 수 있고, 그 값이 V1이면 판단층이 되묻기를 내면서 proposal이 null로 온다 — 이 스위트가
+ * 검증하는 것은 대화→확정 경로이지 어느 생성기를 쓰는가가 아니다. 추적되지 않는 파일에
+ * 결과가 좌우되는 테스트는 그 자체로 결함이라 여기서 못 박는다.
+ */
+@TestPropertySource(properties = "plan.draft.generator=AI")
 @SpringBootTest
 class PeriodPlanConversationIntegrationTest {
 

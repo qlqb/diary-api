@@ -290,17 +290,18 @@ public class PlanJudgmentService {
             knownByTopic.put(treatment.topicId(), knowsFamiliarity(treatment));
         }
 
-        int totalMinutes = 0;
+        int worstCourseMinutes = 0;
         CourseContext worstCourse = null;
         List<TopicContext> worstUnknown = List.of();
         for (CourseContext course : context.courses()) {
             List<TopicContext> unknown = new ArrayList<>();
+            int courseMinutes = 0;
             for (TopicContext topic : course.topics()) {
                 Treatment treatment = treatmentByTopic.get(topic.topicId());
                 if (treatment == null || treatment == Treatment.SKIP) {
                     continue;
                 }
-                totalMinutes += treatment == Treatment.SKIM ? SKIM_ESTIMATE_MINUTES : FULL_ESTIMATE_MINUTES;
+                courseMinutes += treatment == Treatment.SKIM ? SKIM_ESTIMATE_MINUTES : FULL_ESTIMATE_MINUTES;
                 if (treatment == Treatment.FULL && !Boolean.TRUE.equals(knownByTopic.get(topic.topicId()))) {
                     unknown.add(topic);
                 }
@@ -308,9 +309,10 @@ public class PlanJudgmentService {
             if (unknown.size() > worstUnknown.size()) {
                 worstCourse = course;
                 worstUnknown = unknown;
+                worstCourseMinutes = courseMinutes;
             }
         }
-        if (totalMinutes == 0 || worstCourse == null || worstUnknown.isEmpty()) {
+        if (worstCourseMinutes == 0 || worstCourse == null || worstUnknown.isEmpty()) {
             return Optional.empty();
         }
 
@@ -321,9 +323,16 @@ public class PlanJudgmentService {
          * 가장 많이 걸린 과목 하나만 물으면 답이 구체적이고, 그 답은 그대로 맥락이 된다.
          * 다음 계획에서 또 물을 항목이 남아 있으면 그때 그 과목을 묻는다.
          */
+        /*
+         * ★ 비율은 <b>그 과목 안에서</b> 잰다. 계획 전체를 분모로 두면 과목이 늘수록 어떤
+         * 과목도 25%를 넘지 못해 되묻기가 사실상 죽는다 — 7과목 계획에서 한 과목이 통째로
+         * 근거 없어도 전체의 15% 남짓이다. 실제로 그렇게 만들어 두고 게이트를 돌렸더니
+         * 질문이 한 번도 뜨지 않았다. 묻는 대상이 한 과목이니 "그 과목의 계획이 답에 따라
+         * 달라지는가"가 맞는 질문이고, 작은 과목은 절대 문턱이 막는다.
+         */
         int swingMinutes = worstUnknown.size() * (FULL_ESTIMATE_MINUTES - SKIM_ESTIMATE_MINUTES);
         if (swingMinutes < UNKNOWN_FAMILIARITY_MIN_SWING_MINUTES
-                || (double) swingMinutes / totalMinutes < UNKNOWN_FAMILIARITY_THRESHOLD) {
+                || (double) swingMinutes / worstCourseMinutes < UNKNOWN_FAMILIARITY_THRESHOLD) {
             return Optional.empty();
         }
 

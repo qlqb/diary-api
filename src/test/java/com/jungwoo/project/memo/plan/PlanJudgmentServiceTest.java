@@ -438,4 +438,50 @@ class PlanJudgmentServiceTest {
         return new PlanStrategy("다음 수업 따라가기", "필요한 것만", StrategySource.NEW, null,
                 List.of(1L), List.of(), List.of(), List.of("다음 수업 전 선수내용 완료"));
     }
+
+    @Test
+    @DisplayName("과목이 여럿이어도 되묻기가 죽지 않는다 — 비율은 묻는 과목 안에서 잰다")
+    void theAskSurvivesAMultiCourseePlan() {
+        // 근거 없는 과목 하나(4개) + 근거가 덮는 큰 과목 하나(20개).
+        // 계획 전체를 분모로 두면 60/1140 = 5%라 영영 묻지 않게 된다.
+        List<TopicContext> unknownCourse = new ArrayList<>();
+        List<TopicContext> knownCourse = new ArrayList<>();
+        StringBuilder json = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            long id = 300L + i;
+            unknownCourse.add(topic(id, "처음 보는 내용 " + i, TopicProgressStatus.NOT_STARTED, null));
+            json.append(i > 0 ? "," : "").append(topicEntry(id, "FULL", "처음인 것 같다", null));
+        }
+        for (int i = 0; i < 20; i++) {
+            long id = 400L + i;
+            knownCourse.add(topic(id, "맥락이 덮는 내용 " + i, TopicProgressStatus.NOT_STARTED, null));
+            json.append(",").append(topicEntry(id, "FULL", "익숙하지만 제대로 본다",
+                    contextEvidence(1L, "BROAD")));
+        }
+        givenAi(goalsAndTopics(json.toString()));
+
+        PlanningContext ctx = twoCourses(
+                activeContext(1L, "두 번째 과목 내용은 예전에 다뤄 봤다"), unknownCourse, knownCourse);
+        PlanJudgmentResult result = service.judge(ctx, false);
+
+        assertThat(result.isAsk()).isTrue();
+        assertThat(result.ask().question()).startsWith("자료구조의");
+        assertThat(result.ask().topicIds()).containsExactly(300L, 301L, 302L, 303L);
+    }
+
+    private static PlanningContext twoCourses(ContextLine context,
+                                              List<TopicContext> first, List<TopicContext> second) {
+        List<AvailabilityWindow> windows = new ArrayList<>();
+        for (int i = 0; i < 7; i++) {
+            LocalDate date = START.plusDays(i);
+            windows.add(new AvailabilityWindow(date.atTime(19, 0), date.atTime(22, 0),
+                    AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW, "기본 시간대"));
+        }
+        AvailabilityEstimateResult availability = new AvailabilityEstimateResult(windows, List.of());
+        return new PlanningContext(USER_ID, NOW, START, END, PlanIntensity.NORMAL,
+                List.of(new CourseContext(36L, "자료구조", null, NEXT_CLASS, 85L, 2, first),
+                        new CourseContext(31L, "빅데이터분석", null, NEXT_CLASS, 80L, 2, second)),
+                AvailabilityDaySummary.format(START, END, availability),
+                availability, List.of(context), null, null);
+    }
 }
