@@ -458,6 +458,60 @@ class ScheduleSuggestionServiceTest {
                 .isInstanceOf(ConflictException.class);
     }
 
+    // ===== 계약에 없는 필드 =====
+
+    @Test
+    void 모델이_계약에_없는_필드를_얹으면_턴을_실패시킨다() {
+        /*
+         * 조용히 버리면 안 되는 이유가 이 필드다. repeat이 무시되면 반복이어야 할 것이
+         * 일회성 약속 하나가 되어 저장되고, 사용자는 자기가 확인한 적 없는 일정을 보게 된다.
+         * 필드가 사라지는 것은 Bean Validation이 보지 못한다 — 남은 필드는 전부 멀쩡하다.
+         */
+        JsonNode payload = json("""
+                {"title":"친구 약속","startAt":"2026-09-04T19:00","endAt":"2026-09-04T21:00",
+                 "repeat":"weekly"}""");
+
+        assertThatThrownBy(() -> service.createFromSuggestions(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
+                List.of(new ScheduleSuggestion(ScheduleSuggestionKind.COMMITMENT, payload))))
+                .isInstanceOf(ServiceUnavailableException.class);
+
+        verify(suggestionMapper, never()).insert(any());
+    }
+
+    @Test
+    void 사용자가_고친_값에_계약에_없는_필드가_있으면_400이다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.COMMITMENT, COMMITMENT_JSON,
+                        ScheduleSuggestionStatus.PROPOSED));
+
+        Map<String, Object> edited = map("""
+                {"title":"친구 약속","startAt":"2026-09-04T19:00","endAt":"2026-09-04T21:00",
+                 "repeat":"weekly"}""");
+
+        // 모델이 아니라 사용자가 보낸 값이므로 계약 위반(503)이 아니라 입력 오류(400)다.
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, edited))
+                .isInstanceOf(BadRequestException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_INPUT_VALUE);
+
+        verify(commitmentService, never()).create(anyLong(), any(), any());
+    }
+
+    @Test
+    void 저장된_후보를_그대로_적용할_때도_모르는_필드는_거절한다() {
+        // 저장 시점에 걸렀으므로 정상적으로는 나오지 않는다. 나왔다면 저장 데이터가 깨진 것이다.
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.COMMITMENT,
+                        """
+                        {"title":"친구 약속","startAt":"2026-09-04T19:00",
+                         "endAt":"2026-09-04T21:00","repeat":"weekly"}""",
+                        ScheduleSuggestionStatus.PROPOSED));
+
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, null))
+                .isInstanceOf(ServiceUnavailableException.class);
+
+        verify(commitmentService, never()).create(anyLong(), any(), any());
+    }
+
     // ===== 복원 =====
 
     @Test

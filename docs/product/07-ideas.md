@@ -200,3 +200,24 @@
 - **질문별 예산 비율 조정**: 현재 50/35/15는 최적값으로 확정한 것이 아니라 안전한 기본값이다. "아까 말한 것"처럼 최근 대화가 중요한 질문과 "내 생활 패턴을 반영해줘"처럼 장기 Context가 중요한 질문을 구분해 비율을 바꾸는 방식은 실제 사용 데이터가 쌓인 뒤 검토한다. 예산 비율 결정만을 위해 OpenAI 호출을 한 번 더 추가하지 않는다.
 - 위 항목들은 현재 상담 흐름의 정확성을 위해 바로 필요한 작은 보완과 구분한다. 현재 요청 메시지를 최근 과거 대화에서 제외하는 것, 최근 대화를 USER↔ASSISTANT 대화 턴 단위로 보존하는 것은 별도 후속 수정 대상으로 보고 이 장기 아이디어 때문에 미루지 않는다.
 - 상태: **자가사용으로 Context 누적·긴 대화·입력 예산 문제가 실제로 관찰된 뒤 검토**
+
+## 로컬 ObjectMapper를 공용 빈으로 정리 (2026-09-07, 후속 작업)
+
+- 서비스 11곳이 `new ObjectMapper().findAndRegisterModules()`로 매퍼를 직접 만든다:
+  `AiConversationService`, `AiProposalPersistenceService`, `AiProposalService`,
+  `ScheduleImageVisionClient`, `ExecutionItemService`, `PeriodPlanDraftGenerator`,
+  `PlanItemService`, `PlanJudgmentService`, `PlanSnapshotCodec`, `PlanStrategyCodec`,
+  `SchedulePreviewService`. `JacksonConfig`가 등록한 공용 빈이 있는데도 그렇다.
+- 문제는 설정이 갈라진다는 것이다. 실제로 공용 빈은 `WRITE_DATES_AS_TIMESTAMPS`가 켜져
+  있었고(`Jackson2ObjectMapperBuilder.json()`이 Boot 커스터마이저를 안 거친다), 그 사실이
+  일정 후보 payload가 `[2026,9,7,17,0]`으로 저장되는 것으로 드러날 때까지 아무도 몰랐다.
+  빈은 2026-09-07에 고쳤다.
+- **일괄 치환하지 않는다.** 로컬 매퍼는 `FAIL_ON_UNKNOWN_PROPERTIES`가 **켜져** 있고
+  공용 빈은 꺼져 있다. 그냥 바꾸면 모르는 필드를 조용히 버리게 되고, 그 필드가 사라지는
+  것은 Bean Validation이 보지 못한다. 같은 함정을 11번 반복하는 셈이다.
+- **한 곳씩, 그 경로가 엄격함에 기대는지 확인한 뒤 교체한다.** 기대고 있으면
+  `ScheduleSuggestionService.readAndValidatePayload`처럼 그 읽기에만
+  `objectMapper.readerFor(...).with(FAIL_ON_UNKNOWN_PROPERTIES)`를 건다.
+- 특히 조심할 곳: `PlanJudgmentService`, `PeriodPlanDraftGenerator`. 모델 출력의
+  과다생성 방지 검증이 걸려 있어 모르는 필드가 조용히 통과하면 그 검증이 헐거워진다.
+- 상태: **후속 작업. 한 곳씩 확인 후 교체하며, 일괄 치환은 하지 않는다**

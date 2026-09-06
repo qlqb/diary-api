@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.ai;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
@@ -345,10 +346,22 @@ public class ScheduleSuggestionService {
                                           PayloadSource source) {
         Object request;
         try {
-            request = switch (kind) {
-                case COMMITMENT -> objectMapper.treeToValue(payload, CommitmentCreateRequest.class);
-                case ROUTINE -> objectMapper.treeToValue(payload, RoutineSaveRequest.class);
+            Class<?> target = switch (kind) {
+                case COMMITMENT -> CommitmentCreateRequest.class;
+                case ROUTINE -> RoutineSaveRequest.class;
             };
+            /*
+             * 이 경로만 모르는 필드를 거절한다. 공용 빈은 관대하고(FAIL_ON_UNKNOWN_PROPERTIES
+             * 꺼짐) 다른 서비스 넷이 그것에 기대고 있어 빈 자체를 엄격하게 바꿀 수는 없다.
+             *
+             * 여기서 관대하면 안 되는 이유는 payload가 도메인 요청 그 자체이기 때문이다.
+             * 모델이 COMMITMENT에 {@code "repeat": "weekly"}를 얹으면 그 필드는 조용히
+             * 버려지고 사용자는 일회성 약속 하나를 보게 된다. 필드가 사라지는 것은 Bean
+             * Validation이 보지 못한다 — 남은 필드는 전부 멀쩡하기 때문이다.
+             */
+            request = objectMapper.readerFor(target)
+                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .readValue(payload);
         } catch (Exception e) {
             log.warn("일정 후보 payload를 읽지 못했다: kind={}, source={}, payload={}", kind, source, payload, e);
             throw rejected(source);
