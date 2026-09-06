@@ -64,7 +64,10 @@ public record ProposalItemPayload(
          * 근거 있는 마감 시각. 확정 시 execution_items.deadline_at으로 복사된다.
          * 이 필드가 생기기 전에 저장된 JSON은 Jackson이 null로 읽는다.
          */
-        LocalDateTime deadlineAt
+        LocalDateTime deadlineAt,
+
+        /** 이 항목이 다루는 학습 항목. 확정 시 execution_items.topic_id로 남는다. */
+        Long topicId
 ) {
 
     /** 새 실행 조각을 만드는(기존 흐름 그대로인) 후보. */
@@ -85,7 +88,7 @@ public record ProposalItemPayload(
     ) {
         return create(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                courseId, null);
+                courseId, null, null);
     }
 
     /** 마감 시각까지 가진 새 후보(판단층 경로). */
@@ -94,9 +97,20 @@ public record ProposalItemPayload(
             PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
             LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt
     ) {
+        return create(title, description, expectedMinutes, priority, targetDate, placementType,
+                scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, courseId, deadlineAt, null);
+    }
+
+    /** 학습 항목까지 아는 새 후보(조각 생성 경로). */
+    public static ProposalItemPayload create(
+            String title, String description, Integer expectedMinutes, String priority, LocalDate targetDate,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt,
+            Long topicId
+    ) {
         return new ProposalItemPayload(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt);
+                ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt, topicId);
     }
 
     /** 기존 조각을 조정하는 후보. */
@@ -123,7 +137,7 @@ public record ProposalItemPayload(
         return new ProposalItemPayload(title, null, expectedMinutes, priority, targetDate,
                 null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
-                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null);
+                beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null, null);
     }
 
     /**

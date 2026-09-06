@@ -46,12 +46,20 @@ public record ProposalItem(
          * 있을 때만 채운다. deadlineDate와 달리 확정 이후에도 execution_items.deadline_at으로
          * 남아 롤링 배치의 HARD 제약이 된다.
          */
-        LocalDateTime deadlineAt
+        LocalDateTime deadlineAt,
+
+        /**
+         * 이 후보가 다루는 학습 항목. 확정 시 execution_items.topic_id로 남는다.
+         *
+         * <p>이 값이 있어야 나중에 「이미 알아요」와 진행 상태가 이 조각을 되짚을 수 있다.
+         * 없으면 조각과 학습 항목의 연결이 제목 문자열뿐이고, 제목은 사용자가 고칠 수 있다.
+         */
+        Long topicId
 ) {
 
     /**
-     * deadlineAt 없이 만드는 기존 경로. 필드를 뒤에 붙이고 이 생성자를 남긴 것은 호출부
-     * 스무 곳을 건드리지 않기 위해서다 — deadlineAt은 계획 경로만 채우고 나머지 경로에는
+     * deadlineAt·topicId 없이 만드는 기존 경로. 필드를 뒤에 붙이고 이 생성자를 남긴 것은
+     * 호출부 스무 곳을 건드리지 않기 위해서다 — 둘 다 계획 경로만 채우고 나머지 경로에는
      * 채울 근거가 없다.
      */
     public ProposalItem(
@@ -61,6 +69,17 @@ public record ProposalItem(
             LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId
     ) {
         this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
-                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null);
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null, null);
+    }
+
+    /** 마감까지만 아는 경로(v0 블록 생성기). */
+    public ProposalItem(
+            String title, String description, Integer expectedMinutes, String priority,
+            PlacementType placementType, LocalTime startTime, LocalTime endTime,
+            LocalDate earliestStartDate, LocalDate deadlineDate,
+            LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId, LocalDateTime deadlineAt
+    ) {
+        this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, deadlineAt, null);
     }
 }

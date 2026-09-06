@@ -4,15 +4,23 @@ import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiProposalMapper;
 import com.jungwoo.project.memo.ai.AiProposalService;
 import com.jungwoo.project.memo.ai.ContextChangeSuggestionService;
+import com.jungwoo.project.memo.ai.domain.AiProposal;
+import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
+import com.jungwoo.project.memo.ai.dto.ProposalItem;
+import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Generated;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Spec;
 import com.jungwoo.project.memo.plan.domain.FamiliarityAnswer;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
+import com.jungwoo.project.memo.plan.domain.PlanStrategy;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
+import com.jungwoo.project.memo.plan.dto.PlanItemDraft;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -20,6 +28,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -48,19 +58,22 @@ public class PlanDraftService {
     private final PlanningContextBuilder planningContextBuilder;
     private final PlanJudgmentService planJudgmentService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
+    private final PlanItemService planItemService;
 
     /**
-     * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT.
+     * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.
      *
-     * <p><b>V0</b>는 모델을 부르지 않는 결정적 생성기다. 마감이 제안→확정→Timefold까지
-     * 살아남는지 확인할 때 켠다 — 모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을
-     * 안 냈다"로 갈려 재현되지 않는다.
+     * <p>넷은 계단이다. 뒤로 갈수록 모델이 하는 일이 늘고, 앞의 것과 비교하면 그 늘어난
+     * 부분이 실제로 값을 하는지 따로 잴 수 있다(13-plan-judgment.md §8.2).
      *
-     * <p><b>JUDGMENT</b>는 판단만 모델에게 맡기고 조각은 v0와 같은 방식으로 만든다. 조각을
-     * 만드는 방식이 같으니 V0와의 차이는 전부 판단에서 온 것이고, 그래서 판단층이 실제로
-     * 값을 하는지를 같은 자로 잴 수 있다(13-plan-judgment.md §8.2).
-     *
-     * <p>운영 기본값은 AI다.
+     * <ul>
+     *   <li><b>V0</b> 모델 없음. 마감이 제안→확정→Timefold까지 살아남는지 확인할 때 켠다 —
+     *       모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을 안 냈다"로 갈린다.
+     *   <li><b>JUDGMENT</b> 판단만 모델. 조각은 v0와 같은 방식이라 V0와의 차이가 전부
+     *       판단에서 온다.
+     *   <li><b>V1</b> 판단 + 조각 생성. JUDGMENT와의 차이가 전부 조각 생성에서 온다.
+     *   <li><b>AI</b> 기존 단일 호출 경로. 운영 기본값이다.
+     * </ul>
      */
     @Value("${plan.draft.generator:AI}")
     private String generatorMode = "AI";
@@ -88,8 +101,8 @@ public class PlanDraftService {
                     userId, spec.start(), spec.end());
             return blockGeneratorV0.generate(spec);
         }
-        if ("JUDGMENT".equalsIgnoreCase(generatorMode)) {
-            return generateWithJudgment(spec, request);
+        if ("JUDGMENT".equalsIgnoreCase(generatorMode) || "V1".equalsIgnoreCase(generatorMode)) {
+            return generateWithJudgment(spec, request, "V1".equalsIgnoreCase(generatorMode));
         }
         // 모델이 설정돼 있어야 하는 것은 AI 경로뿐이다. v0는 모델을 부르지 않는다.
         if (!aiConsultationClient.isConfigured()) {
@@ -105,7 +118,7 @@ public class PlanDraftService {
      * 묻는 것과 다르다 — 만들어진 계획은 그 자체로 화면의 기준점이 되어, 사용자가 답을 고르기
      * 전에 이미 대답을 유도한다.
      */
-    private Generated generateWithJudgment(Spec spec, PlanDraftRequest request) {
+    private Generated generateWithJudgment(Spec spec, PlanDraftRequest request, boolean generateItems) {
         PlanningContext context = planningContextBuilder.build(spec);
 
         /*
@@ -133,7 +146,70 @@ public class PlanDraftService {
                     spec.userId(), judgment.ask().reason());
             return Generated.asking(spec, judgment.ask());
         }
-        return blockGeneratorV0.generate(spec, context, judgment.strategy());
+        if (!generateItems) {
+            // JUDGMENT 모드: 조각은 v0와 같은 방식으로 만든다. 판단의 기여만 따로 재기 위한
+            // 경로이므로 조각 생성이 끼어들면 안 된다(13-plan-judgment.md §8.2).
+            return blockGeneratorV0.generate(spec, context, judgment.strategy());
+        }
+        return withItems(spec, context, judgment.strategy());
+    }
+
+    /** 판단 → 조각. 완성형 경로다. */
+    private Generated withItems(Spec spec, PlanningContext context, PlanStrategy strategy) {
+        List<PlanItemDraft> drafts = planItemService.generate(strategy, context, spec.maxItems());
+        List<ProposalItem> items = new ArrayList<>();
+        for (PlanItemDraft draft : drafts) {
+            items.add(draft.toProposalItem());
+        }
+
+        int available = PeriodPlanDraftGenerator.availableMinutes(context.availability().windows());
+        int target = spec.intensity().targetMinutesFor(available);
+        String confidence = PeriodPlanDraftGenerator.confidenceSummary(context.availability().windows());
+
+        log.info("기간 계획 초안(V1): userId={}, {}~{}, 조각={}개({}분), 가용={}분, 예산={}분",
+                spec.userId(), spec.start(), spec.end(), items.size(),
+                items.stream().mapToInt(ProposalItem::expectedMinutes).sum(), available, target);
+
+        return new Generated(spec, target, target, null, false,
+                spec.title() != null && !spec.title().isBlank() ? spec.title() : strategy.goal(),
+                strategy.goal(), items,
+                available, confidence, Math.max(0, available - target), items.isEmpty(),
+                false, strategy, null);
+    }
+
+    /**
+     * 판단은 그대로 두고 조각만 다시 만든다. 후속 재계획의 원형이다.
+     *
+     * <p>기존 제안을 고치지 않고 새 제안을 만든 뒤 원본을 폐기한다 — 제안 항목은 각자 상태를
+     * 갖고(적용됨·폐기됨) 그 위에 덮어쓰면 "무엇이 사용자에게 보였던 것인지"가 사라진다.
+     * 둘을 한 트랜잭션에서 처리해 살아 있는 제안이 둘로 남는 상태를 만들지 않는다.
+     *
+     * <p>판단을 다시 하지 않는 것이 요점이다. 사용자가 「이미 알아요」로 가정 하나를 고쳤을 때
+     * 목표와 과목 순서까지 흔들리면, 고친 것과 무관한 변화가 함께 와서 무엇 때문에 계획이
+     * 바뀌었는지 알 수 없게 된다.
+     */
+    public PlanDraftResponse regenerateItems(Long userId, Long proposalId) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED);
+        }
+        PlanStrategy strategy = strategyCodec.fromJson(proposal.getPlanStrategyJson());
+        if (strategy == null || proposal.getPlanStartDate() == null || proposal.getPlanEndDate() == null) {
+            // 판단 없이 만든 초안이다. 다시 만들 근거가 없으므로 새 초안을 만들어야 한다.
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        Spec spec = new Spec(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(),
+                proposal.getPlanIntensity(), null, null, List.of());
+        // 컨텍스트는 다시 모은다 — 그 사이 「이미 알아요」가 눌렸다면 그것이 반영돼야 한다.
+        PlanningContext context = planningContextBuilder.build(spec);
+        Generated generated = withItems(spec, context, strategy);
+
+        log.info("조각만 재생성: userId={}, 원본 proposalId={}", userId, proposalId);
+        return persist(userId, generated, null, null, proposalId);
     }
 
     /**
@@ -144,6 +220,16 @@ public class PlanDraftService {
      */
     @Transactional
     public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId, Long sourceMessageId) {
+        return persist(userId, generated, conversationId, sourceMessageId, null);
+    }
+
+    /**
+     * @param supersededProposalId 이 초안이 대체하는 기존 제안. 같은 트랜잭션에서 폐기해
+     *                             살아 있는 제안이 둘로 남지 않게 한다
+     */
+    @Transactional
+    public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId,
+                                     Long sourceMessageId, Long supersededProposalId) {
         Spec spec = generated.spec();
         int days = spec.days();
         int maxItems = spec.maxItems();
@@ -183,6 +269,11 @@ public class PlanDraftService {
         aiProposalMapper.updatePlanMetadata(
                 proposal.getProposalId(), userId, spec.start(), spec.end(), spec.intensity(),
                 generated.targetMinutes(), strategyCodec.toJson(generated.strategy()));
+
+        if (supersededProposalId != null) {
+            aiProposalMapper.updateStatusAndRespondedAt(
+                    supersededProposalId, userId, AiProposalStatus.DISMISSED, LocalDateTime.now());
+        }
 
         log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, "
                         + "baseline={}분, target={}분, 조정={}, 항목={}개, conversationId={}",

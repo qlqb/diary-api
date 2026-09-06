@@ -63,6 +63,24 @@ public class PlanController {
         return ResponseEntity.ok(planDraftService.createDraft(principal.getUserId(), request));
     }
 
+    /**
+     * 판단은 그대로 두고 조각만 다시 만든다.
+     *
+     * <p>사용자가 초안에서 「이미 알아요」로 가정 하나를 고쳤을 때 쓴다. 판단까지 다시 하면
+     * 목표와 과목 순서가 함께 흔들려, 무엇 때문에 계획이 바뀌었는지 알 수 없게 된다.
+     *
+     * <p>새 제안을 만들고 원본은 폐기한다 — 응답의 proposalId가 바뀌므로 화면은 그것을 쓴다.
+     */
+    @PostMapping("/drafts/{proposalId}/items:regenerate")
+    public ResponseEntity<PlanDraftResponse> regenerateItems(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId
+    ) {
+        log.info("POST /api/plans/drafts/{}/items:regenerate - userId={}", proposalId, principal.getUserId());
+
+        return ResponseEntity.ok(planDraftService.regenerateItems(principal.getUserId(), proposalId));
+    }
+
     @PostMapping("/proposals/{proposalId}/confirm")
     public ResponseEntity<PlanResponse> confirm(
             @AuthenticationPrincipal UserPrincipal principal,

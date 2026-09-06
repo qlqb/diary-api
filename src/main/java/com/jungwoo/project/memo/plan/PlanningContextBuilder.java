@@ -168,7 +168,9 @@ public class PlanningContextBuilder {
                 node.getProgressStatus(),
                 node.getLastStudiedAt(),
                 node.getUserMark(),
-                depth));
+                depth,
+                node.getSourceMaterialId(),
+                node.getSourceMaterialFilename()));
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
                 flatten(out, child, depth + 1);

@@ -348,6 +348,7 @@ class PlanBlockGeneratorV0Test {
 
     private static TopicContext topic(Long topicId, String title, TopicProgressStatus status,
                                       TopicUserMark mark, String locator) {
-        return new TopicContext(topicId, title, locator, TopicLocators.weekOf(locator), status, null, mark, 0);
+        return new TopicContext(topicId, title, locator, TopicLocators.weekOf(locator), status, null, mark, 0,
+                901L, "자료구조 2주차.pdf");
     }
 }

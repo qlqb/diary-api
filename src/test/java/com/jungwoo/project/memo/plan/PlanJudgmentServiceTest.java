@@ -423,7 +423,7 @@ class PlanJudgmentServiceTest {
     }
 
     private static TopicContext topic(Long topicId, String title, TopicProgressStatus status, TopicUserMark mark) {
-        return new TopicContext(topicId, title, "2주차", 2, status, null, mark, 0);
+        return new TopicContext(topicId, title, "2주차", 2, status, null, mark, 0, 901L, "강의자료.pdf");
     }
 
     private static ContextLine activeContext(Long id, String content) {

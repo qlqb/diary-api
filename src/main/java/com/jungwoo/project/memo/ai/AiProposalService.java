@@ -413,7 +413,7 @@ public class AiProposalService {
             result.add(ProposalItemPayload.create(
                     item.title(), item.description(), expectedMinutes, item.priority(), itemTargetDate,
                     placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                    item.courseId(), deadlineAt));
+                    item.courseId(), deadlineAt, item.topicId()));
         }
         return result;
     }
@@ -618,6 +618,12 @@ public class AiProposalService {
             if (itemCourseId != null) {
                 executionItemService.linkCourse(createdItem.getExecutionItemId(), userId, itemCourseId);
             }
+            // 학습 항목도 같은 방식으로 잇는다. 이 값이 있어야 나중에 「이미 알아요」와 진행
+            // 상태가 이 조각을 되짚을 수 있다 — 없으면 연결이 제목 문자열뿐이고, 제목은
+            // 사용자가 고칠 수 있다.
+            if (original.topicId() != null) {
+                executionItemService.linkTopic(createdItem.getExecutionItemId(), userId, original.topicId());
+            }
 
             AiProposalItemStatus newStatus = modified
                     ? AiProposalItemStatus.MODIFIED_APPLIED
@@ -629,7 +635,7 @@ public class AiProposalService {
             String editedJson = modified
                     ? toJson(ProposalItemPayload.create(title, description, expectedMinutes, priority,
                             scheduledDate, placementType, scheduledStartAt, scheduledEndAt, null, null,
-                            original.courseId(), original.deadlineAt()))
+                            original.courseId(), original.deadlineAt(), original.topicId()))
                     : null;
 
             aiProposalItemMapper.updateAfterApply(

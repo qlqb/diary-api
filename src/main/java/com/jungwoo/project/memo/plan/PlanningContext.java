@@ -80,7 +80,17 @@ public record PlanningContext(
             TopicProgressStatus progressStatus,
             LocalDateTime lastStudiedAt,
             TopicUserMark userMark,
-            int depth
+            int depth,
+
+            /**
+             * 이 학습 항목이 어느 자료에서 나왔는가. 조각이 자료에 anchor할 때 쓴다.
+             *
+             * <p>어느 자료를 볼지는 <b>모델이 고르지 않는다.</b> 항목이 이미 출처를 알고
+             * 있으므로 서버가 그대로 붙인다 — 모델에게 고르게 하면 없는 자료를 지어낼 수
+             * 있고, 그것을 막으려면 다시 대조 코드를 써야 한다.
+             */
+            Long sourceMaterialId,
+            String sourceMaterialFilename
     ) {
     }
 
