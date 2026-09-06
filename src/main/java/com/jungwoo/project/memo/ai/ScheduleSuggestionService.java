@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
@@ -54,6 +55,16 @@ public class ScheduleSuggestionService {
 
     private static final int MAX_SUGGESTIONS_PER_TURN = 5;
 
+    /**
+     * 이미지 한 장에서 만들 수 있는 후보 수의 상한.
+     *
+     * <p>대화 상한(5)과 따로 두는 이유는 두 경로가 다른 것을 막기 때문이다. 5는 "모델이
+     * 대화에서 일정을 지어내는 것"을 막는 숫자다. 근무표는 한 주만 해도 최대 7개, 달 단위
+     * 표면 31개가 정상이라 그 숫자를 쓰면 기능이 성립하지 않는다. 여기서 막는 것은 표가
+     * 아닌 것을 표로 읽었을 때의 폭주이므로 한 달 길이로 잡는다.
+     */
+    private static final int MAX_IMPORTED_SUGGESTIONS = 31;
+
     private final AiScheduleSuggestionMapper suggestionMapper;
     private final CommitmentService commitmentService;
     private final RoutineService routineService;
@@ -67,7 +78,15 @@ public class ScheduleSuggestionService {
      */
     private final Validator validator;
 
-    private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+    /**
+     * 날짜를 ISO 문자열로 쓴다. 기본값(타임스탬프 배열)이면 이미지 경로가 만든 payload가
+     * {@code "startAt": [2026,9,7,17,0]}이 되어, 모델이 낸 payload({@code "2026-09-07T17:00"})와
+     * 같은 컬럼에 두 가지 모양이 섞인다. 검토 카드는 이 값을 그대로 그리므로 화면에 배열이
+     * 뜨고, 저장된 데이터를 나중에 읽는 쪽도 두 모양을 다 다뤄야 한다.
+     */
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .findAndRegisterModules()
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     // ===== 생성 — AiTurnLifecycleService.completeTurnSuccess 트랜잭션 안에서 호출된다 =====
 
@@ -114,6 +133,59 @@ public class ScheduleSuggestionService {
             result.add(ScheduleSuggestionResponse.of(entity, toMap(candidate.payload())));
         }
         log.info("일정 후보 저장: userId={}, conversationId={}, count={}", userId, conversationId, result.size());
+        return result;
+    }
+
+    /**
+     * 이미지에서 읽은 근무를 후보로 저장한다.
+     *
+     * <p>{@link #createFromSuggestions}와 달리 payload를 <b>서버가 만든다.</b> 모델은 표를
+     * 받아쓰기만 했고 시간·날짜는 {@code ScheduleTableInterpreter}가 계산했다. 그래서 여기
+     * 들어오는 값은 모델의 것이 아니라 우리 코드의 것이다 — 검증이 실패하면 그건 계약
+     * 위반(503)이 아니라 우리 버그다.
+     *
+     * <p>그래도 검증은 돌린다. 저장 전에 걸러야 사용자가 [적용]을 눌렀을 때가 아니라 지금
+     * 실패한다.
+     */
+    public List<ScheduleSuggestionResponse> createFromImport(
+            Long userId, Long conversationId, Long sourceMessageId, List<CommitmentCreateRequest> commitments
+    ) {
+        if (commitments == null || commitments.isEmpty()) {
+            return List.of();
+        }
+        if (commitments.size() > MAX_IMPORTED_SUGGESTIONS) {
+            log.warn("이미지 일정 후보 개수 초과: userId={}, count={}", userId, commitments.size());
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        List<ScheduleSuggestionResponse> result = new ArrayList<>();
+        for (CommitmentCreateRequest commitment : commitments) {
+            Set<ConstraintViolation<CommitmentCreateRequest>> violations = validator.validate(commitment);
+            if (!violations.isEmpty()) {
+                String detail = violations.stream()
+                        .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                        .sorted()
+                        .collect(Collectors.joining(", "));
+                // 서버가 만든 값이 검증을 통과하지 못했다. 사용자 입력 오류가 아니다.
+                log.error("이미지 일정 후보가 자체 검증에 실패했다: userId={}, 위반={}", userId, detail);
+                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            }
+
+            JsonNode payload = objectMapper.valueToTree(commitment);
+            AiScheduleSuggestion entity = AiScheduleSuggestion.builder()
+                    .userId(userId)
+                    .conversationId(conversationId)
+                    .sourceMessageId(sourceMessageId)
+                    .kind(ScheduleSuggestionKind.COMMITMENT)
+                    .proposedPayload(toJson(payload))
+                    .status(ScheduleSuggestionStatus.PROPOSED)
+                    .build();
+            suggestionMapper.insert(entity);
+
+            result.add(ScheduleSuggestionResponse.of(entity, toMap(payload)));
+        }
+        log.info("이미지 일정 후보 저장: userId={}, conversationId={}, count={}",
+                userId, conversationId, result.size());
         return result;
     }
 

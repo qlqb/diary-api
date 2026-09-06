@@ -62,6 +62,24 @@ public final class ScheduleTableInterpreter {
      * @param displayName 본인 행을 미리 골라 볼 이름. 없으면 null
      */
     public static ScheduleExtractionResponse interpret(RawScheduleTable raw, LocalDate today, String displayName) {
+        return interpret(raw, today, displayName, null, null);
+    }
+
+    /**
+     * 확정 단계용. 사용자가 고른 시작일과 사용자가 알려준 코드 시간을 함께 받는다.
+     *
+     * <p>★ 확정도 <b>여기서 다시 계산한다.</b> 클라이언트가 되돌려준 해석 결과를 쓰지 않고
+     * 표 원문만 받아 처음부터 파싱한다. 화면이 계산한 시간을 그대로 저장하면, 화면 코드가
+     * 바뀌었을 때 달력에 들어가는 값이 조용히 달라진다.
+     *
+     * @param startDateOverride 사용자가 확정한 첫 열의 날짜. null이면 표에서 추론한다
+     * @param legendOverrides   범례에 없던 코드에 사용자가 알려준 시간. 표의 범례를 덮어쓴다.
+     *                          이 값도 {@link CellParser}가 읽는다 — 사용자가 넣었다고 다른
+     *                          문법을 쓰지 않는다
+     */
+    public static ScheduleExtractionResponse interpret(RawScheduleTable raw, LocalDate today,
+                                                       String displayName, LocalDate startDateOverride,
+                                                       Map<String, String> legendOverrides) {
         List<RawScheduleTable.Row> rawRows = raw.safeRows();
         List<String> rawColumns = raw.safeScheduleColumns();
 
@@ -93,9 +111,19 @@ public final class ScheduleTableInterpreter {
         boolean columnsUnrecognized = columns.isEmpty()
                 || columns.stream().anyMatch(column -> !isScheduleColumn(column));
 
-        LocalDate startDate = resolveStartDate(raw.period(), today);
-        boolean periodMissing = startDate == null;
-        LocalDate endDate = resolveEndDate(raw.period(), startDate, columns.size());
+        /*
+         * periodMissing은 override와 무관하게 "표에 날짜가 있었나"를 말한다. override가
+         * 있다고 이 값을 false로 바꾸면, 화면은 사용자가 직접 고른 주를 표에서 읽은 것처럼
+         * 보여주게 된다.
+         */
+        LocalDate inferredStart = resolveStartDate(raw.period(), today);
+        boolean periodMissing = inferredStart == null;
+        LocalDate startDate = startDateOverride != null ? startDateOverride : inferredStart;
+        LocalDate endDate = startDateOverride != null
+                ? startDateOverride.plusDays(Math.max(columns.size() - 1, 0))
+                : resolveEndDate(raw.period(), startDate, columns.size());
+
+        Map<String, String> legend = mergeLegend(raw.safeLegend(), legendOverrides);
 
         /*
          * 보정한 시작일의 요일이 표의 첫 열과 다르면 우리가 고른 주가 틀렸을 가능성이 크다.
@@ -119,7 +147,7 @@ public final class ScheduleTableInterpreter {
             List<CellView> views = new ArrayList<>();
             if (!rowInvalid) {
                 for (int day = 0; day < cells.size(); day++) {
-                    ParsedCell parsed = CellParser.parse(cells.get(day), raw.safeLegend());
+                    ParsedCell parsed = CellParser.parse(cells.get(day), legend);
                     if (parsed.kind() == ParsedCell.Kind.UNRESOLVED && !parsed.raw().isBlank()) {
                         unresolved.add(parsed.raw());
                     }
@@ -139,6 +167,26 @@ public final class ScheduleTableInterpreter {
                 matchRow(rawRows, displayName),
                 rows,
                 new ArrayList<>(unresolved));
+    }
+
+    /**
+     * 표의 범례에 사용자가 알려준 시간을 덮어쓴다.
+     *
+     * <p>사용자 쪽이 이긴다. 사용자가 코드를 고쳐 주는 상황은 표의 범례가 없거나 틀렸을
+     * 때뿐이고, 그때 표를 우선하면 고쳐 준 값이 무시된다.
+     */
+    private static Map<String, String> mergeLegend(Map<String, String> legend,
+                                                   Map<String, String> overrides) {
+        if (overrides == null || overrides.isEmpty()) {
+            return legend;
+        }
+        Map<String, String> merged = new HashMap<>(legend);
+        overrides.forEach((code, time) -> {
+            if (code != null && time != null && !time.isBlank()) {
+                merged.put(code, time);
+            }
+        });
+        return merged;
     }
 
     /**

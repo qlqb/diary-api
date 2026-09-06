@@ -1,21 +1,26 @@
 package com.jungwoo.project.memo.ai.scheduleimport;
 
+import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.scheduleimport.dto.ScheduleExtractionResponse;
+import com.jungwoo.project.memo.ai.scheduleimport.dto.ScheduleImageConfirmRequest;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.security.UserPrincipal;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -53,6 +58,25 @@ public class ScheduleImageImportController {
 
         return ResponseEntity.ok(scheduleImageImportService.extract(
                 principal.getUserId(), conversationId, bytesOf(image), image.getContentType()));
+    }
+
+    /**
+     * 검토를 마친 표에서 후보를 만든다. 실제 약속은 아직 생기지 않는다 —
+     * {@code /api/ai/schedule-suggestions/{id}/apply}가 만든다.
+     *
+     * <p>이미지를 다시 보내지 않는다. 표 원문(raw)만 돌려받아 서버가 처음부터 다시 파싱한다.
+     */
+    @PostMapping("/confirm")
+    public ResponseEntity<List<ScheduleSuggestionResponse>> confirm(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long conversationId,
+            @Valid @RequestBody ScheduleImageConfirmRequest request
+    ) {
+        log.info("POST /api/ai/conversations/{}/schedule-image/confirm - userId={}, rowIndex={}, 시작일={}",
+                conversationId, principal.getUserId(), request.getRowIndex(), request.getPeriodStartDate());
+
+        return ResponseEntity.ok(
+                scheduleImageImportService.confirm(principal.getUserId(), conversationId, request));
     }
 
     private byte[] bytesOf(MultipartFile image) {
