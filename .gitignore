@@ -49,3 +49,6 @@ out/
 # 덤프는 로컬 디스크에만 두고, 무엇을 언제 왜 떴는지는 docs/sql/의 마이그레이션
 # 파일 주석에 남긴다.
 docs/sql/backup/*.sql
+
+# 근무표 테스트 이미지 — 동료 실명과 근무 시간이 들어 있어 저장소에 넣지 않는다
+src/test/resources/schedule-import/
