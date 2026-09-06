@@ -3,7 +3,6 @@ package com.jungwoo.project.memo.ai;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
@@ -79,14 +78,10 @@ public class ScheduleSuggestionService {
     private final Validator validator;
 
     /**
-     * 날짜를 ISO 문자열로 쓴다. 기본값(타임스탬프 배열)이면 이미지 경로가 만든 payload가
-     * {@code "startAt": [2026,9,7,17,0]}이 되어, 모델이 낸 payload({@code "2026-09-07T17:00"})와
-     * 같은 컬럼에 두 가지 모양이 섞인다. 검토 카드는 이 값을 그대로 그리므로 화면에 배열이
-     * 뜨고, 저장된 데이터를 나중에 읽는 쪽도 두 모양을 다 다뤄야 한다.
+     * 공용 빈을 주입받는다. 직접 만들면 날짜 포맷·모듈 설정이 이 클래스에만 따로 남아,
+     * 나중에 설정을 바꿔도 이 경로만 옛 동작으로 뒤처진다({@code JacksonConfig} 참고).
      */
-    private final ObjectMapper objectMapper = new ObjectMapper()
-            .findAndRegisterModules()
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+    private final ObjectMapper objectMapper;
 
     // ===== 생성 — AiTurnLifecycleService.completeTurnSuccess 트랜잭션 안에서 호출된다 =====
 

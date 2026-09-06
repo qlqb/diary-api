@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
+import com.jungwoo.project.memo.common.config.JacksonConfig;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
@@ -89,8 +90,14 @@ class ScheduleSuggestionServiceTest {
     @BeforeEach
     void setUp() {
         ValidatorFactory factory = Validation.buildDefaultValidatorFactory();
+        /*
+         * ObjectMapper도 실물이다. JacksonConfig가 만드는 것과 같은 것을 써야 날짜가
+         * ISO 문자열로 나가는지를 이 테스트가 실제로 확인한다 — 여기서 따로 만들면
+         * 설정이 갈라져도 테스트는 계속 통과한다.
+         */
         service = new ScheduleSuggestionService(
-                suggestionMapper, commitmentService, routineService, factory.getValidator());
+                suggestionMapper, commitmentService, routineService, factory.getValidator(),
+                new JacksonConfig().objectMapper());
     }
 
     /** apply()가 받는 것은 화면에서 온 값이라 Map이다. HTTP 경계에서 Jackson 3이 그렇게 만든다. */
