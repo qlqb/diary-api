@@ -112,6 +112,15 @@ public class PlanJudgmentService {
      * 결과를 버리고 질문을 돌려준다.
      */
     public PlanJudgmentResult judge(PlanningContext context) {
+        return judge(context, false);
+    }
+
+    /**
+     * @param familiarityAnswered 익숙함 되묻기에 이미 답했다. 그 답이 근거로 남지 않는
+     *                            경우("처음이에요")에도 되묻기가 끝나게 하는 유일한 신호다 —
+     *                            자세한 이유는 PlanDraftRequest의 같은 이름 필드에 적어 두었다
+     */
+    public PlanJudgmentResult judge(PlanningContext context, boolean familiarityAnswered) {
         if (!aiConsultationClient.isConfigured()) {
             throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
         }
@@ -137,7 +146,9 @@ public class PlanJudgmentService {
 
         PlanStrategy strategy = normalize(ai, context, goals);
 
-        Optional<PlanJudgmentResult> ask = askUnknownFamiliarity(strategy, context);
+        Optional<PlanJudgmentResult> ask = familiarityAnswered
+                ? Optional.empty()
+                : askUnknownFamiliarity(strategy, context);
         if (ask.isPresent()) {
             log.info("계획 판단: 근거 없는 항목의 시간 차가 커서 되묻는다. userId={}", context.userId());
             return ask.get();
@@ -225,41 +236,87 @@ public class PlanJudgmentService {
      * <p>한 초안에 한 번이다. 이 메서드는 판단 한 번에 한 번만 불리므로 그 자체로 보장된다.
      */
     private Optional<PlanJudgmentResult> askUnknownFamiliarity(PlanStrategy strategy, PlanningContext context) {
-        Map<Long, TopicContext> topicsById = topicsById(context);
+        Map<Long, Treatment> treatmentByTopic = new HashMap<>();
+        Map<Long, Boolean> knownByTopic = new HashMap<>();
+        for (TopicTreatment treatment : strategy.topics()) {
+            treatmentByTopic.put(treatment.topicId(), treatment.treatment());
+            knownByTopic.put(treatment.topicId(), knowsFamiliarity(treatment));
+        }
 
         int totalMinutes = 0;
-        int swingMinutes = 0;
-        List<String> unknownTitles = new ArrayList<>();
-        for (TopicTreatment treatment : strategy.topics()) {
-            if (treatment.treatment() == Treatment.SKIP) {
-                continue;
-            }
-            totalMinutes += treatment.treatment() == Treatment.SKIM
-                    ? SKIM_ESTIMATE_MINUTES : FULL_ESTIMATE_MINUTES;
-            if (treatment.treatment() == Treatment.FULL && !knowsFamiliarity(treatment)) {
-                swingMinutes += FULL_ESTIMATE_MINUTES - SKIM_ESTIMATE_MINUTES;
-                TopicContext topic = topicsById.get(treatment.topicId());
-                if (topic != null) {
-                    unknownTitles.add(topic.title());
+        CourseContext worstCourse = null;
+        List<TopicContext> worstUnknown = List.of();
+        for (CourseContext course : context.courses()) {
+            List<TopicContext> unknown = new ArrayList<>();
+            for (TopicContext topic : course.topics()) {
+                Treatment treatment = treatmentByTopic.get(topic.topicId());
+                if (treatment == null || treatment == Treatment.SKIP) {
+                    continue;
+                }
+                totalMinutes += treatment == Treatment.SKIM ? SKIM_ESTIMATE_MINUTES : FULL_ESTIMATE_MINUTES;
+                if (treatment == Treatment.FULL && !Boolean.TRUE.equals(knownByTopic.get(topic.topicId()))) {
+                    unknown.add(topic);
                 }
             }
+            if (unknown.size() > worstUnknown.size()) {
+                worstCourse = course;
+                worstUnknown = unknown;
+            }
         }
-        if (totalMinutes == 0 || unknownTitles.isEmpty()) {
+        if (totalMinutes == 0 || worstCourse == null || worstUnknown.isEmpty()) {
             return Optional.empty();
         }
+
+        /*
+         * ★ 한 과목만 묻는다. 계획 전체의 근거 없는 항목을 한 질문에 몰아넣으면 "이 46개는
+         * 처음 보는 내용일까요?"가 되는데, 그건 답할 수 있는 질문이 아니다. 답이 뭉뚱그려지면
+         * 저장할 수도 없다 — 46개에 대한 "익숙하다"는 맥락으로 남길 만한 사실이 아니다.
+         * 가장 많이 걸린 과목 하나만 물으면 답이 구체적이고, 그 답은 그대로 맥락이 된다.
+         * 다음 계획에서 또 물을 항목이 남아 있으면 그때 그 과목을 묻는다.
+         */
+        int swingMinutes = worstUnknown.size() * (FULL_ESTIMATE_MINUTES - SKIM_ESTIMATE_MINUTES);
         if (swingMinutes < UNKNOWN_FAMILIARITY_MIN_SWING_MINUTES
                 || (double) swingMinutes / totalMinutes < UNKNOWN_FAMILIARITY_THRESHOLD) {
             return Optional.empty();
         }
 
-        String named = String.join(", ",
-                unknownTitles.subList(0, Math.min(unknownTitles.size(), MAX_NAMED_TOPICS_IN_QUESTION)));
-        String suffix = unknownTitles.size() > MAX_NAMED_TOPICS_IN_QUESTION
-                ? " 외 " + (unknownTitles.size() - MAX_NAMED_TOPICS_IN_QUESTION) + "개"
+        List<String> titles = worstUnknown.stream().map(TopicContext::title).toList();
+        String named = String.join(", ", titles.subList(0, Math.min(titles.size(), MAX_NAMED_TOPICS_IN_QUESTION)));
+        String suffix = titles.size() > MAX_NAMED_TOPICS_IN_QUESTION
+                ? " 외 " + (titles.size() - MAX_NAMED_TOPICS_IN_QUESTION) + "개"
                 : "";
         return Optional.of(PlanJudgmentResult.ask(AskReason.UNKNOWN_FAMILIARITY,
-                named + suffix + "는 이번에 처음 보는 내용일까요? 익숙하면 훑는 정도로 잡을게요.",
-                List.of("처음이에요", "이미 익숙해요", "일부는 익숙해요")));
+                worstCourse.title() + "의 " + named + suffix + "는 이번에 처음 보는 내용일까요? "
+                        + "익숙하면 훑는 정도로 잡을게요.",
+                List.of("처음이에요", "이미 익숙해요", "일부는 익숙해요"),
+                worstUnknown.stream().map(TopicContext::topicId).toList()));
+    }
+
+    /**
+     * "익숙하다"는 답을 맥락 문장으로 옮긴다. 되묻기가 한 과목만 묻기 때문에 이 문장이
+     * 구체적일 수 있고, 구체적이라야 다음 판단에서 어느 항목을 덮는지 알아볼 수 있다.
+     */
+    public String familiarityStatement(PlanningContext context, List<Long> topicIds) {
+        if (topicIds == null || topicIds.isEmpty()) {
+            return null;
+        }
+        Set<Long> ids = new HashSet<>(topicIds);
+        for (CourseContext course : context.courses()) {
+            List<String> titles = course.topics().stream()
+                    .filter(topic -> ids.contains(topic.topicId()))
+                    .map(TopicContext::title)
+                    .toList();
+            if (titles.isEmpty()) {
+                continue;
+            }
+            String named = String.join(", ",
+                    titles.subList(0, Math.min(titles.size(), MAX_NAMED_TOPICS_IN_QUESTION)));
+            String suffix = titles.size() > MAX_NAMED_TOPICS_IN_QUESTION
+                    ? " 등 " + titles.size() + "개 항목"
+                    : "";
+            return course.title() + "의 " + named + suffix + "은(는) 이미 익숙하다";
+        }
+        return null;
     }
 
     /**
@@ -546,6 +603,12 @@ public class PlanJudgmentService {
             - NEXT_CLASS: 다음 수업 시각
             - DEADLINE: 시험·과제 기한
             진행 상태와 사용자 표식은 서버가 이미 알고 있으므로 적지 않아도 된다.
+
+            rank는 **과목마다 다음 수업 전에 반드시 해야 하는 항목을 최대 3개만** 골라
+            1, 2, 3으로 매긴다. 나머지 항목은 rank를 비워 둔다(생략한다).
+            전체에 순위를 매기려 하지 마라 — 그렇게 하면 다 비슷한 값이 되어 "무엇이 먼저인지"를
+            아무것도 말하지 않게 된다. rank가 붙은 항목이 계획 앞쪽에 놓이고, 시간이 모자라면
+            rank 없는 항목부터 잘린다. 그래서 이 세 개를 고르는 것이 이 판단의 알맹이다.
 
             네가 적은 근거가 실제로 있는지 서버가 대조한다. 없는 맥락 번호를 적으면 그 근거는
             버려지고, 근거가 없어진 항목은 FULL로 되돌아간다. 그럴싸한 문장을 근거 자리에

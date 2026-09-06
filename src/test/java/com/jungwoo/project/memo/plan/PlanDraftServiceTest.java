@@ -107,6 +107,8 @@ class PlanDraftServiceTest {
     private PlanningContextBuilder planningContextBuilder;
     @Mock
     private PlanJudgmentService planJudgmentService;
+    @Mock
+    private com.jungwoo.project.memo.ai.ContextChangeSuggestionService contextChangeSuggestionService;
 
     private PlanDraftService service;
 
@@ -124,7 +126,7 @@ class PlanDraftServiceTest {
         ReflectionTestUtils.setField(generator, "defaultTimeZoneId", "Asia/Seoul");
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
-                planningContextBuilder, planJudgmentService);
+                planningContextBuilder, planJudgmentService, contextChangeSuggestionService);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);

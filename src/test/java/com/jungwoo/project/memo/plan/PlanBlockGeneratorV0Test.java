@@ -251,6 +251,25 @@ class PlanBlockGeneratorV0Test {
     }
 
     @Test
+    @DisplayName("과목 안의 순서도 판단의 rank를 따른다 — 선수지식 판단이 순서로 드러나야 뜻이 생긴다")
+    void judgmentDecidesTopicOrderWithinACourse() {
+        PlanningContext context = context(
+                course(36L, "자료구조", DATA_STRUCTURES_CLASS,
+                        topic(216L, "1주차 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(217L, "2주차 내용", TopicProgressStatus.NOT_STARTED, null),
+                        topic(218L, "3주차 내용", TopicProgressStatus.NOT_STARTED, null)));
+
+        Generated generated = generator.generate(spec(), context, judgment(
+                new PlanStrategy.TopicTreatment(218L, Treatment.FULL, 1, "다음 수업의 전제", List.of()),
+                new PlanStrategy.TopicTreatment(216L, Treatment.FULL, 2, "그 다음", List.of()),
+                new PlanStrategy.TopicTreatment(217L, Treatment.FULL, 3, "마지막", List.of())));
+
+        assertThat(generated.items()).extracting(ProposalItem::title)
+                .as("주차 순이 아니라 판단이 매긴 순서다")
+                .containsExactly("자료구조 · 3주차 내용", "자료구조 · 1주차 내용", "자료구조 · 2주차 내용");
+    }
+
+    @Test
     @DisplayName("판단이 정한 과목 순서를 따른다 — 언급되지 않은 과목은 뒤에 그대로 남는다")
     void judgmentDecidesCourseOrder() {
         PlanningContext context = context(

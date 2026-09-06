@@ -3,11 +3,13 @@ package com.jungwoo.project.memo.plan;
 import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiProposalMapper;
 import com.jungwoo.project.memo.ai.AiProposalService;
+import com.jungwoo.project.memo.ai.ContextChangeSuggestionService;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Generated;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Spec;
+import com.jungwoo.project.memo.plan.domain.FamiliarityAnswer;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
@@ -45,6 +47,7 @@ public class PlanDraftService {
     private final PlanBlockGeneratorV0 blockGeneratorV0;
     private final PlanningContextBuilder planningContextBuilder;
     private final PlanJudgmentService planJudgmentService;
+    private final ContextChangeSuggestionService contextChangeSuggestionService;
 
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT.
@@ -86,7 +89,7 @@ public class PlanDraftService {
             return blockGeneratorV0.generate(spec);
         }
         if ("JUDGMENT".equalsIgnoreCase(generatorMode)) {
-            return generateWithJudgment(spec);
+            return generateWithJudgment(spec, request);
         }
         // 모델이 설정돼 있어야 하는 것은 AI 경로뿐이다. v0는 모델을 부르지 않는다.
         if (!aiConsultationClient.isConfigured()) {
@@ -102,9 +105,29 @@ public class PlanDraftService {
      * 묻는 것과 다르다 — 만들어진 계획은 그 자체로 화면의 기준점이 되어, 사용자가 답을 고르기
      * 전에 이미 대답을 유도한다.
      */
-    private Generated generateWithJudgment(Spec spec) {
+    private Generated generateWithJudgment(Spec spec, PlanDraftRequest request) {
         PlanningContext context = planningContextBuilder.build(spec);
-        PlanJudgmentResult judgment = planJudgmentService.judge(context);
+
+        /*
+         * 「이미 익숙해요」는 저장할 사실이다. 맥락으로 남기고 컨텍스트를 다시 모은다 —
+         * 그래야 이번 초안부터 그 사실이 근거가 된다. 답을 다음 계획에서야 반영하면 사용자는
+         * 방금 알려준 것이 무시됐다고 본다.
+         *
+         * 「처음이에요」/「일부는 익숙해요」는 저장할 것이 없다. 전자는 근거 없음이 이미
+         * 기본이고, 후자는 어느 것이 익숙한지를 이 답으로는 알 수 없다(그 자리는 항목별
+         * 「이미 알아요」다). 되묻기만 멈춘다.
+         */
+        if (request.getFamiliarityAnswer() == FamiliarityAnswer.FAMILIAR) {
+            String statement = planJudgmentService.familiarityStatement(
+                    context, request.getFamiliarityTopicIds());
+            if (statement != null) {
+                contextChangeSuggestionService.recordUserConfirmed(spec.userId(), statement);
+                context = planningContextBuilder.build(spec);
+            }
+        }
+
+        PlanJudgmentResult judgment = planJudgmentService.judge(
+                context, request.getFamiliarityAnswer() != null);
         if (judgment.isAsk()) {
             log.info("기간 계획 초안: 되묻고 끝낸다. userId={}, reason={}",
                     spec.userId(), judgment.ask().reason());

@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.plan.dto;
 
+import com.jungwoo.project.memo.plan.domain.FamiliarityAnswer;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -40,4 +41,19 @@ public class PlanDraftRequest {
 
     /** 비어 있으면 전체 프로젝트를 대상으로 한다. */
     private List<Long> courseIds;
+
+    /**
+     * 익숙함을 묻는 되묻기에 고른 답. 화면이 그 답과 함께 아래 topicIds를 그대로 돌려보낸다.
+     *
+     * <p>★ 값이 있으면 그 요청에서는 다시 묻지 않는다. 이것이 없으면 되묻기가 끝나지 않는다 —
+     * "처음이에요"는 저장할 상태가 없어서(근거 없음이 이미 기본이고 그때 취급이 이미 FULL이다)
+     * 다음 요청에서 판단이 똑같이 "근거가 없다"고 보고 또 묻는다. 실데이터로 확인했다.
+     *
+     * <p>{@code FAMILIAR}는 다르다. 그 답은 USER_CONFIRMED 맥락으로 저장되어 <b>이번 초안부터</b>
+     * 근거가 되고, 다음 계획에서도 남는다.
+     */
+    private FamiliarityAnswer familiarityAnswer;
+
+    /** 그 되묻기가 대상으로 삼았던 학습 항목. 응답의 {@code ask.topicIds}를 그대로 돌려보낸다. */
+    private List<Long> familiarityTopicIds;
 }

@@ -247,8 +247,46 @@ class PlanJudgmentServiceTest {
 
         assertThat(result.isAsk()).isTrue();
         assertThat(result.ask().reason()).isEqualTo(AskReason.UNKNOWN_FAMILIARITY);
-        assertThat(result.ask().question()).contains("처음 보는 내용 0");
+        assertThat(result.ask().question())
+                .as("어느 과목 이야기인지가 질문에 있어야 답할 수 있다")
+                .startsWith("자료구조의")
+                .contains("처음 보는 내용 0");
         assertThat(result.ask().options()).contains("처음이에요", "이미 익숙해요");
+        assertThat(result.ask().topicIds())
+                .as("답을 맥락으로 저장하려면 무엇을 물었는지가 응답에 실려야 한다")
+                .containsExactly(300L, 301L, 302L, 303L);
+    }
+
+    @Test
+    @DisplayName("답에 이미 답했으면 다시 묻지 않는다 — 이게 없으면 '처음이에요'가 무한히 반복된다")
+    void answeringSuppressesTheAsk() {
+        List<TopicContext> topics = new ArrayList<>();
+        StringBuilder json = new StringBuilder();
+        for (int i = 0; i < 4; i++) {
+            long id = 300L + i;
+            topics.add(topic(id, "처음 보는 내용 " + i, TopicProgressStatus.NOT_STARTED, null));
+            json.append(i > 0 ? "," : "").append(topicEntry(id, "FULL", "처음인 것 같다", null));
+        }
+        givenAi(goalsAndTopics(json.toString()));
+        PlanningContext ctx = contextWith(
+                activeContext(1L, "주말은 휴무"), topics.toArray(new TopicContext[0]));
+
+        assertThat(service.judge(ctx, false).isAsk()).isTrue();
+        assertThat(service.judge(ctx, true).isAsk()).isFalse();
+    }
+
+    @Test
+    @DisplayName("「이미 익숙해요」는 어느 과목의 무엇인지가 담긴 맥락 문장이 된다")
+    void familiarityStatementNamesTheCourseAndTopics() {
+        PlanningContext ctx = contextWith(
+                activeContext(1L, "주말은 휴무"),
+                topic(300L, "파이썬 기초", TopicProgressStatus.NOT_STARTED, null),
+                topic(301L, "변수와 연산자", TopicProgressStatus.NOT_STARTED, null));
+
+        assertThat(service.familiarityStatement(ctx, List.of(300L, 301L)))
+                .isEqualTo("자료구조의 파이썬 기초, 변수와 연산자은(는) 이미 익숙하다");
+        assertThat(service.familiarityStatement(ctx, List.of())).isNull();
+        assertThat(service.familiarityStatement(ctx, null)).isNull();
     }
 
     @Test

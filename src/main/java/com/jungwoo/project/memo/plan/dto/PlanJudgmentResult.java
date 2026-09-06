@@ -19,7 +19,12 @@ public record PlanJudgmentResult(PlanStrategy strategy, Ask ask) {
     }
 
     public static PlanJudgmentResult ask(AskReason reason, String question, List<String> options) {
-        return new PlanJudgmentResult(null, new Ask(reason, question, options));
+        return ask(reason, question, options, List.of());
+    }
+
+    public static PlanJudgmentResult ask(AskReason reason, String question, List<String> options,
+                                         List<Long> topicIds) {
+        return new PlanJudgmentResult(null, new Ask(reason, question, options, topicIds));
     }
 
     public boolean isAsk() {
@@ -29,10 +34,13 @@ public record PlanJudgmentResult(PlanStrategy strategy, Ask ask) {
     /**
      * 되묻기 한 건.
      *
-     * @param options 사용자가 고를 답. 화면이 버튼으로 그리고, 고른 답을 지시문에 이어 붙여
-     *                다시 요청한다. 기존 상담의 ASK_CLARIFICATION과 같은 패턴이며 새 상태
-     *                개념을 만들지 않는다
+     * @param options  사용자가 고를 답. 화면이 버튼으로 그리고, 고른 답을 다시 요청에 실어
+     *                 보낸다. 기존 상담의 ASK_CLARIFICATION과 같은 패턴이며 새 상태 개념을
+     *                 만들지 않는다
+     * @param topicIds 이 질문이 대상으로 삼은 학습 항목. 화면이 그대로 돌려보내면 서버가
+     *                 "익숙하다"는 답을 그 항목들에 대한 맥락으로 저장한다. 이 값이 없으면
+     *                 답이 텍스트로만 남아 다음 판단이 여전히 근거가 없다고 본다
      */
-    public record Ask(AskReason reason, String question, List<String> options) {
+    public record Ask(AskReason reason, String question, List<String> options, List<Long> topicIds) {
     }
 }

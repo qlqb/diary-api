@@ -201,6 +201,31 @@ public class ContextChangeSuggestionService {
         return toResponseWithTargetLookup(applied);
     }
 
+    /**
+     * 사용자가 직접 확인해 준 사실을 맥락으로 남긴다. 후보(제안) 단계 없이 바로 확정된다.
+     *
+     * <p>계획 초안이 "이건 익숙하세요?"라고 물었고 사용자가 그렇다고 답한 경우가 이 경로다.
+     * 후보를 만들었다가 바로 적용하는 것은 없는 승인 단계를 흉내 내는 것이라 하지 않는다 —
+     * 사용자가 버튼을 누른 것 자체가 승인이다. 그래서 sourceType도 AI_SUGGESTION_APPROVED가
+     * 아니라 USER_CONFIRMED다. 문장을 AI가 다듬었더라도 확인한 것은 사용자다.
+     *
+     * <p>★ 맥락을 만드는 코드는 이 클래스 밖에 두지 않는다. 두 곳에서 만들면 상태 전이 규칙
+     * (SUPERSEDE·MARK_STALE)이 한쪽에만 적용되는 상태가 조용히 생긴다.
+     */
+    @Transactional
+    public UserContext recordUserConfirmed(Long userId, String content) {
+        UserContext created = UserContext.builder()
+                .userId(userId)
+                .content(content)
+                .status(UserContextStatus.ACTIVE)
+                .sourceType(ContextSourceType.USER_CONFIRMED)
+                .confirmedAt(LocalDateTime.now())
+                .build();
+        userContextMapper.insert(created);
+        log.info("사용자 확인 맥락 저장: userId={}, contextId={}", userId, created.getContextId());
+        return created;
+    }
+
     /** 연산별로 user_contexts를 실제로 바꾸고 결과 context_id를 반환한다. 안전하게 전이 못 하면 conflict. */
     private Long executeOperation(AiContextChangeSuggestion suggestion, Long userId, LocalDateTime now) {
         return switch (suggestion.getOperation()) {

@@ -124,7 +124,7 @@ public class PlanBlockGeneratorV0 {
                             ? "다음 수업이 가장 빠른 순서로 놓았어요"
                             : "수업 시각을 몰라 뒤에 두었어요"));
 
-            for (TopicContext topic : inProgressFirst(course.topics())) {
+            for (TopicContext topic : orderedTopics(course.topics(), judged)) {
                 TopicTreatment decided = judged.get(topic.topicId());
                 Treatment treatment = decided != null ? decided.treatment() : treatmentOf(topic);
                 if (decided == null) {
@@ -199,6 +199,29 @@ public class PlanBlockGeneratorV0 {
             }
         }
         return byTopic;
+    }
+
+    /**
+     * 과목 안의 학습 항목 순서.
+     *
+     * <p>판단이 rank를 줬으면 그것을 따른다. 이 순서가 무엇을 뜻하는지가 판단의 알맹이다 —
+     * "1주차 개념이 2주차 수업 이해의 전제"라는 말은 그 항목을 앞에 두어야 뜻이 생긴다.
+     * 순서가 상한(MAX_ITEMS)에서 무엇이 잘리고 배치에서 무엇이 먼저 자리를 잡는지를 정하므로,
+     * 여기서 rank를 버리면 판단은 문장만 남고 계획은 바뀌지 않는다. 실제로 그렇게 만들어
+     * 재 봤더니 v0와 지표가 한 자리도 다르지 않았다.
+     *
+     * <p>판단이 없거나 rank를 안 준 항목은 v0 규칙(이미 시작한 것 먼저, 그 뒤 주차 순)이다.
+     */
+    private List<TopicContext> orderedTopics(List<TopicContext> topics, Map<Long, TopicTreatment> judged) {
+        if (judged.isEmpty()) {
+            return inProgressFirst(topics);
+        }
+        List<TopicContext> ordered = new ArrayList<>(inProgressFirst(topics));
+        ordered.sort(Comparator.comparingInt(topic -> {
+            TopicTreatment decided = judged.get(topic.topicId());
+            return decided == null ? Integer.MAX_VALUE : decided.rank();
+        }));
+        return ordered;
     }
 
     /**
