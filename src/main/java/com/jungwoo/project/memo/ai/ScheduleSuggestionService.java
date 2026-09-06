@@ -211,7 +211,55 @@ public class ScheduleSuggestionService {
      */
     @Transactional
     public ScheduleSuggestionResponse apply(Long suggestionId, Long userId, Map<String, Object> editedPayload) {
-        AiScheduleSuggestion suggestion = requireForUpdate(suggestionId, userId);
+        return applyLocked(requireForUpdate(suggestionId, userId), userId, editedPayload);
+    }
+
+    /**
+     * 여러 후보를 한 번에 적용한다. <b>전부 되거나 전부 안 된다.</b>
+     *
+     * <p>근무표 한 장이 7개의 후보를 만들고, 사용자는 그것을 하나씩 누르지 않는다. 그런데
+     * 중간에 실패해 3개만 들어가면 사용자는 어느 것이 들어갔는지 카드만 보고는 알 수 없다.
+     * 한 트랜잭션으로 묶어 그 상태를 아예 없앤다.
+     *
+     * <p><b>잠금은 suggestionId 오름차순으로 잡는다.</b> 두 요청이 겹치는 후보 집합을 서로
+     * 다른 순서로 잠그면 교착이 난다. 정렬해 두면 먼저 잡은 쪽이 끝날 때까지 다른 쪽이
+     * 기다리기만 한다.
+     *
+     * <p>이미 처리된 후보가 섞여 있으면 통째로 거절한다. [모두 적용]을 두 번 누른 경우가
+     * 여기 해당하는데, 조용히 건너뛰면 "몇 개는 방금 만들어졌고 몇 개는 아까 만들어졌다"가
+     * 되어 사용자가 무엇을 승인한 것인지 흐려진다. 화면이 목록을 새로 받는 것이 맞다.
+     */
+    @Transactional
+    public List<ScheduleSuggestionResponse> applyBatch(Long userId, List<Long> suggestionIds) {
+        if (suggestionIds == null || suggestionIds.isEmpty()) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        List<Long> ordered = suggestionIds.stream()
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .sorted()
+                .toList();
+        if (ordered.isEmpty() || ordered.size() > MAX_IMPORTED_SUGGESTIONS) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        List<ScheduleSuggestionResponse> applied = new ArrayList<>();
+        for (Long suggestionId : ordered) {
+            applied.add(applyLocked(requireForUpdate(suggestionId, userId), userId, null));
+        }
+        log.info("일정 후보 일괄 적용: userId={}, count={}", userId, applied.size());
+        return applied;
+    }
+
+    /**
+     * 잠금을 이미 잡은 후보 하나를 적용한다.
+     *
+     * <p>{@link #apply}와 {@link #applyBatch}가 공유한다. 두 벌로 두면 한쪽만 고쳐져
+     * "하나씩 누를 때와 모두 적용할 때 결과가 다른" 상태가 된다.
+     */
+    private ScheduleSuggestionResponse applyLocked(AiScheduleSuggestion suggestion, Long userId,
+                                                   Map<String, Object> editedPayload) {
+        Long suggestionId = suggestion.getSuggestionId();
         // 이미 결론이 난 후보는 다시 적용하지 않는다. APPLIED에 또 적용하면 원본이 하나 더 생긴다.
         if (suggestion.getStatus() != ScheduleSuggestionStatus.PROPOSED) {
             throw new ConflictException(ErrorCode.SCHEDULE_SUGGESTION_ALREADY_RESOLVED);
