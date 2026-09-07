@@ -15,6 +15,7 @@ import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionsConflictDetails;
 import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesPendingGroup;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -73,9 +74,10 @@ class RoutineServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new RoutineService(routineMapper, routineExceptionMapper,
-                new RoutineReader(routineMapper), courseService,
-                Clock.fixed(Instant.parse("2026-08-31T00:00:00Z"), ZoneOffset.UTC));
+        RoutineReader reader = new RoutineReader(routineMapper);
+        service = new RoutineService(routineMapper, routineExceptionMapper, reader, courseService,
+                Clock.fixed(Instant.parse("2026-08-31T00:00:00Z"), ZoneOffset.UTC),
+                new RoutineOccurrenceService(reader, routineExceptionMapper));
     }
 
     // ===== 소유권 =====
@@ -490,6 +492,103 @@ class RoutineServiceTest {
         verify(routineMapper).updateAll(eq(ROUTINE_ID), eq(USER_ID), any(), any(), any(),
                 any(), any(), eq(30), any(), any());
         assertThat(response.leadMinutes()).isEqualTo(30);
+    }
+
+    // ===== 이동시간: 아직 정하지 않은 수업 =====
+
+    /* 계획 기간: 2026-09-07(월) ~ 09-13(일). */
+    private static final LocalDate PLAN_FROM = LocalDate.of(2026, 9, 7);
+    private static final LocalDate PLAN_TO = LocalDate.of(2026, 9, 13);
+
+    private Routine pendingRoutine(Long routineId, String title, Long courseId, Integer leadMinutes,
+                                   LocalDate effectiveFrom, LocalDate effectiveUntil, DayOfWeek... days) {
+        return Routine.builder()
+                .routineId(routineId)
+                .userId(USER_ID)
+                .courseId(courseId)
+                .title(title)
+                .startTime(LocalTime.of(9 + routineId.intValue(), 0))
+                .endTime(LocalTime.of(12 + routineId.intValue(), 0))
+                .leadMinutes(leadMinutes)
+                .effectiveFrom(effectiveFrom)
+                .effectiveUntil(effectiveUntil)
+                .daysOfWeek(new LinkedHashSet<>(List.of(days)))
+                .build();
+    }
+
+    private void listed(Routine... routines) {
+        when(routineMapper.findAllByUserId(USER_ID)).thenReturn(new java.util.ArrayList<>(List.of(routines)));
+        List<com.jungwoo.project.memo.routine.dto.RoutineWeekdayRow> rows = new java.util.ArrayList<>();
+        for (Routine routine : routines) {
+            for (DayOfWeek day : routine.getDaysOfWeek()) {
+                com.jungwoo.project.memo.routine.dto.RoutineWeekdayRow row =
+                        new com.jungwoo.project.memo.routine.dto.RoutineWeekdayRow();
+                row.setRoutineId(routine.getRoutineId());
+                row.setDayOfWeek(day.name());
+                rows.add(row);
+            }
+        }
+        org.mockito.Mockito.lenient().when(routineMapper.findWeekdaysByUserId(USER_ID)).thenReturn(rows);
+    }
+
+    /**
+     * NULL이고 수업(courseId != null)이고 기간 안에 도는 것만 묻는다. 0/양수는 답한 것이고,
+     * 알바는 수업이 아니고, 기간 밖(다음 달 개강, 지난 학기 종강)은 이번 계획에 영향이 없다.
+     */
+    @Test
+    void 기간_안에_도는_수업_중_아직_정하지_않은_것만_한_묶음으로_묻는다() {
+        listed(pendingRoutine(1L, "자료구조", 101L, null, SEMESTER_START, SEMESTER_END, DayOfWeek.TUESDAY),
+                pendingRoutine(2L, "웹서버", 102L, 0, SEMESTER_START, SEMESTER_END, DayOfWeek.WEDNESDAY),
+                pendingRoutine(3L, "센서", 103L, 60, SEMESTER_START, SEMESTER_END, DayOfWeek.WEDNESDAY),
+                pendingRoutine(4L, "지난 학기", 104L, null, LocalDate.of(2026, 3, 2), LocalDate.of(2026, 6, 20), DayOfWeek.MONDAY),
+                pendingRoutine(5L, "다음 달 개강", 105L, null, LocalDate.of(2026, 10, 5), null, DayOfWeek.MONDAY),
+                pendingRoutine(6L, "알바", null, null, SEMESTER_START, null, DayOfWeek.FRIDAY),
+                pendingRoutine(7L, "빅데이터", 107L, null, SEMESTER_START, SEMESTER_END, DayOfWeek.THURSDAY, DayOfWeek.FRIDAY));
+
+        List<LeadMinutesPendingGroup> pending = service.pendingLeadMinutes(USER_ID, PLAN_FROM, PLAN_TO);
+
+        assertThat(pending).hasSize(1);
+        LeadMinutesPendingGroup group = pending.get(0);
+        assertThat(group.groupKey()).isEqualTo("class");
+        assertThat(group.label()).isEqualTo("수업");
+        assertThat(group.routineIds()).containsExactly(1L, 7L);
+        // 샘플은 기간 안 첫 발생분부터 최대 셋: 화 10:00(자료구조), 목 16:00, 금 16:00(빅데이터).
+        assertThat(group.sample()).containsExactly(
+                new LeadMinutesPendingGroup.Sample(DayOfWeek.TUESDAY, LocalTime.of(10, 0)),
+                new LeadMinutesPendingGroup.Sample(DayOfWeek.THURSDAY, LocalTime.of(16, 0)),
+                new LeadMinutesPendingGroup.Sample(DayOfWeek.FRIDAY, LocalTime.of(16, 0)));
+    }
+
+    /** 수업 수가 몇이든 묶음은 하나다. */
+    @Test
+    void 수업이_여럿이어도_카드는_한_줄이다() {
+        Routine[] routines = new Routine[6];
+        for (int i = 0; i < routines.length; i++) {
+            routines[i] = pendingRoutine((long) (i + 1), "수업 " + (i + 1), (long) (100 + i), null,
+                    SEMESTER_START, SEMESTER_END, DayOfWeek.of(i % 5 + 1));
+        }
+        listed(routines);
+
+        List<LeadMinutesPendingGroup> pending = service.pendingLeadMinutes(USER_ID, PLAN_FROM, PLAN_TO);
+
+        assertThat(pending).hasSize(1);
+        assertThat(pending.get(0).routineIds()).hasSize(routines.length);
+    }
+
+    @Test
+    void 정할_것이_없으면_빈_목록이다() {
+        listed(pendingRoutine(1L, "자료구조", 101L, 30, SEMESTER_START, SEMESTER_END, DayOfWeek.TUESDAY),
+                pendingRoutine(2L, "알바", null, null, SEMESTER_START, null, DayOfWeek.FRIDAY));
+
+        assertThat(service.pendingLeadMinutes(USER_ID, PLAN_FROM, PLAN_TO)).isEmpty();
+    }
+
+    @Test
+    void 기간이_없거나_뒤집혀_있으면_400이다() {
+        assertThatThrownBy(() -> service.pendingLeadMinutes(USER_ID, null, PLAN_TO))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.pendingLeadMinutes(USER_ID, PLAN_TO, PLAN_FROM))
+                .isInstanceOf(BadRequestException.class);
     }
 
     // ===== 고정자 =====

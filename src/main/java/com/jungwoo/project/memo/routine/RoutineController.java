@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesPendingGroup;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import jakarta.validation.Valid;
@@ -37,6 +38,8 @@ import java.util.List;
  * PUT    /api/routines/{id}                     고치기 (전체 교체)
  * DELETE /api/routines/{id}                     소프트 삭제
  * PATCH  /api/routines/lead-minutes             여러 루틴의 이동시간 한 번에 (전부 되거나 전부 안 됨)
+ * GET    /api/routines/lead-minutes/pending?startDate=&endDate=
+ *                                               그 기간에 도는, 아직 이동시간을 정하지 않은 수업
  * GET    /api/routines/occurrences?from=&to=    전개 결과
  * POST   /api/routines/{id}/exceptions          예외 추가
  * PUT    /api/routines/{id}/exceptions/{exId}   예외 수정 (전체 교체)
@@ -95,6 +98,20 @@ public class RoutineController {
             @Valid @RequestBody RoutineSaveRequest request
     ) {
         return ResponseEntity.ok(routineService.update(principal.getUserId(), routineId, request));
+    }
+
+    /**
+     * 요청 기간(계획 기간)에 도는, 아직 이동시간을 정하지 않은 수업. 비어 있으면 계획 초안을
+     * 바로 만들고, 있으면 화면이 먼저 묻는다. 답하지 않아도(나중에) 초안은 만들 수 있다 —
+     * 다음번에 다시 뜬다.
+     */
+    @GetMapping("/lead-minutes/pending")
+    public ResponseEntity<List<LeadMinutesPendingGroup>> pendingLeadMinutes(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate
+    ) {
+        return ResponseEntity.ok(routineService.pendingLeadMinutes(principal.getUserId(), startDate, endDate));
     }
 
     /**

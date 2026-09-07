@@ -11,12 +11,14 @@ import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
 import com.jungwoo.project.memo.routine.domain.Routine;
 import com.jungwoo.project.memo.routine.domain.RoutineException;
+import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.routine.domain.RoutineExceptionConflictReason;
 import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionsConflictDetails;
 import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesPendingGroup;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +38,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -66,6 +69,8 @@ public class RoutineService {
     private final RoutineReader routineReader;
     private final CourseService courseService;
     private final Clock clock;
+    /** 이동시간 질문 대상은 "요청 기간에 실제로 발생하는" 수업이다. 발생 여부는 전개가 안다. */
+    private final RoutineOccurrenceService routineOccurrenceService;
 
     /** 이동시간 상한(분). 8시간 — 그보다 길면 이동이 아니라 일정이다. RoutineSaveRequest의 @Max와 같다. */
     public static final int MAX_LEAD_MINUTES = 480;
@@ -167,6 +172,72 @@ public class RoutineService {
 
         log.info("반복 일정 수정: userId={}, routineId={}", userId, routineId);
         return RoutineResponse.of(locked, existing, today());
+    }
+
+    /** 질문 카드에 보여줄 샘플 시각 수. 세 개면 "화 14:00, 수 09:00, 목 10:00 …"로 충분하다. */
+    private static final int LEAD_PENDING_SAMPLE_LIMIT = 3;
+    /** 질문 카드의 수업 묶음. 통학은 수업마다 다르지 않아 한 줄로 묻는다. */
+    static final String LEAD_PENDING_CLASS_GROUP_KEY = "class";
+    static final String LEAD_PENDING_CLASS_LABEL = "수업";
+
+    /**
+     * 아직 이동시간을 정하지 않은 수업을 한 묶음으로 돌려준다. 계획 초안을 만들기 전에 이
+     * 목록이 비어 있지 않으면 화면이 먼저 묻는다.
+     *
+     * <p>조건: lead_minutes IS NULL, 삭제되지 않음(매퍼), courseId != null(수업), 그리고
+     * <b>요청 기간 안에 발생분이 있음</b>. 기간에 돌지 않는 수업의 이동시간은 물어도 이번
+     * 계획에 아무 영향이 없다. 0(없음)과 양수는 이미 답한 것이라 다시 묻지 않는다.
+     *
+     * <p>수업이 아닌 루틴(알바·운동)은 묻지 않는다 — 통학 정책은 수업의 것이고, 다른
+     * 일정의 이동시간은 폼이나 대화로 넣는다.
+     */
+    @Transactional(readOnly = true)
+    public List<LeadMinutesPendingGroup> pendingLeadMinutes(Long userId, LocalDate startDate, LocalDate endDate) {
+        if (startDate == null || endDate == null || endDate.isBefore(startDate)) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        Map<Long, Routine> pending = new LinkedHashMap<>();
+        for (Routine routine : routineReader.findAllWithWeekdays(userId)) {
+            if (routine.getLeadMinutes() == null && routine.getCourseId() != null) {
+                pending.put(routine.getRoutineId(), routine);
+            }
+        }
+        if (pending.isEmpty()) {
+            return List.of();
+        }
+        List<Long> routineIds = new ArrayList<>();
+        List<LeadMinutesPendingGroup.Sample> sample = new ArrayList<>();
+        for (RoutineOccurrence occurrence : routineOccurrenceService.expand(userId, startDate, endDate)) {
+            if (occurrence.lead() || !pending.containsKey(occurrence.routineId())) {
+                continue;
+            }
+            if (!routineIds.contains(occurrence.routineId())) {
+                routineIds.add(occurrence.routineId());
+            }
+            if (sample.size() < LEAD_PENDING_SAMPLE_LIMIT) {
+                sample.add(new LeadMinutesPendingGroup.Sample(
+                        occurrence.startAt().getDayOfWeek(), occurrence.startAt().toLocalTime()));
+            }
+        }
+        if (routineIds.isEmpty()) {
+            return List.of();
+        }
+        routineIds.sort(null);
+        return List.of(new LeadMinutesPendingGroup(
+                LEAD_PENDING_CLASS_GROUP_KEY, LEAD_PENDING_CLASS_LABEL, routineIds, sample));
+    }
+
+    /** 공백·특수문자를 빼고 소문자로. "자료구조 (월)"과 "자료구조(월)"이 같은 묶음이 된다. */
+    static String leadGroupKey(String title) {
+        StringBuilder key = new StringBuilder();
+        for (int i = 0; i < title.length(); i++) {
+            char c = title.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                key.append(c);
+            }
+        }
+        String normalized = key.toString().toLowerCase(Locale.ROOT);
+        return normalized.isEmpty() ? title.trim().toLowerCase(Locale.ROOT) : normalized;
     }
 
     /**
