@@ -4,11 +4,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
+import com.jungwoo.project.memo.ai.draft.DraftProposalBuilder;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
 import com.jungwoo.project.memo.commitment.dto.CommitmentCreateRequest;
@@ -185,6 +187,52 @@ public class ScheduleSuggestionService {
         return result;
     }
 
+    /**
+     * draft(진행 중 요청 상태)에서 서버가 만든 후보를 저장한다. AiTurnLifecycleService.completeTurnSuccess
+     * 트랜잭션 안에서 DraftPromotionService가 부른다.
+     *
+     * <p>{@link #createFromImport}와 같은 성격이다 — payload는 모델이 아니라 우리 코드
+     * ({@code DraftProposalBuilder})가 시간표·근무 데이터로 계산한 값이라, 검증 실패는 계약 위반이
+     * 아니라 우리 버그다(503 + error 로그). 상한도 대화 상한(5)이 아니라 이미지와 같은 31이다 —
+     * 첫 수업 요일 4개 + 근무 2주치가 정상 범위다.
+     *
+     * <p>payload에는 저장 요청 DTO 밖의 두 키({@code fieldNotes}, {@code assumedFields})가 실려 있다.
+     * 저장 컬럼에는 그대로 남기고(새로고침 후에도 안내를 다시 그려야 한다), DTO로 읽을 때와 화면
+     * payload로 내보낼 때만 떼어낸다.
+     */
+    public List<ScheduleSuggestionResponse> createFromDraft(
+            Long userId, Long conversationId, Long sourceMessageId, List<ScheduleSuggestion> serverMade
+    ) {
+        if (serverMade == null || serverMade.isEmpty()) {
+            return List.of();
+        }
+        if (serverMade.size() > MAX_IMPORTED_SUGGESTIONS) {
+            log.error("draft 후보 개수 초과: userId={}, count={}", userId, serverMade.size());
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        List<ScheduleSuggestionResponse> result = new ArrayList<>();
+        for (ScheduleSuggestion candidate : serverMade) {
+            if (candidate.kind() == null || candidate.payload() == null || !candidate.payload().isObject()) {
+                log.error("draft 후보가 비어 있다: userId={}", userId);
+                throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            }
+            readAndValidatePayload(candidate.kind(), candidate.payload(), PayloadSource.SERVER);
+
+            AiScheduleSuggestion entity = AiScheduleSuggestion.builder()
+                    .userId(userId)
+                    .conversationId(conversationId)
+                    .sourceMessageId(sourceMessageId)
+                    .kind(candidate.kind())
+                    .proposedPayload(toJson(candidate.payload()))
+                    .status(ScheduleSuggestionStatus.PROPOSED)
+                    .build();
+            suggestionMapper.insert(entity);
+            result.add(toResponse(entity, candidate.payload()));
+        }
+        log.info("draft 일정 후보 저장: userId={}, conversationId={}, count={}", userId, conversationId, result.size());
+        return result;
+    }
+
     // ===== 조회 =====
 
     /** 대화 재진입 시 복원할 미처리 후보. */
@@ -326,7 +374,9 @@ public class ScheduleSuggestionService {
         /** 모델이 낸 값. 계약 위반이므로 턴을 실패시킨다(503). */
         MODEL,
         /** 사용자가 검토 카드에서 고친 값. 입력 오류이므로 400이고, 후보는 PROPOSED로 남는다. */
-        USER_EDIT
+        USER_EDIT,
+        /** 서버가 draft에서 계산한 값. 실패는 우리 버그라 503이다(createFromImport와 같다). */
+        SERVER
     }
 
     /**
@@ -361,7 +411,7 @@ public class ScheduleSuggestionService {
              */
             request = objectMapper.readerFor(target)
                     .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
-                    .readValue(payload);
+                    .readValue(withoutAnnotations(payload));
         } catch (Exception e) {
             log.warn("일정 후보 payload를 읽지 못했다: kind={}, source={}, payload={}", kind, source, payload, e);
             throw rejected(source);
@@ -380,9 +430,9 @@ public class ScheduleSuggestionService {
     }
 
     private RuntimeException rejected(PayloadSource source) {
-        return source == PayloadSource.MODEL
-                ? new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED)
-                : new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        return source == PayloadSource.USER_EDIT
+                ? new BadRequestException(ErrorCode.INVALID_INPUT_VALUE)
+                : new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
     }
 
     private AiScheduleSuggestion requireForUpdate(Long suggestionId, Long userId) {
@@ -396,10 +446,43 @@ public class ScheduleSuggestionService {
     private List<ScheduleSuggestionResponse> toResponses(List<AiScheduleSuggestion> suggestions) {
         List<ScheduleSuggestionResponse> responses = new ArrayList<>();
         for (AiScheduleSuggestion suggestion : suggestions) {
-            responses.add(ScheduleSuggestionResponse.of(
-                    suggestion, toMap(readTree(suggestion.getProposedPayload()))));
+            responses.add(toResponse(suggestion, readTree(suggestion.getProposedPayload())));
         }
         return responses;
+    }
+
+    /**
+     * 화면 응답. draft가 붙인 안내 키({@code fieldNotes}/{@code assumedFields})는 payload에서 떼어 응답의
+     * 별도 필드로 내린다 — 카드가 [적용] 때 되돌려 보내는 payload는 저장 요청 DTO 그대로여야 한다.
+     */
+    private ScheduleSuggestionResponse toResponse(AiScheduleSuggestion suggestion, JsonNode payload) {
+        return ScheduleSuggestionResponse.of(suggestion, toMap(withoutAnnotations(payload)),
+                annotationList(payload, DraftProposalBuilder.FIELD_NOTES_KEY),
+                annotationList(payload, DraftProposalBuilder.ASSUMED_FIELDS_KEY));
+    }
+
+    /**
+     * 저장 요청 DTO에 없는 안내 키를 뗀 사본. 두 키는 draft 경로가 payload에 실어 두는 것이고
+     * 도메인 필드가 아니다. 그 외의 모르는 키는 여전히 거절된다(FAIL_ON_UNKNOWN_PROPERTIES).
+     */
+    private JsonNode withoutAnnotations(JsonNode payload) {
+        if (payload == null || !payload.isObject()) {
+            return payload;
+        }
+        if (!payload.has(DraftProposalBuilder.FIELD_NOTES_KEY) && !payload.has(DraftProposalBuilder.ASSUMED_FIELDS_KEY)) {
+            return payload;
+        }
+        ObjectNode copy = payload.deepCopy();
+        copy.remove(DraftProposalBuilder.FIELD_NOTES_KEY);
+        copy.remove(DraftProposalBuilder.ASSUMED_FIELDS_KEY);
+        return copy;
+    }
+
+    private List<Map<String, Object>> annotationList(JsonNode payload, String key) {
+        if (payload == null || !payload.isObject() || !payload.path(key).isArray()) {
+            return List.of();
+        }
+        return objectMapper.convertValue(payload.get(key), new TypeReference<List<Map<String, Object>>>() { });
     }
 
     private JsonNode readTree(String json) {

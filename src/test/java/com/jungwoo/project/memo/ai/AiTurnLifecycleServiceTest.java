@@ -56,6 +56,7 @@ class AiTurnLifecycleServiceTest {
     @Mock private AiUsageLimitService aiUsageLimitService;
     @Mock private ContextChangeSuggestionService contextChangeSuggestionService;
     @Mock private ScheduleSuggestionService scheduleSuggestionService;
+    @Mock private com.jungwoo.project.memo.ai.draft.DraftPromotionService draftPromotionService;
 
     @InjectMocks
     private AiTurnLifecycleService service;
@@ -483,6 +484,69 @@ class AiTurnLifecycleServiceTest {
 
         verify(aiMessageMapper, never()).updateStatusIfCurrent(any(), any(), any(), any());
         verify(aiConversationMapper, never()).releaseActiveRequest(any(), any(), any());
+    }
+
+    // ===== 진행 중 요청(draft) — B-8 #12 =====
+
+    private AiTurnLifecycleService.DraftTurnCommit sampleDraftCommit() {
+        com.jungwoo.project.memo.ai.draft.DraftState draft = com.jungwoo.project.memo.ai.draft.DraftState.newDraft(
+                "new-0", USER_ID, CONVERSATION_ID, com.jungwoo.project.memo.ai.draft.DraftType.CREATE_ROUTINE, "수업 전 이동 루틴");
+        com.jungwoo.project.memo.ai.draft.DraftTurnResolver.Outcome outcome =
+                new com.jungwoo.project.memo.ai.draft.DraftTurnResolver.Outcome(
+                        List.of(draft), java.util.Set.of("new-0"),
+                        com.jungwoo.project.memo.ai.draft.DraftTurnResolver.Action.ASK, false, List.of(), draft,
+                        "q?", List.of(), List.of());
+        return new AiTurnLifecycleService.DraftTurnCommit(outcome,
+                com.jungwoo.project.memo.ai.draft.DraftFacts.empty(LocalDate.of(2026, 9, 8)));
+    }
+
+    /** 잠금 소유권 재확인(PROCESSING 선점)에 실패하면 draft는 한 글자도 바뀌지 않는다. */
+    @Test
+    void completeTurnSuccess_whenClaimFails_neverTouchesDrafts() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(0);
+
+        assertThatThrownBy(() -> service.completeTurnSuccess(
+                CONVERSATION_ID, USER_ID, 501L, "늦은 답변", AiResponseType.CHAT,
+                List.of(), List.of(), LocalDate.now(), List.of(), List.of(), List.of(), sampleDraftCommit()))
+                .isInstanceOf(ServiceUnavailableException.class);
+
+        verify(draftPromotionService, never()).applyTurn(any(), any(), any(), any(), any());
+    }
+
+    /** 선점에 성공하면 ASSISTANT 저장 뒤 같은 트랜잭션에서 draft를 저장·승격하고, 승격된 후보를 응답에 합친다. */
+    @Test
+    void completeTurnSuccess_appliesDraftCommit_afterClaim_andMergesPromotedSuggestions() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(1);
+        com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse promoted =
+                com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse.builder().suggestionId(700L).build();
+        when(draftPromotionService.applyTurn(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any()))
+                .thenReturn(new com.jungwoo.project.memo.ai.draft.DraftPromotionService.PromotionResult(List.of(promoted)));
+
+        AiTurnLifecycleService.TurnCompletionResult result = service.completeTurnSuccess(
+                CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT,
+                List.of(), List.of(), LocalDate.now(), List.of(), List.of(), List.of(), sampleDraftCommit());
+
+        org.mockito.InOrder inOrder = org.mockito.Mockito.inOrder(aiMessageMapper, draftPromotionService, aiConversationMapper);
+        inOrder.verify(aiMessageMapper).updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
+        inOrder.verify(aiMessageMapper).insert(any());
+        inOrder.verify(draftPromotionService).applyTurn(eq(USER_ID), eq(CONVERSATION_ID), any(), any(), any());
+        inOrder.verify(aiConversationMapper).releaseActiveRequest(CONVERSATION_ID, USER_ID, 501L);
+        assertThat(result.scheduleSuggestions()).extracting(
+                com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse::getSuggestionId).containsExactly(700L);
+    }
+
+    /** draft 커밋이 없는 기존 턴은 승격 서비스를 부르지 않는다. */
+    @Test
+    void completeTurnSuccess_withoutDraftCommit_skipsPromotion() {
+        when(aiMessageMapper.updateStatusIfCurrent(501L, USER_ID, MessageStatus.PROCESSING, MessageStatus.COMPLETED))
+                .thenReturn(1);
+
+        service.completeTurnSuccess(CONVERSATION_ID, USER_ID, 501L, "reply", AiResponseType.CHAT,
+                List.of(), List.of(), LocalDate.now(), List.of(), List.of(), List.of());
+
+        verify(draftPromotionService, never()).applyTurn(any(), any(), any(), any(), any());
     }
 
     private AiConversation freeConversation() {

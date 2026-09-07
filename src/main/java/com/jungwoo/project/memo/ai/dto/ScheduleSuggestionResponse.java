@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.ai.dto;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
+import java.util.List;
 import java.util.Map;
 
 import lombok.AllArgsConstructor;
@@ -29,7 +30,25 @@ public class ScheduleSuggestionResponse {
     private Map<String, Object> payload;
     private ScheduleSuggestionStatus status;
 
+    /**
+     * 서버가 규칙대로 채운 값의 안내. {@code [{"field": "effectiveUntil", "reason": "ACTIVE_SEMESTER_END"}, ...]}.
+     * draft에서 만든 후보에만 있고 그 외에는 빈 배열이다. payload 안이 아니라 밖에 둔다 — 카드가 [적용]
+     * 때 되돌려 보내는 payload는 저장 요청 DTO 그대로여야 한다.
+     */
+    @Builder.Default
+    private List<Map<String, Object>> fieldNotes = List.of();
+
+    /** 확인 없이 넣은 추측. {@code [{"field": "anchor", "reason": "UNCONFIRMED"}]}. 없으면 빈 배열. */
+    @Builder.Default
+    private List<Map<String, Object>> assumedFields = List.of();
+
     public static ScheduleSuggestionResponse of(AiScheduleSuggestion suggestion, Map<String, Object> payload) {
+        return of(suggestion, payload, List.of(), List.of());
+    }
+
+    public static ScheduleSuggestionResponse of(AiScheduleSuggestion suggestion, Map<String, Object> payload,
+                                                List<Map<String, Object>> fieldNotes,
+                                                List<Map<String, Object>> assumedFields) {
         return ScheduleSuggestionResponse.builder()
                 .suggestionId(suggestion.getSuggestionId())
                 .conversationId(suggestion.getConversationId())
@@ -37,6 +56,8 @@ public class ScheduleSuggestionResponse {
                 .kind(suggestion.getKind())
                 .payload(payload)
                 .status(suggestion.getStatus())
+                .fieldNotes(fieldNotes != null ? fieldNotes : List.of())
+                .assumedFields(assumedFields != null ? assumedFields : List.of())
                 .build();
     }
 }

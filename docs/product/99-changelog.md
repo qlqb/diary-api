@@ -1,5 +1,48 @@
 # 99. Change Log
 
+## 2026-09-08 (2차) — 상담에 진행 중 요청 상태(draft)를 두고, 판정을 서버로 옮겼다
+
+같은 날 1차(모델 상향)의 베이스라인이 보여준 대로, 되묻기가 끝나지 않는 원인은 모델 크기가
+아니라 확정된 값을 서버가 들고 있지 않는 구조였다. 이번 spike는 그 구조를 고친다.
+설계 근거는 handoff 문서와 `docs/handoff/findings-2026-09-08.md`.
+
+- **draft(서버가 소유하는 비공개 작업 상태)와 proposal(사용자에게 보이는 승인 대상)을 분리했다.**
+  `ai_conversation_drafts`(05-database.md §10.6). 모델은 draft를 들고 있지 않다 — 매 턴 서버가 준
+  `[열려 있는 작업]`을 읽고 routing과 수정(draftOps)을 제안할 뿐이고, 적용·저장·readiness 판정은
+  전부 서버(`DraftTurnResolver`)가 한다. 트리거(서버 자격 검사 통과 / 사용자 명시 요청)가 걸릴
+  때만 proposal(`ai_schedule_suggestions`)을 만든다.
+- **대화당 OPEN draft는 여러 개, 한 발화가 여럿을 만들고 여럿을 고친다.** "수업 이동 반복 + 근무
+  이동 1회성"은 draft 둘(같은 `draft_group_id`)이고 "둘 다 30분으로"는 둘을 동시에 고친다.
+  "활성 1개"는 없다.
+- **출처(source)와 확인(confirmationRequired)을 갈랐다.** 출처는 어디서 왔는가(USER/INFERRED/DB/
+  SYSTEM/DEFAULT), 확인은 믿고 진행해도 되는가. 모델은 USER/INFERRED만 낼 수 있고, 서버 규칙이
+  덮어쓴다: `anchor=FIRST_CLASS_OF_DAY`인데 사용자 발화 어디에도 "첫"이 없으면 확인 필요, endDate가
+  INFERRED이면 항상 확인 필요. DEFAULT는 슬롯 맵(`DraftSlotRegistry`)에 적힌 정책값(title=라벨,
+  1회성 조회 기간 14일)뿐이라 모델의 추측이 아니다.
+- **서버가 action을 정한다.** READY가 하나라도 있으면 PROPOSE(READY만) + 남은 draft의 질문 한 줄
+  (SSE는 텍스트와 후보 카드를 같이 내려 mixed가 된다), 없으면 ASK(질문 대상 하나: NEEDS_INPUT →
+  NEEDS_CONFIRM → 생성 순, 그 draft만 `ask_count`+1). NEEDS_CONFIRM이 3번 질문받으면 가정 표시를 달고
+  승격하지만 NEEDS_INPUT은 필수값 없이는 승격하지 않는다. "그냥 만들어줘"(userTriggered)는 누락만
+  없으면 만들고 누락은 서버 문구로 되묻는다. PROPOSE에서 모델 reply는 버리고 서버 요약을 쓴다.
+- **draftType 셋(ROUTINE/SCHEDULE/PERIOD_PLAN) 모두 draft다.** 그래야 "PERIOD_PLAN으로 잘못 들어감 →
+  그냥 루틴만"이 RETYPE 하나로 끝난다(서버가 새 타입에 없는 필드 — intensity — 를 지운다). 기존
+  "OFFER에 기간·강도 없으면 되묻기"는 OPEN draft가 없거나 그중 PERIOD_PLAN이 있을 때만 동작한다.
+  PERIOD_PLAN이 READY면 새 경로가 아니라 기존 기간 계획 OFFER 버튼으로 넘어간다 — 계획 생성기는
+  모델을 한 번 더 부르므로 같은 턴에서 만들지 않는다.
+- **"첫 수업 1시간 전"은 서버가 시간표로 요일별 고정 시각으로 펼친다.** `FirstClassPerWeekdayResolver`
+  (수업 루틴 → 요일별 가장 이른 시작), `SemesterEndResolver`(수업 루틴 종강일), `UpcomingWorkShiftsResolver`
+  (제목 `근무|알바|출근`, 오늘~+14일). 요일 4개면 ROUTINE 후보 4건이고 하나로 합치지 않는다. 다른 일정에
+  상대적인 시각을 저장하는 새 엔티티는 없다.
+- **후보 payload에 `fieldNotes`(서버가 규칙대로 채운 값)와 `assumedFields`(확인 없이 넣은 추측)를
+  붙였다.** 둘은 뜻이 다르다. 저장 컬럼에는 그대로 남고, DTO로 읽을 때와 화면 payload로 내보낼 때만
+  떼어낸다 — 승인 경로는 모르는 키를 거절하도록 이미 잠겨 있어서(a43e12a) "무시된다"는 전제가 성립하지
+  않았다. 화면은 fieldNotes를 안내 줄로, assumedFields를 뱃지로 보여준다.
+- **트랜잭션 경계는 그대로다.** LLM 호출 중에 DB 트랜잭션을 잡지 않고, draft 저장·승격은 턴 마무리
+  트랜잭션의 PROCESSING 선점 뒤에서만 일어난다(`DraftPromotionService`가 소유, REQUIRED로 참여).
+  선점에 실패한 늦은 결과는 draft를 한 글자도 바꾸지 못한다. 재시도는 없다.
+- 결과와 게이트 판정은 findings 참고(fixture 13/13, 실호출 게이트 표).
+
+
 ## 2026-09-08 — 상담 경로 모델을 분리·상향하고, 같은 로그를 다시 흘려 베이스라인을 남겼다
 
 2026-09-08 00:54~01:06 로그에서 "수업 전 1시간 이동시간 블록 반복 + 근무 전 1시간 이동 블록

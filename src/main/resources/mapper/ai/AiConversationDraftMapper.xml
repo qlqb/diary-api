@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  상담 대화의 진행 중 요청 상태(draft). 승인 전 AI 작업 상태라 어떤 화면도 이 테이블을 일정으로
+  읽지 않는다. 소유권은 user_id 조건이 유일한 방어선이다(FK 없음).
+-->
+<mapper namespace="com.jungwoo.project.memo.ai.draft.AiConversationDraftMapper">
+
+    <resultMap id="draftResultMap" type="com.jungwoo.project.memo.ai.draft.AiConversationDraft">
+        <id     property="draftId"               column="draft_id"/>
+        <result property="userId"                column="user_id"/>
+        <result property="conversationId"        column="conversation_id"/>
+        <result property="draftGroupId"          column="draft_group_id"/>
+        <result property="draftType"             column="draft_type"/>
+        <result property="label"                 column="label"/>
+        <result property="status"                column="status"/>
+        <result property="fields"                column="fields"/>
+        <result property="missingRequired"       column="missing_required"/>
+        <result property="askCount"              column="ask_count"/>
+        <result property="promotedSuggestionIds" column="promoted_suggestion_ids"/>
+        <result property="createdAt"             column="created_at"/>
+        <result property="updatedAt"             column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="draftId">
+        INSERT INTO ai_conversation_drafts (
+            user_id, conversation_id, draft_group_id, draft_type, label, status,
+            fields, missing_required, ask_count, promoted_suggestion_ids
+        ) VALUES (
+            #{userId}, #{conversationId}, #{draftGroupId}, #{draftType}, #{label}, #{status},
+            #{fields}, #{missingRequired}, #{askCount}, #{promotedSuggestionIds}
+        )
+    </insert>
+
+    <update id="updateGroupId">
+        UPDATE ai_conversation_drafts
+           SET draft_group_id = #{draftGroupId}
+         WHERE draft_id = #{draftId}
+           AND user_id  = #{userId}
+    </update>
+
+    <select id="findOpenByConversationIdAndUserId" resultMap="draftResultMap">
+        SELECT d.* FROM ai_conversation_drafts d
+         WHERE d.conversation_id = #{conversationId}
+           AND d.user_id = #{userId}
+           AND d.status = 'OPEN'
+         ORDER BY d.updated_at DESC, d.draft_id DESC
+    </select>
+
+    <select id="findByConversationIdAndUserId" resultMap="draftResultMap">
+        SELECT d.* FROM ai_conversation_drafts d
+         WHERE d.conversation_id = #{conversationId}
+           AND d.user_id = #{userId}
+         ORDER BY d.draft_id
+    </select>
+
+    <update id="update">
+        UPDATE ai_conversation_drafts
+           SET draft_type              = #{draftType},
+               label                   = #{label},
+               status                  = #{status},
+               fields                  = #{fields},
+               missing_required        = #{missingRequired},
+               ask_count               = #{askCount},
+               promoted_suggestion_ids = #{promotedSuggestionIds}
+         WHERE draft_id = #{draftId}
+           AND user_id  = #{userId}
+    </update>
+
+    <update id="cancelOpenByConversation">
+        UPDATE ai_conversation_drafts
+           SET status = 'CANCELLED'
+         WHERE conversation_id = #{conversationId}
+           AND user_id = #{userId}
+           AND status = 'OPEN'
+    </update>
+</mapper>

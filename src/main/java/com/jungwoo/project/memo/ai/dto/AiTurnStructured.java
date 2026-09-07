@@ -2,6 +2,8 @@ package com.jungwoo.project.memo.ai.dto;
 
 import com.jungwoo.project.memo.ai.domain.AiModelDecision;
 import com.jungwoo.project.memo.ai.domain.ProposalPurpose;
+import com.jungwoo.project.memo.ai.draft.dto.DraftOp;
+import com.jungwoo.project.memo.ai.draft.dto.DraftRouting;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 
 import java.time.LocalDate;
@@ -75,6 +77,16 @@ public record AiTurnStructured(
          * 모델 출력을 그대로 신뢰하지 않는다 — ScheduleSuggestionService가 payload를 실제
          * 도메인 요청으로 읽어 본 뒤에만 PROPOSED로 남긴다.
          */
-        List<ScheduleSuggestion> scheduleSuggestions
+        List<ScheduleSuggestion> scheduleSuggestions,
+        /**
+         * 진행 중 요청(draft) 제안. 셋 다 모델의 <b>제안</b>이다 — 적용·저장·readiness 판정은
+         * 서버(DraftTurnResolver)가 한다. 없으면 null(예전 출력 호환).
+         */
+        DraftRouting routing,
+        List<DraftOp> draftOps,
+        /** ASK | PROPOSE | CHAT. 힌트일 뿐 최종 action은 서버가 정한다. */
+        String actionHint,
+        /** "그냥 만들어줘", "바로 해줘"처럼 즉시 생성을 요구했으면 true. */
+        Boolean userTriggered
 ) {
 }

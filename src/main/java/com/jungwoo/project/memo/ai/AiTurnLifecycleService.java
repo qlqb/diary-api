@@ -6,6 +6,9 @@ import com.jungwoo.project.memo.ai.domain.AiResponseType;
 import com.jungwoo.project.memo.ai.domain.ConversationStatus;
 import com.jungwoo.project.memo.ai.domain.MessageRole;
 import com.jungwoo.project.memo.ai.domain.MessageStatus;
+import com.jungwoo.project.memo.ai.draft.DraftFacts;
+import com.jungwoo.project.memo.ai.draft.DraftPromotionService;
+import com.jungwoo.project.memo.ai.draft.DraftTurnResolver;
 import com.jungwoo.project.memo.ai.dto.AiMessageRequest;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ContextChangeSuggestion;
@@ -63,6 +66,7 @@ public class AiTurnLifecycleService {
     private final AiUsageLimitService aiUsageLimitService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final ScheduleSuggestionService scheduleSuggestionService;
+    private final DraftPromotionService draftPromotionService;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초가 돼 stale 판정이 어긋난다.
@@ -232,6 +236,28 @@ public class AiTurnLifecycleService {
             List<ContextChangeSuggestion> contextChangesIfAny,
             List<ScheduleSuggestion> scheduleSuggestionsIfAny
     ) {
+        return completeTurnSuccess(conversationId, userId, requestMessageId, replyContent, responseType,
+                proposalItemsIfProposal, adjustmentsIfProposal, targetDateIfProposal, unavailableWindowsIfProposal,
+                contextChangesIfAny, scheduleSuggestionsIfAny, null);
+    }
+
+    /**
+     * draft 턴용 오버로드. draftCommitOrNull이 있으면 위 선점(PROCESSING → COMPLETED) <b>뒤에</b>, 같은
+     * 트랜잭션 안에서 DraftPromotionService가 draft를 저장·승격한다 — 선점이 곧 대화 잠금 소유권
+     * 재확인이라, 잠금을 잃은 늦은 결과는 draft를 한 글자도 바꾸지 못한다. 승격으로 생긴 일정 후보는
+     * 모델이 낸 후보와 같은 목록(scheduleSuggestions)으로 합쳐 내려간다.
+     */
+    @Transactional
+    public TurnCompletionResult completeTurnSuccess(
+            Long conversationId, Long userId, Long requestMessageId,
+            String replyContent, AiResponseType responseType,
+            List<ProposalItem> proposalItemsIfProposal, List<ProposalAdjustment> adjustmentsIfProposal,
+            LocalDate targetDateIfProposal,
+            List<UnavailableWindowSpec> unavailableWindowsIfProposal,
+            List<ContextChangeSuggestion> contextChangesIfAny,
+            List<ScheduleSuggestion> scheduleSuggestionsIfAny,
+            DraftTurnCommit draftCommitOrNull
+    ) {
         int claimed = aiMessageMapper.updateStatusIfCurrent(
                 requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
         if (claimed != 1) {
@@ -268,8 +294,17 @@ public class AiTurnLifecycleService {
          * 이 시점에는 one_off_commitments/routines를 전혀 건드리지 않는다. 원본은 사용자가
          * 카드에서 적용했을 때만 만들어진다.
          */
-        List<ScheduleSuggestionResponse> scheduleSuggestions = scheduleSuggestionService.createFromSuggestions(
-                userId, conversationId, assistantMessage.getMessageId(), scheduleSuggestionsIfAny);
+        List<ScheduleSuggestionResponse> scheduleSuggestions = new java.util.ArrayList<>(
+                scheduleSuggestionService.createFromSuggestions(
+                        userId, conversationId, assistantMessage.getMessageId(), scheduleSuggestionsIfAny));
+
+        // draft 저장·승격은 선점 뒤·같은 트랜잭션. 여기서 예외가 나면 ASSISTANT 메시지·후보까지 함께 롤백된다.
+        if (draftCommitOrNull != null && draftCommitOrNull.outcome() != null) {
+            DraftPromotionService.PromotionResult promoted = draftPromotionService.applyTurn(
+                    userId, conversationId, assistantMessage.getMessageId(),
+                    draftCommitOrNull.outcome(), draftCommitOrNull.facts());
+            scheduleSuggestions.addAll(promoted.scheduleSuggestions());
+        }
 
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
@@ -343,6 +378,10 @@ public class AiTurnLifecycleService {
         static PreparedTurn replay(AiConversation conversation, AiMessage existingUserMessage) {
             return new PreparedTurn(conversation, existingUserMessage.getMessageId(), true, existingUserMessage);
         }
+    }
+
+    /** 이번 턴의 draft 판정 결과와 그때 쓴 실제 데이터. 트랜잭션 안에서 저장·승격에 쓴다. */
+    public record DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts) {
     }
 
     public record TurnCompletionResult(

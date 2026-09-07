@@ -288,6 +288,39 @@ ai_proposal_schedule_previews
 Proposal 하나당 미리보기는 최신 계산 결과 하나만 보존한다(재계산은 upsert) — 이 표는 승인
 전까지 공식 `execution_items`가 아니며, 새로고침 후 미리보기를 복원하는 용도로만 쓴다.
 
+## 10.6 ai_conversation_drafts (진행 중 요청 상태)
+
+2026-09-08부터 상담 대화는 "아직 만들지 않은 일정 요청"의 확정된 조각을 서버가 들고 있는다.
+DDL은 `docs/sql/2026-09-08-ai-conversation-drafts.sql`.
+
+```text
+ai_conversation_drafts
+- draft_id, user_id, conversation_id
+- draft_group_id nullable   (같은 최초 발화에서 함께 생긴 draft 묶음. 첫 draft의 draft_id를 그대로 쓴다)
+- draft_type                CREATE_ROUTINE / CREATE_SCHEDULE / CREATE_PERIOD_PLAN
+- label                     사람이 읽는 짧은 라벨(모델이 대상 draft를 고를 때 프롬프트에 보인다)
+- status                    OPEN / PROMOTED / CANCELLED
+- fields JSON               {"field": {"value", "source": USER|INFERRED|DB|SYSTEM|DEFAULT, "reason", "confirmationRequired"}}
+- missing_required JSON     서버가 슬롯 맵(DraftSlotRegistry)으로 계산한 필수 누락. 모델이 쓰지 않는다
+- ask_count                 이 draft를 두고 서버가 질문한 횟수(그 턴의 질문 대상에만 +1)
+- promoted_suggestion_ids JSON nullable   PROMOTED 시 만들어진 ai_schedule_suggestions.suggestion_id 목록
+- created_at, updated_at
+```
+
+**일정 저장소가 아니다.** 오늘/일정 화면도 가용시간 계산도 이 표를 보지 않는다. 사용자에게 보이는
+것은 draft가 아니라 그것으로 만든 proposal(`ai_schedule_suggestions`)이고, 원본(`routines`,
+`one_off_commitments`)에는 카드를 승인했을 때만 들어간다. draft → proposal → 원본 순서를 건너뛰는
+경로는 없다. `CREATE_PERIOD_PLAN`은 후보 대신 기존 기간 계획 OFFER(버튼)로 넘어가므로
+`promoted_suggestion_ids`가 비어 있다.
+
+**대화당 OPEN draft는 여러 개**이고 "활성 1개"는 없다. 매 턴 서버가 OPEN 전부를 프롬프트에 주고
+모델이 대상을 고른다(routing). 그룹은 별도 테이블이 아니라 `draft_group_id` 하나다.
+
+**version 컬럼을 두지 않는다.** draft 갱신은 대화 잠금(`ai_conversations.active_request_message_id`)
+안에서만, 그것도 턴 마무리 트랜잭션(PROCESSING → COMPLETED 선점 뒤)에서만 일어난다. 대화 단위 동시
+요청 차단과 `ai_messages.idempotency_key`가 이미 직렬화를 보장하므로 행 단위 낙관적 락이 설 자리가
+없다. 세션 간 지속도 없다 — 대화가 ARCHIVED되면 OPEN은 전부 CANCELLED.
+
 ## 11. version과 동시 수정 방지
 
 PlanItem, ContextItem, ExecutionItem은 version을 가진다. 기존 항목을 수정하는 AI 제안은 생성 당시 version을 baseVersion으로 저장한다.
