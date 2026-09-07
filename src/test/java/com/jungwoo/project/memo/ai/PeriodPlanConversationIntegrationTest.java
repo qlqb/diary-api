@@ -129,7 +129,7 @@ class PeriodPlanConversationIntegrationTest {
         usageLogWatermark = maxUsageLogId();
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         // 상담 턴(2인자): 기간 계획 목적과 기간·강도를 명시한 OFFER.
-        when(aiConsultationClient.streamTurn(any(), any()))
+        when(aiConsultationClient.streamTurn(any(), any(), any(), any()))
                 .thenReturn(Flux.just(chatResponse(offerJson())));
         // 계획 생성 턴(3인자): 9개 항목. PlanDraftService가 부르는 쪽이다.
         when(aiConsultationClient.streamTurn(any(), any(), anyInt()))

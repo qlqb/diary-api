@@ -86,8 +86,8 @@ public class PlanItemService {
     @Value("${ai.request.timeout-seconds:90}")
     private int requestTimeoutSeconds = 90;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     /**
      * 전략이 남긴 항목들을 조각으로 만든다. AI 1회.

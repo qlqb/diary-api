@@ -62,8 +62,8 @@ public class MaterialAnalysisService {
     private final AiUsageLimitService aiUsageLimitService;
     private final ObjectMapper objectMapper;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     @Value("${ai.material.max-input-tokens:12000}")
     private int maxInputTokens = 12000;

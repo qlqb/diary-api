@@ -48,8 +48,8 @@ public class LearningRecommendationService {
     private final AiUsageLimitService aiUsageLimitService;
     private final ObjectMapper objectMapper;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     @Value("${ai.learning.max-completion-tokens:2000}")
     private int maxCompletionTokens = 2000;

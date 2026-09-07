@@ -99,8 +99,8 @@ public class MaterialLinkProposalService {
     private final ProposalNormalizer proposalNormalizer;
     private final ObjectMapper objectMapper;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     @Value("${ai.material.max-completion-tokens:4000}")
     private int maxCompletionTokens = 4000;

@@ -72,8 +72,8 @@ public class PlanningAgentService {
     private final ObjectMapper objectMapper;
     private final Clock clock;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     @Value("${ai.planning.max-completion-tokens:2000}")
     private int maxCompletionTokens = 2000;

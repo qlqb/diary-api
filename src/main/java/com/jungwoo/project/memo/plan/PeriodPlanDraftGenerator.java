@@ -137,8 +137,8 @@ public class PeriodPlanDraftGenerator {
     @Value("${ai.request.timeout-seconds:90}")
     private int requestTimeoutSeconds = 90;
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
 
     @Value("${ai.context.default-time-zone:Asia/Seoul}")
     private String defaultTimeZoneId = "Asia/Seoul";

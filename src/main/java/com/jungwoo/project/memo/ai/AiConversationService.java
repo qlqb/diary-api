@@ -184,8 +184,16 @@ public class AiConversationService {
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
-    @Value("${spring.ai.openai.chat.model:gpt-5-mini}")
-    private String modelName = "gpt-5-mini";
+    @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
+    private String modelName = "gpt-5.6-luna";
+
+    /**
+     * 상담 경로 전용 모델. 비어 있으면 전역 모델(modelName)로 내려간다 — ai.schedule-import.model과
+     * 같은 "비면 전역 fallback" 패턴이다. 실제로 부른 모델이 ai_usage_logs에 남아야 하므로
+     * 스트리밍 호출과 사용량 기록이 모두 {@link #resolveConsultationModel()} 하나를 본다.
+     */
+    @Value("${ai.consultation.model:}")
+    private String consultationModel = "";
 
     @Value("${ai.context.max-input-tokens:6000}")
     private int maxInputTokens = 6000;
@@ -426,7 +434,7 @@ public class AiConversationService {
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> lastFinishReason = new AtomicReference<>();
 
-        return aiConsultationClient.streamTurn(systemPrompt, userPrompt)
+        return aiConsultationClient.streamTurn(systemPrompt, userPrompt, null, resolveConsultationModel())
                 .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                 .subscribe(
                         chatResponse -> {
@@ -676,8 +684,13 @@ public class AiConversationService {
                 log.debug("사용량 메타데이터 추출 실패 - 건너뜀", e);
             }
         }
-        aiUsageLimitService.record(userId, conversationId, requestMessageId, modelName,
+        aiUsageLimitService.record(userId, conversationId, requestMessageId, resolveConsultationModel(),
                 promptTokens, null, completionTokens, resultStatus, errorCode);
+    }
+
+    /** 상담 모델. ai.consultation.model이 비어 있으면 전역 spring.ai.openai.chat.model. */
+    String resolveConsultationModel() {
+        return consultationModel != null && !consultationModel.isBlank() ? consultationModel : modelName;
     }
 
     private AiTurnStructured parseStructured(String json) {

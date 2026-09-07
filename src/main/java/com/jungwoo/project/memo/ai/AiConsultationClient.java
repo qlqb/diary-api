@@ -32,5 +32,17 @@ public interface AiConsultationClient {
      * Material/Learning/Planning Agent처럼 호출별로 다른 출력 토큰 예산이 필요한 경우용
      * 오버로드. maxCompletionTokens가 null이면 전역 기본값을 쓴다(위 오버로드와 동일 동작).
      */
-    Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens);
+    default Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens) {
+        return streamTurn(systemPrompt, userPrompt, maxCompletionTokens, null);
+    }
+
+    /**
+     * 호출별로 모델까지 고르는 오버로드. model이 null이면 전역 기본 모델
+     * (spring.ai.openai.chat.model)을 그대로 쓴다 — 위 두 오버로드와 동일 동작.
+     *
+     * 상담 경로(AiConversationService)만 이것을 쓴다(ai.consultation.model). 어떤 모델을 실제로
+     * 불렀는지는 호출부가 ai_usage_logs에 기록해야 하므로, 모델 문자열은 클라이언트가 숨기지
+     * 않고 호출부가 들고 온다.
+     */
+    Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens, String model);
 }

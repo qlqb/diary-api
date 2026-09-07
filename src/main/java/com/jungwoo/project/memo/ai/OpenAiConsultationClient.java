@@ -540,7 +540,8 @@ public class OpenAiConsultationClient implements AiConsultationClient {
     }
 
     @Override
-    public Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens) {
+    public Flux<ChatResponse> streamTurn(String systemPrompt, String userPrompt, Integer maxCompletionTokens,
+                                         String model) {
         if (chatClient == null) {
             return Flux.error(new IllegalStateException("ChatClient가 설정되지 않았습니다"));
         }
@@ -548,9 +549,19 @@ public class OpenAiConsultationClient implements AiConsultationClient {
         ChatClient.ChatClientRequestSpec spec = chatClient.prompt()
                 .system(systemPrompt)
                 .user(userPrompt);
-        if (maxCompletionTokens != null) {
-            spec = spec.options(OpenAiChatOptions.builder()
-                    .maxCompletionTokens(maxCompletionTokens));
+        // 호출별 옵션은 넘어온 값만 얹는다 — 나머지(reasoning-effort, verbosity, 전역 모델)는
+        // 자동 설정의 기본 옵션이 그대로 병합된다. 비어 있으면 아무 옵션도 만들지 않아 기존
+        // 동작과 완전히 같다.
+        boolean hasModel = model != null && !model.isBlank();
+        if (maxCompletionTokens != null || hasModel) {
+            OpenAiChatOptions.Builder options = OpenAiChatOptions.builder();
+            if (maxCompletionTokens != null) {
+                options = options.maxCompletionTokens(maxCompletionTokens);
+            }
+            if (hasModel) {
+                options = options.model(model);
+            }
+            spec = spec.options(options);
         }
 
         return spec.stream()
