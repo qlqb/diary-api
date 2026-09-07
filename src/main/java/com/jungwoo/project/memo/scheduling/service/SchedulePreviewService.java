@@ -36,11 +36,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -200,6 +202,8 @@ public class SchedulePreviewService {
                         .build())
                 .toList();
 
+        logAvailabilityByDay(proposalId, horizonStart, horizonEnd, availability, placed);
+
         LocalDateTime computedAt = now;
         persistPreview(proposalId, userId, horizonStart, horizonEnd, windowDtos, overrides, placed, unplaced, computedAt);
 
@@ -213,6 +217,70 @@ public class SchedulePreviewService {
                 .unplacedItems(unplaced)
                 .computedAt(computedAt)
                 .build();
+    }
+
+    /**
+     * 요일별로 후보 시간과 확정 일정, 배치 결과를 한 줄씩 남긴다. 평일이 통째로 0분이 되는
+     * 종류의 사고는 결과만 보면 "AI가 주말을 좋아한다"로 읽힌다 — 어느 날 후보가 몇 분이었고
+     * 그중 얼마가 확정 일정에 먹혔는지가 같은 줄에 있어야 원인이 보인다.
+     */
+    private void logAvailabilityByDay(Long proposalId, LocalDate horizonStart, LocalDate horizonEnd,
+                                       AvailabilityEstimateResult availability, List<PlacedItemDto> placed) {
+        if (!log.isInfoEnabled()) {
+            return;
+        }
+        for (LocalDate day = horizonStart; !day.isAfter(horizonEnd); day = day.plusDays(1)) {
+            LocalDateTime dayStart = day.atStartOfDay();
+            LocalDateTime dayEnd = day.plusDays(1).atStartOfDay();
+
+            List<LocalDateTime[]> candidateSpans = new ArrayList<>();
+            for (AvailabilityWindow window : availability.windows()) {
+                candidateSpans.add(new LocalDateTime[]{window.startAt(), window.endAt()});
+            }
+            List<LocalDateTime[]> busySpans = new ArrayList<>();
+            for (BusyWindow busy : availability.busyWindows()) {
+                busySpans.add(new LocalDateTime[]{busy.startAt(), busy.endAt()});
+            }
+
+            LocalDate current = day;
+            long placedCount = placed.stream()
+                    .filter(p -> p.getScheduledStartAt() != null
+                            && p.getScheduledStartAt().toLocalDate().equals(current))
+                    .count();
+
+            log.info("availability.fallback proposalId={} day={} date={} candidateMin={} hardBusyMin={} placed={}",
+                    proposalId, day.getDayOfWeek().name().substring(0, 3), day,
+                    unionMinutesWithin(candidateSpans, dayStart, dayEnd),
+                    unionMinutesWithin(busySpans, dayStart, dayEnd),
+                    placedCount);
+        }
+    }
+
+    /**
+     * 구간들을 [from, to)로 자른 뒤 겹친 것을 합쳐 분을 센다. 수업과 약속이 같은 시간에
+     * 겹쳐 있으면 그 시간은 한 번만 센다 — 두 번 세면 hardBusy가 하루 24시간을 넘는다.
+     */
+    private static long unionMinutesWithin(List<LocalDateTime[]> spans, LocalDateTime from, LocalDateTime to) {
+        List<LocalDateTime[]> clipped = new ArrayList<>();
+        for (LocalDateTime[] span : spans) {
+            LocalDateTime start = span[0].isBefore(from) ? from : span[0];
+            LocalDateTime end = span[1].isAfter(to) ? to : span[1];
+            if (start.isBefore(end)) {
+                clipped.add(new LocalDateTime[]{start, end});
+            }
+        }
+        clipped.sort(Comparator.comparing(span -> span[0]));
+
+        long minutes = 0;
+        LocalDateTime cursor = null;
+        for (LocalDateTime[] span : clipped) {
+            LocalDateTime start = cursor != null && cursor.isAfter(span[0]) ? cursor : span[0];
+            if (start.isBefore(span[1])) {
+                minutes += Duration.between(start, span[1]).toMinutes();
+                cursor = span[1];
+            }
+        }
+        return minutes;
     }
 
     @Transactional(readOnly = true)

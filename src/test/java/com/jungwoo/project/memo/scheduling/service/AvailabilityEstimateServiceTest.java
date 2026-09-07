@@ -67,7 +67,7 @@ class AvailabilityEstimateServiceTest {
 
     @Test
     void excludesExistingTimeFixedItems_fromAvailabilityWindows() {
-        // 기본 추정 창(월 19:00-22:00)과 겹치는 기존 고정 일정
+        // 기본 창(09:00-23:00) 안에 있는 기존 고정 일정
         ExecutionItem fixed = ExecutionItem.builder()
                 .executionItemId(10L).userId(USER_ID)
                 .placementType(PlacementType.TIME_FIXED)
@@ -228,7 +228,7 @@ class AvailabilityEstimateServiceTest {
     @Test
     void excludesCommitments_fromAvailabilityWindows() {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
-        // 기본 추정 창(월 19:00-22:00)과 겹치는 약속
+        // 기본 창(09:00-23:00) 안에 있는 약속
         when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
                 .thenReturn(List.of(commitment("친구 약속",
                         LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0)),
@@ -282,10 +282,129 @@ class AvailabilityEstimateServiceTest {
         AvailabilityEstimateResult result = service.estimate(
                 USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
 
-        // 같은 구간을 두 번 빼는 개념이 아니다 — 20:00~22:00은 그대로 남아야 한다.
+        // 같은 구간을 두 번 빼는 개념이 아니다 — 20:00부터 기본 창 끝까지는 그대로 남아야 한다.
         boolean keepsRemainder = result.windows().stream()
                 .anyMatch(w -> w.startAt().equals(end)
-                        && w.endAt().equals(LocalDateTime.of(HORIZON_START, LocalTime.of(22, 0))));
+                        && w.endAt().equals(LocalDateTime.of(HORIZON_START, LocalTime.of(23, 0))));
         assertThat(keepsRemainder).isTrue();
+    }
+
+    // ===== 기본 창 − hardBusy (proposal 1833 회귀) =====
+
+    /** 그날의 후보 창 분 합계. */
+    private long candidateMinutesOn(AvailabilityEstimateResult result, LocalDate date) {
+        return result.windows().stream()
+                .filter(w -> w.startAt().toLocalDate().equals(date))
+                .mapToLong(w -> w.durationMinutes())
+                .sum();
+    }
+
+    private boolean hasWindow(AvailabilityEstimateResult result, LocalDate date, LocalTime from, LocalTime to) {
+        return result.windows().stream()
+                .anyMatch(w -> w.startAt().equals(LocalDateTime.of(date, from))
+                        && w.endAt().equals(LocalDateTime.of(date, to)));
+    }
+
+    private boolean overlaps(AvailabilityEstimateResult result, LocalDate date, LocalTime from, LocalTime to) {
+        LocalDateTime start = LocalDateTime.of(date, from);
+        LocalDateTime end = LocalDateTime.of(date, to);
+        return result.windows().stream()
+                .anyMatch(w -> w.startAt().isBefore(end) && start.isBefore(w.endAt()));
+    }
+
+    /**
+     * 수업이 없는 월요일에 저녁 근무만 있으면 낮이 통째로 후보로 남는다.
+     *
+     * <p>이게 proposal 1833의 회귀 테스트다. 기본 창이 평일 19~22시였을 때는 17~23시 근무가
+     * 그 세 시간을 정확히 덮어 월요일 후보가 0분이 됐고, 항목 9개가 전부 주말로 밀렸다.
+     * 실제로 비어 있던 낮 여덟 시간은 애초에 후보로 만들어지지도 않았다.
+     */
+    @Test
+    void mondayWithNoClassAndAnEveningShift_keepsItsDaytimeAsCandidate() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(commitment("근무",
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(17, 0)),
+                        LocalDateTime.of(HORIZON_START, LocalTime.of(23, 0)))));
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        assertThat(candidateMinutesOn(result, HORIZON_START)).isPositive();
+        assertThat(hasWindow(result, HORIZON_START, LocalTime.of(9, 0), LocalTime.of(17, 0)))
+                .as("낮 09:00~17:00이 후보로 남는다").isTrue();
+        assertThat(overlaps(result, HORIZON_START, LocalTime.of(17, 0), LocalTime.of(23, 0)))
+                .as("근무 시간은 후보가 아니다").isFalse();
+    }
+
+    /**
+     * 저녁에 일하는 사용자의 평일이 통째로 사라지지 않는다. 근무표를 붙일수록 평일이 0분이
+     * 되던 것이 이 기능의 실패 모드였다.
+     */
+    @Test
+    void everyWeekdayKeepsCandidateTime_whenAllFiveEveningsAreWorked() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        List<Commitment> shifts = new java.util.ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            LocalDate day = HORIZON_START.plusDays(i);
+            LocalTime start = i == 0 ? LocalTime.of(17, 0) : LocalTime.of(18, 0);
+            shifts.add(commitment("근무", LocalDateTime.of(day, start), LocalDateTime.of(day, LocalTime.of(23, 0))));
+        }
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END)).thenReturn(shifts);
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        for (int i = 0; i < 5; i++) {
+            LocalDate day = HORIZON_START.plusDays(i);
+            assertThat(candidateMinutesOn(result, day))
+                    .as("%s 후보 시간", day.getDayOfWeek()).isPositive();
+        }
+    }
+
+    /**
+     * 기본 창이 넓어져도 수업과 약속은 그대로 빠진다. 넓힌 것은 상한이지 hardBusy 규칙이
+     * 아니다 — 이 구분이 무너지면 앱이 수업 시간에 학습을 배치한다.
+     */
+    @Test
+    void classAndCommitment_stillCarveTheDayIntoExactPieces() {
+        LocalDate tuesday = LocalDate.of(2026, 8, 11);
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(new RoutineOccurrence(2L, null, "자료구조", "3-315",
+                        LocalDateTime.of(tuesday, LocalTime.of(14, 0)),
+                        LocalDateTime.of(tuesday, LocalTime.of(16, 50)), tuesday, false)));
+        when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
+                .thenReturn(List.of(commitment("근무",
+                        LocalDateTime.of(tuesday, LocalTime.of(18, 0)),
+                        LocalDateTime.of(tuesday, LocalTime.of(23, 0)))));
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        assertThat(result.windows().stream()
+                .filter(w -> w.startAt().toLocalDate().equals(tuesday))
+                .map(w -> w.startAt().toLocalTime() + "~" + w.endAt().toLocalTime()))
+                .containsExactly("09:00~14:00", "16:50~18:00");
+    }
+
+    /** 근거도 일정도 없으면 주말은 기본 창 하나 그대로다. 요일로 창을 나누지 않는다. */
+    @Test
+    void weekendWithNothingScheduled_isOneFullBaseWindow() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        for (LocalDate weekendDay : List.of(LocalDate.of(2026, 8, 15), LocalDate.of(2026, 8, 16))) {
+            assertThat(result.windows().stream()
+                    .filter(w -> w.startAt().toLocalDate().equals(weekendDay)))
+                    .singleElement()
+                    .satisfies(w -> {
+                        assertThat(w.startAt().toLocalTime()).isEqualTo(LocalTime.of(9, 0));
+                        assertThat(w.endAt().toLocalTime()).isEqualTo(LocalTime.of(23, 0));
+                        assertThat(w.confidence()).isEqualTo(AvailabilityConfidence.LOW);
+                    });
+        }
     }
 }

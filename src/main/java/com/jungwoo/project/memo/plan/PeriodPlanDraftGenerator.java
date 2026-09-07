@@ -360,7 +360,7 @@ public class PeriodPlanDraftGenerator {
         boolean allDefault = windows.stream()
                 .allMatch(w -> w.source() == AvailabilitySource.DEFAULT_INFERENCE);
         if (allDefault) {
-            return "기본 시간대(평일 19~22시, 주말 10~18시)를 사용한 추정";
+            return "기본 시간대(09~23시에서 확정 일정을 뺀 시간)를 사용한 추정";
         }
         if (anyDefault) {
             return "일부는 기본 시간대를 사용한 추정";

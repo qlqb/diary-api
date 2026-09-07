@@ -17,7 +17,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -25,7 +24,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 이번 계획에 실제로 쓸 수 있는 후보 시간을 추정한다. 단순히 "캘린더가 비어 있다"가 아니라
@@ -37,8 +35,20 @@ import java.util.Set;
  * 2. 현재 대화에서 사용자가 명시한 사용 불가 시간을 제외한다(AI_INFERRED 강한 조건).
  * 3. 사용자가 미리보기에서 직접 고친 예외를 반영한다 — 막거나(available=false) 다시
  *    열거나(available=true, 단 1번 TIME_FIXED는 재허용 대상이 아니다).
- * 4. 남는 근거가 없으면 Asia/Seoul 기준 보수적 기본 활동 시간대를 LOW 신뢰도로 채운다.
+ * 4. 남는 근거가 없으면 하루 기본 창에서 1~3번을 뺀 나머지를 LOW 신뢰도로 채운다.
  * 5. 현재 시각 이전과 계획 범위 밖은 항상 제외한다.
+ *
+ * <p><b>세 가지를 구분한다.</b> 이름이 섞이면 "추천하고 싶은 시간"이 조용히 "쓸 수 있는
+ * 시간"의 정의가 된다 — 실제로 그렇게 돼서 저녁에 일하는 사용자의 평일이 통째로 사라졌다.
+ * <ul>
+ *   <li>{@code hardBusy}: 절대 배치하지 않는 시간. 수업·약속·기존 TIME_FIXED 조각.</li>
+ *   <li>{@code baseCandidateWindow}: 후보를 만들 수 있는 하루 상한 창. <b>필터로만</b>
+ *       쓴다. 하루 중 이 창 밖(새벽)은 후보로 만들지 않는다는 뜻일 뿐, 창 안이 곧 좋은
+ *       시간이라는 뜻이 아니다. 요일별 차이는 이 상수가 아니라 hardBusy가 만든다.</li>
+ *   <li>{@code preferredWindow}: 배치 점수용 선호 시간. <b>필터로 쓰면 안 된다.</b>
+ *       지금은 근거 출처가 없어 구현하지 않는다 — 근거 없는 추측을 점수로 올리면 이번
+ *       버그가 한 층 위에서 되풀이된다. 첫 근거 출처는 실행 이력을 예정하고 있다.</li>
+ * </ul>
  *
  * ContextItem(장기 확정 컨텍스트)과 실행 패턴 집계는 아직 이 코드베이스에 없다 — 출처
  * enum(USER_CONFIRMED_CONTEXT/EXECUTION_PATTERN) 계약만 남기고 이번 구현에서는 만들지 않는다.
@@ -47,11 +57,12 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class AvailabilityEstimateService {
 
-    private static final LocalTime WEEKDAY_DEFAULT_START = LocalTime.of(19, 0);
-    private static final LocalTime WEEKDAY_DEFAULT_END = LocalTime.of(22, 0);
-    private static final LocalTime WEEKEND_DEFAULT_START = LocalTime.of(10, 0);
-    private static final LocalTime WEEKEND_DEFAULT_END = LocalTime.of(18, 0);
-    private static final Set<DayOfWeek> WEEKEND = Set.of(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
+    /**
+     * 후보를 만들 수 있는 하루 상한 창. 요일로 나누지 않는다 — 평일과 주말의 차이는 수업과
+     * 근무가 hardBusy로 만들어 내는 것이지, 이 상수가 미리 정할 것이 아니다.
+     */
+    private static final LocalTime BASE_CANDIDATE_WINDOW_START = LocalTime.of(9, 0);
+    private static final LocalTime BASE_CANDIDATE_WINDOW_END = LocalTime.of(23, 0);
 
     private final ExecutionItemMapper executionItemMapper;
     private final RoutineOccurrenceService routineOccurrenceService;
@@ -133,7 +144,7 @@ public class AvailabilityEstimateService {
         // 사용자가 "이 시간은 돼요"라고 말해도 다시 열리지 않는다.
         List<Interval> softBlockedAfterReopen = subtractAll(softBlocked, reopenIntervals);
 
-        List<AvailabilityWindow> rawWindows = defaultInferenceWindows(horizonStart, horizonEnd);
+        List<AvailabilityWindow> rawWindows = baseCandidateWindows(horizonStart, horizonEnd);
 
         List<Interval> allExclusions = new ArrayList<>(hardBusy);
         allExclusions.addAll(softBlockedAfterReopen);
@@ -181,16 +192,18 @@ public class AvailabilityEstimateService {
         return dates;
     }
 
-    private List<AvailabilityWindow> defaultInferenceWindows(LocalDate horizonStart, LocalDate horizonEnd) {
+    /**
+     * 날짜마다 기본 창 한 개씩. 여기서 hardBusy를 빼지 않는다 — 차감은 부르는 쪽의
+     * subtract 한 곳에서만 일어난다. 이 메서드는 "무엇을 후보로 만들 수 있는가"의 상한만 준다.
+     */
+    private List<AvailabilityWindow> baseCandidateWindows(LocalDate horizonStart, LocalDate horizonEnd) {
         List<AvailabilityWindow> windows = new ArrayList<>();
         for (LocalDate d = horizonStart; !d.isAfter(horizonEnd); d = d.plusDays(1)) {
-            boolean weekend = WEEKEND.contains(d.getDayOfWeek());
-            LocalTime start = weekend ? WEEKEND_DEFAULT_START : WEEKDAY_DEFAULT_START;
-            LocalTime end = weekend ? WEEKEND_DEFAULT_END : WEEKDAY_DEFAULT_END;
             windows.add(new AvailabilityWindow(
-                    LocalDateTime.of(d, start), LocalDateTime.of(d, end),
+                    LocalDateTime.of(d, BASE_CANDIDATE_WINDOW_START),
+                    LocalDateTime.of(d, BASE_CANDIDATE_WINDOW_END),
                     AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW,
-                    "구체적인 근거가 없어 Asia/Seoul 기준 보수적인 기본 활동 시간대를 썼어요"));
+                    "구체적인 근거가 없어 하루 기본 시간대에서 확정 일정을 뺀 시간이에요"));
         }
         return windows;
     }

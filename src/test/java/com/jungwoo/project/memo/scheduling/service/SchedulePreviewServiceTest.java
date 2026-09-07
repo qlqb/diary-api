@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
 import com.jungwoo.project.memo.execution.domain.PlacementType;
@@ -151,8 +152,16 @@ class SchedulePreviewServiceTest {
     void leavesLowerPriorityUnplaced_whenNotEnoughAvailableTime() {
         when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
 
-        // 하루 안에만 배치 가능하도록 짧은 horizon(오늘 하루)과, 그 하루의 기본 추정 창(19:00-22:00,
-        // 3시간)을 거의 다 채우는 4개의 90분짜리 후보를 넣어 시간을 의도적으로 부족하게 만든다.
+        // 하루 안에만 배치 가능하도록 짧은 horizon(오늘 하루)을 쓰고, 그날 20:00까지를 근무로
+        // 막아 남는 시간을 3시간으로 만든다. 부족한 상태를 기본 창 크기에 기대지 않고 여기서
+        // 직접 만든다 — 기본 창은 정책이라 바뀔 수 있고, 이 테스트가 확인하려는 것은
+        // "시간이 모자라면 우선순위가 낮은 것이 미배치로 남는다"이지 창의 크기가 아니다.
+        when(commitmentService.findOverlapping(USER_ID, TODAY, TODAY))
+                .thenReturn(List.of(Commitment.builder()
+                        .commitmentId(70L).userId(USER_ID).title("근무")
+                        .startAt(TODAY.atTime(9, 0)).endAt(TODAY.atTime(20, 0))
+                        .build()));
+
         List<AiProposalItem> items = new ArrayList<>();
         items.add(proposalItem(1L, "A(MUST)", 90, "MUST", null));
         items.add(proposalItem(2L, "B(MUST)", 90, "MUST", null));

@@ -48,8 +48,8 @@ public class PlanDraftResponse {
     private Integer estimatedAvailableMinutes;
 
     /**
-     * 남는 시간 추정의 근거 요약. 근거가 없어 기본 시간대(평일 19~22시, 주말 10~18시)를 쓴
-     * 부분이 있으면 그 사실을 말한다 — 확정 사실처럼 보이지 않게 하기 위해서다.
+     * 남는 시간 추정의 근거 요약. 근거가 없어 기본 시간대(09~23시에서 확정 일정을 뺀 시간)를
+     * 쓴 부분이 있으면 그 사실을 말한다 — 확정 사실처럼 보이지 않게 하기 위해서다.
      */
     private String availabilityConfidenceSummary;
 
