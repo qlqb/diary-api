@@ -17,7 +17,11 @@ import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
+import com.jungwoo.project.memo.common.exception.ForbiddenException;
 import com.jungwoo.project.memo.routine.RoutineService;
+import com.jungwoo.project.memo.routine.domain.Routine;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import jakarta.validation.Validation;
 import jakarta.validation.ValidatorFactory;
@@ -68,6 +72,10 @@ class ScheduleSuggestionServiceTest {
     private static final String ROUTINE_JSON = """
             {"courseId":null,"title":"알바","location":null,"daysOfWeek":["THURSDAY"],
              "startTime":"18:00","endTime":"23:00","effectiveFrom":"2026-09-01","effectiveUntil":null}""";
+    private static final String LEAD_JSON = """
+            {"routineIds":[1,2,3],"leadMinutes":60,"targetSummary":"자료구조 외 2개"}""";
+    private static final String LEAD_UNDECIDED_JSON = """
+            {"routineIds":[1,2,3],"leadMinutes":null,"targetSummary":"자료구조 외 2개"}""";
 
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -526,5 +534,148 @@ class ScheduleSuggestionServiceTest {
         assertThat(pending).hasSize(1);
         // 화면이 다시 파싱하지 않도록 payload를 객체로 내보낸다.
         assertThat(pending.get(0).getPayload()).containsEntry("title", "친구 약속");
+    }
+
+    // ===== ROUTINE_LEAD: 의도 → 서버 해석 → 후보 =====
+
+    private Routine classRoutine(Long routineId, String title) {
+        return Routine.builder().routineId(routineId).userId(USER_ID).courseId(100L + routineId).title(title).build();
+    }
+
+    private RoutineResponse savedLead(Long routineId, Long courseId, int leadMinutes) {
+        return new RoutineResponse(routineId, courseId, "수업 " + routineId, null, java.util.Set.of(DayOfWeek.TUESDAY),
+                LocalTime.of(14, 0), LocalTime.of(17, 0), leadMinutes, LocalDate.of(2026, 8, 25), null,
+                false, false, false, List.of());
+    }
+
+    @Test
+    void 이동시간_후보는_힌트를_서버가_해석해_대상_id와_요약을_저장한다() {
+        when(routineService.resolveLeadTargets(USER_ID, null, "수업"))
+                .thenReturn(List.of(classRoutine(1L, "자료구조"), classRoutine(2L, "웹서버"), classRoutine(3L, "센서")));
+
+        ScheduleSuggestionService.Created created = service.createFromModelSuggestions(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(new ScheduleSuggestion(
+                        ScheduleSuggestionKind.ROUTINE_LEAD,
+                        json("{\"targetRoutineIds\":null,\"targetHint\":\"수업\",\"leadMinutes\":60}"))));
+
+        assertThat(created.unresolvedLeadTargets()).isZero();
+        assertThat(created.saved()).hasSize(1);
+        ScheduleSuggestionResponse response = created.saved().get(0);
+        assertThat(response.getKind()).isEqualTo(ScheduleSuggestionKind.ROUTINE_LEAD);
+        assertThat(response.getPayload()).containsEntry("leadMinutes", 60)
+                .containsEntry("targetSummary", "자료구조 외 2개");
+        assertThat((List<Object>) response.getPayload().get("routineIds")).containsExactly(1L, 2L, 3L);
+        // 후보일 뿐이다 — 아직 아무 루틴의 이동시간도 바뀌지 않았다.
+        verify(routineService, never()).updateLeadMinutes(anyLong(), any());
+    }
+
+    @Test
+    void 대상을_못_찾으면_후보를_만들지_않고_그_수만_센다() {
+        when(routineService.resolveLeadTargets(USER_ID, null, "xyz")).thenReturn(List.of());
+
+        ScheduleSuggestionService.Created created = service.createFromModelSuggestions(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(new ScheduleSuggestion(
+                        ScheduleSuggestionKind.ROUTINE_LEAD,
+                        json("{\"targetRoutineIds\":null,\"targetHint\":\"xyz\",\"leadMinutes\":60}"))));
+
+        assertThat(created.saved()).isEmpty();
+        assertThat(created.unresolvedLeadTargets()).isEqualTo(1);
+        verify(suggestionMapper, never()).insert(any());
+    }
+
+    @Test
+    void 이동시간_후보의_시간이_범위_밖이면_계약_위반이다() {
+        assertThatThrownBy(() -> service.createFromModelSuggestions(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(new ScheduleSuggestion(
+                        ScheduleSuggestionKind.ROUTINE_LEAD,
+                        json("{\"targetRoutineIds\":[1],\"targetHint\":null,\"leadMinutes\":481}")))))
+                .isInstanceOf(ServiceUnavailableException.class);
+        verify(suggestionMapper, never()).insert(any());
+    }
+
+    @Test
+    void 시간을_말하지_않은_후보는_값이_비어_있는_채로_저장된다() {
+        when(routineService.resolveLeadTargets(USER_ID, null, "수업")).thenReturn(List.of(classRoutine(1L, "자료구조")));
+
+        ScheduleSuggestionService.Created created = service.createFromModelSuggestions(
+                USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(new ScheduleSuggestion(
+                        ScheduleSuggestionKind.ROUTINE_LEAD,
+                        json("{\"targetRoutineIds\":null,\"targetHint\":\"수업\",\"leadMinutes\":null}"))));
+
+        assertThat(created.saved()).hasSize(1);
+        assertThat(created.saved().get(0).getPayload().get("leadMinutes")).isNull();
+        assertThat(created.saved().get(0).getPayload()).containsEntry("targetSummary", "자료구조");
+    }
+
+    // ===== ROUTINE_LEAD: 승인 =====
+
+    @Test
+    void 이동시간_후보를_적용하면_루틴마다_같은_값으로_저장하고_확인_문장을_돌려준다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.ROUTINE_LEAD, LEAD_JSON, ScheduleSuggestionStatus.PROPOSED));
+        when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
+        when(routineService.updateLeadMinutes(eq(USER_ID), any()))
+                .thenReturn(List.of(savedLead(1L, 101L, 60), savedLead(2L, 102L, 60), savedLead(3L, 103L, 60)));
+
+        ScheduleSuggestionResponse response = service.apply(SUGGESTION_ID, USER_ID, null);
+
+        ArgumentCaptor<List<LeadMinutesBatchItemRequest>> captor = ArgumentCaptor.forClass(List.class);
+        verify(routineService).updateLeadMinutes(eq(USER_ID), captor.capture());
+        assertThat(captor.getValue()).extracting(LeadMinutesBatchItemRequest::getRoutineId, LeadMinutesBatchItemRequest::getLeadMinutes)
+                .containsExactly(org.assertj.core.groups.Tuple.tuple(1L, 60),
+                        org.assertj.core.groups.Tuple.tuple(2L, 60), org.assertj.core.groups.Tuple.tuple(3L, 60));
+        assertThat(response.getStatus()).isEqualTo(ScheduleSuggestionStatus.APPLIED);
+        assertThat(response.getSystemNote()).isEqualTo("수업 일정의 이동시간을 60분으로 저장했어요.");
+        verify(routineService, never()).create(anyLong(), any());
+    }
+
+    @Test
+    void 값이_비어_있는_이동시간_후보는_카드에서_고른_값으로만_적용된다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.ROUTINE_LEAD, LEAD_UNDECIDED_JSON, ScheduleSuggestionStatus.PROPOSED));
+
+        // 고르지 않고 누르면 400이고 아무것도 저장하지 않는다.
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, null))
+                .isInstanceOf(BadRequestException.class);
+        verify(routineService, never()).updateLeadMinutes(anyLong(), any());
+        verify(suggestionMapper, never()).resolveIfProposed(anyLong(), anyLong(), any(), any());
+
+        // 골라서 보내면 그 값으로 저장한다.
+        when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
+        when(routineService.updateLeadMinutes(eq(USER_ID), any()))
+                .thenReturn(List.of(savedLead(1L, 101L, 0), savedLead(2L, 102L, 0), savedLead(3L, 103L, 0)));
+        ScheduleSuggestionResponse response = service.apply(SUGGESTION_ID, USER_ID,
+                map("{\"routineIds\":[1,2,3],\"leadMinutes\":0,\"targetSummary\":\"자료구조 외 2개\"}"));
+
+        assertThat(response.getStatus()).isEqualTo(ScheduleSuggestionStatus.APPLIED);
+        assertThat(response.getSystemNote()).isEqualTo("수업 일정의 이동시간을 없음으로 저장했어요.");
+    }
+
+    /** 저장이 거부되면(남의 루틴) 예외가 그대로 올라간다 — 완료 문장도, 상태 전이도 없다. */
+    @Test
+    void 이동시간_저장이_거부되면_완료_문장을_만들지_않는다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.ROUTINE_LEAD, LEAD_JSON, ScheduleSuggestionStatus.PROPOSED));
+        when(routineService.updateLeadMinutes(eq(USER_ID), any())).thenThrow(new ForbiddenException());
+
+        assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, null))
+                .isInstanceOf(ForbiddenException.class);
+
+        verify(suggestionMapper, never()).resolveIfProposed(anyLong(), anyLong(), any(), any());
+    }
+
+    /** 수업이 아닌 대상이 섞이면 "수업 일정" 대신 대상 요약으로 말한다. */
+    @Test
+    void 수업이_아닌_대상이면_확인_문장은_대상_요약으로_말한다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.ROUTINE_LEAD,
+                        "{\"routineIds\":[5],\"leadMinutes\":30,\"targetSummary\":\"쿠팡 알바\"}",
+                        ScheduleSuggestionStatus.PROPOSED));
+        when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
+        when(routineService.updateLeadMinutes(eq(USER_ID), any())).thenReturn(List.of(savedLead(5L, null, 30)));
+
+        ScheduleSuggestionResponse response = service.apply(SUGGESTION_ID, USER_ID, null);
+
+        assertThat(response.getSystemNote()).isEqualTo("쿠팡 알바의 이동시간을 30분으로 저장했어요.");
     }
 }

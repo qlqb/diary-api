@@ -227,6 +227,59 @@ public class RoutineService {
                 LEAD_PENDING_CLASS_GROUP_KEY, LEAD_PENDING_CLASS_LABEL, routineIds, sample));
     }
 
+    /** "수업 전에"의 "수업"처럼 종류를 가리키는 말. 프로젝트에 묶인 루틴(courseId != null)이 수업이다. */
+    private static final Set<String> CLASS_HINTS = Set.of("수업", "강의", "class", "lecture");
+
+    /**
+     * AI 후보의 대상 해석. <b>결정적이다</b> — 모델이 고르지 않고 서버가 고른다.
+     *
+     * <ul>
+     *   <li>ids가 있으면 전부 본인 소유(살아 있고 종료되지 않은 것)여야 한다. 하나라도 아니면
+     *       빈 목록이다 — 부분 해석은 "말한 것과 다른 것이 저장되는" 경로다.
+     *   <li>힌트만 있으면: "수업/강의"류는 프로젝트에 묶인 루틴 전부, 그 밖에는 이름에 힌트가
+     *       들어가는 것(공백·특수문자·대소문자 무시). 0개면 빈 목록이다.
+     * </ul>
+     * 순서는 목록 순(시작 시각, id)이다. 비어 있으면 호출부가 후보를 만들지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<Routine> resolveLeadTargets(Long userId, List<Long> routineIds, String hint) {
+        LocalDate today = today();
+        List<Routine> alive = new ArrayList<>();
+        for (Routine routine : routineReader.findAllWithWeekdays(userId)) {
+            if (!routine.isEndedAsOf(today)) {
+                alive.add(routine);
+            }
+        }
+        if (routineIds != null && !routineIds.isEmpty()) {
+            Map<Long, Routine> byId = new LinkedHashMap<>();
+            for (Routine routine : alive) {
+                byId.put(routine.getRoutineId(), routine);
+            }
+            List<Routine> matched = new ArrayList<>();
+            for (Long routineId : new TreeSet<>(routineIds)) {
+                Routine routine = routineId == null ? null : byId.get(routineId);
+                if (routine == null) {
+                    log.info("이동시간 대상 해석 실패(소유 아님 또는 없음): userId={}, routineId={}", userId, routineId);
+                    return List.of();
+                }
+                matched.add(routine);
+            }
+            return matched;
+        }
+        String key = hint == null ? "" : leadGroupKey(hint);
+        if (key.isBlank()) {
+            return List.of();
+        }
+        List<Routine> matched = new ArrayList<>();
+        boolean classHint = CLASS_HINTS.contains(key);
+        for (Routine routine : alive) {
+            if (classHint ? routine.getCourseId() != null : leadGroupKey(routine.getTitle()).contains(key)) {
+                matched.add(routine);
+            }
+        }
+        return matched;
+    }
+
     /** 공백·특수문자를 빼고 소문자로. "자료구조 (월)"과 "자료구조(월)"이 같은 묶음이 된다. */
     static String leadGroupKey(String title) {
         StringBuilder key = new StringBuilder();

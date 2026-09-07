@@ -376,8 +376,8 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               ],
               "scheduleSuggestions": [
                 {
-                  "kind": "COMMITMENT" 또는 "ROUTINE",
-                  "payload": kind에 따라 아래 둘 중 하나. 다른 필드를 추가하지 않는다.
+                  "kind": "COMMITMENT" 또는 "ROUTINE" 또는 "ROUTINE_LEAD",
+                  "payload": kind에 따라 아래 셋 중 하나. 다른 필드를 추가하지 않는다.
 
                     COMMITMENT(한 번만 일어나며 그 시간에 다른 일을 할 수 없는 것 —
                     약속·병원·면접·이동·통학·행사·외출):
@@ -400,6 +400,17 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                         다음 날 종료로 읽는다 — 18:00~02:00 같은 야간 근무가 그렇다),
                       "effectiveFrom": "YYYY-MM-DD",
                       "effectiveUntil": "YYYY-MM-DD" 또는 null (끝이 정해지지 않았으면 null)
+                    }
+
+                    ROUTINE_LEAD(이미 등록된 반복 일정 앞에 붙는 이동·준비 시간. 새 일정이
+                    아니라 그 일정의 값이다):
+                    {
+                      "targetRoutineIds": [정수, ...] 또는 null (대상 반복 일정의 번호를 확실히
+                        알 때만. 화면 블록에 번호가 없으면 null),
+                      "targetHint": "수업" 또는 "알바"처럼 사용자가 대상을 부른 말 또는 null
+                        (targetRoutineIds가 null이면 반드시 채운다),
+                      "leadMinutes": 분(정수, 0~480) 또는 null (사용자가 시간을 말하지 않았으면 null.
+                        추측해 채우지 않는다 — 카드에서 고르게 한다)
                     }
                 }
               ] (후보가 없으면 빈 배열. 최대 5개),
@@ -471,6 +482,13 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               ★ 이동시간은 앞뒤 일정에 딸려 나오는 경우가 많다(병원 10~11시 뒤 이동 11~12시).
               그래도 앞뒤 일정과 합치지 말고 별도 COMMITMENT로 낸다 — 합치면 "병원 10~12시"가
               되어 사실과 달라진다.
+
+              ★ 이동·준비 시간을 "특정 반복 일정 앞에" 붙여달라는 요청이면 COMMITMENT가 아니라
+              ROUTINE_LEAD를 낸다. "수업 전엔 이동시간 1시간 채워줘", "알바 가기 전 30분은
+              비워줘"가 그것이다. 시간이 명시되지 않았으면 leadMinutes는 null이다. 반복 여부·
+              대상 시각을 추측하지 않는다 — 대상은 번호(targetRoutineIds) 또는 사용자가 부른
+              말(targetHint)로만 가리키고, 어느 일정인지는 서버가 정한다. 대상이 등록되지
+              않았을 수 있다고 답변에서 말할 수 있지만, 후보를 건너뛰지는 않는다.
 
               ★ 이런 시간을 unavailableWindows로만 처리하고 끝내지 마라. 그쪽은 이번 계획
               계산에만 쓰이는 일회성 값이라 다음 대화와 다른 계획에는 남지 않는다. 사용자가

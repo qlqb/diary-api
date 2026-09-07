@@ -291,4 +291,24 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("periodStartDate/periodEndDate는 반드시 null이다");
         assertThat(prompt).contains("[확정된 계획 기간]");
     }
+
+    /**
+     * "수업 전엔 이동시간 1시간 채워줘"는 새 약속이 아니라 반복 일정의 값이다. 모델은 의도만
+     * 낸다 — 대상은 id 또는 힌트로만 가리키고, 시간이 없으면 null이다. 원칙 22("반영해둘게요"
+     * 금지)는 그대로 두고, 확인 문장은 서버가 만든다(SystemNotes).
+     */
+    @Test
+    void systemPrompt_emitsRoutineLeadIntent_withoutGuessingTargetOrMinutes() {
+        String prompt = OpenAiConsultationClient.SYSTEM_PROMPT;
+
+        assertThat(prompt).contains("\"ROUTINE_LEAD\"");
+        assertThat(prompt).contains("targetRoutineIds");
+        assertThat(prompt).contains("targetHint");
+        assertThat(prompt).contains("leadMinutes");
+        assertThat(prompt).contains("시간이 명시되지 않았으면 leadMinutes는 null");
+        assertThat(prompt).contains("대상 시각을 추측하지 않는다");
+        assertThat(prompt).contains("어느 일정인지는 서버가 정한다");
+        // 원칙 22는 그대로다.
+        assertThat(prompt).contains("네가 직접 저장하는 것은 없다");
+    }
 }

@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.domain.AiScheduleSuggestion;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
+import com.jungwoo.project.memo.ai.dto.LeadMinutesIntent;
+import com.jungwoo.project.memo.ai.dto.LeadMinutesSuggestionPayload;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.commitment.CommitmentService;
@@ -18,6 +20,9 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.routine.RoutineService;
+import com.jungwoo.project.memo.routine.domain.Routine;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.Validator;
@@ -47,6 +52,10 @@ import java.util.stream.Collectors;
  *
  * <p>이 서비스는 "이건 반복인가"를 판단하지 않는다. 그 판단은 AI의 몫이고(프롬프트가 반복성이
  * 명백할 때만 ROUTINE을 만들게 한다), 여기서는 계약 형태만 본다.
+ *
+ * <p><b>ROUTINE_LEAD만 예외적으로 서버가 해석한다.</b> 모델은 대상을 id나 힌트("수업")로만
+ * 가리키고, 어느 루틴인지는 {@code RoutineService.resolveLeadTargets}가 결정적으로 정한다.
+ * 못 찾으면 후보를 만들지 않고 그 사실만 센다 — 확인 문장이 "찾지 못했어요"로 나간다.
  */
 @Slf4j
 @Service
@@ -97,8 +106,24 @@ public class ScheduleSuggestionService {
     public List<ScheduleSuggestionResponse> createFromSuggestions(
             Long userId, Long conversationId, Long sourceMessageId, List<ScheduleSuggestion> raw
     ) {
+        return createFromModelSuggestions(userId, conversationId, sourceMessageId, raw).saved();
+    }
+
+    /**
+     * 이번 턴에 저장된 후보와, 후보로 만들지 못한 것의 수.
+     *
+     * @param unresolvedLeadTargets ROUTINE_LEAD인데 대상 일정을 못 찾아 만들지 않은 수.
+     *                              확인 문장(SystemNotes)이 이 값으로 "찾지 못했어요"를 낸다
+     */
+    public record Created(List<ScheduleSuggestionResponse> saved, int unresolvedLeadTargets) {
+    }
+
+    /** {@link #createFromSuggestions}와 같되, 만들지 못한 이동시간 후보의 수를 함께 돌려준다. */
+    public Created createFromModelSuggestions(
+            Long userId, Long conversationId, Long sourceMessageId, List<ScheduleSuggestion> raw
+    ) {
         if (raw == null || raw.isEmpty()) {
-            return List.of();
+            return new Created(List.of(), 0);
         }
         if (raw.size() > MAX_SUGGESTIONS_PER_TURN) {
             log.warn("일정 후보 검증 실패: 개수 초과 (count={})", raw.size());
@@ -106,30 +131,80 @@ public class ScheduleSuggestionService {
         }
 
         List<ScheduleSuggestionResponse> result = new ArrayList<>();
+        int unresolvedLeadTargets = 0;
         for (ScheduleSuggestion candidate : raw) {
             if (candidate.kind() == null || candidate.payload() == null
                     || !candidate.payload().isObject()) {
                 log.warn("일정 후보 검증 실패: kind 또는 payload 누락");
                 throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
             }
+
+            JsonNode payload = candidate.payload();
+            if (candidate.kind() == ScheduleSuggestionKind.ROUTINE_LEAD) {
+                payload = resolveLeadPayload(userId, payload);
+                if (payload == null) {
+                    unresolvedLeadTargets++;
+                    continue;
+                }
+            }
             // 모델이 낸 값이므로 계약 위반이다. 실제 도메인 검증(시간 역전 등)은 적용 시점에
             // 같은 도메인 서비스가 한 번 더 한다 — 두 층은 보는 것이 다르다.
-            readAndValidatePayload(candidate.kind(), candidate.payload(), PayloadSource.MODEL);
+            readAndValidatePayload(candidate.kind(), payload, PayloadSource.MODEL);
 
             AiScheduleSuggestion entity = AiScheduleSuggestion.builder()
                     .userId(userId)
                     .conversationId(conversationId)
                     .sourceMessageId(sourceMessageId)
                     .kind(candidate.kind())
-                    .proposedPayload(toJson(candidate.payload()))
+                    .proposedPayload(toJson(payload))
                     .status(ScheduleSuggestionStatus.PROPOSED)
                     .build();
             suggestionMapper.insert(entity);
 
-            result.add(ScheduleSuggestionResponse.of(entity, toMap(candidate.payload())));
+            result.add(ScheduleSuggestionResponse.of(entity, toMap(payload)));
         }
-        log.info("일정 후보 저장: userId={}, conversationId={}, count={}", userId, conversationId, result.size());
-        return result;
+        log.info("일정 후보 저장: userId={}, conversationId={}, count={}, unresolvedLead={}",
+                userId, conversationId, result.size(), unresolvedLeadTargets);
+        return new Created(result, unresolvedLeadTargets);
+    }
+
+    /**
+     * 모델의 ROUTINE_LEAD 의도({@link LeadMinutesIntent})를 저장용 payload
+     * ({@link LeadMinutesSuggestionPayload})로 바꾼다. 대상을 못 찾으면 null이다.
+     *
+     * <p>모델이 낸 leadMinutes가 범위 밖이면 계약 위반이다(다른 kind와 같다). 대상은 서버가
+     * 정한다 — ids가 오면 전부 본인 소유여야 하고, 아니면 힌트로 이름을 본다.
+     */
+    private JsonNode resolveLeadPayload(Long userId, JsonNode raw) {
+        LeadMinutesIntent intent;
+        try {
+            intent = objectMapper.readerFor(LeadMinutesIntent.class)
+                    .with(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                    .readValue(raw);
+        } catch (Exception e) {
+            log.warn("이동시간 후보 payload를 읽지 못했다: payload={}", raw, e);
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (intent.leadMinutes() != null
+                && (intent.leadMinutes() < 0 || intent.leadMinutes() > RoutineService.MAX_LEAD_MINUTES)) {
+            log.warn("이동시간 후보 검증 실패: leadMinutes={}", intent.leadMinutes());
+            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        List<Routine> targets = routineService.resolveLeadTargets(
+                userId, intent.targetRoutineIds(), intent.targetHint());
+        if (targets.isEmpty()) {
+            log.info("이동시간 후보 대상 없음: userId={}, ids={}, hint={}",
+                    userId, intent.targetRoutineIds(), intent.targetHint());
+            return null;
+        }
+        List<Long> routineIds = new ArrayList<>();
+        for (Routine routine : targets) {
+            routineIds.add(routine.getRoutineId());
+        }
+        String summary = targets.size() == 1
+                ? targets.get(0).getTitle()
+                : targets.get(0).getTitle() + " 외 " + (targets.size() - 1) + "개";
+        return objectMapper.valueToTree(new LeadMinutesSuggestionPayload(routineIds, intent.leadMinutes(), summary));
     }
 
     /**
@@ -277,7 +352,7 @@ public class ScheduleSuggestionService {
                 ? objectMapper.valueToTree(editedPayload) : readTree(suggestion.getProposedPayload());
         Object request = readAndValidatePayload(suggestion.getKind(), payload,
                 edited ? PayloadSource.USER_EDIT : PayloadSource.MODEL);
-        createDomain(userId, suggestion.getKind(), request);
+        String systemNote = createDomain(userId, suggestion.getKind(), request);
 
         int resolved = suggestionMapper.resolveIfProposed(
                 suggestionId, userId, ScheduleSuggestionStatus.APPLIED.name(), LocalDateTime.now());
@@ -289,7 +364,10 @@ public class ScheduleSuggestionService {
 
         log.info("일정 후보 적용: userId={}, suggestionId={}, kind={}", userId, suggestionId, suggestion.getKind());
         suggestion.setStatus(ScheduleSuggestionStatus.APPLIED);
-        return ScheduleSuggestionResponse.of(suggestion, toMap(payload));
+        ScheduleSuggestionResponse response = ScheduleSuggestionResponse.of(suggestion, toMap(payload));
+        // 저장이 끝난 뒤에만 붙는다. 위에서 예외가 났으면 여기 오지 않으므로 완료 문장도 없다.
+        response.setSystemNote(systemNote);
+        return response;
     }
 
     /** 도메인 행을 만들지 않고 후보만 닫는다. */
@@ -312,13 +390,43 @@ public class ScheduleSuggestionService {
 
     // ===== 내부 =====
 
-    /** 종류별로 기존 생성 경로를 그대로 부른다. 여기서 새 규칙을 만들지 않는다. */
-    private void createDomain(Long userId, ScheduleSuggestionKind kind, Object request) {
+    /**
+     * 종류별로 기존 생성 경로를 그대로 부른다. 여기서 새 규칙을 만들지 않는다.
+     *
+     * @return 서버가 만든 확인 문장. 이동시간은 "무엇을 얼마로 저장했는지"를 말하고, 약속·반복
+     *         일정은 화면이 이미 카드로 말하므로 null이다
+     */
+    private String createDomain(Long userId, ScheduleSuggestionKind kind, Object request) {
         switch (kind) {
-            case COMMITMENT -> commitmentService.create(userId, (CommitmentCreateRequest) request,
-                    CommitmentSourceType.AI_SUGGESTION_APPROVED);
-            case ROUTINE -> routineService.create(userId, (RoutineSaveRequest) request);
+            case COMMITMENT -> {
+                commitmentService.create(userId, (CommitmentCreateRequest) request,
+                        CommitmentSourceType.AI_SUGGESTION_APPROVED);
+                return null;
+            }
+            case ROUTINE -> {
+                routineService.create(userId, (RoutineSaveRequest) request);
+                return null;
+            }
+            case ROUTINE_LEAD -> {
+                LeadMinutesSuggestionPayload lead = (LeadMinutesSuggestionPayload) request;
+                if (lead.getLeadMinutes() == null) {
+                    // 시간을 말하지 않은 후보는 카드에서 값을 고른 뒤에만 승인할 수 있다.
+                    throw new BadRequestException(ErrorCode.ROUTINE_LEAD_MINUTES_INVALID);
+                }
+                List<LeadMinutesBatchItemRequest> entries = new ArrayList<>();
+                for (Long routineId : lead.getRoutineIds()) {
+                    entries.add(new LeadMinutesBatchItemRequest(routineId, lead.getLeadMinutes()));
+                }
+                // 소유 검증·잠금·저장은 저쪽이 한다. 남의 루틴이 섞이면 403이 나고 이 트랜잭션이 통째로 롤백된다.
+                List<RoutineResponse> saved = routineService.updateLeadMinutes(userId, entries);
+                boolean allClasses = !saved.isEmpty() && saved.stream().allMatch(r -> r.courseId() != null);
+                String label = allClasses ? "수업 일정"
+                        : (lead.getTargetSummary() == null || lead.getTargetSummary().isBlank()
+                                ? "그 일정" : lead.getTargetSummary());
+                return SystemNotes.forLeadApplied(label, lead.getLeadMinutes());
+            }
         }
+        return null;
     }
 
     /** 이 payload가 누구의 것인지. 같은 검증이 실패해도 누구의 잘못인지에 따라 결과가 다르다. */
@@ -349,6 +457,7 @@ public class ScheduleSuggestionService {
             Class<?> target = switch (kind) {
                 case COMMITMENT -> CommitmentCreateRequest.class;
                 case ROUTINE -> RoutineSaveRequest.class;
+                case ROUTINE_LEAD -> LeadMinutesSuggestionPayload.class;
             };
             /*
              * 이 경로만 모르는 필드를 거절한다. 공용 빈은 관대하고(FAIL_ON_UNKNOWN_PROPERTIES

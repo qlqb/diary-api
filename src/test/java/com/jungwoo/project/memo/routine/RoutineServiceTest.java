@@ -591,6 +591,49 @@ class RoutineServiceTest {
                 .isInstanceOf(BadRequestException.class);
     }
 
+    // ===== 이동시간: AI 후보의 대상 해석 =====
+
+    private void classesAndShift() {
+        listed(pendingRoutine(1L, "자료구조", 101L, null, SEMESTER_START, SEMESTER_END, DayOfWeek.TUESDAY),
+                pendingRoutine(2L, "웹서버", 102L, null, SEMESTER_START, SEMESTER_END, DayOfWeek.WEDNESDAY),
+                pendingRoutine(3L, "센서", 103L, null, SEMESTER_START, SEMESTER_END, DayOfWeek.WEDNESDAY),
+                pendingRoutine(4L, "지난 학기", 104L, null, LocalDate.of(2026, 3, 2), LocalDate.of(2026, 6, 20), DayOfWeek.MONDAY),
+                pendingRoutine(5L, "쿠팡 알바", null, null, SEMESTER_START, null, DayOfWeek.FRIDAY));
+    }
+
+    /** "수업"은 이름이 아니라 courseId != null인 활성 루틴 집합이다. 종료된 수업은 빠진다. */
+    @Test
+    void 힌트가_수업이면_프로젝트에_묶인_활성_루틴_전부다() {
+        classesAndShift();
+
+        assertThat(service.resolveLeadTargets(USER_ID, null, "수업")).extracting(Routine::getRoutineId)
+                .containsExactly(1L, 2L, 3L);
+        assertThat(service.resolveLeadTargets(USER_ID, List.of(), "강의")).extracting(Routine::getRoutineId)
+                .containsExactly(1L, 2L, 3L);
+    }
+
+    @Test
+    void 그_밖의_힌트는_루틴_이름으로_찾고_없으면_비어_있다() {
+        classesAndShift();
+
+        assertThat(service.resolveLeadTargets(USER_ID, null, "쿠팡")).extracting(Routine::getRoutineId)
+                .containsExactly(5L);
+        assertThat(service.resolveLeadTargets(USER_ID, null, "xyz")).isEmpty();
+        assertThat(service.resolveLeadTargets(USER_ID, null, "  ")).isEmpty();
+        assertThat(service.resolveLeadTargets(USER_ID, null, null)).isEmpty();
+    }
+
+    /** ids가 오면 전부 본인 것이어야 한다. 하나라도 아니면(남의 것·삭제·종료) 통째로 비어 있다. */
+    @Test
+    void 대상_id에_본인_것이_아닌_것이_섞이면_비어_있다() {
+        classesAndShift();
+
+        assertThat(service.resolveLeadTargets(USER_ID, List.of(2L, 1L), "무시됨"))
+                .extracting(Routine::getRoutineId).containsExactly(1L, 2L);
+        assertThat(service.resolveLeadTargets(USER_ID, List.of(1L, 999L), null)).isEmpty();
+        assertThat(service.resolveLeadTargets(USER_ID, List.of(1L, 4L), null)).isEmpty();
+    }
+
     // ===== 고정자 =====
 
     private void lockedRoutine(DayOfWeek... days) {

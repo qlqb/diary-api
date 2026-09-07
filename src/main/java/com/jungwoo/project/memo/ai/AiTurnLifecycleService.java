@@ -268,14 +268,16 @@ public class AiTurnLifecycleService {
          * 이 시점에는 one_off_commitments/routines를 전혀 건드리지 않는다. 원본은 사용자가
          * 카드에서 적용했을 때만 만들어진다.
          */
-        List<ScheduleSuggestionResponse> scheduleSuggestions = scheduleSuggestionService.createFromSuggestions(
+        ScheduleSuggestionService.Created created = scheduleSuggestionService.createFromModelSuggestions(
                 userId, conversationId, assistantMessage.getMessageId(), scheduleSuggestionsIfAny);
+        List<ScheduleSuggestionResponse> scheduleSuggestions = created == null ? List.of() : created.saved();
+        int unresolvedLeadTargets = created == null ? 0 : created.unresolvedLeadTargets();
 
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
 
         return new TurnCompletionResult(
-                assistantMessage, proposalResponse, contextSuggestions, scheduleSuggestions);
+                assistantMessage, proposalResponse, contextSuggestions, scheduleSuggestions, unresolvedLeadTargets);
     }
 
     /**
@@ -345,12 +347,22 @@ public class AiTurnLifecycleService {
         }
     }
 
+    /**
+     * @param unresolvedLeadTargets 이동시간 후보를 내려 했지만 대상 일정을 못 찾아 만들지 않은 수.
+     *                              확인 문장(SystemNotes)이 "찾지 못했어요"를 내는 근거다
+     */
     public record TurnCompletionResult(
             AiMessage assistantMessage,
             AiProposalResponse proposalResponseOrNull,
             List<ContextSuggestionResponse> contextSuggestions,
-            List<ScheduleSuggestionResponse> scheduleSuggestions
+            List<ScheduleSuggestionResponse> scheduleSuggestions,
+            int unresolvedLeadTargets
     ) {
+        public TurnCompletionResult(AiMessage assistantMessage, AiProposalResponse proposalResponseOrNull,
+                                    List<ContextSuggestionResponse> contextSuggestions,
+                                    List<ScheduleSuggestionResponse> scheduleSuggestions) {
+            this(assistantMessage, proposalResponseOrNull, contextSuggestions, scheduleSuggestions, 0);
+        }
     }
 
     /** 기간 계획 턴의 결과. draft는 계획 화면의 /api/plans/draft 응답과 같은 모양이다. */

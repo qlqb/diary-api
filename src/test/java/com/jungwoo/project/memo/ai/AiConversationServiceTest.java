@@ -1685,6 +1685,75 @@ class AiConversationServiceTest {
         verify(aiConversationMapper).findSummariesByUserId(USER_ID, null, true, "EXECUTION");
     }
 
+    // ===== 확인 문장(systemNote): 서버가 만들고 모델은 손대지 못한다 =====
+
+    @Test
+    void streamAndComplete_systemNoteComesFromWhatWasActuallySaved_notFromTheModel() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        // 모델이 "반영해둘게요"라고 말해도 확인 문장은 저장된 후보로만 정해진다.
+        String raw = "수업 전 이동시간 1시간, 반영해둘게요.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[],"
+                + " \"scheduleSuggestions\":[{\"kind\":\"ROUTINE_LEAD\",\"payload\":{"
+                + "\"targetRoutineIds\":null,\"targetHint\":\"수업\",\"leadMinutes\":60}}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        java.util.Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("routineIds", List.of(1, 2, 3, 4, 5));
+        payload.put("leadMinutes", 60);
+        payload.put("targetSummary", "자료구조 외 4개");
+        ScheduleSuggestionResponse lead = ScheduleSuggestionResponse.builder()
+                .suggestionId(700L).kind(com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind.ROUTINE_LEAD)
+                .payload(payload).status(com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus.PROPOSED).build();
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(205L), null, List.of(), List.of(lead), 0));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("수업 전엔 이동시간 1시간 채워줘", "k-lead"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.reply()).isEqualTo("수업 전 이동시간 1시간, 반영해둘게요.");
+        assertThat(sink.completed.systemNote())
+                .isEqualTo("이동시간 후보 1건을 만들었어요. 승인하면 자료구조 외 4개 앞 60분이 비워져요.");
+        assertThat(sink.scheduleSuggestionsReady).containsExactly(lead);
+    }
+
+    @Test
+    void streamAndComplete_unresolvedLeadTarget_saysSoInSystemNote() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "네.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[],"
+                + " \"scheduleSuggestions\":[{\"kind\":\"ROUTINE_LEAD\",\"payload\":{"
+                + "\"targetRoutineIds\":null,\"targetHint\":\"xyz\",\"leadMinutes\":60}}]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(
+                        assistantMessage(206L), null, List.of(), List.of(), 1));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("xyz 전에 이동시간", "k-lead2"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.systemNote())
+                .isEqualTo("어느 일정 앞인지 찾지 못했어요. 일정 이름을 알려주시면 다시 만들게요.");
+        assertThat(sink.scheduleSuggestionsReady).isNull();
+    }
+
+    @Test
+    void streamAndComplete_nothingSaved_noSystemNote() {
+        when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
+        String raw = "그렇군요.\n<<<AI_STRUCTURED>>>\n"
+                + "{\"decision\":\"CHAT\",\"proposalItems\":[],\"missingInformation\":[],\"unavailableWindows\":[]}";
+        when(aiConsultationClient.streamTurn(any(), any())).thenReturn(Flux.just(chatResponse(raw)));
+        when(aiTurnLifecycleService.completeTurnSuccess(any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new AiTurnLifecycleService.TurnCompletionResult(assistantMessage(207L), null, List.of(), List.of()));
+
+        RecordingSink sink = new RecordingSink();
+        Disposable d = service.streamAndComplete(preparedTurn(), request("그냥 얘기", "k-lead3"), sink);
+        awaitTerminal(sink, d);
+
+        assertThat(sink.completed.systemNote()).isNull();
+    }
+
     // ===== 일정 후보(scheduleSuggestions) sidecar =====
     //
     // 여기서 고정하는 것은 서버가 후보를 어디로 보내느냐다. "이 말이 반복인가 한 번인가"는

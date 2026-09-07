@@ -363,9 +363,11 @@ public class AiConversationService {
             sink.onScheduleSuggestionsReady(scheduleSuggestions);
         }
 
+        // 재생에서도 같은 규칙으로 확인 문장을 만든다 — 저장돼 있던 후보가 근거다.
         sink.onCompleted(new AiTurnCompletedPayload(
                 assistantReply.getResponseType(), assistantReply.getContent(), proposalId,
-                items, offerAction, requestMessage.getMessageId(), assistantReply.getMessageId()));
+                items, offerAction, requestMessage.getMessageId(), assistantReply.getMessageId(),
+                null, List.of(), SystemNotes.forTurn(contextSuggestions, scheduleSuggestions, 0)));
     }
 
     /**
@@ -659,9 +661,17 @@ public class AiConversationService {
             sink.onScheduleSuggestionsReady(completion.scheduleSuggestions());
         }
 
+        /*
+         * 확인 문장은 모델 호출 밖에서, 실제로 저장된 것으로만 만든다. 모델의 reply와 섞지
+         * 않고 별도 필드로 보낸다 — 모델이 "반영해둘게요"라고 해도 이 줄이 실제를 말한다.
+         */
+        String systemNote = SystemNotes.forTurn(
+                completion.contextSuggestions(), completion.scheduleSuggestions(), completion.unresolvedLeadTargets());
+
         sink.onCompleted(new AiTurnCompletedPayload(
                 resolved.responseType(), resolved.reply(), proposalId, proposalItemResponses, offerAction,
-                requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies()));
+                requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies(),
+                systemNote));
     }
 
     private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,

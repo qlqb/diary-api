@@ -28,6 +28,11 @@ public class ScheduleSuggestionResponse {
     private ScheduleSuggestionKind kind;
     private Map<String, Object> payload;
     private ScheduleSuggestionStatus status;
+    /**
+     * 승인 뒤 서버가 만든 확인 문장(SystemNotes). 저장이 끝난 값만 말하고, 저장하지 않은
+     * 응답(후보 목록·거절)에서는 null이다. 화면이 그대로 보여준다.
+     */
+    private String systemNote;
 
     public static ScheduleSuggestionResponse of(AiScheduleSuggestion suggestion, Map<String, Object> payload) {
         return ScheduleSuggestionResponse.builder()
