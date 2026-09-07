@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.routine;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.ForbiddenException;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
@@ -13,6 +14,8 @@ import com.jungwoo.project.memo.routine.domain.RoutineExceptionConflictReason;
 import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionsConflictDetails;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -276,7 +279,7 @@ class RoutineServiceTest {
 
         // 예외를 자동으로 지우지 않는다. 루틴도 그대로 둔다 — 전체를 거부하는 것이 요점이다.
         verify(routineMapper, never()).updateAll(anyLong(), anyLong(), any(), any(), any(),
-                any(), any(), any(), any());
+                any(), any(), any(), any(), any());
         verify(routineExceptionMapper, never()).deleteByIdAndRoutineId(anyLong(), anyLong());
     }
 
@@ -349,7 +352,7 @@ class RoutineServiceTest {
         service.update(USER_ID, ROUTINE_ID, shortened);
 
         verify(routineMapper).updateAll(eq(ROUTINE_ID), eq(USER_ID), any(), any(), any(),
-                any(), any(), any(), eq(LocalDate.of(2026, 10, 8)));
+                any(), any(), any(), any(), eq(LocalDate.of(2026, 10, 8)));
     }
 
     @Test
@@ -394,6 +397,99 @@ class RoutineServiceTest {
 
         verify(routineMapper, never()).findByIdAndUserIdForUpdate(anyLong(), anyLong());
         verify(routineExceptionMapper).deleteByIdAndRoutineId(101L, ROUTINE_ID);
+    }
+
+    // ===== 이동시간 =====
+
+    private Routine ownedRoutine(Long routineId) {
+        return Routine.builder()
+                .routineId(routineId)
+                .userId(USER_ID)
+                .title("수업 " + routineId)
+                .startTime(LocalTime.of(14, 0))
+                .endTime(LocalTime.of(17, 0))
+                .effectiveFrom(SEMESTER_START)
+                .daysOfWeek(new LinkedHashSet<>())
+                .build();
+    }
+
+    /** L8. 남의(또는 없는) routineId가 하나라도 섞이면 403이고 아무것도 저장되지 않는다. */
+    @Test
+    void 이동시간_일괄_저장은_남의_루틴이_섞이면_403이고_아무것도_저장하지_않는다() {
+        when(routineMapper.findByIdAndUserIdForUpdate(1L, USER_ID)).thenReturn(ownedRoutine(1L));
+        when(routineMapper.findByIdAndUserIdForUpdate(2L, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.updateLeadMinutes(USER_ID, List.of(
+                new LeadMinutesBatchItemRequest(1L, 60), new LeadMinutesBatchItemRequest(2L, 60))))
+                .isInstanceOf(ForbiddenException.class);
+
+        verify(routineMapper, never()).updateLeadMinutes(anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void 이동시간_일괄_저장은_전부_본인_것이면_전부_저장한다() {
+        when(routineMapper.findByIdAndUserIdForUpdate(1L, USER_ID)).thenReturn(ownedRoutine(1L));
+        when(routineMapper.findByIdAndUserIdForUpdate(2L, USER_ID)).thenReturn(ownedRoutine(2L));
+
+        List<RoutineResponse> responses = service.updateLeadMinutes(USER_ID, List.of(
+                new LeadMinutesBatchItemRequest(2L, 0), new LeadMinutesBatchItemRequest(1L, 60)));
+
+        verify(routineMapper).updateLeadMinutes(1L, USER_ID, 60);
+        verify(routineMapper).updateLeadMinutes(2L, USER_ID, 0);
+        // "없음"은 0으로 남는다 — null과 다르다. 응답이 저장된 값을 그대로 돌려준다.
+        assertThat(responses).extracting(RoutineResponse::routineId, RoutineResponse::leadMinutes)
+                .containsExactly(tuple(1L, 60), tuple(2L, 0));
+    }
+
+    @Test
+    void 이동시간은_0에서_480분_사이여야_하고_null은_받지_않는다() {
+        assertThatThrownBy(() -> service.updateLeadMinutes(USER_ID,
+                List.of(new LeadMinutesBatchItemRequest(1L, 481))))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.updateLeadMinutes(USER_ID,
+                List.of(new LeadMinutesBatchItemRequest(1L, -1))))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.updateLeadMinutes(USER_ID,
+                List.of(new LeadMinutesBatchItemRequest(1L, null))))
+                .isInstanceOf(BadRequestException.class);
+        assertThatThrownBy(() -> service.updateLeadMinutes(USER_ID, List.of()))
+                .isInstanceOf(BadRequestException.class);
+
+        verify(routineMapper, never()).findByIdAndUserIdForUpdate(anyLong(), anyLong());
+        verify(routineMapper, never()).updateLeadMinutes(anyLong(), anyLong(), any());
+    }
+
+    /**
+     * PUT 전체 교체가 이동시간을 모르는 요청(null)으로 오면 저장된 값을 건드리지 않는다.
+     * 매퍼는 null을 받아 컬럼을 SET 목록에서 빼고(XML의 if), 응답에는 저장돼 있던 값이 남는다.
+     */
+    @Test
+    void 루틴_수정이_이동시간을_생략하면_저장된_값이_남는다() {
+        lockedRoutine(DayOfWeek.THURSDAY);
+        Routine locked = routineMapper.findByIdAndUserIdForUpdate(ROUTINE_ID, USER_ID);
+        locked.setLeadMinutes(45);
+        when(routineExceptionMapper.findByRoutineId(ROUTINE_ID)).thenReturn(List.of());
+
+        RoutineResponse response = service.update(USER_ID, ROUTINE_ID, request(DayOfWeek.THURSDAY));
+
+        verify(routineMapper).updateAll(eq(ROUTINE_ID), eq(USER_ID), any(), any(), any(),
+                any(), any(), eq(null), any(), any());
+        assertThat(response.leadMinutes()).isEqualTo(45);
+    }
+
+    @Test
+    void 루틴_수정에_이동시간이_있으면_함께_저장된다() {
+        lockedRoutine(DayOfWeek.THURSDAY);
+        when(routineExceptionMapper.findByRoutineId(ROUTINE_ID)).thenReturn(List.of());
+        RoutineSaveRequest request = new RoutineSaveRequest(null, "빅데이터분석", "3-315",
+                Set.of(DayOfWeek.THURSDAY), LocalTime.of(10, 0), LocalTime.of(12, 50), 30,
+                SEMESTER_START, SEMESTER_END);
+
+        RoutineResponse response = service.update(USER_ID, ROUTINE_ID, request);
+
+        verify(routineMapper).updateAll(eq(ROUTINE_ID), eq(USER_ID), any(), any(), any(),
+                any(), any(), eq(30), any(), any());
+        assertThat(response.leadMinutes()).isEqualTo(30);
     }
 
     // ===== 고정자 =====

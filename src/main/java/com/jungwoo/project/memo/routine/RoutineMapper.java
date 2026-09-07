@@ -37,7 +37,10 @@ public interface RoutineMapper {
 
     List<String> findWeekdaysByRoutineId(@Param("routineId") Long routineId);
 
-    /** 전체 교체. courseId·location·effectiveUntil은 COALESCE하지 않는다 — null이면 비운다. */
+    /**
+     * 전체 교체. courseId·location·effectiveUntil은 COALESCE하지 않는다 — null이면 비운다.
+     * leadMinutes만 예외다: null이면 건드리지 않는다(XML 주석 참고).
+     */
     int updateAll(@Param("routineId") Long routineId,
                   @Param("userId") Long userId,
                   @Param("courseId") Long courseId,
@@ -45,8 +48,14 @@ public interface RoutineMapper {
                   @Param("location") String location,
                   @Param("startTime") LocalTime startTime,
                   @Param("endTime") LocalTime endTime,
+                  @Param("leadMinutes") Integer leadMinutes,
                   @Param("effectiveFrom") LocalDate effectiveFrom,
                   @Param("effectiveUntil") LocalDate effectiveUntil);
+
+    /** 이동시간만. 0은 "없음"이다. null로 되돌리는 경로는 없다. */
+    int updateLeadMinutes(@Param("routineId") Long routineId,
+                          @Param("userId") Long userId,
+                          @Param("leadMinutes") Integer leadMinutes);
 
     /**
      * 소프트 삭제. 행을 지우지 않으므로 요일·예외 행도 그대로 남는다 — 복구할 수 있어야 한다.

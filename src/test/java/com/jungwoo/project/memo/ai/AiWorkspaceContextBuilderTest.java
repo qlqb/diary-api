@@ -241,7 +241,7 @@ class AiWorkspaceContextBuilderTest {
 
     private RoutineResponse classRoutine(Long routineId, Long courseId, DayOfWeek day,
                                          LocalTime start, LocalTime end) {
-        return new RoutineResponse(routineId, courseId, "수업", null, Set.of(day), start, end,
+        return new RoutineResponse(routineId, courseId, "수업", null, Set.of(day), start, end, null,
                 LocalDate.of(2026, 8, 25), LocalDate.of(2026, 12, 11), false, false, false, List.of());
     }
 

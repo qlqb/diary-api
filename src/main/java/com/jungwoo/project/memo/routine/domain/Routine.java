@@ -48,6 +48,13 @@ public class Routine {
      */
     private LocalTime endTime;
 
+    /**
+     * 발생분 앞에 붙는 이동시간(분). 세 상태를 구조로 구분한다 — null은 "아직 모름"(초안을
+     * 만들기 전에 묻는다), 0은 "없음"(묻지 않는다), 양수는 그만큼을 발생분 시작 앞에서
+     * hardBusy로 뺀다. 메모가 아니라 일정층이 읽는 값이다.
+     */
+    private Integer leadMinutes;
+
     private LocalDate effectiveFrom;
 
     /**

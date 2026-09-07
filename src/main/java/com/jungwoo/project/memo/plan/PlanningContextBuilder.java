@@ -248,7 +248,8 @@ public class PlanningContextBuilder {
         LocalDate to = planEnd.plusDays(NEXT_CLASS_LOOKAHEAD_DAYS);
         Map<Long, RoutineOccurrence> earliest = new HashMap<>();
         for (RoutineOccurrence occurrence : routineOccurrenceService.expand(userId, now.toLocalDate(), to)) {
-            if (occurrence.courseId() == null || !occurrence.startAt().isAfter(now)) {
+            // 이동시간 발생분은 수업이 아니다. 걸러내지 않으면 "다음 수업"이 한 시간 당겨진다.
+            if (occurrence.lead() || occurrence.courseId() == null || !occurrence.startAt().isAfter(now)) {
                 continue;
             }
             earliest.merge(occurrence.courseId(), occurrence,

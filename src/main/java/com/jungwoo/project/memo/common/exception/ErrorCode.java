@@ -62,6 +62,9 @@ public enum ErrorCode {
 
     ROUTINE_EXCEPTION_MOVED_INVALID(HttpStatus.BAD_REQUEST, "E400_025",
             "옮기려면 옮길 날짜가 필요하고, 옮길 시각은 둘 다 있거나 둘 다 없어야 합니다"),
+    /** 이동시간은 0~480분. 일괄 저장에서는 null도 받지 않는다("아직 모름"으로 되돌리는 경로가 없다). */
+    ROUTINE_LEAD_MINUTES_INVALID(HttpStatus.BAD_REQUEST, "E400_030",
+            "이동시간은 0분에서 480분 사이여야 합니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),

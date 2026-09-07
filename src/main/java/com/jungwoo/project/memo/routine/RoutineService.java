@@ -3,6 +3,7 @@ package com.jungwoo.project.memo.routine;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.common.exception.ForbiddenException;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.time.MinutePrecision;
 import com.jungwoo.project.memo.course.CourseService;
@@ -15,6 +16,7 @@ import com.jungwoo.project.memo.routine.domain.RoutineExceptionType;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionsConflictDetails;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +34,9 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -62,6 +66,9 @@ public class RoutineService {
     private final RoutineReader routineReader;
     private final CourseService courseService;
     private final Clock clock;
+
+    /** 이동시간 상한(분). 8시간 — 그보다 길면 이동이 아니라 일정이다. RoutineSaveRequest의 @Max와 같다. */
+    public static final int MAX_LEAD_MINUTES = 480;
 
     /**
      * 지금 이 앱이 가진 유일한 사용자 시간대 설정이다(AvailabilityEstimateService와 같은 키).
@@ -96,6 +103,7 @@ public class RoutineService {
                 .location(blankToNull(request.getLocation()))
                 .startTime(request.getStartTime())
                 .endTime(request.getEndTime())
+                .leadMinutes(request.getLeadMinutes())
                 .effectiveFrom(request.getEffectiveFrom())
                 .effectiveUntil(request.getEffectiveUntil())
                 .daysOfWeek(daysOfWeek)
@@ -140,7 +148,7 @@ public class RoutineService {
 
         routineMapper.updateAll(routineId, userId, request.getCourseId(), request.getTitle().trim(),
                 blankToNull(request.getLocation()), request.getStartTime(), request.getEndTime(),
-                request.getEffectiveFrom(), request.getEffectiveUntil());
+                request.getLeadMinutes(), request.getEffectiveFrom(), request.getEffectiveUntil());
         routineMapper.deleteWeekdays(routineId);
         routineMapper.insertWeekdays(routineId, names(daysOfWeek));
 
@@ -149,12 +157,67 @@ public class RoutineService {
         locked.setLocation(blankToNull(request.getLocation()));
         locked.setStartTime(request.getStartTime());
         locked.setEndTime(request.getEndTime());
+        if (request.getLeadMinutes() != null) {
+            // null은 "건드리지 않음"이다(RoutineSaveRequest 참고). 저장된 값이 응답에 남는다.
+            locked.setLeadMinutes(request.getLeadMinutes());
+        }
         locked.setEffectiveFrom(request.getEffectiveFrom());
         locked.setEffectiveUntil(request.getEffectiveUntil());
         locked.setDaysOfWeek(daysOfWeek);
 
         log.info("반복 일정 수정: userId={}, routineId={}", userId, routineId);
         return RoutineResponse.of(locked, existing, today());
+    }
+
+    /**
+     * 여러 루틴의 이동시간을 한 번에. <b>전부 되거나 전부 안 된다.</b>
+     *
+     * <p>본인 소유가 아니거나 없는(삭제된) routineId가 하나라도 섞이면 아무것도 저장하지
+     * 않고 403이다. 부분 적용을 하면 "수업 5개 중 4개만 이동시간이 생긴" 상태를 사용자가
+     * 카드만 보고는 알 수 없다. 쓰기 전에 전부 잠그고(FOR UPDATE) 확인한 뒤에야 쓴다.
+     * 같은 id가 두 번 오면 뒤의 값이 이긴다.
+     *
+     * <p>값은 0~480이고 null은 받지 않는다 — 이 경로는 "답했다"를 저장하는 경로라 "아직
+     * 모름"으로 되돌리는 값이 있을 수 없다. 0이 "없음"이다.
+     */
+    @Transactional
+    public List<RoutineResponse> updateLeadMinutes(Long userId, List<LeadMinutesBatchItemRequest> requests) {
+        if (requests == null || requests.isEmpty()) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        Map<Long, Integer> byRoutine = new LinkedHashMap<>();
+        for (LeadMinutesBatchItemRequest request : requests) {
+            if (request == null || request.getRoutineId() == null || request.getLeadMinutes() == null
+                    || request.getLeadMinutes() < 0 || request.getLeadMinutes() > MAX_LEAD_MINUTES) {
+                throw new BadRequestException(ErrorCode.ROUTINE_LEAD_MINUTES_INVALID);
+            }
+            byRoutine.put(request.getRoutineId(), request.getLeadMinutes());
+        }
+
+        // 잠금은 id 오름차순 — 두 요청이 겹치는 집합을 다른 순서로 잠그면 교착이 난다.
+        Map<Long, Routine> locked = new LinkedHashMap<>();
+        for (Long routineId : new TreeSet<>(byRoutine.keySet())) {
+            Routine routine = routineMapper.findByIdAndUserIdForUpdate(routineId, userId);
+            if (routine == null) {
+                log.info("이동시간 일괄 저장 거부(소유 아님 또는 없음): userId={}, routineId={}", userId, routineId);
+                throw new ForbiddenException(ErrorCode.NOT_RESOURCE_OWNER);
+            }
+            locked.put(routineId, routine);
+        }
+
+        LocalDate today = today();
+        List<RoutineResponse> responses = new ArrayList<>();
+        for (Map.Entry<Long, Routine> entry : locked.entrySet()) {
+            Integer leadMinutes = byRoutine.get(entry.getKey());
+            routineMapper.updateLeadMinutes(entry.getKey(), userId, leadMinutes);
+            Routine routine = entry.getValue();
+            routine.setLeadMinutes(leadMinutes);
+            routineReader.attachWeekdays(routine);
+            responses.add(RoutineResponse.of(routine,
+                    routineExceptionMapper.findByRoutineId(entry.getKey()), today));
+        }
+        log.info("이동시간 일괄 저장: userId={}, count={}, values={}", userId, responses.size(), byRoutine);
+        return responses;
     }
 
     /** 소프트 삭제. 요일·예외 행은 남긴다 — 복구할 수 있어야 한다. */

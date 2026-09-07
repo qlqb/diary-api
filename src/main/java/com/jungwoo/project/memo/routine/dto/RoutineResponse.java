@@ -21,6 +21,7 @@ import java.util.Set;
  *                              계산되는 값이라 저장하지 않는다
  * @param hasFutureMovedDate    종료된 뒤에도 남아 있는 미래 보강이 있는가. 조용히 지우지
  *                              않으므로, 남아 있다는 사실을 화면이 보여줘야 한다
+ * @param leadMinutes           발생분 앞 이동시간(분). null은 아직 정하지 않은 것, 0은 없음
  */
 public record RoutineResponse(
         Long routineId,
@@ -30,6 +31,7 @@ public record RoutineResponse(
         Set<DayOfWeek> daysOfWeek,
         LocalTime startTime,
         LocalTime endTime,
+        Integer leadMinutes,
         LocalDate effectiveFrom,
         LocalDate effectiveUntil,
         boolean ended,
@@ -57,6 +59,7 @@ public record RoutineResponse(
                 routine.getDaysOfWeek(),
                 routine.getStartTime(),
                 routine.getEndTime(),
+                routine.getLeadMinutes(),
                 routine.getEffectiveFrom(),
                 routine.getEffectiveUntil(),
                 routine.isEndedAsOf(today),

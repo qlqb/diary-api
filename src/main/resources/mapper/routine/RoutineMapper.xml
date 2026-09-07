@@ -16,6 +16,7 @@
         <result property="location"        column="location"/>
         <result property="startTime"       column="start_time"/>
         <result property="endTime"         column="end_time"/>
+        <result property="leadMinutes"     column="lead_minutes"/>
         <result property="effectiveFrom"   column="effective_from"/>
         <result property="effectiveUntil"  column="effective_until"/>
         <result property="deleted"         column="is_deleted"/>
@@ -36,9 +37,10 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="routineId">
         INSERT INTO routines (
-            user_id, course_id, title, location, start_time, end_time, effective_from, effective_until
+            user_id, course_id, title, location, start_time, end_time, lead_minutes,
+            effective_from, effective_until
         ) VALUES (
-            #{userId}, #{courseId}, #{title}, #{location}, #{startTime}, #{endTime},
+            #{userId}, #{courseId}, #{title}, #{location}, #{startTime}, #{endTime}, #{leadMinutes},
             #{effectiveFrom}, #{effectiveUntil}
         )
     </insert>
@@ -75,6 +77,12 @@
         SELECT day_of_week FROM routine_weekdays WHERE routine_id = #{routineId}
     </select>
 
+    <!--
+      lead_minutes만 전체 교체에서 뺀다. 다른 nullable 컬럼(course_id·location·effective_until)은
+      null이 "비우기"라 그대로 덮지만, lead_minutes의 null은 "아직 안 물어봄"이라 되돌릴 이유가
+      없는 상태다. 이 값을 모르는 옛 폼이 PUT을 보내도 이미 답한 이동시간이 사라지지 않아야 한다.
+      요청에 값이 있을 때만 바꾼다(그 값이 0이면 "없음"으로 저장된다).
+    -->
     <update id="updateAll">
         UPDATE routines
            SET course_id       = #{courseId},
@@ -82,8 +90,18 @@
                location        = #{location},
                start_time      = #{startTime},
                end_time        = #{endTime},
+               <if test="leadMinutes != null">
+               lead_minutes    = #{leadMinutes},
+               </if>
                effective_from  = #{effectiveFrom},
                effective_until = #{effectiveUntil}
+         WHERE routine_id = #{routineId} AND user_id = #{userId} AND is_deleted = 0
+    </update>
+
+    <!-- 이동시간만 바꾼다. 0은 "없음"이고, null로 되돌리는 경로는 두지 않는다. -->
+    <update id="updateLeadMinutes">
+        UPDATE routines
+           SET lead_minutes = #{leadMinutes}
          WHERE routine_id = #{routineId} AND user_id = #{userId} AND is_deleted = 0
     </update>
 

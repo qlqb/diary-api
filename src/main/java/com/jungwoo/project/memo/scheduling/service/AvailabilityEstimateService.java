@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
 import com.jungwoo.project.memo.scheduling.domain.BusyWindow;
 import com.jungwoo.project.memo.scheduling.dto.AvailabilityOverrideRequest;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -43,6 +44,7 @@ import java.util.Set;
  * ContextItem(장기 확정 컨텍스트)과 실행 패턴 집계는 아직 이 코드베이스에 없다 — 출처
  * enum(USER_CONFIRMED_CONTEXT/EXECUTION_PATTERN) 계약만 남기고 이번 구현에서는 만들지 않는다.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class AvailabilityEstimateService {
@@ -87,10 +89,19 @@ public class AvailabilityEstimateService {
          * 화면(GET /api/routines/occurrences)과 여기가 같은 expand를 부른다. 그래서 "화면에는
          * 보이는데 배치는 그 시간에 학습을 넣는" 상태가 구조적으로 불가능하다.
          */
+        /*
+         * 이동시간(lead) 발생분도 expand가 돌려주는 그대로 hardBusy다. 여기서 lead를 따로
+         * 거르지 않는 것이 요점이다 — 시간을 막는 것이 그 값의 전부이고, 화면과 같은 목록을
+         * 본다. 관측을 위해 lead 구간만 따로 세어 둔다.
+         */
+        List<Interval> leadBusy = new ArrayList<>();
         for (RoutineOccurrence occurrence :
                 routineOccurrenceService.expand(userId, horizonStart, horizonEnd)) {
             hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
             busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(), occurrence.title()));
+            if (occurrence.lead()) {
+                leadBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
+            }
         }
 
         /*
@@ -160,7 +171,43 @@ public class AvailabilityEstimateService {
         }
 
         resultWindows.sort((a, b) -> a.startAt().compareTo(b.startAt()));
+        logPerDay(userId, rawWindows, resultWindows, hardBusy, leadBusy);
         return new AvailabilityEstimateResult(resultWindows, busyWindows);
+    }
+
+    /**
+     * 요일별 관측 로그. candidateMin은 최종 후보 창의 합, hardBusyMin·leadMin은 기본 창
+     * 안과 겹치는 부분만 센다 — 창 밖의 수업(오후 수업과 평일 저녁 창)을 세면 hardBusyMin이
+     * 그날의 후보 시간보다 커져 숫자가 서로를 설명하지 못한다.
+     */
+    private void logPerDay(Long userId, List<AvailabilityWindow> rawWindows,
+                           List<AvailabilityWindow> resultWindows,
+                           List<Interval> hardBusy, List<Interval> leadBusy) {
+        if (!log.isInfoEnabled()) {
+            return;
+        }
+        for (AvailabilityWindow raw : rawWindows) {
+            Interval base = new Interval(raw.startAt(), raw.endAt());
+            LocalDate day = raw.startAt().toLocalDate();
+            long candidateMin = 0;
+            for (AvailabilityWindow window : resultWindows) {
+                if (window.startAt().toLocalDate().equals(day)) {
+                    candidateMin += java.time.Duration.between(window.startAt(), window.endAt()).toMinutes();
+                }
+            }
+            log.info("availability.estimate userId={} day={} date={} candidateMin={} hardBusyMin={} leadMin={}",
+                    userId, day.getDayOfWeek(), day, candidateMin,
+                    overlapMinutes(base, hardBusy), overlapMinutes(base, leadBusy));
+        }
+    }
+
+    /** base와 겹치는 cuts의 합(분). 겹친 구간끼리 또 겹치면 한 번만 센다. */
+    private static long overlapMinutes(Interval base, List<Interval> cuts) {
+        long total = 0;
+        for (Interval remaining : subtract(base, cuts)) {
+            total += java.time.Duration.between(remaining.start(), remaining.end()).toMinutes();
+        }
+        return java.time.Duration.between(base.start(), base.end()).toMinutes() - total;
     }
 
     private List<LocalDate> expandDates(UnavailableWindowSpec spec, LocalDate horizonStart, LocalDate horizonEnd) {

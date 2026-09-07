@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.security.UserPrincipal;
 import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineExceptionSaveRequest;
+import com.jungwoo.project.memo.routine.dto.LeadMinutesBatchItemRequest;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import com.jungwoo.project.memo.routine.dto.RoutineSaveRequest;
 import jakarta.validation.Valid;
@@ -15,6 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -34,6 +36,7 @@ import java.util.List;
  * POST   /api/routines                          만들기
  * PUT    /api/routines/{id}                     고치기 (전체 교체)
  * DELETE /api/routines/{id}                     소프트 삭제
+ * PATCH  /api/routines/lead-minutes             여러 루틴의 이동시간 한 번에 (전부 되거나 전부 안 됨)
  * GET    /api/routines/occurrences?from=&to=    전개 결과
  * POST   /api/routines/{id}/exceptions          예외 추가
  * PUT    /api/routines/{id}/exceptions/{exId}   예외 수정 (전체 교체)
@@ -92,6 +95,20 @@ public class RoutineController {
             @Valid @RequestBody RoutineSaveRequest request
     ) {
         return ResponseEntity.ok(routineService.update(principal.getUserId(), routineId, request));
+    }
+
+    /**
+     * 이동시간 일괄 저장. 계획 초안 전 질문 카드와 AI 후보 승인이 같은 경로를 쓴다.
+     * 본인 소유가 아닌 routineId가 하나라도 섞이면 403이고 아무것도 저장되지 않는다.
+     */
+    @PatchMapping("/lead-minutes")
+    public ResponseEntity<List<RoutineResponse>> updateLeadMinutes(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @Valid @RequestBody List<LeadMinutesBatchItemRequest> requests
+    ) {
+        log.info("PATCH /api/routines/lead-minutes - userId={}, count={}",
+                principal.getUserId(), requests == null ? 0 : requests.size());
+        return ResponseEntity.ok(routineService.updateLeadMinutes(principal.getUserId(), requests));
     }
 
     @DeleteMapping("/{routineId}")

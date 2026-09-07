@@ -107,13 +107,34 @@ class RoutineMapperTest {
         Routine saved = insertThursdayClass(TEST_USER_ID);
 
         routineMapper.updateAll(saved.getRoutineId(), TEST_USER_ID, null, "빅데이터분석", null,
-                LocalTime.of(13, 0), LocalTime.of(15, 50), LocalDate.of(2026, 9, 1), null);
+                LocalTime.of(13, 0), LocalTime.of(15, 50), null, LocalDate.of(2026, 9, 1), null);
 
         Routine found = routineMapper.findByIdAndUserId(saved.getRoutineId(), TEST_USER_ID);
         assertThat(found.getCourseId()).isNull();
         assertThat(found.getLocation()).isNull();
         assertThat(found.getEffectiveUntil()).isNull();
         assertThat(found.getStartTime()).isEqualTo(LocalTime.of(13, 0));
+    }
+
+    /**
+     * lead_minutes만 전체 교체의 예외다. null 요청은 저장된 값을 두고, 값이 있으면 바꾼다.
+     * 세 상태(NULL/0/양수)가 컬럼에서 그대로 구분되는지도 여기서 본다.
+     */
+    @Test
+    void 이동시간은_전체_교체에서_생략하면_남고_값이_있으면_바뀐다() {
+        Routine saved = insertThursdayClass(TEST_USER_ID);
+        assertThat(routineMapper.findByIdAndUserId(saved.getRoutineId(), TEST_USER_ID).getLeadMinutes()).isNull();
+
+        routineMapper.updateLeadMinutes(saved.getRoutineId(), TEST_USER_ID, 60);
+        assertThat(routineMapper.findByIdAndUserId(saved.getRoutineId(), TEST_USER_ID).getLeadMinutes()).isEqualTo(60);
+
+        routineMapper.updateAll(saved.getRoutineId(), TEST_USER_ID, null, "빅데이터분석", null,
+                LocalTime.of(13, 0), LocalTime.of(15, 50), null, LocalDate.of(2026, 9, 1), null);
+        assertThat(routineMapper.findByIdAndUserId(saved.getRoutineId(), TEST_USER_ID).getLeadMinutes()).isEqualTo(60);
+
+        routineMapper.updateAll(saved.getRoutineId(), TEST_USER_ID, null, "빅데이터분석", null,
+                LocalTime.of(13, 0), LocalTime.of(15, 50), 0, LocalDate.of(2026, 9, 1), null);
+        assertThat(routineMapper.findByIdAndUserId(saved.getRoutineId(), TEST_USER_ID).getLeadMinutes()).isZero();
     }
 
     /** 원본 발생일 조회와 이동 목적지 조회는 서로 다른 것을 본다. 이게 섞이면 전개가 무너진다. */

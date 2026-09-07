@@ -1,5 +1,7 @@
 package com.jungwoo.project.memo.routine.dto;
 
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -47,9 +49,25 @@ public class RoutineSaveRequest {
     @NotNull
     private LocalTime endTime;
 
+    /**
+     * 발생분 앞 이동시간(분). 생략(null)하면 저장된 값을 건드리지 않는다 — PUT 전체 교체의
+     * 유일한 예외다. null은 "아직 안 물어봄"이라 되돌릴 이유가 없고, 이 필드를 모르는 폼이
+     * 이미 답한 값을 지우면 안 된다. 0은 "없음"으로 저장된다.
+     */
+    @Min(0)
+    @Max(480)
+    private Integer leadMinutes;
+
     @NotNull
     private LocalDate effectiveFrom;
 
     /** 비워 두면 무기한. 그만두는 날 이 값을 채우는 것이 곧 "종료"다. */
     private LocalDate effectiveUntil;
+
+    /** 이동시간을 말하지 않는 요청(= 저장된 값 유지). 기존 호출부의 모양을 그대로 받는다. */
+    public RoutineSaveRequest(Long courseId, String title, String location, Set<DayOfWeek> daysOfWeek,
+                              LocalTime startTime, LocalTime endTime,
+                              LocalDate effectiveFrom, LocalDate effectiveUntil) {
+        this(courseId, title, location, daysOfWeek, startTime, endTime, null, effectiveFrom, effectiveUntil);
+    }
 }

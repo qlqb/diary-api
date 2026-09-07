@@ -333,6 +333,190 @@ class RoutineOccurrenceServiceTest {
                 .containsExactly(LocalDate.of(2026, 4, 9));
     }
 
+    // ===== 이동시간(lead) =====
+
+    /* 이번 주(2026-09-07 월 ~ 09-13 일). 화요일은 9/8, 수요일은 9/9. */
+    private static final LocalDate THIS_WEEK_FROM = LocalDate.of(2026, 9, 7);
+    private static final LocalDate THIS_WEEK_TO = LocalDate.of(2026, 9, 13);
+
+    private Routine leadClass(Long routineId, String title, LocalTime start, LocalTime end,
+                              Integer leadMinutes, DayOfWeek... days) {
+        Routine routine = routine(routineId, title, routineId, start, end, SEMESTER_START, SEMESTER_END, days);
+        routine.setLeadMinutes(leadMinutes);
+        return routine;
+    }
+
+    private static List<RoutineOccurrence> leadsOf(List<RoutineOccurrence> occurrences) {
+        return occurrences.stream().filter(RoutineOccurrence::lead).toList();
+    }
+
+    /** L1. 화 14:00 수업, lead=60 → 13:00~14:00 lead 하나. 원 발생분과 같은 routineId를 갖는다. */
+    @Test
+    void 이동시간이_있으면_발생분_앞에_lead_발생분이_하나_나온다() {
+        given(List.of(leadClass(1L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), 60,
+                DayOfWeek.TUESDAY)), List.of());
+
+        List<RoutineOccurrence> occurrences = service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO);
+
+        assertThat(occurrences).hasSize(2);
+        RoutineOccurrence lead = occurrences.get(0);
+        assertThat(lead.lead()).isTrue();
+        assertThat(lead.routineId()).isEqualTo(1L);
+        assertThat(lead.title()).isEqualTo("자료구조 이동");
+        assertThat(lead.startAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 13, 0));
+        assertThat(lead.endAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 14, 0));
+        assertThat(occurrences.get(1).lead()).isFalse();
+        assertThat(occurrences.get(1).startAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 14, 0));
+    }
+
+    /** L2. 수 09:00~12:00 뒤 13:00~16:00, 둘 다 lead=60 → 첫 수업 앞 08:00~09:00만. */
+    @Test
+    void 같은_날_수업이_여럿이면_첫_수업_앞에만_lead가_생긴다() {
+        given(List.of(
+                leadClass(1L, "웹서버", LocalTime.of(9, 0), LocalTime.of(12, 0), 60, DayOfWeek.WEDNESDAY),
+                leadClass(2L, "센서", LocalTime.of(13, 0), LocalTime.of(16, 0), 60, DayOfWeek.WEDNESDAY)),
+                List.of());
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO));
+
+        assertThat(leads).hasSize(1);
+        assertThat(leads.get(0).title()).isEqualTo("웹서버 이동");
+        assertThat(leads.get(0).startAt()).isEqualTo(LocalDateTime.of(2026, 9, 9, 8, 0));
+        assertThat(leads.get(0).endAt()).isEqualTo(LocalDateTime.of(2026, 9, 9, 9, 0));
+    }
+
+    /** "첫"은 이동시간이 있는 발생분 중에서다. 이동시간이 없는 이른 루틴은 순서에 끼지 않는다. */
+    @Test
+    void 이동시간이_없는_이른_발생분은_첫_수업_판정에_끼지_않는다() {
+        given(List.of(
+                leadClass(1L, "아침 운동", LocalTime.of(7, 0), LocalTime.of(8, 0), null, DayOfWeek.TUESDAY),
+                leadClass(2L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), 60, DayOfWeek.TUESDAY)),
+                List.of());
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO));
+
+        assertThat(leads).hasSize(1);
+        assertThat(leads.get(0).title()).isEqualTo("자료구조 이동");
+    }
+
+    /** 시각이 같으면 routineId가 작은 쪽이 "첫"이다 — 결정적이어야 화면과 배치가 같은 것을 본다. */
+    @Test
+    void 같은_시각이면_routineId가_작은_발생분_앞에만_lead가_생긴다() {
+        given(List.of(
+                leadClass(5L, "B", LocalTime.of(10, 0), LocalTime.of(11, 0), 30, DayOfWeek.TUESDAY),
+                leadClass(3L, "A", LocalTime.of(10, 0), LocalTime.of(12, 0), 60, DayOfWeek.TUESDAY)),
+                List.of());
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO));
+
+        assertThat(leads).hasSize(1);
+        assertThat(leads.get(0).routineId()).isEqualTo(3L);
+        assertThat(leads.get(0).startAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 9, 0));
+    }
+
+    /**
+     * "첫 수업 앞에만"은 수업(courseId != null)의 통학 정책이다. 수업이 아닌 루틴의 이동시간은
+     * 같은 날 수업이 있어도, 같은 날 두 번 돌아도 발생분마다 붙는다.
+     */
+    @Test
+    void 수업이_아닌_루틴의_이동시간은_발생분마다_붙는다() {
+        Routine gym = routine(9L, "헬스", null, LocalTime.of(7, 0), LocalTime.of(8, 0),
+                SEMESTER_START, null, DayOfWeek.TUESDAY);
+        gym.setLeadMinutes(20);
+        Routine shift = routine(8L, "알바", null, LocalTime.of(18, 0), LocalTime.of(22, 0),
+                SEMESTER_START, null, DayOfWeek.TUESDAY);
+        shift.setLeadMinutes(30);
+        given(List.of(gym, shift,
+                leadClass(1L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), 60, DayOfWeek.TUESDAY)),
+                List.of());
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO));
+
+        assertThat(leads).extracting(RoutineOccurrence::title, RoutineOccurrence::startAt)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple("헬스 이동", LocalDateTime.of(2026, 9, 8, 6, 40)),
+                        org.assertj.core.groups.Tuple.tuple("자료구조 이동", LocalDateTime.of(2026, 9, 8, 13, 0)),
+                        org.assertj.core.groups.Tuple.tuple("알바 이동", LocalDateTime.of(2026, 9, 8, 17, 30)));
+    }
+
+    /** L4. NULL(아직 모름)과 0(없음)은 둘 다 lead를 만들지 않는다. */
+    @Test
+    void 이동시간이_null이거나_0이면_lead가_없다() {
+        given(List.of(
+                leadClass(1L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), null, DayOfWeek.TUESDAY),
+                leadClass(2L, "웹서버", LocalTime.of(9, 0), LocalTime.of(12, 0), 0, DayOfWeek.WEDNESDAY)),
+                List.of());
+
+        List<RoutineOccurrence> occurrences = service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO);
+
+        assertThat(occurrences).hasSize(2);
+        assertThat(leadsOf(occurrences)).isEmpty();
+    }
+
+    /**
+     * L5. effective_from이 미래인 루틴은 원 발생분이 없으므로 lead도 없다. 삭제된 루틴은
+     * 매퍼가 돌려주지 않는다(is_deleted = 0) — 여기서는 "매퍼가 돌려준 목록 밖의 루틴에서
+     * lead가 생기지 않는다"를 본다. 필터 전 루틴에서 lead를 만들면 이 테스트가 깨진다.
+     */
+    @Test
+    void 아직_시작하지_않은_루틴은_lead도_없다() {
+        Routine future = leadClass(1L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), 60,
+                DayOfWeek.TUESDAY);
+        future.setEffectiveFrom(LocalDate.of(2026, 10, 1));
+        given(List.of(future), List.of());
+
+        assertThat(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO)).isEmpty();
+    }
+
+    /** SKIP 예외로 빠진 날에는 lead도 없다 — lead는 필터 뒤의 발생분에서만 나온다. */
+    @Test
+    void 쉬는_날에는_lead도_없다() {
+        given(List.of(leadClass(1L, "자료구조", LocalTime.of(14, 0), LocalTime.of(17, 0), 60,
+                DayOfWeek.TUESDAY)), List.of(skip(1L, LocalDate.of(2026, 9, 8))));
+
+        assertThat(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO)).isEmpty();
+    }
+
+    /** L6. 00:30 시작 루틴 lead=60 → 00:00~00:30으로 자른다. */
+    @Test
+    void lead가_자정_앞으로_넘어가면_그날_0시로_자른다() {
+        given(List.of(leadClass(1L, "새벽 알바", LocalTime.of(0, 30), LocalTime.of(6, 0), 60,
+                DayOfWeek.TUESDAY)), List.of());
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO));
+
+        assertThat(leads).hasSize(1);
+        assertThat(leads.get(0).startAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 0, 0));
+        assertThat(leads.get(0).endAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 0, 30));
+    }
+
+    /** 00:00 시작이면 자른 뒤 길이가 0이라 만들지 않는다. */
+    @Test
+    void 자정에_시작하는_루틴은_lead가_없다() {
+        given(List.of(leadClass(1L, "야간", LocalTime.of(0, 0), LocalTime.of(6, 0), 60,
+                DayOfWeek.TUESDAY)), List.of());
+
+        assertThat(leadsOf(service().expand(USER_ID, THIS_WEEK_FROM, THIS_WEEK_TO))).isEmpty();
+    }
+
+    /** 이동(MOVED) 보강 발생분에도 lead가 붙는다 — 보강도 가야 하는 수업이다. */
+    @Test
+    void 보강_발생분에도_lead가_붙는다() {
+        Routine routine = thursdayClass();
+        routine.setLeadMinutes(30);
+        // 9/24(목) → 10/2(금). 10/1(목)로 옮기면 정규 수업과 같은 날이라 첫 발생분 하나만 lead를 갖는다.
+        given(List.of(routine), List.of(moved(1L, LocalDate.of(2026, 9, 24), LocalDate.of(2026, 10, 2))));
+
+        List<RoutineOccurrence> leads = leadsOf(service().expand(USER_ID, NEXT_WEEK_FROM, NEXT_WEEK_TO));
+
+        assertThat(leads).extracting(RoutineOccurrence::moved, RoutineOccurrence::startAt, RoutineOccurrence::endAt)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(false,
+                                LocalDateTime.of(2026, 10, 1, 9, 30), LocalDateTime.of(2026, 10, 1, 10, 0)),
+                        org.assertj.core.groups.Tuple.tuple(true,
+                                LocalDateTime.of(2026, 10, 2, 9, 30), LocalDateTime.of(2026, 10, 2, 10, 0)));
+    }
+
     // ===== 고정자 =====
 
     private Routine thursdayClass() {
