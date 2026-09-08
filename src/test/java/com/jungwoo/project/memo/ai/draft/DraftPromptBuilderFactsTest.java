@@ -7,7 +7,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.TODAY;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.facts;
@@ -42,7 +42,7 @@ class DraftPromptBuilderFactsTest {
 
     @Test
     void emptyResult_saysSoWithTheRange() {
-        String block = DraftPromptBuilder.renderFacts(facts(List.of(), List.of(), Set.of(),
+        String block = DraftPromptBuilder.renderFacts(facts(List.of(), List.of(), Map.of(),
                 LocalDate.of(2026, 9, 8), LocalDate.of(2026, 9, 13), DraftFacts.WorkLookup.OK));
 
         assertThat(block).contains("근무 조회 성공 · 대상 기간 2026-09-08~2026-09-13 · 등록된 근무 없음");
@@ -52,7 +52,7 @@ class DraftPromptBuilderFactsTest {
     void missingEnd_isMarked_notOmitted() {
         DraftFacts f = facts(List.of(),
                 List.of(new WorkShift(205L, "근무", LocalDateTime.of(2026, 9, 11, 18, 0), null)),
-                Set.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
+                Map.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
 
         assertThat(DraftPromptBuilder.renderFacts(f))
                 .contains("근무 #205: 2026-09-11 18:00 → 종료 시각 없음");
@@ -67,7 +67,7 @@ class DraftPromptBuilderFactsTest {
                     LocalDateTime.of(2026, 9, 8, 18, 0).plusDays(i),
                     LocalDateTime.of(2026, 9, 8, 23, 0).plusDays(i)));
         }
-        DraftFacts f = facts(many, List.of(), Set.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
+        DraftFacts f = facts(many, List.of(), Map.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
 
         String block = DraftPromptBuilder.renderFacts(f);
 

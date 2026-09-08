@@ -107,21 +107,7 @@ public final class DraftProposalBuilder {
                 String anchor = text(f, DraftSlotRegistry.ANCHOR);
                 DerivedTravelRelation relation = relationOf(anchor);
                 if (relation != null) {
-                    LocalDate[] range = range(draft, facts);
-                    for (WorkShift shift : facts.workShiftsIn(range[0], range[1])) {
-                        if (facts.alreadyCovered(shift.commitmentId(), relation)) {
-                            // 같은 근무의 같은 방향 이동이 이미 있다. 같은 시간 블록을 조용히 하나 더 만들지 않는다.
-                            continue;
-                        }
-                        LocalDateTime startAt = relation == DerivedTravelRelation.AFTER_WORK
-                                ? shift.endAt() : shift.startAt().minusMinutes(duration);
-                        LocalDateTime endAt = relation == DerivedTravelRelation.AFTER_WORK
-                                ? shift.endAt().plusMinutes(duration) : shift.startAt();
-                        LocalDateTime anchorAt = relation == DerivedTravelRelation.AFTER_WORK
-                                ? shift.endAt() : shift.startAt();
-                        result.add(commitment(om, title, startAt, endAt, assumed, notes,
-                                shift.commitmentId(), relation, anchorAt));
-                    }
+                    result.addAll(plan(draft, facts, om).create());
                 } else {
                     LocalDate day = date(f, DraftSlotRegistry.DATE);
                     LocalTime start = time(f, DraftSlotRegistry.START_TIME);
@@ -202,27 +188,101 @@ public final class DraftProposalBuilder {
     }
 
     /**
-     * 이 draft의 기간에서 "이미 같은 이동이 있어서" 후보를 만들지 않은 근무 수.
+     * 근무 기준 이동 요청 하나를 근무별로 분류한 결과.
      *
-     * <p>PROPOSE 문구가 쓴다. "모든 근무 후에"라고 했는데 후보가 2건이면 사용자는 나머지가
-     * 어디 갔는지 알아야 한다 — 조용히 빠지면 앱이 요청을 흘린 것처럼 보인다.
+     * <p>"만들 것"만 돌려주면 나머지가 왜 빠졌는지 말할 수 없다. 사용자가 "모든 근무 후에"라고
+     * 했는데 후보가 2건이면, 남은 근무가 이미 같은 이동을 갖고 있어서인지 길이가 달라서인지는
+     * 전혀 다른 이야기다. 전자는 할 일이 없고 후자는 사용자가 고쳐야 한다.
+     *
+     * @param create    새로 만들 후보
+     * @param unchanged 요청과 구간이 같은 이동이 이미 있는 근무. 다시 만들지 않는다
+     * @param conflicts 같은 근무·방향에 이동이 있지만 구간이 다른 것. 수정이 필요하다
      */
-    public static int skippedAsCovered(DraftState draft, DraftFacts facts) {
+    public record TravelPlan(List<ScheduleSuggestion> create,
+                             List<ExistingTravel> unchanged,
+                             List<TravelConflict> conflicts) {
+        public static final TravelPlan EMPTY = new TravelPlan(List.of(), List.of(), List.of());
+
+        public boolean hasExisting() {
+            return !unchanged.isEmpty() || !conflicts.isEmpty();
+        }
+    }
+
+    /**
+     * 기존 이동이 있는데 요청과 구간이 다른 근무.
+     *
+     * @param shift       원본 근무
+     * @param existing    이미 있는 이동
+     * @param wantedStart 이번 요청이 만들려던 시작
+     * @param wantedEnd   이번 요청이 만들려던 종료
+     */
+    public record TravelConflict(WorkShift shift, ExistingTravel existing,
+                                 LocalDateTime wantedStart, LocalDateTime wantedEnd) {
+        public long wantedMinutes() {
+            return java.time.Duration.between(wantedStart, wantedEnd).toMinutes();
+        }
+    }
+
+    /**
+     * 근무 기준 이동 요청을 근무별로 분류한다.
+     *
+     * <p>대상 근무 집합이 방향에 따라 다르다. 근무 <b>앞</b> 이동은 근무 시작 시각만 쓰므로
+     * 종료 시각이 이상한 근무에도 만들 수 있다 — 준비 여부 판정이 그렇게 허용하는데 여기서만
+     * 정상 목록을 돌면, READY인데 후보가 0건이라 사용자는 이유 없는 되물음을 받는다. 근무
+     * <b>뒤</b> 이동은 종료 시각이 필요하므로 정상 근무만 대상이다(누락이 있으면 판정 단계에서
+     * 이미 보류된다).
+     */
+    public static TravelPlan plan(DraftState draft, DraftFacts facts, ObjectMapper om) {
         if (draft == null || facts == null || draft.getType() != DraftType.CREATE_SCHEDULE) {
-            return 0;
+            return TravelPlan.EMPTY;
         }
-        DerivedTravelRelation relation = relationOf(text(draft.getFields(), DraftSlotRegistry.ANCHOR));
-        if (relation == null) {
-            return 0;
+        Map<String, DraftField> f = draft.getFields();
+        DerivedTravelRelation relation = relationOf(text(f, DraftSlotRegistry.ANCHOR));
+        String title = text(f, DraftSlotRegistry.TITLE);
+        Integer duration = intValue(f, DraftSlotRegistry.DURATION_MINUTES);
+        if (relation == null || title == null || duration == null || duration <= 0) {
+            return TravelPlan.EMPTY;
         }
+        ArrayNode assumed = annotations(draft, om, true);
+        ArrayNode notes = annotations(draft, om, false);
         LocalDate[] range = range(draft, facts);
-        int skipped = 0;
-        for (WorkShift shift : facts.workShiftsIn(range[0], range[1])) {
-            if (facts.alreadyCovered(shift.commitmentId(), relation)) {
-                skipped++;
+
+        List<ScheduleSuggestion> create = new ArrayList<>();
+        List<ExistingTravel> unchanged = new ArrayList<>();
+        List<TravelConflict> conflicts = new ArrayList<>();
+
+        for (WorkShift shift : targetShifts(facts, relation, range)) {
+            LocalDateTime anchorAt = relation == DerivedTravelRelation.AFTER_WORK
+                    ? shift.endAt() : shift.startAt();
+            LocalDateTime startAt = relation == DerivedTravelRelation.AFTER_WORK
+                    ? anchorAt : anchorAt.minusMinutes(duration);
+            LocalDateTime endAt = relation == DerivedTravelRelation.AFTER_WORK
+                    ? anchorAt.plusMinutes(duration) : anchorAt;
+
+            ExistingTravel existing = facts.existingTravelFor(shift.commitmentId(), relation);
+            if (existing == null) {
+                create.add(commitment(om, title, startAt, endAt, assumed, notes,
+                        shift.commitmentId(), relation, anchorAt));
+            } else if (existing.matches(startAt, endAt)) {
+                // 요청한 것과 똑같은 이동이 이미 있다. 하나 더 만들 이유가 없다.
+                unchanged.add(existing);
+            } else {
+                // 길이나 시각이 다르다. 이건 "이미 있음"이 아니라 "고쳐야 함"이다.
+                conflicts.add(new TravelConflict(shift, existing, startAt, endAt));
             }
         }
-        return skipped;
+        return new TravelPlan(create, unchanged, conflicts);
+    }
+
+    /** 이 방향의 이동을 만들 수 있는 근무. 앞이면 시작만, 뒤면 시작·종료가 모두 필요하다. */
+    private static List<WorkShift> targetShifts(DraftFacts facts, DerivedTravelRelation relation,
+                                                LocalDate[] range) {
+        List<WorkShift> targets = new ArrayList<>(facts.workShiftsIn(range[0], range[1]));
+        if (relation == DerivedTravelRelation.BEFORE_WORK) {
+            targets.addAll(facts.incompleteShiftsIn(range[0], range[1]));
+            targets.sort(java.util.Comparator.comparing(WorkShift::startAt));
+        }
+        return targets;
     }
 
     /** anchor가 뜻하는 파생 관계. 근무 기준 anchor가 아니면 null. */

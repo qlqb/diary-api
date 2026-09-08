@@ -42,6 +42,18 @@
     </select>
 
     <!--
+      적용 경로 전용. 원본 시각 검사와 이동 INSERT 사이에 원본이 바뀌는 것을 막는다.
+      일반 조회는 잠그지 않는다 - 상담과 목록이 서로를 기다리게 만들 이유가 없다.
+    -->
+    <select id="findByIdAndUserIdForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.commitment_id = #{commitmentId}
+           AND c.user_id = #{userId}
+           AND c.is_deleted = 0
+         FOR UPDATE
+    </select>
+
+    <!--
       겹침 조회다. start_at BETWEEN을 쓰면 전날 밤에 시작해 오늘 새벽에 끝나는 약속이
       오늘 조회에서 빠지고, 배치가 그 시간을 비어 있다고 본다.
       반열린 구간: [rangeStart, rangeEnd)
@@ -97,13 +109,31 @@
          FOR UPDATE
     </select>
 
-    <select id="findDerivedInRange" resultMap="commitmentResultMap">
+    <!--
+      근무 후보. 겹침이 아니라 "시작 날짜가 기간 안"이다 - findOverlapping과 의미가 다르다.
+      idx_commitments_user_time(user_id, start_at, ...)를 그대로 탄다.
+    -->
+    <select id="findWorkShiftCandidates" resultMap="commitmentResultMap">
         SELECT c.* FROM one_off_commitments c
          WHERE c.user_id = #{userId}
            AND c.is_deleted = 0
-           AND c.derived_from_commitment_id IS NOT NULL
-           AND c.start_at &lt; #{rangeEnd}
-           AND c.end_at   &gt; #{rangeStart}
+           AND c.start_at &gt;= #{rangeStart}
+           AND c.start_at &lt;  #{rangeEnd}
+         ORDER BY c.start_at, c.commitment_id
+    </select>
+
+    <!--
+      기존 이동을 원본 근무 id로 찾는다. 이동의 날짜로 찾으면 자정을 넘어간 것과 사용자가
+      옮긴 것을 놓치고, 그러면 이미 있는 블록을 하나 더 만든다.
+    -->
+    <select id="findDerivedByOrigins" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.derived_from_commitment_id IN
+        <foreach item="originId" collection="originIds" open="(" separator="," close=")">
+            #{originId}
+        </foreach>
          ORDER BY c.start_at, c.commitment_id
     </select>
 </mapper>

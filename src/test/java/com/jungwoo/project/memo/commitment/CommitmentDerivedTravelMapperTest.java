@@ -16,6 +16,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -102,8 +103,8 @@ class CommitmentDerivedTravelMapperTest {
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.DERIVED_COMMITMENT_ALREADY_EXISTS);
 
-        assertThat(commitmentService.findDerivedKeys(TEST_USER_ID,
-                LocalDate.of(2026, 9, 8), LocalDate.of(2026, 9, 13))).hasSize(1);
+        assertThat(commitmentService.findDerivedByOrigins(TEST_USER_ID, List.of(shift.getCommitmentId())))
+                .hasSize(1);
     }
 
     @Test
@@ -122,8 +123,8 @@ class CommitmentDerivedTravelMapperTest {
                 new CommitmentService.DerivedTravel(shift.getCommitmentId(),
                         DerivedTravelRelation.AFTER_WORK, LocalDateTime.of(2026, 9, 8, 23, 0)));
 
-        assertThat(commitmentService.findDerivedKeys(TEST_USER_ID,
-                LocalDate.of(2026, 9, 8), LocalDate.of(2026, 9, 13))).hasSize(2);
+        assertThat(commitmentService.findDerivedByOrigins(TEST_USER_ID, List.of(shift.getCommitmentId())))
+                .hasSize(2);
     }
 
     /** 원본이 그 사이 옮겨졌으면 그대로 만들지 않는다 — 근무와 겹치는 이동이 생긴다. */

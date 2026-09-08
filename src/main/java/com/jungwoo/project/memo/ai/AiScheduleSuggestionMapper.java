@@ -27,6 +27,14 @@ public interface AiScheduleSuggestionMapper {
             @Param("conversationId") Long conversationId, @Param("userId") Long userId);
 
     /** idempotency 재생용 — 그 ASSISTANT 메시지가 만든 후보 전체(상태 무관). */
+    /**
+     * 이 사용자의 미처리(PROPOSED) 후보 전부. 대화를 가리지 않는다.
+     *
+     * <p>같은 요청을 다른 대화에서 다시 말해도 같은 근무에 카드가 두 장 생기면 안 된다.
+     * 대화별 조회({@link #findPendingByConversationIdAndUserId})는 화면 복원용이라 목적이 다르다.
+     */
+    List<AiScheduleSuggestion> findPendingByUserId(@Param("userId") Long userId);
+
     List<AiScheduleSuggestion> findBySourceMessageIdAndUserId(
             @Param("sourceMessageId") Long sourceMessageId, @Param("userId") Long userId);
 

@@ -3,7 +3,9 @@ package com.jungwoo.project.memo.ai.draft;
 import com.jungwoo.project.memo.ai.draft.resolver.FirstClassPerWeekdayResolver;
 import com.jungwoo.project.memo.ai.draft.resolver.SemesterEndResolver;
 import com.jungwoo.project.memo.ai.draft.resolver.UpcomingWorkShiftsResolver;
+import com.jungwoo.project.memo.ai.ScheduleSuggestionService;
 import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
 import com.jungwoo.project.memo.routine.RoutineService;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import lombok.RequiredArgsConstructor;
@@ -11,10 +13,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * resolver들의 입력을 DB에서 읽어 {@link DraftFacts}를 만든다. 계산 자체는 순수 resolver가 한다.
@@ -27,6 +30,7 @@ public class DraftFactsService {
 
     private final RoutineService routineService;
     private final CommitmentService commitmentService;
+    private final ScheduleSuggestionService scheduleSuggestionService;
 
     /** 기본 기간(오늘~+14일)으로 수집한다. 요청 기간을 아직 모르는 LLM 호출 전 경로가 쓴다. */
     public DraftFacts collect(Long userId, LocalDate today) {
@@ -53,20 +57,24 @@ public class DraftFactsService {
 
         DraftFacts.WorkLookup lookup = DraftFacts.WorkLookup.OK;
         UpcomingWorkShiftsResolver.Result shifts = UpcomingWorkShiftsResolver.Result.EMPTY;
-        Set<String> covered = Set.of();
+        Map<String, ExistingTravel> existing = Map.of();
         try {
+            /*
+             * 근무 선택은 겹침이 아니라 "시작 날짜가 기간 안"이다. 가용시간 계산용
+             * findOverlapping을 쓰면 전날 밤에 시작한 근무가 이번 주 근무로 딸려 온다.
+             */
             shifts = UpcomingWorkShiftsResolver.resolve(
-                    commitmentService.findOverlapping(userId, from, to), from, to);
-            covered = commitmentService.findDerivedKeys(userId, from, to);
+                    commitmentService.findWorkShiftCandidates(userId, from, to), from, to);
+            existing = collectExistingTravel(userId, shifts);
         } catch (RuntimeException e) {
             log.warn("draft 근무 조회 실패: userId={}, 기간={}~{}", userId, from, to, e);
             lookup = DraftFacts.WorkLookup.FAILED;
             shifts = UpcomingWorkShiftsResolver.Result.EMPTY;
-            covered = Set.of();
+            existing = Map.of();
         }
 
-        log.info("draft 사실 수집: userId={}, 기간={}~{}, 근무조회={}, 근무={}건, 종료누락={}건, 기존이동={}건",
-                userId, from, to, lookup, shifts.usable().size(), shifts.incomplete().size(), covered.size());
+        log.info("draft 사실 수집: userId={}, 기간={}~{}, 근무조회={}, 근무={}건, 종료문제={}건, 기존이동={}건",
+                userId, from, to, lookup, shifts.usable().size(), shifts.incomplete().size(), existing.size());
 
         return new DraftFacts(
                 today,
@@ -75,9 +83,49 @@ public class DraftFactsService {
                 lookup,
                 shifts.usable(),
                 shifts.incomplete(),
-                covered,
+                existing,
                 from,
                 to);
+    }
+
+    /**
+     * 이 근무들에 이미 붙어 있는 이동 — 적용된 약속과 아직 검토 중인 후보를 함께 모은다.
+     *
+     * <p>기준은 원본 근무 id다. 이동의 날짜로 찾으면 자정을 넘어간 것과 사용자가 옮긴 것을
+     * 놓친다. 미적용 후보까지 보는 이유는, 같은 요청을 다시 말했을 때 같은 근무에 카드가 두 장
+     * 생기면 사용자가 어느 것을 눌러야 할지 알 수 없기 때문이다.
+     *
+     * <p>같은 (근무, 방향)에 적용된 것과 후보가 함께 있으면 <b>적용된 쪽</b>을 남긴다. 사용자가
+     * 실제로 보고 있는 일정이 그것이고, 고쳐야 할 대상도 그것이다.
+     */
+    private Map<String, ExistingTravel> collectExistingTravel(
+            Long userId, UpcomingWorkShiftsResolver.Result shifts) {
+        List<Long> originIds = new ArrayList<>();
+        for (UpcomingWorkShiftsResolver.WorkShift shift : shifts.usable()) {
+            originIds.add(shift.commitmentId());
+        }
+        for (UpcomingWorkShiftsResolver.WorkShift shift : shifts.incomplete()) {
+            originIds.add(shift.commitmentId());
+        }
+        if (originIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, ExistingTravel> byKey = new LinkedHashMap<>();
+        for (ExistingTravel pending : scheduleSuggestionService.findPendingDerivedTravel(userId)) {
+            if (originIds.contains(pending.originCommitmentId())) {
+                byKey.put(pending.key(), pending);
+            }
+        }
+        for (Commitment applied : commitmentService.findDerivedByOrigins(userId, originIds)) {
+            if (applied.getDerivedFromCommitmentId() == null || applied.getDerivedRelation() == null) {
+                continue;
+            }
+            ExistingTravel travel = new ExistingTravel(applied.getDerivedFromCommitmentId(),
+                    applied.getDerivedRelation(), ExistingTravel.Source.APPLIED, applied.getCommitmentId(),
+                    applied.getStartAt(), applied.getEndAt());
+            byKey.put(travel.key(), travel);
+        }
+        return byKey;
     }
 
     /**

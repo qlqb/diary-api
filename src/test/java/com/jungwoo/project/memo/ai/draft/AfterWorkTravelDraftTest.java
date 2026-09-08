@@ -8,14 +8,15 @@ import org.junit.jupiter.api.Test;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.OM;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.SHIFT_THU;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.SHIFT_TUE;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.TODAY;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.byRef;
-import static com.jungwoo.project.memo.ai.draft.DraftFixtures.coveredKey;
+import static com.jungwoo.project.memo.ai.draft.DraftFixtures.appliedAfter;
+import static com.jungwoo.project.memo.ai.draft.DraftFixtures.existing;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.facts;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.factsWithLookupFailure;
 import static com.jungwoo.project.memo.ai.draft.DraftFixtures.input;
@@ -61,7 +62,7 @@ class AfterWorkTravelDraftTest {
     void afterAnchor_lateShift_keepsFullDurationIntoNextDay() {
         WorkShift late = new WorkShift(201L, "근무",
                 LocalDateTime.of(2026, 9, 13, 18, 0), LocalDateTime.of(2026, 9, 13, 23, 30));
-        DraftFacts f = facts(List.of(late), List.of(), Set.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftFacts f = facts(List.of(late), List.of(), Map.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
 
@@ -93,7 +94,7 @@ class AfterWorkTravelDraftTest {
     void requestedRange_excludesShiftsOutsideIt() {
         WorkShift nextWeek = new WorkShift(203L, "근무",
                 LocalDateTime.of(2026, 9, 16, 18, 0), LocalDateTime.of(2026, 9, 16, 23, 0));
-        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU, nextWeek), List.of(), Set.of(),
+        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU, nextWeek), List.of(), Map.of(),
                 TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
@@ -114,9 +115,9 @@ class AfterWorkTravelDraftTest {
         LocalDate farTo = LocalDate.of(2026, 10, 11);
         WorkShift october = new WorkShift(204L, "근무",
                 LocalDateTime.of(2026, 10, 6, 18, 0), LocalDateTime.of(2026, 10, 6, 23, 0));
-        DraftFacts base = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(), Set.of(),
+        DraftFacts base = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(), Map.of(),
                 TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.OK);
-        DraftFacts far = facts(List.of(october), List.of(), Set.of(), farFrom, farTo, DraftFacts.WorkLookup.OK);
+        DraftFacts far = facts(List.of(october), List.of(), Map.of(), farFrom, farTo, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, farFrom, farTo);
         boolean[] requeried = {false};
@@ -193,7 +194,7 @@ class AfterWorkTravelDraftTest {
     @Test
     void oneShiftMissingEnd_holdsWholeDraft_andNamesThatShift() {
         WorkShift broken = new WorkShift(205L, "근무", LocalDateTime.of(2026, 9, 11, 18, 0), null);
-        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(broken), Set.of(),
+        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(broken), Map.of(),
                 WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
@@ -206,7 +207,7 @@ class AfterWorkTravelDraftTest {
         assertThat(out.action()).isEqualTo(DraftTurnResolver.Action.ASK);
         assertThat(byRef(out, "9").getMissingRequired())
                 .containsExactly(DraftSlotRegistry.MISSING_WORK_SHIFT_END);
-        assertThat(out.serverReply()).contains("9월 11일").contains("몇 시에 끝나나요");
+        assertThat(out.serverReply()).contains("9월 11일").contains("일정 화면");
         assertThat(out.proposeDrafts()).isEmpty();
     }
 
@@ -214,7 +215,7 @@ class AfterWorkTravelDraftTest {
     @Test
     void beforeAnchor_ignoresMissingEnd() {
         WorkShift broken = new WorkShift(205L, "근무", LocalDateTime.of(2026, 9, 11, 18, 0), null);
-        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(broken), Set.of(),
+        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(broken), Map.of(),
                 WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(8, T0, "근무 전 이동",
                 DraftSlotRegistry.ANCHOR_BEFORE_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
@@ -237,7 +238,7 @@ class AfterWorkTravelDraftTest {
                 input(List.of(a), s, "네", false, factsWithLookupFailure()));
         DraftTurnResolver.Outcome empty = DraftTurnResolver.resolve(
                 input(List.of(b), s, "네", false,
-                        facts(List.of(), List.of(), Set.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK)));
+                        facts(List.of(), List.of(), Map.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK)));
 
         assertThat(byRef(failed, "9").getMissingRequired())
                 .containsExactly(DraftSlotRegistry.MISSING_WORK_LOOKUP);
@@ -277,28 +278,71 @@ class AfterWorkTravelDraftTest {
 
     // ===== 중복 =====
 
-    /** 이미 이동이 붙은 근무는 건너뛰고, 몇 건을 왜 뺐는지 말한다. */
+    /** 요청과 <b>구간까지 같은</b> 이동이 이미 있는 근무만 건너뛴다. 왜 뺐는지도 말한다. */
     @Test
-    void alreadyCoveredShift_isSkipped_andReported() {
-        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU),
-                List.of(), Set.of(coveredKey(SHIFT_TUE, DerivedTravelRelation.AFTER_WORK)),
+    void identicalExistingTravel_isSkipped_andReported() {
+        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(),
+                Map.ofEntries(appliedAfter(SHIFT_TUE, 60, 900L)),
                 WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
 
-        var built = DraftProposalBuilder.build(draft, f, OM);
+        var plan = DraftProposalBuilder.plan(draft, f, OM);
 
-        assertThat(built).hasSize(1);
-        assertThat(built.get(0).payload().path("startAt").asText()).isEqualTo("2026-09-10T22:00");
-        assertThat(DraftProposalBuilder.skippedAsCovered(draft, f)).isEqualTo(1);
+        assertThat(plan.create()).hasSize(1);
+        assertThat(plan.create().get(0).payload().path("startAt").asText()).isEqualTo("2026-09-10T22:00");
+        assertThat(plan.unchanged()).hasSize(1);
+        assertThat(plan.conflicts()).isEmpty();
     }
 
-    /** 그 기간 근무에 이미 다 붙어 있으면 "이대로 만들까요"가 아니라 기존 항목을 안내한다. */
+    /**
+     * 기존 30분이 새 60분 요청을 조용히 막지 않는다. 이건 "이미 있음"이 아니라 "고쳐야 함"이다 —
+     * 기준 커밋에서는 원본 id + 방향만 봐서 30분짜리가 60분 요청을 삼켰다.
+     */
     @Test
-    void allShiftsCovered_explainsInsteadOfOfferingEmptyCreate() {
+    void existingTravelWithDifferentLength_isConflict_notAlreadyCovered() {
         DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(),
-                Set.of(coveredKey(SHIFT_TUE, DerivedTravelRelation.AFTER_WORK),
-                        coveredKey(SHIFT_THU, DerivedTravelRelation.AFTER_WORK)),
+                Map.ofEntries(appliedAfter(SHIFT_TUE, 30, 900L)),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
+                DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+
+        var plan = DraftProposalBuilder.plan(draft, f, OM);
+
+        assertThat(plan.unchanged()).isEmpty();
+        assertThat(plan.conflicts()).hasSize(1);
+        assertThat(plan.conflicts().get(0).existing().minutes()).isEqualTo(30);
+        assertThat(plan.conflicts().get(0).wantedMinutes()).isEqualTo(60);
+        // 없는 근무에는 그대로 새로 만든다 — 혼합 요청에서 신규가 막히면 안 된다.
+        assertThat(plan.create()).hasSize(1);
+        assertThat(plan.create().get(0).payload().path("startAt").asText()).isEqualTo("2026-09-10T22:00");
+    }
+
+    /** 혼합 요청: 신규는 만들고, 길이가 다른 것은 수정 필요로 구분해 특정한다. */
+    @Test
+    void mixedRequest_createsNew_andNamesTheOneNeedingChange() {
+        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(),
+                Map.ofEntries(appliedAfter(SHIFT_TUE, 30, 900L)),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
+                DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+        AiTurnStructured s = structured("{" + BASE + ",\"routing\":{\"targets\":[9],\"create\":[]},"
+                + "\"draftOps\":[],\"actionHint\":\"PROPOSE\",\"userTriggered\":false}");
+
+        DraftTurnResolver.Outcome out = DraftTurnResolver.resolve(input(List.of(draft), s, "네", false, f));
+
+        assertThat(out.action()).isEqualTo(DraftTurnResolver.Action.PROPOSE);
+        assertThat(out.serverReply()).contains("후보 1건");
+        // 전부 완료로 표시하지 않는다. 어느 근무를 어떻게 고쳐야 하는지 말한다.
+        assertThat(out.serverReply()).contains("9월 8일").contains("30분").contains("60분")
+                .contains("일정 화면");
+    }
+
+    /** 그 기간 근무에 요청과 같은 이동이 다 있으면 "이대로 만들까요"가 아니라 그 사실을 말한다. */
+    @Test
+    void allShiftsAlreadyIdentical_explainsInsteadOfOfferingEmptyCreate() {
+        DraftFacts f = facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(),
+                Map.ofEntries(appliedAfter(SHIFT_TUE, 60, 900L), appliedAfter(SHIFT_THU, 60, 901L)),
                 WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
@@ -309,9 +353,79 @@ class AfterWorkTravelDraftTest {
 
         assertThat(out.action()).isEqualTo(DraftTurnResolver.Action.ASK);
         assertThat(out.proposeDrafts()).isEmpty();
-        assertThat(out.serverReply()).contains("이미 다 들어가 있어요");
-        // 기존 항목을 자동으로 바꾸지 않는다.
-        assertThat(out.quickReplies()).contains("그대로 둘게요", "길이 바꿀게요");
+        assertThat(out.serverReply()).contains("이미 다 있어요");
+    }
+
+    /** 미적용 후보도 기존 이동으로 본다 — 같은 요청을 다시 말해도 카드가 두 장 되지 않는다. */
+    @Test
+    void pendingSuggestion_countsAsExisting_soCardsDoNotPileUp() {
+        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(),
+                Map.ofEntries(existing(SHIFT_TUE, DerivedTravelRelation.AFTER_WORK,
+                        SHIFT_TUE.endAt(), SHIFT_TUE.endAt().plusMinutes(60),
+                        ExistingTravel.Source.PROPOSED, 700L)),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
+                DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+
+        var plan = DraftProposalBuilder.plan(draft, f, OM);
+
+        assertThat(plan.create()).isEmpty();
+        assertThat(plan.unchanged()).singleElement()
+                .satisfies(e -> assertThat(e.source()).isEqualTo(ExistingTravel.Source.PROPOSED));
+    }
+
+    /** 미적용 후보와 구간이 다르면 조용히 건너뛰지 않고 수정 필요로 특정한다. */
+    @Test
+    void pendingSuggestionWithDifferentInterval_isConflict() {
+        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(),
+                Map.ofEntries(existing(SHIFT_TUE, DerivedTravelRelation.AFTER_WORK,
+                        SHIFT_TUE.endAt(), SHIFT_TUE.endAt().plusMinutes(90),
+                        ExistingTravel.Source.PROPOSED, 700L)),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
+                DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+
+        var plan = DraftProposalBuilder.plan(draft, f, OM);
+
+        assertThat(plan.create()).isEmpty();
+        assertThat(plan.conflicts()).singleElement()
+                .satisfies(c -> assertThat(c.existing().source()).isEqualTo(ExistingTravel.Source.PROPOSED));
+    }
+
+    /**
+     * 종료 시각을 못 쓰는 근무에도 <b>앞</b> 이동은 만들어진다. 준비 여부 판정은 허용하는데
+     * 생성만 정상 목록을 돌면, READY인데 후보가 0건이라 이유 없는 되물음이 나간다.
+     */
+    @Test
+    void beforeAnchor_createsForIncompleteShiftsToo() {
+        WorkShift broken = new WorkShift(205L, "근무", LocalDateTime.of(2026, 9, 11, 18, 0), null);
+        DraftFacts f = facts(List.of(SHIFT_TUE), List.of(broken), Map.of(),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(8, T0, "근무 전 이동",
+                DraftSlotRegistry.ANCHOR_BEFORE_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+
+        var built = DraftProposalBuilder.build(draft, f, OM);
+
+        assertThat(built).hasSize(2);
+        assertThat(built).extracting(x -> x.payload().path("startAt").asText())
+                .containsExactly("2026-09-08T17:00", "2026-09-11T17:00");
+    }
+
+    /** 종료가 이상한 근무만 있어도 앞 이동은 만들 수 있다 — "근무 없음"이 아니다. */
+    @Test
+    void beforeAnchor_worksWhenOnlyIncompleteShiftsExist() {
+        WorkShift broken = new WorkShift(205L, "근무", LocalDateTime.of(2026, 9, 11, 18, 0), null);
+        DraftFacts f = facts(List.of(), List.of(broken), Map.of(),
+                WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftState draft = openWorkSchedule(8, T0, "근무 전 이동",
+                DraftSlotRegistry.ANCHOR_BEFORE_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
+        AiTurnStructured s = structured("{" + BASE + ",\"routing\":{\"targets\":[8],\"create\":[]},"
+                + "\"draftOps\":[],\"actionHint\":\"PROPOSE\",\"userTriggered\":false}");
+
+        DraftTurnResolver.Outcome out = DraftTurnResolver.resolve(input(List.of(draft), s, "네", false, f));
+
+        assertThat(out.action()).isEqualTo(DraftTurnResolver.Action.PROPOSE);
+        assertThat(DraftProposalBuilder.build(draft, f, OM)).hasSize(1);
     }
 
     /** 후보 payload는 원본 근무와 앞/뒤, 기준 시각을 들고 다닌다 — 적용 경로가 이것을 읽는다. */
@@ -357,7 +471,7 @@ class AfterWorkTravelDraftTest {
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
         draft.setMissingRequired(List.of(DraftSlotRegistry.DATE, DraftSlotRegistry.START_TIME));
         draft.setAskCount(5);
-        DraftFacts f = facts(List.of(), List.of(), Set.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftFacts f = facts(List.of(), List.of(), Map.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         AiTurnStructured s = structured("{" + BASE + ",\"routing\":{\"targets\":[9],\"create\":[]},"
                 + "\"draftOps\":[],\"actionHint\":\"PROPOSE\",\"userTriggered\":false}");
 
@@ -373,7 +487,7 @@ class AfterWorkTravelDraftTest {
     void modelQuestion_isReplacedWhenServerHasMissing() {
         DraftState draft = openWorkSchedule(9, T0, "근무 후 이동시간",
                 DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT, WEEK_FROM, WEEK_TO);
-        DraftFacts f = facts(List.of(), List.of(), Set.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
+        DraftFacts f = facts(List.of(), List.of(), Map.of(), WEEK_FROM, WEEK_TO, DraftFacts.WorkLookup.OK);
         AiTurnStructured s = structured("{" + BASE + ",\"routing\":{\"targets\":[9],\"create\":[]},"
                 + "\"draftOps\":[],\"actionHint\":\"ASK\",\"userTriggered\":false}");
 

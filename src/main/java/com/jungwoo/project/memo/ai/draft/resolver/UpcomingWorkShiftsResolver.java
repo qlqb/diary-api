@@ -56,6 +56,12 @@ public final class UpcomingWorkShiftsResolver {
     /**
      * 기간 안의 근무를 쓸 수 있는 것과 없는 것으로 나눈 결과.
      *
+     * <p><b>어느 경계가 무엇을 보장하는가.</b> one_off_commitments는 {@code end_at NOT NULL}과
+     * {@code chk_commitments_time CHECK (start_at < end_at)}을 걸고 있어, DB에서 온 근무는
+     * incomplete가 될 수 없다. 그래서 이 구분은 DB 경로에서는 항상 비어 있고, 여기서는 그
+     * 제약을 믿지 않는 방어선으로만 남는다 — 이미지 인식·다른 입력 경로가 생기거나 제약이
+     * 완화될 때 잘못된 시각으로 이동을 만들지 않기 위해서다. 제약을 느슨하게 바꾸지 않는다.
+     *
      * <p>둘을 합쳐 버리면 "근무가 없다"와 "근무는 있는데 종료 시각이 이상하다"가 같은 상태가
      * 되고, 사용자는 등록해 둔 근무를 앱이 못 본다고 생각하게 된다.
      *

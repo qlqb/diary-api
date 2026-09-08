@@ -60,7 +60,11 @@ public final class DraftTurnResolver {
     static final String STALLED_PREFIX = "%s은(는) %s을(를) 아직 받지 못해서 계속 못 만들고 있어요.";
     static final String STALLED_SUFFIX = " 지금 정하기 어려우면 \"취소\"라고 하시면 이 요청은 접어 둘게요.";
 
+    /** 안내 문구에 이름을 적는 최대 건수. 넘으면 "외 N건"으로 줄인다. */
+    private static final int MAX_NAMED_CONFLICTS = 3;
+
     private static final DateTimeFormatter DATE_LABEL_FMT = DateTimeFormatter.ofPattern("M월 d일");
+    private static final DateTimeFormatter TIME_LABEL_FMT = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter DATE_TIME_LABEL_FMT = DateTimeFormatter.ofPattern("M월 d일 HH:mm");
 
     private DraftTurnResolver() {
@@ -310,7 +314,7 @@ public final class DraftTurnResolver {
             if (next != null) {
                 next.setAskCount(next.getAskCount() + 1);
                 Question question = questionFor(next, userTriggered, factsByDraft.get(next),
-                        stalled(next, previousMissing));
+                        stalled(next, previousMissing), in.objectMapper());
                 reply.append(' ').append(question.text());
                 quick = question.quickReplies();
             }
@@ -327,7 +331,8 @@ public final class DraftTurnResolver {
             notes.add("같은 필수 누락으로 진전 없음: #" + target.refId() + " " + target.getMissingRequired());
         }
         target.setAskCount(target.getAskCount() + 1);
-        Question question = questionFor(target, userTriggered, factsByDraft.get(target), noProgress);
+        Question question = questionFor(target, userTriggered, factsByDraft.get(target), noProgress,
+                in.objectMapper());
         /*
          * 모델 질문을 그대로 두는 조건이 "물음표가 있는가" 하나였다. 그러면 서버가 판정한
          * 누락과 무관한 되물음("종료 직후가 맞나요?")이 그대로 나가고, 사용자가 이미 답한 것을
@@ -538,7 +543,8 @@ public final class DraftTurnResolver {
     record Question(String text, List<String> quickReplies) {
     }
 
-    static Question questionFor(DraftState draft, boolean userTriggered, DraftFacts facts, boolean stalled) {
+    static Question questionFor(DraftState draft, boolean userTriggered, DraftFacts facts, boolean stalled,
+                                ObjectMapper om) {
         List<String> missing = draft.getMissingRequired();
         if (!missing.isEmpty()) {
             String first = missing.get(0);
@@ -558,9 +564,9 @@ public final class DraftTurnResolver {
             }
             return new Question(text, quick);
         }
-        Question allCovered = allCoveredQuestion(draft, facts);
-        if (allCovered != null) {
-            return allCovered;
+        Question existing = existingTravelQuestion(draft, facts, om);
+        if (existing != null) {
+            return existing;
         }
         List<String> unconfirmed = draft.unconfirmedFields();
         if (unconfirmed.isEmpty()) {
@@ -608,10 +614,17 @@ public final class DraftTurnResolver {
             case DraftSlotRegistry.MISSING_WORK_LOOKUP ->
                     "근무 일정을 불러오지 못해서 " + draft.getLabel()
                             + "을(를) 아직 만들지 못했어요. 등록된 근무가 없다는 뜻은 아니에요. 다시 시도할까요?";
-            // 어느 근무인지 지정한다. "근무가 몇 시에 끝나나요"는 이미 실패한 질문이다.
+            /*
+             * 어느 근무인지 지정하고, 사용자가 실제로 할 수 있는 행동으로 보낸다.
+             *
+             * "그 근무는 몇 시에 끝나나요?"라고 물으면 안 된다 — 답을 받아도 그 값을 원본 근무에
+             * 반영할 슬롯도 경로도 없어서 다음 턴에 또 막힌다. 원본을 몰래 고치지도 않는다.
+             * 종료 시각은 일정 화면에서 사용자가 고치는 값이다.
+             */
             case DraftSlotRegistry.MISSING_WORK_SHIFT_END ->
-                    incompleteShiftText(draft, facts) + " 종료 시각이 없어서 그 뒤에 "
-                            + draft.getLabel() + "을(를) 붙일 수 없어요. 그 근무는 몇 시에 끝나나요?";
+                    incompleteShiftText(draft, facts) + " 종료 시각이 비어 있어서 그 뒤에 "
+                            + draft.getLabel() + "을(를) 붙일 수 없어요. 일정 화면에서 그 근무의 종료 시각을"
+                            + " 채운 뒤 다시 말씀해 주시겠어요?";
             case DraftSlotRegistry.TITLE -> "이 일정을 뭐라고 부를까요?";
             case DraftSlotRegistry.INTENSITY ->
                     "이번 기간의 남는 시간 중 어느 정도를 공부로 채울까요? 가볍게 / 보통 / 집중 중에 골라주세요.";
@@ -670,35 +683,60 @@ public final class DraftTurnResolver {
     }
 
     /**
-     * 필수 누락도 없고 확인할 것도 없는데 만들 후보가 0건인 경우. 그 기간 근무에 이미 같은
-     * 이동이 다 붙어 있다는 뜻이다. "이대로 만들까요?"라고 물으면 눌러도 아무것도 안 생긴다.
+     * 만들 후보가 0건인데 필수 누락도 확인할 것도 없는 경우 — 대상 근무에 이미 이동이 다
+     * 붙어 있다는 뜻이다. "이대로 만들까요?"라고 물으면 눌러도 아무것도 안 생긴다.
+     *
+     * <p>두 경우를 나눠 말한다. 구간까지 같으면 할 일이 없고, 구간이 다르면 사용자가 고쳐야
+     * 한다. 예전에는 둘을 합쳐 "이미 다 들어가 있어요"라고만 했는데, 기존 30분이 있는 상태에서
+     * 60분을 요청한 사용자에게 그 문구는 사실과 다르다.
+     *
+     * <p>고치는 선택지를 버튼으로 주지 않는다 — 눌러도 서버가 기존 항목을 바꿔 줄 경로가 아직
+     * 없기 때문이다. 대신 어느 블록을 어디서 고치면 되는지 문구로 특정한다.
      */
-    private static Question allCoveredQuestion(DraftState draft, DraftFacts facts) {
+    private static Question existingTravelQuestion(DraftState draft, DraftFacts facts, ObjectMapper om) {
         if (draft.getType() != DraftType.CREATE_SCHEDULE || facts == null) {
             return null;
         }
-        DerivedTravelRelation relation = DraftProposalBuilder.relationOf(
-                textField(draft, DraftSlotRegistry.ANCHOR));
-        if (relation == null) {
+        DraftProposalBuilder.TravelPlan plan = DraftProposalBuilder.plan(draft, facts, om);
+        if (!plan.create().isEmpty() || !plan.hasExisting()) {
             return null;
         }
-        LocalDate[] range = DraftProposalBuilder.range(draft, facts);
-        List<WorkShift> shifts = facts.workShiftsIn(range[0], range[1]);
-        if (shifts.isEmpty()) {
-            return null;
+        if (plan.conflicts().isEmpty()) {
+            return new Question(rangeText(draft, facts) + " 근무에는 요청하신 것과 같은 "
+                    + draft.getLabel() + "이(가) 이미 다 있어요. 그대로 두면 될까요?",
+                    YES_NO_QUICK_REPLIES);
         }
-        for (WorkShift shift : shifts) {
-            if (!facts.alreadyCovered(shift.commitmentId(), relation)) {
-                return null;
+        return new Question(conflictText(plan.conflicts())
+                + " 기존 것을 " + draft.getLabel() + " 길이에 맞게 고치시겠어요?",
+                YES_NO_QUICK_REPLIES);
+    }
+
+    /**
+     * 기존 이동과 요청이 어긋난 근무를 특정하는 문구. 어느 블록을 어디서 고치면 되는지까지 적는다 —
+     * "수정이 필요해요"만으로는 사용자가 무엇을 열어야 할지 모른다.
+     */
+    /** 파생 방향을 사람이 읽는 말로. "뒤/앞"처럼 둘 다 적으면 어느 쪽인지 알 수 없다. */
+    private static String relationWord(DerivedTravelRelation relation) {
+        return relation == DerivedTravelRelation.AFTER_WORK ? "뒤" : "앞";
+    }
+
+    static String conflictText(List<DraftProposalBuilder.TravelConflict> conflicts) {
+        List<String> parts = new ArrayList<>();
+        for (DraftProposalBuilder.TravelConflict conflict : conflicts) {
+            if (parts.size() == MAX_NAMED_CONFLICTS) {
+                parts.add("외 " + (conflicts.size() - MAX_NAMED_CONFLICTS) + "건");
+                break;
             }
+            ExistingTravel existing = conflict.existing();
+            parts.add(conflict.shift().startAt().format(DATE_LABEL_FMT) + " 근무 "
+                    + relationWord(existing.relation()) + "에 이미 "
+                    + existing.startAt().format(TIME_LABEL_FMT) + "~"
+                    + existing.endAt().format(TIME_LABEL_FMT)
+                    + "(" + existing.minutes() + "분)"
+                    + (existing.source() == ExistingTravel.Source.PROPOSED ? " 검토 중인 후보가" : " 이동이")
+                    + " 있어요 — 요청은 " + conflict.wantedMinutes() + "분입니다");
         }
-        /*
-         * 기존 항목을 조용히 바꾸지 않는다. 길이가 달라졌으면 그것은 "수정"이지 "추가"가
-         * 아니고, 어느 쪽인지는 사용자만 안다.
-         */
-        return new Question(rangeText(draft, facts) + " 근무에는 " + draft.getLabel()
-                + "이(가) 이미 다 들어가 있어요. 기존 것을 그대로 둘까요, 길이를 바꿔 다시 만들까요?",
-                List.of("그대로 둘게요", "길이 바꿀게요"));
+        return String.join(", ", parts) + ".";
     }
 
     static String missingNoun(String field) {
@@ -731,7 +769,8 @@ public final class DraftTurnResolver {
                                 ObjectMapper om) {
         List<String> parts = new ArrayList<>();
         List<String> assumedNouns = new ArrayList<>();
-        int skipped = 0;
+        int unchanged = 0;
+        List<DraftProposalBuilder.TravelConflict> conflicts = new ArrayList<>();
         boolean periodPlan = false;
         for (DraftState draft : proposable) {
             DraftFacts facts = factsByDraft.get(draft);
@@ -742,7 +781,9 @@ public final class DraftTurnResolver {
                 Map<ScheduleSuggestionKind, Integer> counts = DraftProposalBuilder.countByKind(built);
                 int total = counts.values().stream().mapToInt(Integer::intValue).sum();
                 parts.add(draft.getLabel() + " 후보 " + total + "건");
-                skipped += DraftProposalBuilder.skippedAsCovered(draft, facts);
+                DraftProposalBuilder.TravelPlan plan = DraftProposalBuilder.plan(draft, facts, om);
+                unchanged += plan.unchanged().size();
+                conflicts.addAll(plan.conflicts());
             }
             for (String field : draft.unconfirmedFields()) {
                 String noun = draft.getLabel() + "의 " + fieldNoun(field);
@@ -761,9 +802,17 @@ public final class DraftTurnResolver {
             }
             sb.append(PERIOD_PLAN_OFFER_LINE);
         }
-        if (skipped > 0) {
-            // 조용히 건너뛰지 않는다. 사용자가 "모든 근무"라고 했는데 건수가 적으면 이유를 알아야 한다.
-            sb.append(" 이미 같은 이동이 있는 근무 ").append(skipped).append("건은 빼고 만들었어요.");
+        /*
+         * 조용히 건너뛰지 않는다. 사용자가 "모든 근무"라고 했는데 건수가 적으면 이유를 알아야
+         * 하고, 그 이유가 "이미 같은 것이 있다"인지 "다른 길이가 있어 고쳐야 한다"인지는
+         * 사용자가 할 일이 다르다. 후자를 완료로 표시하지 않는다.
+         */
+        if (unchanged > 0) {
+            sb.append(" 요청과 같은 이동이 이미 있는 근무 ").append(unchanged).append("건은 그대로 뒀어요.");
+        }
+        if (!conflicts.isEmpty()) {
+            sb.append(' ').append(conflictText(conflicts))
+                    .append(" 이건 새로 만들지 않았어요 — 일정 화면에서 그 블록을 고쳐 주세요.");
         }
         if (!assumedNouns.isEmpty()) {
             sb.append(" 확인 없이 넣은 값이 있어요: ").append(String.join(", ", assumedNouns)).append('.');

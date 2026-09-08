@@ -2144,7 +2144,7 @@ class AiConversationServiceTest {
                 com.jungwoo.project.memo.ai.draft.DraftFacts.WorkLookup.OK,
                 List.of(new com.jungwoo.project.memo.ai.draft.resolver.UpcomingWorkShiftsResolver.WorkShift(
                         1L, "근무", LocalDateTime.of(2026, 8, 5, 18, 0), LocalDateTime.of(2026, 8, 5, 23, 0))),
-                List.of(), java.util.Set.of(),
+                List.of(), java.util.Map.of(),
                 TODAY, TODAY.plusDays(14)));
         String raw = "수업 전마다요, 아니면 첫 수업 전만요?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"수업 전마다요, 아니면 첫 수업 전만요?\","

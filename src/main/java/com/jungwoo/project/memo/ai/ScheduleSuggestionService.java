@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionStatus;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.draft.DraftProposalBuilder;
+import com.jungwoo.project.memo.ai.draft.ExistingTravel;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
 import com.jungwoo.project.memo.commitment.domain.DerivedTravelRelation;
@@ -248,6 +249,43 @@ public class ScheduleSuggestionService {
         return toResponses(suggestionMapper.findPendingByConversationIdAndUserId(conversationId, userId));
     }
 
+    /**
+     * 아직 적용되지 않은 파생 이동 후보. draft 사실 수집이 "이미 카드가 있는 근무"를 알기 위해 읽는다.
+     *
+     * <p>적용된 약속만 보면, 같은 요청을 두 번 말했을 때 같은 근무에 카드가 두 장 생긴다.
+     * 사용자는 어느 쪽을 눌러야 하는지 알 수 없고, 둘 다 누르면 두 번째는 409로 막힌다 —
+     * 막히기 전에 만들지 않는 편이 맞다.
+     *
+     * <p>payload JSON을 자바에서 읽는다. 저장 컬럼이 텍스트라 SQL로 거르려면 JSON 함수에
+     * 의존해야 하고, 미처리 후보는 원래 몇 건 수준이다.
+     */
+    @Transactional(readOnly = true)
+    public List<ExistingTravel> findPendingDerivedTravel(Long userId) {
+        List<ExistingTravel> result = new ArrayList<>();
+        for (AiScheduleSuggestion suggestion : suggestionMapper.findPendingByUserId(userId)) {
+            if (suggestion.getKind() != ScheduleSuggestionKind.COMMITMENT) {
+                continue;
+            }
+            JsonNode payload;
+            try {
+                payload = objectMapper.readTree(suggestion.getProposedPayload());
+            } catch (Exception e) {
+                // 읽히지 않는 후보는 여기서 실패시키지 않는다 — 이 조회는 중복 방지용 보조 정보다.
+                log.warn("미처리 후보 payload를 읽지 못했다: suggestionId={}", suggestion.getSuggestionId());
+                continue;
+            }
+            DerivedReference reference = derivedReferenceOf(payload);
+            if (!reference.usable()) {
+                continue;
+            }
+            result.add(new ExistingTravel(reference.originCommitmentId(), reference.relation(),
+                    ExistingTravel.Source.PROPOSED, suggestion.getSuggestionId(),
+                    parseDateTime(payload.path("startAt").asText(null)),
+                    parseDateTime(payload.path("endAt").asText(null))));
+        }
+        return result;
+    }
+
     /** idempotency 재생용 — 그 ASSISTANT 메시지가 만든 후보 전체(상태 무관). */
     @Transactional(readOnly = true)
     public List<ScheduleSuggestionResponse> findBySourceMessageId(Long sourceMessageId, Long userId) {
@@ -384,23 +422,68 @@ public class ScheduleSuggestionService {
     }
 
     /**
-     * 저장된 payload의 {@code derivedFrom}을 도메인 값으로. 없거나 읽을 수 없으면 null이고,
-     * 그때는 파생이 아닌 보통 약속으로 만들어진다.
+     * 저장된 payload에서 읽은 파생 참조. 세 가지를 구분한다.
+     *
+     * <p>"파생 정보가 아예 없음"과 "있는데 깨졌음"을 합치면, 깨진 후보가 조용히 보통 약속으로
+     * 저장된다. 그 행은 원본 참조가 없어 다음 조회에서 근무로 오인되고 중복 방지도 받지 못한다.
+     *
+     * @param present 파생 키가 payload에 있었는가
      */
-    private CommitmentService.DerivedTravel derivedTravelOf(JsonNode storedPayload) {
-        if (storedPayload == null || !storedPayload.path(DraftProposalBuilder.DERIVED_FROM_KEY).isObject()) {
-            return null;
+    private record DerivedReference(boolean present, Long originCommitmentId,
+                                    DerivedTravelRelation relation, LocalDateTime anchorAt) {
+        static final DerivedReference ABSENT = new DerivedReference(false, null, null, null);
+
+        static DerivedReference broken() {
+            return new DerivedReference(true, null, null, null);
+        }
+
+        /** 파생으로 다룰 수 있는가(필수 식별자·관계가 모두 있는가). */
+        boolean usable() {
+            return present && originCommitmentId != null && relation != null;
+        }
+
+        /** 파생 키는 있는데 쓸 수 없는가. 재검토로 돌려야 하는 상태다. */
+        boolean brokenReference() {
+            return present && !usable();
+        }
+    }
+
+    private DerivedReference derivedReferenceOf(JsonNode storedPayload) {
+        if (storedPayload == null || !storedPayload.has(DraftProposalBuilder.DERIVED_FROM_KEY)) {
+            return DerivedReference.ABSENT;
         }
         JsonNode derived = storedPayload.get(DraftProposalBuilder.DERIVED_FROM_KEY);
+        if (derived == null || !derived.isObject()) {
+            return DerivedReference.broken();
+        }
         JsonNode id = derived.path(DraftProposalBuilder.DERIVED_COMMITMENT_ID);
         DerivedTravelRelation relation = DerivedTravelRelation.from(
                 derived.path(DraftProposalBuilder.DERIVED_RELATION).asText(null));
         if (!id.isNumber() || relation == null) {
-            log.warn("파생 정보를 읽지 못했다: {}", derived);
+            return DerivedReference.broken();
+        }
+        return new DerivedReference(true, id.asLong(), relation,
+                parseDateTime(derived.path(DraftProposalBuilder.DERIVED_ANCHOR_AT).asText(null)));
+    }
+
+    /**
+     * 적용에 쓸 파생 정보. 파생 키가 있는데 깨져 있으면 보통 약속으로 우회 저장하지 않고 거절한다.
+     *
+     * <p>기준 시각이 없는 것도 깨진 것으로 본다 — 그게 없으면 원본이 바뀌었는지 확인할 수 없고,
+     * 확인 없이 저장하면 근무와 어긋난 이동이 조용히 생긴다.
+     */
+    private CommitmentService.DerivedTravel derivedTravelOf(JsonNode storedPayload) {
+        DerivedReference reference = derivedReferenceOf(storedPayload);
+        if (reference.brokenReference() || (reference.usable() && reference.anchorAt() == null)) {
+            log.warn("파생 후보의 참조가 깨져 있다: {}",
+                    storedPayload == null ? null : storedPayload.path(DraftProposalBuilder.DERIVED_FROM_KEY));
+            throw new ConflictException(ErrorCode.DERIVED_COMMITMENT_ORIGIN_CHANGED);
+        }
+        if (!reference.usable()) {
             return null;
         }
-        return new CommitmentService.DerivedTravel(id.asLong(), relation,
-                parseDateTime(derived.path(DraftProposalBuilder.DERIVED_ANCHOR_AT).asText(null)));
+        return new CommitmentService.DerivedTravel(reference.originCommitmentId(), reference.relation(),
+                reference.anchorAt());
     }
 
     /** 이 payload가 누구의 것인지. 같은 검증이 실패해도 누구의 잘못인지에 따라 결과가 다르다. */

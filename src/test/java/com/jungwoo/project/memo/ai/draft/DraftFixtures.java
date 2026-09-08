@@ -39,33 +39,45 @@ final class DraftFixtures {
             LocalDateTime.of(2026, 9, 10, 17, 0), LocalDateTime.of(2026, 9, 10, 22, 0));
 
     static DraftFacts facts() {
-        return facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(), Set.of(), TODAY, TODAY.plusDays(14),
+        return facts(List.of(SHIFT_TUE, SHIFT_THU), List.of(), Map.of(), TODAY, TODAY.plusDays(14),
                 DraftFacts.WorkLookup.OK);
     }
 
-    static DraftFacts facts(List<WorkShift> usable, List<WorkShift> incomplete, Set<String> covered,
+    static DraftFacts facts(List<WorkShift> usable, List<WorkShift> incomplete,
+                            Map<String, ExistingTravel> existing,
                             LocalDate from, LocalDate to, DraftFacts.WorkLookup lookup) {
         return new DraftFacts(TODAY,
                 Map.of(DayOfWeek.TUESDAY, LocalTime.of(14, 0), DayOfWeek.WEDNESDAY, LocalTime.of(10, 0),
                         DayOfWeek.THURSDAY, LocalTime.of(10, 0), DayOfWeek.FRIDAY, LocalTime.of(10, 0)),
                 Optional.of(SEMESTER_END),
-                lookup, usable, incomplete, covered, from, to);
+                lookup, usable, incomplete, existing, from, to);
     }
 
     /** 근무 조회 자체가 실패한 턴. "근무 없음"과 구분돼야 한다. */
     static DraftFacts factsWithLookupFailure() {
-        return facts(List.of(), List.of(), Set.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.FAILED);
+        return facts(List.of(), List.of(), Map.of(), TODAY, TODAY.plusDays(14), DraftFacts.WorkLookup.FAILED);
     }
 
     /** 종강일을 모르는 프로젝트. endDate는 missing으로 남아야 한다. */
     static DraftFacts factsWithoutSemesterEnd() {
         DraftFacts f = facts();
         return new DraftFacts(f.today(), f.firstClassByDay(), Optional.empty(), f.workLookup(),
-                f.workShifts(), f.incompleteShifts(), f.coveredKeys(), f.workRangeFrom(), f.workRangeTo());
+                f.workShifts(), f.incompleteShifts(), f.existingTravel(), f.workRangeFrom(), f.workRangeTo());
     }
 
-    static String coveredKey(WorkShift shift, DerivedTravelRelation relation) {
-        return shift.commitmentId() + ":" + relation.name();
+    /** 이 근무에 이미 붙어 있는 이동. 구간을 직접 준다 — 같은 요청인지 다른 요청인지는 구간이 정한다. */
+    static Map.Entry<String, ExistingTravel> existing(WorkShift shift, DerivedTravelRelation relation,
+                                                      LocalDateTime startAt, LocalDateTime endAt,
+                                                      ExistingTravel.Source source, long referenceId) {
+        ExistingTravel travel = new ExistingTravel(shift.commitmentId(), relation, source, referenceId,
+                startAt, endAt);
+        return Map.entry(travel.key(), travel);
+    }
+
+    /** 요청과 정확히 같은 구간으로 이미 적용된 이동(근무 뒤 60분). */
+    static Map.Entry<String, ExistingTravel> appliedAfter(WorkShift shift, int minutes, long referenceId) {
+        return existing(shift, DerivedTravelRelation.AFTER_WORK, shift.endAt(),
+                shift.endAt().plusMinutes(minutes), ExistingTravel.Source.APPLIED, referenceId);
     }
 
     static AiTurnStructured structured(String json) {

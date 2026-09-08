@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * 한 턴에서 resolver들이 결정적으로 계산한 "관련 실제 데이터". 프롬프트 블록과 서버 판정이
@@ -26,7 +25,9 @@ import java.util.Set;
  * @param workLookup       근무 조회가 성공했는가. 실패를 "근무 없음"으로 위장하지 않는다
  * @param workShifts       조회 기간의 원본 근무 중 시작·종료가 정상인 것
  * @param incompleteShifts 조회 기간의 원본 근무 중 종료 시각을 쓸 수 없는 것
- * @param coveredKeys      이미 이동 블록이 붙어 있는 (근무 id + 앞/뒤). 같은 것을 또 만들지 않는다
+ * @param existingTravel   이미 이동이 붙어 있는 (근무 id + 앞/뒤) → 그 이동의 실제 구간.
+ *                         구간까지 들고 다니는 이유는 "있다/없다"만으로는 기존 30분이 새 60분
+ *                         요청을 조용히 막기 때문이다. 적용된 약속과 미적용 후보를 모두 담는다
  * @param workRangeFrom    workShifts를 조회한 기간 시작(포함)
  * @param workRangeTo      workShifts를 조회한 기간 끝(포함)
  */
@@ -37,7 +38,7 @@ public record DraftFacts(
         WorkLookup workLookup,
         List<WorkShift> workShifts,
         List<WorkShift> incompleteShifts,
-        Set<String> coveredKeys,
+        Map<String, ExistingTravel> existingTravel,
         LocalDate workRangeFrom,
         LocalDate workRangeTo
 ) {
@@ -46,7 +47,7 @@ public record DraftFacts(
     public enum WorkLookup { OK, FAILED }
 
     public static DraftFacts empty(LocalDate today) {
-        return new DraftFacts(today, Map.of(), Optional.empty(), WorkLookup.OK, List.of(), List.of(), Set.of(),
+        return new DraftFacts(today, Map.of(), Optional.empty(), WorkLookup.OK, List.of(), List.of(), Map.of(),
                 today, today.plusDays(DraftSlotRegistry.SCHEDULE_DEFAULT_RANGE_DAYS));
     }
 
@@ -75,12 +76,17 @@ public record DraftFacts(
         return filter(incompleteShifts, from, to);
     }
 
-    /** 이 근무의 이 방향 이동이 이미 있는가. */
-    public boolean alreadyCovered(Long commitmentId, DerivedTravelRelation relation) {
+    /**
+     * 이 근무의 이 방향에 이미 붙어 있는 이동. 없으면 null.
+     *
+     * <p>있다는 사실만으로 "같은 요청"이라고 판단하지 않는다 — 구간이 같은지는 부르는 쪽이
+     * {@link ExistingTravel#matches}로 본다.
+     */
+    public ExistingTravel existingTravelFor(Long commitmentId, DerivedTravelRelation relation) {
         if (commitmentId == null || relation == null) {
-            return false;
+            return null;
         }
-        return coveredKeys.contains(commitmentId + ":" + relation.name());
+        return existingTravel.get(ExistingTravel.key(commitmentId, relation));
     }
 
     private static List<WorkShift> filter(List<WorkShift> shifts, LocalDate from, LocalDate to) {

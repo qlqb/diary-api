@@ -48,6 +48,16 @@
          ORDER BY s.suggestion_id
     </select>
 
+    <!--
+      대화를 가리지 않는 미처리 후보. 같은 근무에 카드가 두 장 생기는 것을 막기 위해 읽는다.
+    -->
+    <select id="findPendingByUserId" resultMap="scheduleSuggestionResultMap">
+        SELECT s.* FROM ai_schedule_suggestions s
+         WHERE s.user_id = #{userId}
+           AND s.status = 'PROPOSED'
+         ORDER BY s.suggestion_id
+    </select>
+
     <select id="findBySourceMessageIdAndUserId" resultMap="scheduleSuggestionResultMap">
         SELECT s.* FROM ai_schedule_suggestions s
          WHERE s.source_message_id = #{sourceMessageId} AND s.user_id = #{userId}

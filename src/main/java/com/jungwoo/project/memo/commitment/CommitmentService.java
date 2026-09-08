@@ -20,9 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 일회성 약속 CRUD.
@@ -73,6 +72,22 @@ public class CommitmentService {
                 userId, from.atStartOfDay(), to.plusDays(1).atStartOfDay());
     }
 
+    /**
+     * 근무 후보 조회 — 시작 날짜가 기간 안인 약속. {@link #findOverlapping}과 목적이 다르다.
+     *
+     * <p>겹침 조회를 그대로 쓰면 "전날 밤에 시작해 오늘 새벽에 끝나는 근무"가 오늘 기간의
+     * 근무로 딸려 온다. 가용시간 계산에서는 그게 맞지만, "이번 주 근무마다 이동을 붙여라"에서는
+     * 그 근무가 이번 주 것이 아니다.
+     */
+    @Transactional(readOnly = true)
+    public List<Commitment> findWorkShiftCandidates(Long userId, LocalDate from, LocalDate to) {
+        if (from == null || to == null || to.isBefore(from)) {
+            return List.of();
+        }
+        return commitmentMapper.findWorkShiftCandidates(
+                userId, from.atStartOfDay(), to.plusDays(1).atStartOfDay());
+    }
+
     @Transactional
     public CommitmentResponse create(Long userId, CommitmentCreateRequest request,
                                      CommitmentSourceType sourceType) {
@@ -96,6 +111,7 @@ public class CommitmentService {
         validateRange(request.getStartAt(), request.getEndAt());
 
         if (origin != null) {
+            // 잠금 순서를 고정한다: 원본 근무 → 파생 이동. 두 요청이 반대로 잡으면 교착이 난다.
             requireOriginUnchanged(userId, origin);
             Commitment existing = commitmentMapper.findDerivedForUpdate(
                     userId, origin.originCommitmentId(), origin.relation().name());
@@ -163,7 +179,12 @@ public class CommitmentService {
         if (origin.expectedAnchorAt() == null) {
             return;
         }
-        Commitment source = commitmentMapper.findByIdAndUserId(origin.originCommitmentId(), userId);
+        /*
+         * FOR UPDATE로 읽는다. 일반 SELECT로 검사하면 검사와 INSERT 사이에 다른 트랜잭션이
+         * 근무 시각을 바꿔 커밋할 수 있고, 그러면 "검사할 때는 맞았던" 값으로 이동이 저장된다.
+         * 잠금은 이 트랜잭션이 커밋할 때까지 유지된다.
+         */
+        Commitment source = commitmentMapper.findByIdAndUserIdForUpdate(origin.originCommitmentId(), userId);
         LocalDateTime actual = source == null ? null
                 : origin.relation() == DerivedTravelRelation.AFTER_WORK ? source.getEndAt() : source.getStartAt();
         if (!origin.expectedAnchorAt().equals(actual)) {
@@ -174,26 +195,17 @@ public class CommitmentService {
     }
 
     /**
-     * 기간 안에 이미 만들어진 파생 이동의 키(원본 id + 관계). 같은 요청을 다시 말했을 때
-     * 같은 블록을 또 후보로 만들지 않기 위해 draft 사실 수집이 읽는다.
+     * 이 원본 근무들에 이미 붙어 있는 이동 블록.
+     *
+     * <p>기준은 <b>원본 근무 id</b>다. 이동 자체의 날짜로 찾으면 마지막 날 근무의 이동(다음 날로
+     * 넘어간다)과 사용자가 옮긴 이동을 놓치고, 그러면 "없다"고 보고 같은 블록을 하나 더 만든다.
      */
     @Transactional(readOnly = true)
-    public Set<String> findDerivedKeys(Long userId, LocalDate from, LocalDate to) {
-        if (from == null || to == null || to.isBefore(from)) {
-            return Set.of();
+    public List<Commitment> findDerivedByOrigins(Long userId, Collection<Long> originIds) {
+        if (originIds == null || originIds.isEmpty()) {
+            return List.of();
         }
-        Set<String> keys = new LinkedHashSet<>();
-        for (Commitment commitment : commitmentMapper.findDerivedInRange(
-                userId, from.atStartOfDay(), to.plusDays(1).atStartOfDay())) {
-            if (commitment.getDerivedFromCommitmentId() != null && commitment.getDerivedRelation() != null) {
-                keys.add(derivedKey(commitment.getDerivedFromCommitmentId(), commitment.getDerivedRelation()));
-            }
-        }
-        return keys;
-    }
-
-    public static String derivedKey(Long originCommitmentId, DerivedTravelRelation relation) {
-        return originCommitmentId + ":" + relation.name();
+        return commitmentMapper.findDerivedByOrigins(userId, originIds);
     }
 
     /** 전체 교체. 출처는 바꾸지 않는다 — 어디서 만들어졌는지는 나중에 바뀌는 사실이 아니다. */
