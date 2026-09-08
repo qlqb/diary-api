@@ -41,7 +41,7 @@ class DraftPromotionServiceTest {
         DraftState draft = openRoutine(31, LocalDateTime.of(2026, 9, 8, 1, 0), true);
         DraftTurnResolver.Outcome outcome = new DraftTurnResolver.Outcome(
                 List.of(draft), Set.of("31"), DraftTurnResolver.Action.PROPOSE, false, List.of(draft), null,
-                "요약", List.of(), List.of());
+                "요약", List.of(), Map.of(), List.of());
         when(scheduleSuggestionService.createFromDraft(eq(USER_ID), eq(CONVERSATION_ID), eq(900L), any()))
                 .thenAnswer(inv -> {
                     List<ScheduleSuggestion> in = inv.getArgument(3);
@@ -91,7 +91,7 @@ class DraftPromotionServiceTest {
         }).when(draftMapper).insert(any());
         DraftTurnResolver.Outcome outcome = new DraftTurnResolver.Outcome(
                 List.of(first, second), Set.of("new-0", "new-1"), DraftTurnResolver.Action.ASK, false, List.of(),
-                first, "q?", List.of(), List.of());
+                first, "q?", List.of(), Map.of(), List.of());
 
         service.applyTurn(USER_ID, CONVERSATION_ID, 900L, outcome, facts());
 

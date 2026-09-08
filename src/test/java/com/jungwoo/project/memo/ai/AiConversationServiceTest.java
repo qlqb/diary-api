@@ -99,6 +99,15 @@ class AiConversationServiceTest {
     @Mock private com.jungwoo.project.memo.ai.draft.AiConversationDraftMapper aiConversationDraftMapper;
     @Mock private com.jungwoo.project.memo.ai.draft.DraftFactsService draftFactsService;
 
+    /**
+     * 기본 기간 조회와 기간 지정 조회를 같은 값으로 세운다. TurnFacts가 기간에 따라 둘 중
+     * 하나를 부른다 — 한쪽만 세우면 판정이 null 사실을 보게 된다.
+     */
+    private void stubDraftFacts(com.jungwoo.project.memo.ai.draft.DraftFacts facts) {
+        lenient().when(draftFactsService.collect(eq(USER_ID), any())).thenReturn(facts);
+        lenient().when(draftFactsService.collect(eq(USER_ID), any(), any(), any())).thenReturn(facts);
+    }
+
     @InjectMocks
     private AiConversationService service;
 
@@ -2128,12 +2137,14 @@ class AiConversationServiceTest {
     @Test
     void firstUtterance_draftTurn_proposesViaServerReply_andCommitsDrafts() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
-        when(draftFactsService.collect(eq(USER_ID), any())).thenReturn(new com.jungwoo.project.memo.ai.draft.DraftFacts(
+        stubDraftFacts(new com.jungwoo.project.memo.ai.draft.DraftFacts(
                 TODAY,
                 java.util.Map.of(java.time.DayOfWeek.WEDNESDAY, java.time.LocalTime.of(10, 0)),
                 java.util.Optional.of(LocalDate.of(2026, 12, 11)),
+                com.jungwoo.project.memo.ai.draft.DraftFacts.WorkLookup.OK,
                 List.of(new com.jungwoo.project.memo.ai.draft.resolver.UpcomingWorkShiftsResolver.WorkShift(
                         1L, "근무", LocalDateTime.of(2026, 8, 5, 18, 0), LocalDateTime.of(2026, 8, 5, 23, 0))),
+                List.of(), java.util.Set.of(),
                 TODAY, TODAY.plusDays(14)));
         String raw = "수업 전마다요, 아니면 첫 수업 전만요?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"ASK_CLARIFICATION\",\"clarifyingQuestion\":\"수업 전마다요, 아니면 첫 수업 전만요?\","

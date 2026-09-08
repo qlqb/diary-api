@@ -18,7 +18,8 @@ import java.util.Set;
  *   classDaysOnly    anchor가 있으면 true (SYSTEM / ANCHOR_IMPLIES)
  * CREATE_SCHEDULE:
  *   title            필수 (위와 같음)
- *   anchor | (date + startTime)   둘 중 하나 필수. anchor ∈ {BEFORE_EACH_WORK_SHIFT}
+ *   anchor | (date + startTime)   둘 중 하나 필수.
+ *                    anchor ∈ {BEFORE_EACH_WORK_SHIFT, AFTER_EACH_WORK_SHIFT}
  *   durationMinutes  필수
  *   dateRange        anchor일 때만. 없으면 오늘~+14일 (DEFAULT / DEFAULT_RANGE_14_DAYS, 확인 불필요 —
  *                    1회성 블록은 승인 시 개별 검토되므로)
@@ -47,6 +48,7 @@ public final class DraftSlotRegistry {
     // ---- anchor 값 ----
     public static final String ANCHOR_FIRST_CLASS_OF_DAY = "FIRST_CLASS_OF_DAY";
     public static final String ANCHOR_BEFORE_EACH_WORK_SHIFT = "BEFORE_EACH_WORK_SHIFT";
+    public static final String ANCHOR_AFTER_EACH_WORK_SHIFT = "AFTER_EACH_WORK_SHIFT";
 
     // ---- reason 상수 (payload fieldNotes/assumedFields의 reason이 된다) ----
     public static final String REASON_CURRENT_DATE = "CURRENT_DATE";
@@ -58,11 +60,29 @@ public final class DraftSlotRegistry {
 
     /**
      * anchor는 있는데 실제 데이터로 펼칠 수 없을 때 missing_required에 넣는 가상 키.
-     * 시간표에 시작 시각이 없으면 고정 시각을 물어야 하고(§7), 앞으로 2주 안에 근무가 없으면
-     * 근무 날짜·시각을 물어야 한다. 값이 없다는 뜻이지 모델이 채울 필드가 아니다.
+     * 값이 없다는 뜻이지 모델이 채울 필드가 아니다.
+     *
+     * <p>네 가지를 구분한다. 합치면 사용자가 무엇을 해야 하는지 알 수 없다 —
+     * "근무를 등록하세요"와 "다시 시도해 주세요"는 다른 행동이다.
+     * <ul>
+     *   <li>{@link #MISSING_FIRST_CLASS_TIMES}: 시간표에 수업 시작 시각이 없다
+     *   <li>{@link #MISSING_WORK_SHIFTS}: 조회는 됐고, 그 기간에 근무가 없다
+     *   <li>{@link #MISSING_WORK_SHIFT_END}: 근무는 있는데 종료 시각을 쓸 수 없다(뒤쪽 이동만 해당)
+     *   <li>{@link #MISSING_WORK_LOOKUP}: 근무 조회 자체가 실패했다. 근무가 없다는 뜻이 아니다
+     * </ul>
      */
     public static final String MISSING_FIRST_CLASS_TIMES = "firstClassTimes";
     public static final String MISSING_WORK_SHIFTS = "workShifts";
+    public static final String MISSING_WORK_SHIFT_END = "workShiftEnd";
+    public static final String MISSING_WORK_LOOKUP = "workLookup";
+
+    /** 사용자가 답할 수 없는 누락. 이것들은 "정보를 더 달라"가 아니라 상태 안내로 말해야 한다. */
+    private static final Set<String> NOT_USER_ANSWERABLE = Set.of(MISSING_WORK_LOOKUP);
+
+    /** 사용자가 답해서 풀 수 있는 누락인가. */
+    public static boolean userCanAnswer(String field) {
+        return !NOT_USER_ANSWERABLE.contains(field);
+    }
 
     /** 1회성 이동 블록의 기본 조회 기간(오늘 포함). 제품 정책값이다. */
     public static final int SCHEDULE_DEFAULT_RANGE_DAYS = 14;
@@ -72,6 +92,13 @@ public final class DraftSlotRegistry {
 
     /** NEEDS_CONFIRM draft가 이 횟수 이상 질문받으면 가정 표시를 달고 READY로 승격한다. */
     public static final int CONFIRM_ASK_LIMIT = 3;
+
+    /**
+     * 같은 필수 누락으로 이 횟수 이상 물었으면 같은 질문을 반복하지 않고 진전이 없다는 것을
+     * 말한다. <b>승격은 하지 않는다</b> — NEEDS_INPUT을 횟수로 밀어 올리면 서버가 날짜·시각을
+     * 지어내 일정을 만들게 된다. draft는 OPEN으로 남아, 사용자가 나중에 값을 주면 이어진다.
+     */
+    public static final int STALLED_ASK_LIMIT = 3;
 
     private static final Set<String> ROUTINE_FIELDS = Set.of(
             TITLE, ANCHOR, DAYS_OF_WEEK, START_TIME, DURATION_MINUTES, START_DATE, END_DATE, CLASS_DAYS_ONLY);
@@ -98,7 +125,8 @@ public final class DraftSlotRegistry {
         }
         return switch (type) {
             case CREATE_ROUTINE -> ANCHOR_FIRST_CLASS_OF_DAY.equals(anchor);
-            case CREATE_SCHEDULE -> ANCHOR_BEFORE_EACH_WORK_SHIFT.equals(anchor);
+            case CREATE_SCHEDULE -> ANCHOR_BEFORE_EACH_WORK_SHIFT.equals(anchor)
+                    || ANCHOR_AFTER_EACH_WORK_SHIFT.equals(anchor);
             case CREATE_PERIOD_PLAN -> false;
         };
     }
@@ -137,8 +165,22 @@ public final class DraftSlotRegistry {
                 requireText(fields, TITLE, missing);
                 String anchor = text(fields, ANCHOR);
                 if (anchor != null) {
-                    if (!facts.workShiftsKnown()) {
+                    /*
+                     * 셋은 배타적이다. 조회를 못 했으면 근무 유무를 알 수 없고, 근무가 없으면
+                     * 종료 시각을 따질 것도 없다. 조회 실패를 "근무 없음"과 같은 문구로 말하지
+                     * 않는다 - 사용자가 할 수 있는 일이 다르다(재시도 vs 근무 등록).
+                     */
+                    if (facts.workLookupFailed()) {
+                        missing.add(MISSING_WORK_LOOKUP);
+                    } else if (!facts.workShiftsKnown()) {
                         missing.add(MISSING_WORK_SHIFTS);
+                    } else if (facts.hasUnusableShiftEnd()) {
+                        /*
+                         * 근무 뒤 이동은 종료 시각이 있어야 계산된다. 일부만 정상이라고 그것만
+                         * 만들고 끝내면 "모든 근무 후에"라는 요청이 조용히 일부만 처리된 채
+                         * 완료로 표시된다. 그 근무를 지정해 묻고, 답이 올 때까지 이 draft는 보류다.
+                         */
+                        missing.add(MISSING_WORK_SHIFT_END);
                     }
                     if (fields.get(DATE_RANGE) == null || fields.get(DATE_RANGE).asDateRange() == null) {
                         missing.add(DATE_RANGE);
@@ -199,9 +241,20 @@ public final class DraftSlotRegistry {
         return DraftReadiness.READY;
     }
 
-    /** anchor를 실제 데이터로 펼칠 수 있는가. resolver 결과에서 온다. */
-    public record AnchorFacts(boolean firstClassTimesKnown, boolean workShiftsKnown) {
-        public static final AnchorFacts NONE = new AnchorFacts(false, false);
+    /**
+     * anchor를 실제 데이터로 펼칠 수 있는가. resolver 결과에서 온다.
+     *
+     * <p>근무 관련 세 값은 <b>요청 기간</b> 기준이다. 무관한 기간에 근무가 있다는 이유로
+     * 요청 기간의 workShiftsKnown을 true로 만들면, 그 기간에 후보가 0건인데도 READY가 된다.
+     *
+     * @param firstClassTimesKnown  시간표에서 요일별 첫 수업 시각을 하나라도 찾았는가
+     * @param workShiftsKnown       요청 기간에 쓸 수 있는 근무가 하나라도 있는가
+     * @param workLookupFailed      근무 조회 자체가 실패했는가. true면 위 값은 의미가 없다
+     * @param hasUnusableShiftEnd   요청 기간에 종료 시각을 쓸 수 없는 근무가 있는가(뒤쪽 이동만 본다)
+     */
+    public record AnchorFacts(boolean firstClassTimesKnown, boolean workShiftsKnown,
+                              boolean workLookupFailed, boolean hasUnusableShiftEnd) {
+        public static final AnchorFacts NONE = new AnchorFacts(false, false, false, false);
     }
 
     // ---- 내부 ----

@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.ai.draft.resolver;
 
 import com.jungwoo.project.memo.commitment.domain.Commitment;
+import com.jungwoo.project.memo.commitment.domain.DerivedTravelRelation;
 import com.jungwoo.project.memo.routine.dto.RoutineResponse;
 import org.junit.jupiter.api.Test;
 
@@ -72,6 +73,50 @@ class FirstClassPerWeekdayResolverTest {
 
         var shifts = UpcomingWorkShiftsResolver.resolve(commitments, TODAY, TODAY.plusDays(14));
 
-        assertThat(shifts).extracting(UpcomingWorkShiftsResolver.WorkShift::commitmentId).containsExactly(1L, 2L);
+        assertThat(shifts.usable()).extracting(UpcomingWorkShiftsResolver.WorkShift::commitmentId)
+                .containsExactly(1L, 2L);
+        assertThat(shifts.incomplete()).isEmpty();
+    }
+
+    /**
+     * 파생 이동은 원본 근무가 아니다. 제목에 "근무"가 남아 있어도, 사용자가 "퇴근길"로 바꿔도
+     * derived_from_commitment_id가 있으면 근무 후보에서 빠진다 — 이동 뒤에 또 이동이 붙는 것을
+     * 제목 규칙만으로는 막을 수 없다.
+     */
+    @Test
+    void derivedTravel_isNeverPickedAsOriginShift() {
+        List<Commitment> commitments = List.of(
+                Commitment.builder().commitmentId(1L).title("근무")
+                        .startAt(LocalDateTime.of(2026, 9, 8, 18, 0)).endAt(LocalDateTime.of(2026, 9, 8, 23, 0)).build(),
+                // 컬럼으로 파생임이 남아 있다. 제목은 사용자가 바꾼 뒤다.
+                Commitment.builder().commitmentId(2L).title("퇴근길")
+                        .derivedFromCommitmentId(1L).derivedRelation(DerivedTravelRelation.AFTER_WORK)
+                        .startAt(LocalDateTime.of(2026, 9, 8, 23, 0)).endAt(LocalDateTime.of(2026, 9, 9, 0, 0)).build(),
+                // 컬럼이 없던 시절의 레거시 이동. 제목 규칙이 걸러낸다.
+                Commitment.builder().commitmentId(3L).title("근무 전 이동")
+                        .startAt(LocalDateTime.of(2026, 9, 9, 17, 0)).endAt(LocalDateTime.of(2026, 9, 9, 18, 0)).build());
+
+        var shifts = UpcomingWorkShiftsResolver.resolve(commitments, TODAY, TODAY.plusDays(14));
+
+        assertThat(shifts.usable()).extracting(UpcomingWorkShiftsResolver.WorkShift::commitmentId)
+                .containsExactly(1L);
+    }
+
+    /** 종료 시각이 없거나 역전된 근무는 usable이 아니라 incomplete다. 시작 시각으로 지어내지 않는다. */
+    @Test
+    void shiftsWithUnusableEnd_areSeparated_notDropped() {
+        List<Commitment> commitments = List.of(
+                Commitment.builder().commitmentId(1L).title("근무")
+                        .startAt(LocalDateTime.of(2026, 9, 8, 18, 0)).endAt(null).build(),
+                Commitment.builder().commitmentId(2L).title("근무")
+                        .startAt(LocalDateTime.of(2026, 9, 9, 18, 0)).endAt(LocalDateTime.of(2026, 9, 9, 17, 0)).build(),
+                Commitment.builder().commitmentId(3L).title("근무")
+                        .startAt(LocalDateTime.of(2026, 9, 10, 17, 0)).endAt(LocalDateTime.of(2026, 9, 10, 22, 0)).build());
+
+        var shifts = UpcomingWorkShiftsResolver.resolve(commitments, TODAY, TODAY.plusDays(14));
+
+        assertThat(shifts.usable()).extracting(UpcomingWorkShiftsResolver.WorkShift::commitmentId).containsExactly(3L);
+        assertThat(shifts.incomplete()).extracting(UpcomingWorkShiftsResolver.WorkShift::commitmentId)
+                .containsExactly(1L, 2L);
     }
 }

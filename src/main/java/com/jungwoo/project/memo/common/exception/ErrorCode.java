@@ -112,6 +112,10 @@ public enum ErrorCode {
             "이 변경은 기존 예외를 무효로 만듭니다. 예외를 먼저 정리해 주세요"),
     ROUTINE_EXCEPTION_DATE_TAKEN(HttpStatus.CONFLICT, "E409_012", "그 날짜에는 이미 예외가 있습니다"),
     SCHEDULE_SUGGESTION_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_013", "이미 처리된 일정 후보입니다"),
+    DERIVED_COMMITMENT_ALREADY_EXISTS(HttpStatus.CONFLICT, "E409_014",
+            "그 근무에는 같은 이동 블록이 이미 있습니다"),
+    DERIVED_COMMITMENT_ORIGIN_CHANGED(HttpStatus.CONFLICT, "E409_015",
+            "기준이 된 근무가 그 사이 바뀌었습니다. 후보를 다시 만들어 주세요"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.jungwoo.project.memo.ai.domain.ScheduleSuggestionKind;
 import com.jungwoo.project.memo.ai.draft.resolver.UpcomingWorkShiftsResolver.WorkShift;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestion;
+import com.jungwoo.project.memo.commitment.domain.DerivedTravelRelation;
 
 import java.time.DayOfWeek;
 import java.time.LocalDate;
@@ -22,7 +23,11 @@ import java.util.Map;
  * <ul>
  *   <li>anchor=FIRST_CLASS_OF_DAY: 요일마다 ROUTINE 1건. 시작 = 첫 수업 − durationMinutes, 종료 = 첫 수업.
  *       요일 4개면 4건이다 — 하나로 합치지 않는다. payload는 {@code RoutineSaveRequest} 필드명 그대로.
- *   <li>anchor=BEFORE_EACH_WORK_SHIFT: 근무 1건당 COMMITMENT 1건. payload는 {@code CommitmentCreateRequest}.
+ *   <li>anchor=BEFORE_EACH_WORK_SHIFT: 근무 1건당 COMMITMENT 1건. 시작 = 근무 시작 − durationMinutes,
+ *       종료 = 근무 시작. payload는 {@code CommitmentCreateRequest}.
+ *   <li>anchor=AFTER_EACH_WORK_SHIFT: 근무 1건당 COMMITMENT 1건. 시작 = 근무 <b>종료</b>,
+ *       종료 = 근무 종료 + durationMinutes. 날짜가 있는 LocalDateTime으로 더하므로 23:00 + 60분은
+ *       다음 날 00:00이다 — 같은 날 00:00으로 접거나 길이를 줄이지 않는다.
  *   <li>anchor 없이 요일+시각(ROUTINE) / 날짜+시각(SCHEDULE)이면 1건.
  *   <li>CREATE_PERIOD_PLAN은 후보를 만들지 않는다(기존 기간 계획 OFFER로 간다).
  * </ul>
@@ -38,6 +43,19 @@ public final class DraftProposalBuilder {
 
     public static final String ASSUMED_FIELDS_KEY = "assumedFields";
     public static final String FIELD_NOTES_KEY = "fieldNotes";
+
+    /**
+     * 이 후보가 어떤 근무에서 파생됐는가. {@code {"commitmentId":528,"relation":"AFTER_WORK"}}.
+     *
+     * <p>화면 장식이 아니다. 적용 시점에 {@code ScheduleSuggestionService}가 <b>저장된</b>
+     * payload에서 이 값을 읽어 one_off_commitments의 파생 컬럼으로 넘긴다. 사용자가 카드에서
+     * 고친 payload에서는 읽지 않는다 — 원본 참조는 서버가 정한 사실이라 사용자가 바꿀 값이 아니다.
+     */
+    public static final String DERIVED_FROM_KEY = "derivedFrom";
+    public static final String DERIVED_COMMITMENT_ID = "commitmentId";
+    public static final String DERIVED_RELATION = "relation";
+    /** 후보를 계산할 때 기준으로 삼은 원본의 시각. 적용 시점에 원본이 바뀌었는지 이것으로 안다. */
+    public static final String DERIVED_ANCHOR_AT = "anchorAt";
 
     private DraftProposalBuilder() {
     }
@@ -87,16 +105,22 @@ public final class DraftProposalBuilder {
             }
             case CREATE_SCHEDULE -> {
                 String anchor = text(f, DraftSlotRegistry.ANCHOR);
-                if (DraftSlotRegistry.ANCHOR_BEFORE_EACH_WORK_SHIFT.equals(anchor)) {
-                    LocalDate[] range = f.containsKey(DraftSlotRegistry.DATE_RANGE)
-                            ? f.get(DraftSlotRegistry.DATE_RANGE).asDateRange() : null;
-                    for (WorkShift shift : facts.workShifts()) {
-                        LocalDate day = shift.startAt().toLocalDate();
-                        if (range != null && (day.isBefore(range[0]) || day.isAfter(range[1]))) {
+                DerivedTravelRelation relation = relationOf(anchor);
+                if (relation != null) {
+                    LocalDate[] range = range(draft, facts);
+                    for (WorkShift shift : facts.workShiftsIn(range[0], range[1])) {
+                        if (facts.alreadyCovered(shift.commitmentId(), relation)) {
+                            // 같은 근무의 같은 방향 이동이 이미 있다. 같은 시간 블록을 조용히 하나 더 만들지 않는다.
                             continue;
                         }
-                        result.add(commitment(om, title, shift.startAt().minusMinutes(duration), shift.startAt(),
-                                assumed, notes));
+                        LocalDateTime startAt = relation == DerivedTravelRelation.AFTER_WORK
+                                ? shift.endAt() : shift.startAt().minusMinutes(duration);
+                        LocalDateTime endAt = relation == DerivedTravelRelation.AFTER_WORK
+                                ? shift.endAt().plusMinutes(duration) : shift.startAt();
+                        LocalDateTime anchorAt = relation == DerivedTravelRelation.AFTER_WORK
+                                ? shift.endAt() : shift.startAt();
+                        result.add(commitment(om, title, startAt, endAt, assumed, notes,
+                                shift.commitmentId(), relation, anchorAt));
                     }
                 } else {
                     LocalDate day = date(f, DraftSlotRegistry.DATE);
@@ -105,7 +129,8 @@ public final class DraftProposalBuilder {
                         return result;
                     }
                     LocalDateTime startAt = LocalDateTime.of(day, start);
-                    result.add(commitment(om, title, startAt, startAt.plusMinutes(duration), assumed, notes));
+                    result.add(commitment(om, title, startAt, startAt.plusMinutes(duration), assumed, notes,
+                            null, null, null));
                 }
             }
             case CREATE_PERIOD_PLAN -> {
@@ -155,7 +180,9 @@ public final class DraftProposalBuilder {
     }
 
     private static ScheduleSuggestion commitment(ObjectMapper om, String title, LocalDateTime startAt,
-                                                 LocalDateTime endAt, ArrayNode assumed, ArrayNode notes) {
+                                                 LocalDateTime endAt, ArrayNode assumed, ArrayNode notes,
+                                                 Long originCommitmentId, DerivedTravelRelation relation,
+                                                 LocalDateTime anchorAt) {
         ObjectNode payload = om.createObjectNode();
         payload.put("title", title);
         payload.put("startAt", startAt.toString());
@@ -163,7 +190,65 @@ public final class DraftProposalBuilder {
         payload.putNull("locationText");
         payload.set(ASSUMED_FIELDS_KEY, assumed.deepCopy());
         payload.set(FIELD_NOTES_KEY, notes.deepCopy());
+        if (originCommitmentId != null && relation != null) {
+            ObjectNode derived = payload.putObject(DERIVED_FROM_KEY);
+            derived.put(DERIVED_COMMITMENT_ID, originCommitmentId);
+            derived.put(DERIVED_RELATION, relation.name());
+            if (anchorAt != null) {
+                derived.put(DERIVED_ANCHOR_AT, anchorAt.toString());
+            }
+        }
         return new ScheduleSuggestion(ScheduleSuggestionKind.COMMITMENT, payload);
+    }
+
+    /**
+     * 이 draft의 기간에서 "이미 같은 이동이 있어서" 후보를 만들지 않은 근무 수.
+     *
+     * <p>PROPOSE 문구가 쓴다. "모든 근무 후에"라고 했는데 후보가 2건이면 사용자는 나머지가
+     * 어디 갔는지 알아야 한다 — 조용히 빠지면 앱이 요청을 흘린 것처럼 보인다.
+     */
+    public static int skippedAsCovered(DraftState draft, DraftFacts facts) {
+        if (draft == null || facts == null || draft.getType() != DraftType.CREATE_SCHEDULE) {
+            return 0;
+        }
+        DerivedTravelRelation relation = relationOf(text(draft.getFields(), DraftSlotRegistry.ANCHOR));
+        if (relation == null) {
+            return 0;
+        }
+        LocalDate[] range = range(draft, facts);
+        int skipped = 0;
+        for (WorkShift shift : facts.workShiftsIn(range[0], range[1])) {
+            if (facts.alreadyCovered(shift.commitmentId(), relation)) {
+                skipped++;
+            }
+        }
+        return skipped;
+    }
+
+    /** anchor가 뜻하는 파생 관계. 근무 기준 anchor가 아니면 null. */
+    public static DerivedTravelRelation relationOf(String anchor) {
+        if (DraftSlotRegistry.ANCHOR_BEFORE_EACH_WORK_SHIFT.equals(anchor)) {
+            return DerivedTravelRelation.BEFORE_WORK;
+        }
+        if (DraftSlotRegistry.ANCHOR_AFTER_EACH_WORK_SHIFT.equals(anchor)) {
+            return DerivedTravelRelation.AFTER_WORK;
+        }
+        return null;
+    }
+
+    /**
+     * 이 draft가 대상으로 하는 기간. dateRange가 있으면 그것이고, 없으면 조회한 기간이다.
+     *
+     * <p>조회·필수 판정·후보 생성이 <b>같은</b> 기간을 봐야 한다. 사용자가 "이번 주"라고 했는데
+     * 생성만 기본 2주를 쓰면 말하지 않은 다음 주 근무에도 블록이 붙는다.
+     */
+    public static LocalDate[] range(DraftState draft, DraftFacts facts) {
+        DraftField field = draft.getFields().get(DraftSlotRegistry.DATE_RANGE);
+        LocalDate[] declared = field != null ? field.asDateRange() : null;
+        if (declared != null && !declared[1].isBefore(declared[0])) {
+            return declared;
+        }
+        return new LocalDate[]{facts.workRangeFrom(), facts.workRangeTo()};
     }
 
     /** 사람이 읽는 한 줄 요약에 쓰는 종류별 건수. */

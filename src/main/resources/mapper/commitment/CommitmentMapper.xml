@@ -16,6 +16,8 @@
         <result property="endAt"        column="end_at"/>
         <result property="locationText" column="location_text"/>
         <result property="sourceType"   column="source_type"/>
+        <result property="derivedFromCommitmentId" column="derived_from_commitment_id"/>
+        <result property="derivedRelation"         column="derived_relation"/>
         <result property="version"      column="version"/>
         <result property="isDeleted"    column="is_deleted"/>
         <result property="createdAt"    column="created_at"/>
@@ -24,9 +26,11 @@
 
     <insert id="insert" useGeneratedKeys="true" keyProperty="commitmentId">
         INSERT INTO one_off_commitments (
-            user_id, title, start_at, end_at, location_text, source_type
+            user_id, title, start_at, end_at, location_text, source_type,
+            derived_from_commitment_id, derived_relation
         ) VALUES (
-            #{userId}, #{title}, #{startAt}, #{endAt}, #{locationText}, #{sourceType}
+            #{userId}, #{title}, #{startAt}, #{endAt}, #{locationText}, #{sourceType},
+            #{derivedFromCommitmentId}, #{derivedRelation}
         )
     </insert>
 
@@ -64,13 +68,42 @@
            AND is_deleted = 0
     </update>
 
+    <!--
+      파생 이동이면 원본 참조도 지운다. uk_commitments_derived를 계속 점유하면 사용자가
+      이동 블록을 지우고 같은 근무에 다시 만들 수 없다.
+    -->
     <update id="softDeleteWithVersion">
         UPDATE one_off_commitments
            SET is_deleted = 1,
+               derived_from_commitment_id = NULL,
+               derived_relation           = NULL,
                version    = version + 1
          WHERE commitment_id = #{commitmentId}
            AND user_id = #{userId}
            AND version = #{version}
            AND is_deleted = 0
     </update>
+
+    <!--
+      적용 직전의 중복 확인. FOR UPDATE라 행이 없어도 그 자리를 잠근다 - 두 요청이 동시에
+      "없음"을 보고 둘 다 만드는 것을 조회 후 검사로는 막을 수 없다.
+    -->
+    <select id="findDerivedForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.derived_from_commitment_id = #{originCommitmentId}
+           AND c.derived_relation = #{relation}
+           AND c.is_deleted = 0
+         FOR UPDATE
+    </select>
+
+    <select id="findDerivedInRange" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.derived_from_commitment_id IS NOT NULL
+           AND c.start_at &lt; #{rangeEnd}
+           AND c.end_at   &gt; #{rangeStart}
+         ORDER BY c.start_at, c.commitment_id
+    </select>
 </mapper>

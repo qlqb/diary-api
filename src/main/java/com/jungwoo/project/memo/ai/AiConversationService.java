@@ -441,7 +441,15 @@ public class AiConversationService {
         int draftReserveChars = draftBlock.isEmpty() ? 0 : DraftPromptBuilder.MAX_CHARS;
         int contextBudgetChars = Math.max(0,
                 maxChars - currentMessageChars - workspaceBlock.length() - draftReserveChars);
-        DraftTurnContext draftContext = autoTurn ? new DraftTurnContext(openDrafts, draftFacts) : null;
+        /*
+         * 요청 기간이 기본 조회 기간(오늘~+14일) 밖일 수 있다. 그 기간은 모델 응답의 dateRange를
+         * 읽어야 알 수 있으므로, 판정 단계에서 필요하면 다시 조회할 수 있는 조회기를 넘긴다.
+         * 같은 기간이면 여기서 미리 읽어 둔 값을 재사용한다 — 한 턴에 같은 조회를 두 번 하지 않는다.
+         */
+        DraftFactsService.TurnFacts turnFacts = autoTurn && draftFacts != null
+                ? new DraftFactsService.TurnFacts(draftFactsService, userId, requestMoment.toLocalDate(), draftFacts)
+                : null;
+        DraftTurnContext draftContext = autoTurn ? new DraftTurnContext(openDrafts, turnFacts) : null;
 
         // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
         // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
@@ -645,8 +653,14 @@ public class AiConversationService {
         recordUsage(userId, conversationId, requestMessageId, null, UsageResultStatus.CANCELLED, null);
     }
 
-    /** AUTO 턴이 LLM 호출 전에 읽어 둔 OPEN draft와(있으면) 실제 데이터. 버튼 턴은 null. */
-    record DraftTurnContext(List<DraftState> openDrafts, DraftFacts facts) {
+    /**
+     * AUTO 턴이 LLM 호출 전에 읽어 둔 OPEN draft와 기간별 사실 조회기. 버튼 턴은 null.
+     *
+     * <p>{@code turnFacts}는 LLM 호출 전 사실(있으면)을 들고 있고, 요청 기간이 그 밖이면
+     * 판정 단계에서 한 번 더 조회한다. OPEN draft가 없어 미리 읽지 않은 턴에도 모델이 근무
+     * 기준 요청을 내면 여기서 조회가 일어난다 — 매번 선행 질문을 강제하지 않기 위해서다.
+     */
+    record DraftTurnContext(List<DraftState> openDrafts, DraftFactsService.TurnFacts turnFacts) {
     }
 
     private void completeTurnSuccessfully(
@@ -674,7 +688,7 @@ public class AiConversationService {
          * completeTurnSuccess의 트랜잭션(선점 뒤)에서 DraftPromotionService가 한다.
          */
         DraftTurnResolver.Outcome draftOutcome = null;
-        DraftFacts facts = draftContext != null ? draftContext.facts() : null;
+        DraftFacts facts = null;
         boolean allowPeriodPlanQuestions = true;
         if (requestedAction == RequestedAction.AUTO && draftContext != null) {
             List<DraftState> open = draftContext.openDrafts();
@@ -682,14 +696,18 @@ public class AiConversationService {
             allowPeriodPlanQuestions = open.isEmpty()
                     || open.stream().anyMatch(d -> d.getType() == DraftType.CREATE_PERIOD_PLAN);
             if (!open.isEmpty() || hasDraftSignals(structured)) {
-                if (facts == null) {
-                    facts = draftFactsService.collect(conversation.getUserId(), todayDate);
+                DraftFactsService.TurnFacts turnFacts = draftContext.turnFacts();
+                if (turnFacts == null) {
+                    // OPEN draft가 없어 미리 읽지 않은 첫 요청. 모델이 근무 기준을 냈으면 여기서 조회한다.
+                    turnFacts = new DraftFactsService.TurnFacts(
+                            draftFactsService, conversation.getUserId(), todayDate, null);
                 }
+                facts = turnFacts.base();
                 boolean userMentionedFirst = userMentionedFirst(
                         conversation.getConversationId(), conversation.getUserId(), request.getMessage());
                 draftOutcome = DraftTurnResolver.resolve(new DraftTurnResolver.Input(
                         conversation.getUserId(), conversation.getConversationId(), open, structured,
-                        result.reply(), userMentionedFirst, facts, objectMapper));
+                        result.reply(), userMentionedFirst, facts, turnFacts, objectMapper));
                 for (String note : draftOutcome.notes()) {
                     log.info("draft 판정 메모: conversationId={}, {}", conversation.getConversationId(), note);
                 }

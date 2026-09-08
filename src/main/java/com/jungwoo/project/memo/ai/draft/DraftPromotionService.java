@@ -78,7 +78,12 @@ public class DraftPromotionService {
                 draft.setStatus(DraftStatus.PROMOTED);
                 continue;
             }
-            List<ScheduleSuggestion> suggestions = DraftProposalBuilder.build(draft, facts, objectMapper);
+            /*
+             * 판정에 쓴 사실과 같은 것으로 만든다. 판정은 "이번 주"로 하고 생성은 기본 2주
+             * 사실로 하면, 사용자가 말하지 않은 다음 주 근무에도 블록이 붙는다.
+             */
+            List<ScheduleSuggestion> suggestions = DraftProposalBuilder.build(
+                    draft, outcome.factsFor(draft, facts), objectMapper);
             List<ScheduleSuggestionResponse> responses = scheduleSuggestionService.createFromDraft(
                     userId, conversationId, assistantMessageId, suggestions);
             List<Long> ids = responses.stream().map(ScheduleSuggestionResponse::getSuggestionId).toList();

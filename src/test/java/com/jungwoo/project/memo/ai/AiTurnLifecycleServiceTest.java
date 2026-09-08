@@ -495,7 +495,7 @@ class AiTurnLifecycleServiceTest {
                 new com.jungwoo.project.memo.ai.draft.DraftTurnResolver.Outcome(
                         List.of(draft), java.util.Set.of("new-0"),
                         com.jungwoo.project.memo.ai.draft.DraftTurnResolver.Action.ASK, false, List.of(), draft,
-                        "q?", List.of(), List.of());
+                        "q?", List.of(), java.util.Map.of(), List.of());
         return new AiTurnLifecycleService.DraftTurnCommit(outcome,
                 com.jungwoo.project.memo.ai.draft.DraftFacts.empty(LocalDate.of(2026, 9, 8)));
     }

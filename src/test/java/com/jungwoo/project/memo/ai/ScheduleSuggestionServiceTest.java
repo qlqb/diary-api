@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.common.config.JacksonConfig;
 import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
+import com.jungwoo.project.memo.commitment.domain.DerivedTravelRelation;
 import com.jungwoo.project.memo.commitment.dto.CommitmentCreateRequest;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
@@ -40,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -126,6 +128,13 @@ class ScheduleSuggestionServiceTest {
                 .build();
     }
 
+    /** draft가 만든 파생 이동 후보. 저장 payload에는 원본 참조가 실려 있다. */
+    private static final String DERIVED_JSON = """
+            {"title":"근무 후 이동","startAt":"2026-09-08T23:00","endAt":"2026-09-09T00:00",
+             "locationText":null,"fieldNotes":[],"assumedFields":[],
+             "derivedFrom":{"commitmentId":101,"relation":"AFTER_WORK","anchorAt":"2026-09-08T23:00"}}
+            """;
+
     // ===== 저장 =====
 
     @Test
@@ -137,7 +146,7 @@ class ScheduleSuggestionServiceTest {
         assertThat(result).hasSize(1);
         assertThat(result.get(0).getStatus()).isEqualTo(ScheduleSuggestionStatus.PROPOSED);
         // 승인 전에 저장되면 사용자는 자기가 만들지 않은 일정 때문에 계획이 비는 이유를 모른다.
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
         verify(routineService, never()).create(anyLong(), any());
     }
 
@@ -195,8 +204,9 @@ class ScheduleSuggestionServiceTest {
 
         ArgumentCaptor<CommitmentCreateRequest> captor =
                 ArgumentCaptor.forClass(CommitmentCreateRequest.class);
+        // 파생이 아닌 보통 약속이라 origin은 null이다.
         verify(commitmentService).create(eq(USER_ID), captor.capture(),
-                eq(CommitmentSourceType.AI_SUGGESTION_APPROVED));
+                eq(CommitmentSourceType.AI_SUGGESTION_APPROVED), isNull());
         assertThat(captor.getValue().getTitle()).isEqualTo("친구 약속");
         assertThat(captor.getValue().getStartAt()).isEqualTo(LocalDateTime.of(2026, 9, 4, 19, 0));
         assertThat(captor.getValue().getLocationText()).isEqualTo("홍대");
@@ -220,7 +230,7 @@ class ScheduleSuggestionServiceTest {
         assertThat(captor.getValue().getStartTime()).isEqualTo(LocalTime.of(18, 0));
         assertThat(captor.getValue().getEffectiveFrom()).isEqualTo(LocalDate.of(2026, 9, 1));
         assertThat(captor.getValue().getEffectiveUntil()).isNull();
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -235,7 +245,7 @@ class ScheduleSuggestionServiceTest {
 
         ArgumentCaptor<CommitmentCreateRequest> captor =
                 ArgumentCaptor.forClass(CommitmentCreateRequest.class);
-        verify(commitmentService).create(eq(USER_ID), captor.capture(), any());
+        verify(commitmentService).create(eq(USER_ID), captor.capture(), any(), isNull());
         assertThat(captor.getValue().getEndAt()).isEqualTo(LocalDateTime.of(2026, 9, 4, 21, 30));
     }
 
@@ -249,7 +259,7 @@ class ScheduleSuggestionServiceTest {
         assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, null))
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.SCHEDULE_SUGGESTION_ALREADY_RESOLVED);
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -300,7 +310,7 @@ class ScheduleSuggestionServiceTest {
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.AI_GENERATION_FAILED);
         // PROPOSED 행이 남으면 사용자는 못 쓰는 카드를 보게 된다.
         verify(suggestionMapper, never()).insert(any());
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
         verify(routineService, never()).create(anyLong(), any());
     }
 
@@ -373,7 +383,7 @@ class ScheduleSuggestionServiceTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_INPUT_VALUE);
 
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
         verify(routineService, never()).create(anyLong(), any());
         // 후보는 PROPOSED로 남는다 — 사용자가 값을 고쳐 다시 시도할 수 있어야 한다.
         verify(suggestionMapper, never()).resolveIfProposed(anyLong(), anyLong(), any(), any());
@@ -401,7 +411,7 @@ class ScheduleSuggestionServiceTest {
                 .thenReturn(stored(ScheduleSuggestionKind.COMMITMENT, COMMITMENT_JSON,
                         ScheduleSuggestionStatus.PROPOSED));
         org.mockito.Mockito.doThrow(new BadRequestException(ErrorCode.INVALID_TIME_RANGE))
-                .when(commitmentService).create(anyLong(), any(), any());
+                .when(commitmentService).create(anyLong(), any(), any(), any());
 
         assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, map(
                 "{\"title\":\"친구 약속\",\"startAt\":\"2026-09-04T21:00\",\"endAt\":\"2026-09-04T19:00\"}")))
@@ -444,7 +454,7 @@ class ScheduleSuggestionServiceTest {
         ScheduleSuggestionResponse response = service.dismiss(SUGGESTION_ID, USER_ID);
 
         assertThat(response.getStatus()).isEqualTo(ScheduleSuggestionStatus.DISMISSED);
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
         verify(routineService, never()).create(anyLong(), any());
     }
 
@@ -493,7 +503,7 @@ class ScheduleSuggestionServiceTest {
                 .isInstanceOf(BadRequestException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.INVALID_INPUT_VALUE);
 
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
     }
 
     @Test
@@ -509,7 +519,7 @@ class ScheduleSuggestionServiceTest {
         assertThatThrownBy(() -> service.apply(SUGGESTION_ID, USER_ID, null))
                 .isInstanceOf(ServiceUnavailableException.class);
 
-        verify(commitmentService, never()).create(anyLong(), any(), any());
+        verify(commitmentService, never()).create(anyLong(), any(), any(), any());
     }
 
     // ===== 복원 =====
@@ -526,5 +536,67 @@ class ScheduleSuggestionServiceTest {
         assertThat(pending).hasSize(1);
         // 화면이 다시 파싱하지 않도록 payload를 객체로 내보낸다.
         assertThat(pending.get(0).getPayload()).containsEntry("title", "친구 약속");
+    }
+
+    // ===== 파생 이동(근무 후/전) =====
+
+    /** 원본 참조가 도메인까지 전달된다. 화면 장식으로 끝나면 다음 조회에서 근무로 다시 뽑힌다. */
+    @Test
+    void 파생_이동_후보를_적용하면_원본_근무_참조가_함께_저장된다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.COMMITMENT, DERIVED_JSON,
+                        ScheduleSuggestionStatus.PROPOSED));
+        when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
+
+        service.apply(SUGGESTION_ID, USER_ID, null);
+
+        ArgumentCaptor<CommitmentService.DerivedTravel> origin =
+                ArgumentCaptor.forClass(CommitmentService.DerivedTravel.class);
+        verify(commitmentService).create(eq(USER_ID), any(),
+                eq(CommitmentSourceType.AI_SUGGESTION_APPROVED), origin.capture());
+        assertThat(origin.getValue().originCommitmentId()).isEqualTo(101L);
+        assertThat(origin.getValue().relation()).isEqualTo(DerivedTravelRelation.AFTER_WORK);
+        assertThat(origin.getValue().expectedAnchorAt()).isEqualTo(LocalDateTime.of(2026, 9, 8, 23, 0));
+    }
+
+    /**
+     * 사용자가 카드에서 시각·제목을 고쳐도 원본 참조는 저장된 payload에서 읽는다. 고친 값에서
+     * 읽으면 사용자가 아무 근무에나 파생 딱지를 붙일 수 있고, 카드가 되돌려 보내는 payload에는
+     * 그 키가 애초에 없어서 참조가 통째로 사라진다.
+     */
+    @Test
+    void 사용자가_고쳐도_원본_참조는_저장된_값에서_읽는다() {
+        when(suggestionMapper.findByIdAndUserIdForUpdate(SUGGESTION_ID, USER_ID))
+                .thenReturn(stored(ScheduleSuggestionKind.COMMITMENT, DERIVED_JSON,
+                        ScheduleSuggestionStatus.PROPOSED));
+        when(suggestionMapper.resolveIfProposed(anyLong(), anyLong(), any(), any())).thenReturn(1);
+
+        service.apply(SUGGESTION_ID, USER_ID, map("""
+                {"title":"퇴근길","startAt":"2026-09-08T23:00","endAt":"2026-09-09T00:30"}
+                """));
+
+        ArgumentCaptor<CommitmentCreateRequest> request = ArgumentCaptor.forClass(CommitmentCreateRequest.class);
+        ArgumentCaptor<CommitmentService.DerivedTravel> origin =
+                ArgumentCaptor.forClass(CommitmentService.DerivedTravel.class);
+        verify(commitmentService).create(eq(USER_ID), request.capture(), any(), origin.capture());
+        assertThat(request.getValue().getTitle()).isEqualTo("퇴근길");
+        assertThat(request.getValue().getEndAt()).isEqualTo(LocalDateTime.of(2026, 9, 9, 0, 30));
+        assertThat(origin.getValue().originCommitmentId()).isEqualTo(101L);
+    }
+
+    /** derivedFrom은 저장 요청 DTO의 필드가 아니다 — 화면으로 나가는 payload에서 떨어져 있어야 한다. */
+    @Test
+    void 파생_키는_화면_payload에서_떼어_내보낸다() {
+        when(suggestionMapper.findPendingByConversationIdAndUserId(CONVERSATION_ID, USER_ID))
+                .thenReturn(List.of(stored(ScheduleSuggestionKind.COMMITMENT, DERIVED_JSON,
+                        ScheduleSuggestionStatus.PROPOSED)));
+
+        List<ScheduleSuggestionResponse> responses = service.listPendingByConversation(CONVERSATION_ID, USER_ID);
+
+        assertThat(responses).hasSize(1);
+        assertThat(responses.get(0).getPayload())
+                .doesNotContainKey("derivedFrom")
+                .doesNotContainKey("fieldNotes")
+                .containsKey("startAt");
     }
 }

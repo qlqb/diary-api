@@ -47,6 +47,20 @@ public class Commitment {
     private CommitmentSourceType sourceType;
 
     /**
+     * 이 약속이 어떤 근무에서 파생됐는가. 파생이 아니면 null.
+     *
+     * <p>근무 앞뒤 이동 블록이 다음 조회에서 다시 "근무"로 뽑히는 것을 막고, 같은 근무에
+     * 같은 이동이 두 번 생기는 것을 막는다(uk_commitments_derived). 제목이 아니라 이 값이
+     * 분류의 근거다 — 제목은 사용자가 바꾼다.
+     *
+     * <p>{@link #derivedRelation}과 항상 같이 있거나 같이 없다(chk_commitments_derived).
+     */
+    private Long derivedFromCommitmentId;
+
+    /** 원본 근무의 앞인가 뒤인가. {@link #derivedFromCommitmentId}가 null이면 null. */
+    private DerivedTravelRelation derivedRelation;
+
+    /**
      * 낙관적 락 전용 필드. 공식 변경마다 1 증가한다.
      *
      * <p>루틴에는 없는 것을 여기에 두는 이유는 쓰기 경로가 둘이기 때문이다 — 일정 화면의

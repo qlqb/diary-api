@@ -44,8 +44,35 @@ public interface CommitmentMapper {
                           @Param("endAt") LocalDateTime endAt,
                           @Param("locationText") String locationText);
 
-    /** 소프트 삭제. 행을 지우지 않는다 — 잘못 지운 것을 되살릴 수 있어야 한다. */
+    /**
+     * 소프트 삭제. 행을 지우지 않는다 — 잘못 지운 것을 되살릴 수 있어야 한다.
+     *
+     * <p>파생 이동이면 원본 참조를 NULL로 만든다. uk_commitments_derived를 계속 점유하면
+     * 사용자가 이동 블록을 지우고 같은 근무에 다시 만들 수 없다. 지워진 행의 원본 참조는
+     * 보존 가치가 없다.
+     */
     int softDeleteWithVersion(@Param("commitmentId") Long commitmentId,
                               @Param("userId") Long userId,
                               @Param("version") Long version);
+
+    /**
+     * 같은 원본 근무에서 같은 방향으로 파생된 살아 있는 이동 블록. 적용 직전에
+     * <b>FOR UPDATE로</b> 잡는다.
+     *
+     * <p>조회 후 검사만으로는 두 요청이 동시에 "없음"을 보고 둘 다 만든다. 인덱스
+     * (user_id, derived_from_commitment_id, derived_relation)를 탄 FOR UPDATE는 행이 없어도
+     * 그 자리를 잠그므로, 뒤에 온 쪽이 앞선 트랜잭션이 끝날 때까지 기다린다. unique 제약이
+     * 최종 방어선이고 이 조회는 사용자에게 이유를 말해 주기 위한 것이다.
+     */
+    Commitment findDerivedForUpdate(@Param("userId") Long userId,
+                                    @Param("originCommitmentId") Long originCommitmentId,
+                                    @Param("relation") String relation);
+
+    /**
+     * 기간 안에서 이미 만들어진 파생 이동의 (원본 id, 관계). 같은 요청을 다시 말했을 때
+     * 같은 블록을 또 후보로 만들지 않기 위해 읽는다.
+     */
+    List<Commitment> findDerivedInRange(@Param("userId") Long userId,
+                                        @Param("rangeStart") LocalDateTime rangeStart,
+                                        @Param("rangeEnd") LocalDateTime rangeEnd);
 }

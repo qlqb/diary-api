@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.ai.dto.ScheduleSuggestionResponse;
 import com.jungwoo.project.memo.ai.draft.DraftProposalBuilder;
 import com.jungwoo.project.memo.commitment.CommitmentService;
 import com.jungwoo.project.memo.commitment.domain.CommitmentSourceType;
+import com.jungwoo.project.memo.commitment.domain.DerivedTravelRelation;
 import com.jungwoo.project.memo.commitment.dto.CommitmentCreateRequest;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
@@ -56,6 +57,12 @@ import java.util.stream.Collectors;
 public class ScheduleSuggestionService {
 
     private static final int MAX_SUGGESTIONS_PER_TURN = 5;
+
+    /** 저장 요청 DTO에 매핑하지 않는 안내 키. 저장 컬럼에는 남기고 DTO/화면 경계에서만 뗀다. */
+    private static final List<String> ANNOTATION_KEYS = List.of(
+            DraftProposalBuilder.FIELD_NOTES_KEY,
+            DraftProposalBuilder.ASSUMED_FIELDS_KEY,
+            DraftProposalBuilder.DERIVED_FROM_KEY);
 
     /**
      * 이미지 한 장에서 만들 수 있는 후보 수의 상한.
@@ -321,11 +328,17 @@ public class ScheduleSuggestionService {
          * 사용자가 잘못 입력했다는 뜻이 아니다.
          */
         boolean edited = editedPayload != null && !editedPayload.isEmpty();
-        JsonNode payload = edited
-                ? objectMapper.valueToTree(editedPayload) : readTree(suggestion.getProposedPayload());
+        JsonNode stored = readTree(suggestion.getProposedPayload());
+        JsonNode payload = edited ? objectMapper.valueToTree(editedPayload) : stored;
         Object request = readAndValidatePayload(suggestion.getKind(), payload,
                 edited ? PayloadSource.USER_EDIT : PayloadSource.MODEL);
-        createDomain(userId, suggestion.getKind(), request);
+        /*
+         * 파생 관계는 사용자가 고친 payload가 아니라 저장된 원본에서 읽는다. 서버가 근무
+         * 데이터로 정한 사실이라 사용자가 바꿀 값이 아니고, 카드가 되돌려 보내는 payload에는
+         * 애초에 실려 있지도 않다(withoutAnnotations가 떼어 낸다). 사용자가 시각·제목을 고쳐도
+         * "이 블록은 저 근무에서 나왔다"는 사실은 그대로 남아야 다음 조회에서 근무로 오인되지 않는다.
+         */
+        createDomain(userId, suggestion.getKind(), request, derivedTravelOf(stored));
 
         int resolved = suggestionMapper.resolveIfProposed(
                 suggestionId, userId, ScheduleSuggestionStatus.APPLIED.name(), LocalDateTime.now());
@@ -361,12 +374,33 @@ public class ScheduleSuggestionService {
     // ===== 내부 =====
 
     /** 종류별로 기존 생성 경로를 그대로 부른다. 여기서 새 규칙을 만들지 않는다. */
-    private void createDomain(Long userId, ScheduleSuggestionKind kind, Object request) {
+    private void createDomain(Long userId, ScheduleSuggestionKind kind, Object request,
+                              CommitmentService.DerivedTravel origin) {
         switch (kind) {
             case COMMITMENT -> commitmentService.create(userId, (CommitmentCreateRequest) request,
-                    CommitmentSourceType.AI_SUGGESTION_APPROVED);
+                    CommitmentSourceType.AI_SUGGESTION_APPROVED, origin);
             case ROUTINE -> routineService.create(userId, (RoutineSaveRequest) request);
         }
+    }
+
+    /**
+     * 저장된 payload의 {@code derivedFrom}을 도메인 값으로. 없거나 읽을 수 없으면 null이고,
+     * 그때는 파생이 아닌 보통 약속으로 만들어진다.
+     */
+    private CommitmentService.DerivedTravel derivedTravelOf(JsonNode storedPayload) {
+        if (storedPayload == null || !storedPayload.path(DraftProposalBuilder.DERIVED_FROM_KEY).isObject()) {
+            return null;
+        }
+        JsonNode derived = storedPayload.get(DraftProposalBuilder.DERIVED_FROM_KEY);
+        JsonNode id = derived.path(DraftProposalBuilder.DERIVED_COMMITMENT_ID);
+        DerivedTravelRelation relation = DerivedTravelRelation.from(
+                derived.path(DraftProposalBuilder.DERIVED_RELATION).asText(null));
+        if (!id.isNumber() || relation == null) {
+            log.warn("파생 정보를 읽지 못했다: {}", derived);
+            return null;
+        }
+        return new CommitmentService.DerivedTravel(id.asLong(), relation,
+                parseDateTime(derived.path(DraftProposalBuilder.DERIVED_ANCHOR_AT).asText(null)));
     }
 
     /** 이 payload가 누구의 것인지. 같은 검증이 실패해도 누구의 잘못인지에 따라 결과가 다르다. */
@@ -462,19 +496,30 @@ public class ScheduleSuggestionService {
     }
 
     /**
-     * 저장 요청 DTO에 없는 안내 키를 뗀 사본. 두 키는 draft 경로가 payload에 실어 두는 것이고
+     * 저장 요청 DTO에 없는 안내 키를 뗀 사본. 세 키는 draft 경로가 payload에 실어 두는 것이고
      * 도메인 필드가 아니다. 그 외의 모르는 키는 여전히 거절된다(FAIL_ON_UNKNOWN_PROPERTIES).
+     *
+     * <p>{@code derivedFrom}도 여기서 뗀다 — 카드가 되돌려 보내는 payload는 저장 요청 DTO
+     * 그대로여야 하고, 원본 참조는 서버가 저장된 payload에서 읽지 사용자에게 받지 않는다.
      */
     private JsonNode withoutAnnotations(JsonNode payload) {
         if (payload == null || !payload.isObject()) {
             return payload;
         }
-        if (!payload.has(DraftProposalBuilder.FIELD_NOTES_KEY) && !payload.has(DraftProposalBuilder.ASSUMED_FIELDS_KEY)) {
+        boolean hasAny = false;
+        for (String key : ANNOTATION_KEYS) {
+            if (payload.has(key)) {
+                hasAny = true;
+                break;
+            }
+        }
+        if (!hasAny) {
             return payload;
         }
         ObjectNode copy = payload.deepCopy();
-        copy.remove(DraftProposalBuilder.FIELD_NOTES_KEY);
-        copy.remove(DraftProposalBuilder.ASSUMED_FIELDS_KEY);
+        for (String key : ANNOTATION_KEYS) {
+            copy.remove(key);
+        }
         return copy;
     }
 
@@ -483,6 +528,18 @@ public class ScheduleSuggestionService {
             return List.of();
         }
         return objectMapper.convertValue(payload.get(key), new TypeReference<List<Map<String, Object>>>() { });
+    }
+
+    private LocalDateTime parseDateTime(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return LocalDateTime.parse(value.trim());
+        } catch (Exception e) {
+            log.warn("파생 기준 시각을 읽지 못했다: {}", value);
+            return null;
+        }
     }
 
     private JsonNode readTree(String json) {
