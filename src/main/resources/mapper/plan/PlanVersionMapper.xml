@@ -21,6 +21,7 @@
         <result property="targetMinutes"    column="target_minutes"/>
         <result property="itemsSnapshot"    column="items_snapshot"/>
         <result property="strategyJson"     column="strategy_json"/>
+        <result property="provenanceJson"   column="provenance_json"/>
         <result property="sourceProposalId" column="source_proposal_id"/>
         <result property="confirmedAt"      column="confirmed_at"/>
     </resultMap>
@@ -38,6 +39,7 @@
             target_minutes,
             items_snapshot,
             strategy_json,
+            provenance_json,
             source_proposal_id
         ) VALUES (
             #{userId},
@@ -51,6 +53,7 @@
             #{targetMinutes},
             #{itemsSnapshot},
             #{strategyJson},
+            #{provenanceJson},
             #{sourceProposalId}
         )
     </insert>

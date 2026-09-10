@@ -48,7 +48,8 @@ public interface AiProposalMapper {
             @Param("planEndDate") LocalDate planEndDate,
             @Param("planIntensity") PlanIntensity planIntensity,
             @Param("planTargetMinutes") Integer planTargetMinutes,
-            @Param("planStrategyJson") String planStrategyJson
+            @Param("planStrategyJson") String planStrategyJson,
+            @Param("planProvenanceJson") String planProvenanceJson
     );
 
     /** 이 ASSISTANT 메시지가 만든 제안(있으면 하나뿐). 대화 이력 표시·idempotency 재생용. */

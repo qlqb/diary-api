@@ -24,11 +24,18 @@ import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
 import com.jungwoo.project.memo.plan.domain.PlanStrategy;
+import com.jungwoo.project.memo.plan.provenance.PlanItemEvidence;
+import com.jungwoo.project.memo.plan.provenance.PlanProvenance;
+import com.jungwoo.project.memo.plan.provenance.ProvenanceCollector;
+import com.jungwoo.project.memo.plan.provenance.ProvenanceRepresentation;
+import com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType;
+import com.jungwoo.project.memo.plan.provenance.ServerCalculation;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.domain.BusySource;
 import com.jungwoo.project.memo.scheduling.domain.BusyWindow;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
 import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
@@ -49,7 +56,9 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
@@ -200,19 +209,54 @@ public class PeriodPlanDraftGenerator {
             boolean noAvailableTime,
             boolean targetCappedByItemLimit,
             PlanStrategy strategy,
-            PlanJudgmentResult.Ask ask
+            PlanJudgmentResult.Ask ask,
+
+            /**
+             * 이 회차에 모델에 <b>무엇을 줬는가</b>. 서버만 만들고 모델·클라이언트가 쓰지 못한다.
+             * 모델을 부르지 않았거나 아직 붙이지 않은 경로는 null이고, 그때 제안의
+             * plan_provenance_json도 NULL로 남아 화면이 "출처 기록 없음"으로 처리한다.
+             */
+            PlanProvenance provenance,
+
+            /**
+             * items와 <b>같은 순서·같은 길이</b>인 항목별 근거. 저장이 인덱스로 짝지으므로
+             * 둘의 길이가 어긋나면 근거를 붙이지 않는다(잘못 붙이는 것보다 없는 편이 낫다).
+             */
+            List<PlanItemEvidence> itemEvidence
     ) {
         /** 되물어야 해서 초안을 만들지 않은 경우. */
         public static Generated asking(Spec spec, PlanJudgmentResult.Ask ask) {
             return new Generated(spec, 0, 0, null, false, null, null, List.of(),
-                    0, null, 0, false, false, null, ask);
+                    0, null, 0, false, false, null, ask, null, List.of());
+        }
+
+        /** 만들어진 초안에 이번 회차의 출처를 붙인다. 다른 값은 그대로다. */
+        public Generated withProvenance(PlanProvenance newProvenance, List<PlanItemEvidence> newEvidence) {
+            return new Generated(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted,
+                    suggestedTitle, goalSummary, items, estimatedAvailableMinutes,
+                    availabilityConfidenceSummary, reservedBufferMinutes, noAvailableTime,
+                    targetCappedByItemLimit, strategy, ask, newProvenance,
+                    newEvidence == null ? List.of() : newEvidence);
+        }
+
+        /** 출처를 아직 붙이지 않은 호출부용(기존 15개 인자 경로). */
+        public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
+                         boolean targetAdjusted, String suggestedTitle, String goalSummary,
+                         List<ProposalItem> items, int estimatedAvailableMinutes,
+                         String availabilityConfidenceSummary, int reservedBufferMinutes,
+                         boolean noAvailableTime, boolean targetCappedByItemLimit,
+                         PlanStrategy strategy, PlanJudgmentResult.Ask ask) {
+            this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
+                    goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
+                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, strategy, ask,
+                    null, List.of());
         }
 
         /** 가용시간 정보가 없는 호출부(테스트 등)용. */
         public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
                          boolean targetAdjusted, String suggestedTitle, String goalSummary, List<ProposalItem> items) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
-                    goalSummary, items, 0, null, 0, false, false, null, null);
+                    goalSummary, items, 0, null, 0, false, false, null, null, null, List.of());
         }
 
         /** 가용시간까지만 아는 호출부용(상한 조정 없음). */
@@ -222,7 +266,7 @@ public class PeriodPlanDraftGenerator {
                          int reservedBufferMinutes, boolean noAvailableTime) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
                     goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
-                    reservedBufferMinutes, noAvailableTime, false, null, null);
+                    reservedBufferMinutes, noAvailableTime, false, null, null, null, List.of());
         }
 
         /** 판단 없이 만든 초안(모델 경로). 상한 조정 여부까지 아는 호출부용. */
@@ -232,7 +276,8 @@ public class PeriodPlanDraftGenerator {
                          int reservedBufferMinutes, boolean noAvailableTime, boolean targetCappedByItemLimit) {
             this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
                     goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
-                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, null, null);
+                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, null, null,
+                    null, List.of());
         }
     }
 
@@ -323,18 +368,27 @@ public class PeriodPlanDraftGenerator {
             target = cap;
         }
 
-        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence,
-                maxItems, cappedByItemLimit);
+        /*
+         * ★ 스냅샷은 프롬프트를 만들면서 같은 자리에서 모은다. 모델을 부른 뒤 DB를 다시
+         *   조회해 만들면 그 사이 바뀐 값이 "그때 준 값"으로 저장된다(handoff §4).
+         */
+        ProvenanceCollector collector = new ProvenanceCollector(
+                ZonedDateTime.now(clock).withZoneSameInstant(ZoneId.of(defaultTimeZoneId)).toLocalDateTime(),
+                defaultTimeZoneId, spec.start(), spec.end(), "AI", modelName);
 
-        List<ProposalItem> items = toProposalItems(ai, spec.start(), spec.end(), courses);
-        if (items.isEmpty()) {
+        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence,
+                maxItems, cappedByItemLimit, collector);
+
+        Normalized normalized = toProposalItems(ai, spec.start(), spec.end(), courses, collector);
+        if (normalized.items().isEmpty()) {
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
         return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
-                blankToNull(ai.goalSummary()), items, available, confidence, available - target, false,
-                cappedByItemLimit);
+                blankToNull(ai.goalSummary()), normalized.items(), available, confidence,
+                available - target, false, cappedByItemLimit)
+                .withProvenance(collector.build(), normalized.evidence());
     }
 
     /** 가용 구간의 분 합계. 구간은 이미 겹치지 않게 계산돼 있다. */
@@ -387,12 +441,16 @@ public class PeriodPlanDraftGenerator {
                   "priority": "MUST" | "SHOULD" | "OPTIONAL",
                   "courseId": 정수 또는 null,
                   "scheduledDate": "YYYY-MM-DD" 또는 null,
-                  "reason": "왜 이걸 지금 하는지 한 문장"
+                  "reason": "왜 이걸 지금 하는지 한 문장",
+                  "refIds": ["s3"]
                 }
               ]
             }
 
             규칙:
+            - refIds에는 이 항목의 근거가 된 입력 줄의 대괄호 값(예: s3)만 넣는다. 아래
+              입력에 실제로 있는 값만 쓴다 — 없는 값은 서버가 버리고 근거로 보여주지 않는다.
+              근거로 삼은 줄이 없으면 빈 배열로 둔다. 있어 보이게 채우지 마라.
             - courseId는 [대상 프로젝트]에 실린 id만 쓴다. 해당 없으면 null.
             - scheduledDate는 "반드시 그날 해야 하는" 항목에만 넣는다(마감·수업 연동 등).
               대부분은 null로 두어라 — 날짜는 나중에 사용자가 주 단위로 배치한다.
@@ -425,10 +483,10 @@ public class PeriodPlanDraftGenerator {
 
     private PlanDraftAiResult callAi(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
                                      int days, int available, int target, String confidence, int maxItems,
-                                     boolean cappedByItemLimit) {
+                                     boolean cappedByItemLimit, ProvenanceCollector collector) {
         Long userId = spec.userId();
         String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence,
-                maxItems, cappedByItemLimit);
+                maxItems, cappedByItemLimit, collector);
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> lastFinishReason = new AtomicReference<>();
@@ -483,7 +541,7 @@ public class PeriodPlanDraftGenerator {
 
     private String buildUserPrompt(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
                                    int days, int available, int target, String confidence, int maxItems,
-                                   boolean cappedByItemLimit) {
+                                   boolean cappedByItemLimit, ProvenanceCollector collector) {
         Long userId = spec.userId();
         LocalDate start = spec.start();
         LocalDate end = spec.end();
@@ -521,7 +579,8 @@ public class PeriodPlanDraftGenerator {
                     .append("담아라.\n\n");
         }
 
-        appendAvailabilityBlocks(sb, availability, available, confidence);
+        appendAvailabilityBlocks(sb, availability, available, confidence,
+                spec.intensity(), target, collector);
 
         /*
           학습 항목과 일정을 줘도 어디까지가 "지금"인지는 따로 말해주지 않으면 모른다.
@@ -532,14 +591,15 @@ public class PeriodPlanDraftGenerator {
                 .append("자료에서 확인한 위치다. 일정에 개강일이 있으면 오늘 날짜와 대조해 지금이 ")
                 .append("몇 주차인지 계산하고, 이번 주와 다음 주 진도에 집중하라. 한참 뒤 주차 ")
                 .append("내용을 당겨오지 마라. 학습 항목에 없는 것을 지어내지 마라 — 교재의 장 ")
-                .append("번호나 쪽수처럼 자료에 없는 값은 쓰지 않는다.\n\n");
+                .append("번호나 쪽수처럼 자료에 없는 값은 쓰지 않는다.\n")
+                .append("줄 끝 대괄호(예: [s7])는 그 줄의 인용 번호다. 항목의 refIds에 이 값만 쓴다.\n\n");
 
         sb.append("[대상 프로젝트]\n");
         if (courses.isEmpty()) {
             sb.append("(없음 — 프로젝트에 묶이지 않는 할 일만 제안해도 된다)\n");
         }
         for (Course course : courses) {
-            appendCourseContext(sb, userId, course);
+            appendCourseContext(sb, userId, course, collector);
         }
 
         List<ExecutionItem> existing =
@@ -549,31 +609,60 @@ public class PeriodPlanDraftGenerator {
             sb.append("(없음)\n");
         }
         for (ExecutionItem item : existing) {
-            sb.append("- ").append(item.getTitle());
+            StringBuilder line = new StringBuilder(item.getTitle());
             if (item.getPlacementType() == PlacementType.TIME_FIXED) {
-                sb.append(" · ").append(item.getScheduledStartAt()).append(" (고정)");
+                line.append(" · ").append(item.getScheduledStartAt()).append(" (고정)");
             } else if (item.getScheduledDate() != null) {
-                sb.append(" · ").append(item.getScheduledDate());
+                line.append(" · ").append(item.getScheduledDate());
             } else {
-                sb.append(" · 날짜 미정");
+                line.append(" · 날짜 미정");
             }
             if (item.getExpectedMinutes() != null) {
-                sb.append(" · ").append(item.getExpectedMinutes()).append("분");
+                line.append(" · ").append(item.getExpectedMinutes()).append("분");
             }
-            sb.append("\n");
+            sb.append("- ").append(collector.mark(
+                    ProvenanceSourceType.EXECUTION_ITEM_PLANNED, item.getExecutionItemId(),
+                    item.getVersion(), item.getUpdatedAt(), ProvenanceRepresentation.SELECTED_FIELDS,
+                    ProvenanceCollector.value(
+                            "title", item.getTitle(),
+                            "placementType", String.valueOf(item.getPlacementType()),
+                            "scheduledDate", item.getScheduledDate(),
+                            "scheduledStartAt", item.getScheduledStartAt(),
+                            "expectedMinutes", item.getExpectedMinutes()),
+                    line.toString()).text()).append("\n");
         }
         sb.append("\n");
 
         String previous = planReviewService.summarizeLatestForPrompt(userId);
         if (previous != null) {
-            sb.append("[직전 계획 회고]\n").append(previous).append("\n\n");
+            /*
+             * 회고 요약은 특정 행 하나가 아니라 서버가 여러 행을 접어 만든 문장이다.
+             * SUMMARY_LINE으로 남겨 "원본 한 줄"로 오해되지 않게 한다.
+             */
+            sb.append("[직전 계획 회고]\n").append(collector.mark(
+                    ProvenanceSourceType.PLAN_REVIEW, null, null, null,
+                    ProvenanceRepresentation.SUMMARY_LINE,
+                    ProvenanceCollector.value("summary", previous), previous).text()).append("\n\n");
         }
 
+        /*
+         * 이번 턴에 사용자가 방금 말한 것. 확정된 맥락(user_contexts)으로 가장하지 않으려고
+         * TURN_INPUT으로 따로 남긴다(handoff §4). 대화 이력 전체를 출처로 바꾸지는 않는다 —
+         * 여기 실리는 것은 이 요청에 실제로 담겨 프롬프트로 나간 문장뿐이다.
+         */
         if (spec.instruction() != null && !spec.instruction().isBlank()) {
-            sb.append("[사용자 지시]\n").append(spec.instruction()).append("\n\n");
+            sb.append("[사용자 지시]\n").append(collector.mark(
+                    ProvenanceSourceType.TURN_INPUT, null, null, null,
+                    ProvenanceRepresentation.EXCERPT,
+                    ProvenanceCollector.value("field", "instruction", "text", spec.instruction()),
+                    spec.instruction()).text()).append("\n\n");
         }
         if (spec.title() != null && !spec.title().isBlank()) {
-            sb.append("[사용자가 정한 제목]\n").append(spec.title()).append("\n");
+            sb.append("[사용자가 정한 제목]\n").append(collector.mark(
+                    ProvenanceSourceType.TURN_INPUT, null, null, null,
+                    ProvenanceRepresentation.EXCERPT,
+                    ProvenanceCollector.value("field", "title", "text", spec.title()),
+                    spec.title()).text()).append("\n");
         }
         return sb.toString();
     }
@@ -586,7 +675,8 @@ public class PeriodPlanDraftGenerator {
      * [이번 주 일정]/[남는 시간(추정)]과 같은 뜻이지만 여기서는 기간 전체를 본다.
      */
     private void appendAvailabilityBlocks(StringBuilder sb, AvailabilityEstimateResult availability,
-                                          int available, String confidence) {
+                                          int available, String confidence, PlanIntensity intensity,
+                                          int target, ProvenanceCollector collector) {
         sb.append("[이번 기간에 이미 등록된 일정]\n");
         List<BusyWindow> busy = new ArrayList<>(availability.busyWindows());
         busy.sort(java.util.Comparator.comparing(BusyWindow::startAt));
@@ -594,13 +684,26 @@ public class PeriodPlanDraftGenerator {
             sb.append("(없음)\n");
         }
         int shown = 0;
+        boolean busyTruncated = false;
         for (BusyWindow window : busy) {
             if (shown++ >= MAX_WINDOW_LINES) {
                 sb.append("- … 외 ").append(busy.size() - MAX_WINDOW_LINES).append("건\n");
+                busyTruncated = true;
                 break;
             }
-            sb.append("- ").append(renderSpan(window.startAt(), window.endAt())).append(' ')
-                    .append(window.label()).append('\n');
+            /*
+             * ★ 줄을 쓰고 나서 따로 기록하지 않는다. 기록이 줄을 만들어 돌려주고 그 값을
+             *   그대로 쓴다 — 준 것과 남은 것이 갈라질 자리를 없앤다. 상한에 걸려 실리지
+             *   않은 건은 mark를 부르지 않으므로 출처 목록에도 없다.
+             */
+            sb.append("- ").append(collector.mark(
+                    busySourceType(window), window.sourceId(), null, null,
+                    ProvenanceRepresentation.SELECTED_FIELDS,
+                    ProvenanceCollector.value(
+                            "label", window.label(),
+                            "startAt", window.startAt(),
+                            "endAt", window.endAt()),
+                    renderSpan(window.startAt(), window.endAt()) + " " + window.label()).text()).append('\n');
         }
         sb.append("이 시간은 새로 만들 대상이 아니다. 계획은 이 시간을 피해 잡힌다.\n\n");
 
@@ -620,6 +723,73 @@ public class PeriodPlanDraftGenerator {
         }
         sb.append("합계 약 ").append(available).append("분 · ").append(confidence)
                 .append(". 사용자가 확정한 값이 아니라 추정이므로 확정된 것처럼 말하지 않는다.\n\n");
+
+        recordAvailabilityCalculations(availability, available, confidence, intensity, target,
+                busyTruncated, collector);
+    }
+
+    /**
+     * 남는 시간과 학습 예산은 <b>출처가 아니라 서버 계산</b>이다.
+     *
+     * <p>원본 일정과 같은 목록에 두면 사용자가 "등록된 사실"과 "추정"을 구분할 수 없다
+     * (handoff §3.2). AvailabilityEstimateService가 낸 source/confidence는 의미를 그대로
+     * 옮긴다 — 새 척도로 바꾸지 않는다.
+     *
+     * <p>입력 계보는 PARTIAL이다. 하루 기본 창(09~23시)과 현재 시각은 서버 상수·시계에서
+     * 오므로 가리킬 원본 행이 없다. 일부만 담아 놓고 "전체 재현 가능"이라고 말하지 않는다.
+     */
+    private void recordAvailabilityCalculations(AvailabilityEstimateResult availability, int available,
+                                                String confidence, PlanIntensity intensity, int target,
+                                                boolean busyTruncated, ProvenanceCollector collector) {
+        List<String> busyRefs = collector.refIdsOfType(Set.of(
+                ProvenanceSourceType.ROUTINE_OCCURRENCE,
+                ProvenanceSourceType.COMMITMENT,
+                ProvenanceSourceType.EXECUTION_ITEM_FIXED));
+
+        String note = "하루 기본 창(09~23시)과 현재 시각은 서버 상수·시계에서 와 가리킬 원본 행이 없다";
+        if (busyTruncated) {
+            note = note + ". 프롬프트 줄 상한에 걸려 일부 일정은 모델 입력에도 출처 목록에도 실리지 않았다";
+        }
+
+        List<Map<String, Object>> windowValues = new ArrayList<>();
+        for (AvailabilityWindow window : availability.windows()) {
+            windowValues.add(ProvenanceCollector.value(
+                    "startAt", window.startAt(),
+                    "endAt", window.endAt(),
+                    "minutes", window.durationMinutes(),
+                    "source", window.source() != null ? window.source().name() : null,
+                    "confidence", window.confidence() != null ? window.confidence().name() : null,
+                    "reason", window.reason()));
+        }
+
+        String availabilityCalc = collector.calculation(
+                ServerCalculation.ServerCalculationKind.AVAILABILITY_ESTIMATE, true, busyRefs,
+                ServerCalculation.InputLineage.PARTIAL, note,
+                ProvenanceCollector.value(
+                        "availableMinutes", available,
+                        "confidenceSummary", confidence,
+                        "windows", windowValues));
+
+        collector.calculation(
+                ServerCalculation.ServerCalculationKind.STUDY_BUDGET, true, List.of(),
+                ServerCalculation.InputLineage.COMPLETE,
+                "가용시간 추정(" + availabilityCalc + ")에 강도 비율을 적용한 값이다",
+                ProvenanceCollector.value(
+                        "intensity", intensity.name(),
+                        "fillPercent", intensity.getFillPercent(),
+                        "targetMinutes", target));
+    }
+
+    /** 막힌 시간 하나의 원본 종류. 출처를 모르는 창(예전 경로)은 실행 조각으로 보지 않는다. */
+    private static ProvenanceSourceType busySourceType(BusyWindow window) {
+        if (window.source() == null) {
+            return ProvenanceSourceType.EXECUTION_ITEM_FIXED;
+        }
+        return switch (window.source()) {
+            case ROUTINE_OCCURRENCE -> ProvenanceSourceType.ROUTINE_OCCURRENCE;
+            case COMMITMENT -> ProvenanceSourceType.COMMITMENT;
+            case EXECUTION_ITEM, PINNED_PROPOSAL_ITEM -> ProvenanceSourceType.EXECUTION_ITEM_FIXED;
+        };
     }
 
     private static String renderSpan(LocalDateTime startAt, LocalDateTime endAt) {
@@ -646,14 +816,22 @@ public class PeriodPlanDraftGenerator {
      * 정한 순서이고 수업이 그 순서대로 나가지 않는다 — 이 과목만 해도 전처리가 교재
      * 앞쪽인데 수업은 9주차다. source_locator에 "2주차"처럼 위치가 붙어 있어 그대로 전달된다.
      */
-    private void appendCourseContext(StringBuilder sb, Long userId, Course course) {
-        sb.append("- id=").append(course.getCourseId()).append(" ").append(course.getTitle());
+    private void appendCourseContext(StringBuilder sb, Long userId, Course course,
+                                     ProvenanceCollector collector) {
+        StringBuilder head = new StringBuilder("id=").append(course.getCourseId())
+                .append(" ").append(course.getTitle());
         if (course.getTextbookTitle() != null) {
-            sb.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+            head.append(" (교재: ").append(course.getTextbookTitle()).append(")");
         }
-        sb.append("\n");
+        sb.append("- ").append(collector.mark(
+                ProvenanceSourceType.COURSE, course.getCourseId(), null, course.getUpdatedAt(),
+                ProvenanceRepresentation.SELECTED_FIELDS,
+                ProvenanceCollector.value(
+                        "title", course.getTitle(),
+                        "textbookTitle", course.getTextbookTitle()),
+                head.toString()).text()).append("\n");
 
-        List<String> topicLines = new ArrayList<>();
+        List<TopicLine> topicLines = new ArrayList<>();
         for (TopicResponse root : topicService.getTopicTree(userId, course.getCourseId())) {
             appendTopicLine(topicLines, root, 0);
         }
@@ -661,21 +839,47 @@ public class PeriodPlanDraftGenerator {
             sb.append("  [학습 항목]").append("\n");
             int shown = Math.min(topicLines.size(), MAX_TOPIC_LINES_PER_COURSE);
             for (int i = 0; i < shown; i++) {
-                sb.append("  ").append(topicLines.get(i)).append("\n");
+                TopicLine topic = topicLines.get(i);
+                // 잘려서 안 실린 뒤쪽 항목은 mark를 부르지 않으므로 출처 목록에도 없다.
+                sb.append("  ").append(collector.mark(
+                        ProvenanceSourceType.TOPIC, topic.topicId(), null, null,
+                        ProvenanceRepresentation.SELECTED_FIELDS,
+                        ProvenanceCollector.value(
+                                "courseId", course.getCourseId(),
+                                "title", topic.title(),
+                                "sourceLocator", topic.sourceLocator()),
+                        topic.text()).text()).append("\n");
             }
             if (topicLines.size() > shown) {
                 sb.append("    … 외 ").append(topicLines.size() - shown).append("개\n");
             }
         }
 
-        List<String> scheduleLines = courseScheduleLines(userId, course.getCourseId());
+        List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId());
         if (!scheduleLines.isEmpty()) {
             sb.append("  [일정·평가]").append("\n");
-            for (String line : scheduleLines) {
-                sb.append("  - ").append(line).append("\n");
+            for (ScheduleLine line : scheduleLines) {
+                sb.append("  - ").append(collector.mark(
+                        line.type(), line.sourceId(), null, null,
+                        ProvenanceRepresentation.SELECTED_FIELDS,
+                        ProvenanceCollector.value("courseId", course.getCourseId(), "text", line.text()),
+                        line.text()).text()).append("\n");
             }
         }
         sb.append("\n");
+    }
+
+    /**
+     * 프롬프트에 실을 학습 항목 한 줄과 그 줄이 가리키는 원본.
+     *
+     * <p>문자열만 모으면 나중에 "이 줄이 어느 topic인가"를 제목으로 되짚어야 하는데, 제목은
+     * 겹치고 바뀐다. 줄을 만들 때 id를 함께 들고 있는 편이 짧다.
+     */
+    private record TopicLine(Long topicId, String title, String sourceLocator, String text) {
+    }
+
+    /** 프롬프트에 실을 일정·평가 한 줄과 그 원본의 종류. */
+    private record ScheduleLine(ProvenanceSourceType type, Long sourceId, String text) {
     }
 
     /*
@@ -683,12 +887,12 @@ public class PeriodPlanDraftGenerator {
       "상한을 넘긴 만큼"이 되어, 40개 중 30개를 보여주고 "외 1개"라고 말하게 된다.
       자르는 것은 출력할 때 한 번만 한다.
     */
-    private void appendTopicLine(List<String> out, TopicResponse node, int depth) {
+    private void appendTopicLine(List<TopicLine> out, TopicResponse node, int depth) {
         StringBuilder line = new StringBuilder("  ".repeat(depth)).append("- ").append(node.getTitle());
         if (node.getSourceLocator() != null && !node.getSourceLocator().isBlank()) {
             line.append(" (").append(node.getSourceLocator()).append(")");
         }
-        out.add(line.toString());
+        out.add(new TopicLine(node.getTopicId(), node.getTitle(), node.getSourceLocator(), line.toString()));
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
                 appendTopicLine(out, child, depth + 1);
@@ -703,8 +907,8 @@ public class PeriodPlanDraftGenerator {
      * course_notes만 꺼내 저장하고 날짜는 원문에 남겨둔다. 그래서 여기서 읽어 파싱한다.
      * 파싱이 실패하면 조용히 건너뛴다. 일정이 없다고 계획을 못 만들 이유는 없다.
      */
-    private List<String> courseScheduleLines(Long userId, Long courseId) {
-        List<String> lines = new ArrayList<>();
+    private List<ScheduleLine> courseScheduleLines(Long userId, Long courseId) {
+        List<ScheduleLine> lines = new ArrayList<>();
         for (CourseMaterialAnalysis analysis : analysisMapper.findAppliedByCourseIdAndUserId(courseId, userId)) {
             String json = analysis.getEditedJson() != null ? analysis.getEditedJson() : analysis.getAnalysisJson();
             try {
@@ -715,7 +919,12 @@ public class PeriodPlanDraftGenerator {
                 for (MaterialAnalysisPayload.KeyDate keyDate : payload.keyDates()) {
                     String detail = keyDate.date() != null ? keyDate.date() : keyDate.description();
                     if (detail != null && !detail.isBlank()) {
-                        lines.add(keyDate.title() + ": " + detail);
+                        /*
+                         * keyDate에는 행 id가 없다. 가리킬 수 있는 것은 분석 행뿐이라 그것을
+                         * 남기고, 없는 쪽·문단 번호를 지어내지 않는다(handoff §3.1).
+                         */
+                        lines.add(new ScheduleLine(ProvenanceSourceType.MATERIAL_KEY_DATE,
+                                analysis.getAnalysisId(), keyDate.title() + ": " + detail));
                     }
                 }
             } catch (Exception e) {
@@ -724,9 +933,20 @@ public class PeriodPlanDraftGenerator {
         }
         courseNoteMapper.findByCourseIdAndUserId(courseId, userId).stream()
                 .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
-                .forEach(note -> lines.add(note.getLabel() + ": " + note.getDetail()));
+                .forEach(note -> lines.add(new ScheduleLine(ProvenanceSourceType.COURSE_NOTE,
+                        note.getNoteId(), note.getLabel() + ": " + note.getDetail())));
 
-        return lines.stream().distinct().limit(MAX_SCHEDULE_LINES_PER_COURSE).toList();
+        List<ScheduleLine> distinct = new ArrayList<>();
+        Set<String> seen = new java.util.HashSet<>();
+        for (ScheduleLine line : lines) {
+            if (distinct.size() >= MAX_SCHEDULE_LINES_PER_COURSE) {
+                break;
+            }
+            if (seen.add(line.text())) {
+                distinct.add(line);
+            }
+        }
+        return distinct;
     }
 
     /** 대상 프로젝트. 지정한 id는 소유 확인을 거치고, 비어 있으면 활성 전체다. */
@@ -758,15 +978,19 @@ public class PeriodPlanDraftGenerator {
      * "행동 · 완료: 기준"을 요구하는데, 예전처럼 reason("왜 지금 하는지")을 우선하면 모델이
      * 규칙을 지켜도 그 내용이 제안에 실리지 않는다 — reason은 거의 항상 채워지기 때문이다.
      */
-    private List<ProposalItem> toProposalItems(
-            PlanDraftAiResult ai, LocalDate start, LocalDate end, List<Course> targetCourses) {
+    private Normalized toProposalItems(
+            PlanDraftAiResult ai, LocalDate start, LocalDate end, List<Course> targetCourses,
+            ProvenanceCollector collector) {
         Set<Long> allowedCourseIds = targetCourses.stream()
                 .map(Course::getCourseId).collect(Collectors.toSet());
         Long soleCourseId = targetCourses.size() == 1 ? targetCourses.get(0).getCourseId() : null;
         List<ProposalItem> items = new ArrayList<>();
+        List<PlanItemEvidence> evidence = new ArrayList<>();
         if (ai.items() == null) {
-            return items;
+            return new Normalized(items, evidence);
         }
+        Set<String> validRefs = collector.build().refIds();
+        int totalUnknown = 0;
         for (PlanDraftAiResult.PlanDraftAiItem raw : ai.items()) {
             if (raw == null || raw.title() == null || raw.title().isBlank()) {
                 continue;
@@ -784,8 +1008,70 @@ public class PeriodPlanDraftGenerator {
                     null, null,
                     resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId)
             ));
+
+            List<String> refs = new ArrayList<>();
+            int unknown = 0;
+            for (String ref : raw.refIds() == null ? List.<String>of() : raw.refIds()) {
+                String trimmed = ref == null ? null : ref.trim();
+                if (trimmed == null || trimmed.isEmpty()) {
+                    continue;
+                }
+                /*
+                 * ★ 이번 회차에 실제로 준 것만 근거다. 다른 회차·다른 사용자의 값이나 조회만
+                 *   하고 안 준 값은 여기서 떨어진다. 떨어진 것을 조용히 없애지 않고 개수를
+                 *   남겨, 화면이 "AI가 확인되지 않는 출처를 인용했다"고 말할 수 있게 한다.
+                 */
+                if (validRefs.contains(trimmed) && !refs.contains(trimmed)) {
+                    refs.add(trimmed);
+                } else if (!validRefs.contains(trimmed)) {
+                    unknown++;
+                }
+            }
+            totalUnknown += unknown;
+
+            /*
+             * 서버 계산 id는 붙이지 않는다. 이 경로에서 서버가 계산한 것은 기간 전체의
+             * 남는 시간과 예산이고, 그것은 어느 한 항목의 근거가 아니라 회차 전체의 조건이다.
+             * 항목 옆에 붙이면 "이 항목에 대해 서버가 계산했다"로 읽힌다.
+             */
+            evidence.add(PlanItemEvidence.of(collector.generationId(), refs,
+                    blankToNull(raw.reason()), aiEstimates(raw, scheduled), List.of(), unknown));
         }
-        return items;
+        if (totalUnknown > 0) {
+            // 원문을 남기지 않는다 — 진단에 필요한 것은 빈도이지 모델이 쓴 문자열이 아니다.
+            log.warn("계획 초안: 모델이 이번 회차에 없는 인용 {}건을 냈다. generationId={}",
+                    totalUnknown, collector.generationId());
+        }
+        return new Normalized(items, evidence);
+    }
+
+    /** 모델 출력 중 <b>추정·판단</b>인 것들. 서버가 계산한 값과 같은 자리에 두지 않는다. */
+    private List<String> aiEstimates(PlanDraftAiResult.PlanDraftAiItem raw, LocalDate scheduled) {
+        List<String> estimates = new ArrayList<>();
+        if (raw.expectedMinutes() != null) {
+            estimates.add("예상 소요 시간 " + raw.expectedMinutes() + "분");
+        }
+        if (blankToNull(raw.priority()) != null) {
+            /*
+             * enum 원문을 그대로 넣지 않는다. 이 문자열은 화면에 그대로 뜨는데, MUST/SHOULD는
+             * 서버가 값을 구분하려고 쓰는 이름이지 사용자에게 할 말이 아니다(계획 화면의
+             * 표시 규칙과 같다). 화면이 다시 번역할 수 있게 토큰을 내리는 편이 나을 수도
+             * 있지만, 이 목록은 "AI가 이렇게 봤다"를 사람 문장으로 나열하는 자리다.
+             */
+            estimates.add(switch (normalizePriority(raw.priority())) {
+                case "MUST" -> "시간이 모자라도 꼭 해야 한다고 봄";
+                case "OPTIONAL" -> "여유가 되면 하는 쪽으로 봄";
+                default -> "보통 순위로 봄";
+            });
+        }
+        if (scheduled != null) {
+            estimates.add("이 날짜에 해야 한다고 봄: " + scheduled);
+        }
+        return estimates;
+    }
+
+    /** 검증을 마친 항목과, 그 항목과 <b>같은 순서</b>인 근거. */
+    private record Normalized(List<ProposalItem> items, List<PlanItemEvidence> evidence) {
     }
 
     private Long resolveItemCourseId(Long raw, Set<Long> allowed, Long soleCourseId) {

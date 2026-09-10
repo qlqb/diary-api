@@ -32,6 +32,16 @@ public class AiProposalItem {
 
     private String editedPayload;
 
+    /**
+     * 이 항목의 근거(PlanItemEvidence)의 JSON. 서버만 쓴다.
+     *
+     * originalPayload와 나눠 두는 것이 요점이다 — 그쪽은 사용자가 고친 값이
+     * editedPayload로 다시 쓰이는 자리이고, 근거는 사용자가 쓰는 값이 아니다. 컬럼이
+     * 다르면 "클라이언트가 서버 소유 값을 덮어쓸 수 있는가"를 검사 코드가 아니라 구조가
+     * 답한다.
+     */
+    private String evidenceJson;
+
     private Long targetItemId;
 
     private Long baseVersion;

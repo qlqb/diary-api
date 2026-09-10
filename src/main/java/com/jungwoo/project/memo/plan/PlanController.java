@@ -8,8 +8,10 @@ import com.jungwoo.project.memo.plan.dto.PlanDraftRequest;
 import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import com.jungwoo.project.memo.plan.dto.PlanPlacementRequest;
 import com.jungwoo.project.memo.plan.dto.PlanPlacementResponse;
+import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse;
 import com.jungwoo.project.memo.plan.dto.PlanResponse;
 import com.jungwoo.project.memo.plan.dto.PlanReviewResponse;
+import com.jungwoo.project.memo.plan.provenance.PlanProvenanceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -36,6 +38,8 @@ import java.util.List;
  * GET  /api/plans/{planVersionId}/items         이 계획의 현재 항목 (planKey 기준)
  * GET  /api/plans/{planVersionId}/review        회고
  * POST /api/plans/{planVersionId}/place         롤링 배치 (다가온 창의 시각을 정한다)
+ * GET  /api/plans/drafts/{proposalId}/provenance          초안의 생성 정보와 항목별 근거
+ * GET  /api/plans/items/{executionItemId}/provenance      적용된 조각의 근거 (같은 응답 모양)
  *
  * ★ 목록은 단건을 반환하지 않는다. 같은 날짜에 8월 계획·이번 주 계획·오늘 계획이 동시에
  * 걸릴 수 있다.
@@ -51,6 +55,7 @@ public class PlanController {
     private final PlanVersionService planVersionService;
     private final PlanReviewService planReviewService;
     private final PlanPlacementService planPlacementService;
+    private final PlanProvenanceService planProvenanceService;
 
     @PostMapping("/draft")
     public ResponseEntity<PlanDraftResponse> createDraft(
@@ -136,6 +141,34 @@ public class PlanController {
                 planVersionService.findItems(principal.getUserId(), planVersionId).stream()
                         .map(ExecutionItemResponse::from)
                         .toList());
+    }
+
+    /**
+     * 이 초안을 만들 때 모델에 무엇을 줬고, 각 항목이 무엇을 근거로 하는가.
+     *
+     * <p>기록이 없으면 404가 아니라 recorded=false다 — 출처가 없는 것은 오류가 아니라
+     * 사실이고, 화면은 그대로 "생성 당시 출처 기록이 없습니다"라고 말한다.
+     */
+    @GetMapping("/drafts/{proposalId}/provenance")
+    public ResponseEntity<PlanProvenanceResponse> draftProvenance(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId
+    ) {
+        return ResponseEntity.ok(planProvenanceService.forProposal(principal.getUserId(), proposalId));
+    }
+
+    /**
+     * 적용된 실행 조각의 근거. 계획 화면과 오늘 화면이 같은 응답을 쓴다.
+     *
+     * <p>같은 사실을 화면마다 다른 모양으로 복제하지 않으려고 초안 경로와 같은 DTO를 쓴다.
+     */
+    @GetMapping("/items/{executionItemId}/provenance")
+    public ResponseEntity<PlanProvenanceResponse> itemProvenance(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionItemId
+    ) {
+        return ResponseEntity.ok(
+                planProvenanceService.forExecutionItem(principal.getUserId(), executionItemId));
     }
 
     @GetMapping("/{planVersionId}/review")

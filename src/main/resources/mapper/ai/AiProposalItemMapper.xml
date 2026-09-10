@@ -11,6 +11,7 @@
         <result property="userId"          column="user_id"/>
         <result property="itemType"        column="item_type"/>
         <result property="originalPayload" column="original_payload"/>
+        <result property="evidenceJson"    column="evidence_json"/>
         <result property="editedPayload"   column="edited_payload"/>
         <result property="targetItemId"    column="target_item_id"/>
         <result property="baseVersion"     column="base_version"/>
@@ -27,6 +28,7 @@
             user_id,
             item_type,
             original_payload,
+            evidence_json,
             target_item_id,
             base_version,
             status
@@ -35,6 +37,7 @@
             #{userId},
             #{itemType},
             #{originalPayload},
+            #{evidenceJson},
             #{targetItemId},
             #{baseVersion},
             #{status}
@@ -48,6 +51,29 @@
           AND user_id     = #{userId}
         ORDER BY proposal_item_id ASC
     </select>
+
+    <!--
+      적용된 실행 조각에서 원래 제안 항목으로 되짚는다. created_item_id는 인덱스가 없지만
+      한 사용자의 제안 항목 수가 크지 않고, 이 조회는 사용자가 근거를 열 때만 일어난다.
+    -->
+    <select id="findByCreatedItemIdAndUserId" resultMap="aiProposalItemResultMap">
+        SELECT *
+        FROM ai_proposal_items
+        WHERE created_item_id = #{createdItemId}
+          AND user_id         = #{userId}
+        ORDER BY proposal_item_id DESC
+    </select>
+
+    <!--
+      근거의 상태만 바꾼다. edited_payload/status 같은 적용 결과와 한 UPDATE로 묶지 않는
+      이유는, 근거 갱신이 실패해도 적용은 성립해야 하고 그 반대는 아니기 때문이다.
+    -->
+    <update id="updateEvidenceJson">
+        UPDATE ai_proposal_items
+        SET evidence_json = #{evidenceJson}
+        WHERE proposal_item_id = #{proposalItemId}
+          AND user_id          = #{userId}
+    </update>
 
     <update id="updateAfterApply">
         UPDATE ai_proposal_items

@@ -17,6 +17,7 @@
         <result property="planIntensity"      column="plan_intensity"/>
         <result property="planTargetMinutes"  column="plan_target_minutes"/>
         <result property="planStrategyJson"   column="plan_strategy_json"/>
+        <result property="planProvenanceJson" column="plan_provenance_json"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -88,7 +89,8 @@
                plan_end_date       = #{planEndDate},
                plan_intensity      = #{planIntensity},
                plan_target_minutes = #{planTargetMinutes},
-               plan_strategy_json  = #{planStrategyJson}
+               plan_strategy_json  = #{planStrategyJson},
+               plan_provenance_json = #{planProvenanceJson}
          WHERE proposal_id = #{proposalId}
            AND user_id     = #{userId}
     </update>

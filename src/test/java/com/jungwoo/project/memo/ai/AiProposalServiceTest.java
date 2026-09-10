@@ -85,13 +85,15 @@ class AiProposalServiceTest {
 
     @Mock
     private ExecutionItemService executionItemService;
+    @Mock
+    private com.jungwoo.project.memo.plan.provenance.ProposalEvidenceService proposalEvidenceService;
 
     private AiProposalService service;
 
     @BeforeEach
     void setUp() {
-        service = new AiProposalService(persistenceService, aiProposalMapper, aiProposalItemMapper,
-                aiConversationMapper, executionItemService, FIXED_CLOCK);
+        service = new AiProposalService(persistenceService, proposalEvidenceService, aiProposalMapper,
+                aiProposalItemMapper, aiConversationMapper, executionItemService, FIXED_CLOCK);
     }
 
     // ===== createFromItems =====
@@ -130,23 +132,23 @@ class AiProposalServiceTest {
     @Test
     void createFromItems_saves_whenExpectedMinutesIs5_atMinimum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 5, "SHOULD"));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any());
     }
 
     @Test
     void createFromItems_saves_whenExpectedMinutesIs120_atMaximum() {
         List<ProposalItem> items = List.of(dateOnlyItem("제목", 120, "SHOULD"));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any());
     }
 
     @Test
@@ -191,13 +193,13 @@ class AiProposalServiceTest {
         List<ProposalItem> items = List.of(new ProposalItem(
                 "제목", "설명", 30, "SHOULD", PlacementType.TIME_FIXED, LocalTime.of(9, 0), LocalTime.of(9, 30),
                 null, null, null, null, null));
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         AiProposalResponse response = service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
         assertThat(response.getProposalId()).isEqualTo(PROPOSAL_ID);
-        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any());
+        verify(persistenceService).save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), any(), any(), any());
     }
 
     /*
@@ -217,7 +219,7 @@ class AiProposalServiceTest {
                 LocalTime.of(17, 0), LocalTime.of(23, 0), null, null, null, null, null));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
@@ -234,7 +236,7 @@ class AiProposalServiceTest {
                 LocalTime.of(9, 0), LocalTime.of(9, 30), null, null, null, null, null));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
@@ -250,7 +252,7 @@ class AiProposalServiceTest {
                 TARGET_DATE.atTime(18, 0), TARGET_DATE.atTime(23, 0), null));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
@@ -285,7 +287,7 @@ class AiProposalServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
@@ -310,7 +312,7 @@ class AiProposalServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any()))
+        when(persistenceService.save(eq(USER_ID), eq(CONVERSATION_ID), eq(SOURCE_MESSAGE_ID), captor.capture(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         // 순서를 반대로 바꿔도(먼저 DATE_ONLY, 그다음 fixedStartAt) 각 항목의 날짜가
@@ -585,7 +587,7 @@ class AiProposalServiceTest {
     void createFromItems_adjustment_recordsTargetAndBaseVersion() {
         ExecutionItem target = plannedItem(500L, 3L, "자료구조 복습", 30);
         when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
-        when(persistenceService.save(any(), any(), any(), any(), any()))
+        when(persistenceService.save(any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
@@ -594,7 +596,7 @@ class AiProposalServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any(), any());
         ProposalItemPayload payload = captor.getValue().get(0);
         assertThat(payload.effectiveOperation()).isEqualTo(ProposalOperation.REDUCE);
         assertThat(payload.targetExecutionItemId()).isEqualTo(500L);
@@ -608,7 +610,7 @@ class AiProposalServiceTest {
     void createFromItems_adjustment_dropsCandidate_whenTargetNotAdjustable() {
         // 이미 끝났거나 없는 항목을 가리키면 그 후보만 버린다. 다른 후보가 있으면 제안은 살아남는다.
         when(executionItemService.findOwnedForAdjustment(999L, USER_ID)).thenReturn(null);
-        when(persistenceService.save(any(), any(), any(), any(), any()))
+        when(persistenceService.save(any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID,
@@ -618,7 +620,7 @@ class AiProposalServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any(), any());
         assertThat(captor.getValue()).hasSize(1);
         assertThat(captor.getValue().get(0).isAdjustment()).isFalse();
     }
@@ -651,7 +653,7 @@ class AiProposalServiceTest {
         // "오전에 못 한 것을 오늘 16시로" — 날짜는 그대로지만 언제 할지가 달라졌으므로 유효한 이동이다.
         ExecutionItem target = timeFixedItem(500L, 1L, 10, 0, 10, 30);
         when(executionItemService.findOwnedForAdjustment(500L, USER_ID)).thenReturn(target);
-        when(persistenceService.save(any(), any(), any(), any(), any()))
+        when(persistenceService.save(any(), any(), any(), any(), any(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(PROPOSAL_ID).build());
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, List.of(),
@@ -661,7 +663,7 @@ class AiProposalServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ProposalItemPayload>> captor = ArgumentCaptor.forClass(List.class);
-        verify(persistenceService).save(any(), any(), any(), captor.capture(), any());
+        verify(persistenceService).save(any(), any(), any(), captor.capture(), any(), any());
         ProposalItemPayload payload = captor.getValue().get(0);
         assertThat(payload.effectiveOperation()).isEqualTo(ProposalOperation.MOVE);
         assertThat(payload.targetDate()).isEqualTo(TARGET_DATE);
@@ -837,7 +839,7 @@ class AiProposalServiceTest {
 
         service.createFromItems(USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE, List.of());
 
-        verify(persistenceService).save(any(), any(), any(), any(), any());
+        verify(persistenceService).save(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -854,7 +856,7 @@ class AiProposalServiceTest {
         service.createFromItems(
                 USER_ID, CONVERSATION_ID, SOURCE_MESSAGE_ID, items, TARGET_DATE.minusDays(2), List.of());
 
-        verify(persistenceService).save(any(), any(), any(), any(), any());
+        verify(persistenceService).save(any(), any(), any(), any(), any(), any());
     }
 
     @Test

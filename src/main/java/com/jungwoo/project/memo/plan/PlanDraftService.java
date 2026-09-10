@@ -23,6 +23,8 @@ import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import com.jungwoo.project.memo.plan.dto.PlanItemDraft;
 import com.jungwoo.project.memo.plan.dto.PlanStrategyResponse;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
+import com.jungwoo.project.memo.plan.provenance.PlanItemEvidence;
+import com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -60,6 +62,7 @@ public class PlanDraftService {
     private final PlanJudgmentService planJudgmentService;
     private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final PlanItemService planItemService;
+    private final PlanProvenanceCodec provenanceCodec;
 
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.
@@ -265,13 +268,15 @@ public class PlanDraftService {
 
         AiProposalResponse proposal = aiProposalService.createFromItems(
                 userId, conversationId, sourceMessageId, generated.items(), List.of(), spec.start(), List.of(),
-                maxItems);
+                maxItems, evidenceJson(generated));
 
         // 판단은 제안에 얹어 둔다. 확정이 여기서 읽어 plan_versions로 옮기므로 클라이언트가
         // 다시 보낼 필요가 없고, 사용자가 화면에서 본 판단과 저장되는 판단이 갈라지지 않는다.
+        // 출처 스냅샷도 같은 자리에 같은 이유로 얹는다.
         aiProposalMapper.updatePlanMetadata(
                 proposal.getProposalId(), userId, spec.start(), spec.end(), spec.intensity(),
-                generated.targetMinutes(), strategyCodec.toJson(generated.strategy()));
+                generated.targetMinutes(), strategyCodec.toJson(generated.strategy()),
+                provenanceCodec.toJson(generated.provenance()));
 
         if (supersededProposalId != null) {
             aiProposalMapper.updateStatusAndRespondedAt(
@@ -304,6 +309,30 @@ public class PlanDraftService {
                 .proposal(proposal)
                 .strategy(PlanStrategyResponse.from(generated.strategy()))
                 .build();
+    }
+
+    /**
+     * 항목별 근거를 저장 계층이 받는 모양(JSON 문자열)으로 옮긴다.
+     *
+     * <p>근거를 못 만든 경로(v0 등)는 빈 목록이고, 그러면 저장도 근거를 붙이지 않는다.
+     * 항목 수와 근거 수가 어긋나면 붙이지 않는다 — 저장 계층에도 같은 검사가 있지만,
+     * 여기서 먼저 걸러야 어느 생성 경로가 어긋났는지가 로그에 남는다.
+     */
+    private List<String> evidenceJson(Generated generated) {
+        List<PlanItemEvidence> evidence = generated.itemEvidence();
+        if (evidence == null || evidence.isEmpty()) {
+            return List.of();
+        }
+        if (evidence.size() != generated.items().size()) {
+            log.error("계획 초안: 조각 {}개와 근거 {}개의 수가 다르다 — 근거를 붙이지 않는다.",
+                    generated.items().size(), evidence.size());
+            return List.of();
+        }
+        List<String> json = new ArrayList<>();
+        for (PlanItemEvidence one : evidence) {
+            json.add(provenanceCodec.toJson(one));
+        }
+        return json;
     }
 
     /**

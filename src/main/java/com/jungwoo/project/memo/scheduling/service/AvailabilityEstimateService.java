@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.domain.BusySource;
 import com.jungwoo.project.memo.scheduling.domain.BusyWindow;
 import com.jungwoo.project.memo.scheduling.dto.AvailabilityOverrideRequest;
 import lombok.RequiredArgsConstructor;
@@ -87,7 +88,8 @@ public class AvailabilityEstimateService {
         List<BusyWindow> busyWindows = new ArrayList<>();
         for (ExecutionItem item : existingFixed) {
             hardBusy.add(new Interval(item.getScheduledStartAt(), item.getScheduledEndAt()));
-            busyWindows.add(new BusyWindow(item.getScheduledStartAt(), item.getScheduledEndAt(), item.getTitle()));
+            busyWindows.add(new BusyWindow(item.getScheduledStartAt(), item.getScheduledEndAt(),
+                    item.getTitle(), BusySource.EXECUTION_ITEM, item.getExecutionItemId()));
         }
 
         /*
@@ -101,7 +103,8 @@ public class AvailabilityEstimateService {
         for (RoutineOccurrence occurrence :
                 routineOccurrenceService.expand(userId, horizonStart, horizonEnd)) {
             hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
-            busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(), occurrence.title()));
+            busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(),
+                    occurrence.title(), BusySource.ROUTINE_OCCURRENCE, occurrence.routineId()));
         }
 
         /*
@@ -113,7 +116,8 @@ public class AvailabilityEstimateService {
         for (Commitment commitment : commitmentService.findOverlapping(userId, horizonStart, horizonEnd)) {
             hardBusy.add(new Interval(commitment.getStartAt(), commitment.getEndAt()));
             busyWindows.add(new BusyWindow(
-                    commitment.getStartAt(), commitment.getEndAt(), commitment.getTitle()));
+                    commitment.getStartAt(), commitment.getEndAt(), commitment.getTitle(),
+                    BusySource.COMMITMENT, commitment.getCommitmentId()));
         }
 
         List<Interval> softBlocked = new ArrayList<>();

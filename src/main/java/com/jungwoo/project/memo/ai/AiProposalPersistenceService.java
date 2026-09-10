@@ -39,6 +39,27 @@ public class AiProposalPersistenceService {
     @Transactional
     public AiProposalResponse save(Long userId, Long conversationId, Long sourceMessageId,
                                     List<ProposalItemPayload> items, List<UnavailableWindowSpec> unavailableWindows) {
+        return save(userId, conversationId, sourceMessageId, items, unavailableWindows, List.of());
+    }
+
+    /**
+     * 항목별 근거를 함께 저장한다. 계획 경로만 쓴다.
+     *
+     * <p>★ {@code itemEvidenceJson}은 {@code items}와 <b>같은 순서</b>여야 한다. 검증
+     * 단계가 항목 하나당 payload 하나를 순서대로 만들거나 통째로 실패하므로 이 대응이
+     * 성립한다. 그래도 길이가 다르면 근거를 하나도 붙이지 않는다 — 엉뚱한 항목에 남의
+     * 근거가 붙는 것이 근거가 없는 것보다 훨씬 나쁘다.
+     */
+    @Transactional
+    public AiProposalResponse save(Long userId, Long conversationId, Long sourceMessageId,
+                                    List<ProposalItemPayload> items, List<UnavailableWindowSpec> unavailableWindows,
+                                    List<String> itemEvidenceJson) {
+        List<String> evidence = itemEvidenceJson == null ? List.of() : itemEvidenceJson;
+        if (!evidence.isEmpty() && evidence.size() != items.size()) {
+            log.error("제안 저장: 항목 {}개와 근거 {}개의 수가 달라 근거를 붙이지 않는다. userId={}",
+                    items.size(), evidence.size(), userId);
+            evidence = List.of();
+        }
         AiProposal proposal = AiProposal.builder()
                 .userId(userId)
                 .conversationId(conversationId)
@@ -50,7 +71,8 @@ public class AiProposalPersistenceService {
         aiProposalMapper.insert(proposal);
 
         List<AiProposalItemResponse> itemResponses = new ArrayList<>();
-        for (ProposalItemPayload payload : items) {
+        for (int index = 0; index < items.size(); index++) {
+            ProposalItemPayload payload = items.get(index);
             String json = toJson(payload);
 
             // 조정 후보는 어느 실행 조각을 바꾸려는지(target_item_id)와 그 당시 버전
@@ -61,6 +83,9 @@ public class AiProposalPersistenceService {
                     .userId(userId)
                     .itemType(AiProposalItemType.EXECUTION_ITEM)
                     .originalPayload(json)
+                    // 근거는 original_payload와 다른 컬럼이다 — 사용자가 고친 값이 덮어쓰는
+                    // 자리와 서버가 소유하는 자리를 구조로 갈라 둔다.
+                    .evidenceJson(evidence.isEmpty() ? null : evidence.get(index))
                     .targetItemId(payload.targetExecutionItemId())
                     .baseVersion(payload.targetBaseVersion())
                     .status(AiProposalItemStatus.PROPOSED)

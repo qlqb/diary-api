@@ -28,6 +28,7 @@ import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemHoldRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemMoveRequest;
 import com.jungwoo.project.memo.execution.dto.ExecutionItemReduceRequest;
+import com.jungwoo.project.memo.plan.provenance.ProposalEvidenceService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -85,6 +86,7 @@ public class AiProposalService {
     private static final int MAX_EXPECTED_MINUTES = 120;
 
     private final AiProposalPersistenceService persistenceService;
+    private final ProposalEvidenceService proposalEvidenceService;
     private final AiProposalMapper aiProposalMapper;
     private final AiProposalItemMapper aiProposalItemMapper;
     private final AiConversationMapper aiConversationMapper;
@@ -148,7 +150,28 @@ public class AiProposalService {
             List<ProposalItem> items, List<ProposalAdjustment> adjustments,
             LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows, int maxItems
     ) {
+        return createFromItems(userId, conversationId, sourceMessageId, items, adjustments, targetDate,
+                unavailableWindows, maxItems, List.of());
+    }
+
+    /**
+     * 항목별 근거를 함께 저장하는 형태. 계획 경로만 쓴다.
+     *
+     * <p>{@code itemEvidenceJson}은 서버가 만든 불투명 JSON이다 — 이 서비스는 내용을 읽지
+     * 않고 저장 계층으로 넘기기만 한다. 모델 응답이나 클라이언트 요청에서 온 값이 여기로
+     * 들어올 경로는 없다.
+     *
+     * <p>★ 근거는 새 후보(items)에만 붙는다. 조정 후보(adjustments)는 기존 조각을 바꾸는
+     * 제안이라 "무엇을 보고 만들었나"의 대상이 아니고, 계획 경로에는 조정 후보가 없다.
+     */
+    public AiProposalResponse createFromItems(
+            Long userId, Long conversationId, Long sourceMessageId,
+            List<ProposalItem> items, List<ProposalAdjustment> adjustments,
+            LocalDate targetDate, List<UnavailableWindowSpec> unavailableWindows, int maxItems,
+            List<String> itemEvidenceJson
+    ) {
         List<ProposalItemPayload> payloads = new ArrayList<>(validateAndNormalize(items, targetDate, maxItems));
+        int newItemCount = payloads.size();
         payloads.addAll(normalizeAdjustments(userId, adjustments, targetDate));
 
         if (payloads.isEmpty()) {
@@ -159,7 +182,21 @@ public class AiProposalService {
             log.warn("AI 제안 구조 검증 실패: 후보 총 개수가 상한({})을 넘음: {}", maxItems, payloads.size());
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
-        return persistenceService.save(userId, conversationId, sourceMessageId, payloads, unavailableWindows);
+        List<String> evidence = itemEvidenceJson == null ? List.of() : itemEvidenceJson;
+        if (!evidence.isEmpty() && evidence.size() != newItemCount) {
+            log.error("제안 저장: 새 후보 {}개와 근거 {}개의 수가 달라 근거를 붙이지 않는다.",
+                    newItemCount, evidence.size());
+            evidence = List.of();
+        } else if (!evidence.isEmpty() && payloads.size() > newItemCount) {
+            // 조정 후보 자리에는 근거가 없다. 길이를 맞춰 넘긴다.
+            List<String> padded = new ArrayList<>(evidence);
+            while (padded.size() < payloads.size()) {
+                padded.add(null);
+            }
+            evidence = padded;
+        }
+        return persistenceService.save(userId, conversationId, sourceMessageId, payloads,
+                unavailableWindows, evidence);
     }
 
     /**
@@ -487,6 +524,13 @@ public class AiProposalService {
         Map<LocalDate, Integer> nextOrderIndexByDate = new HashMap<>();
 
         Long proposalCourseId = resolveCourseId(proposal, userId);
+        /*
+         * 확정 요청은 배치 미리보기가 정한 시각을 그대로 싣는다. 그것을 사용자 수정으로 세면
+         * 모든 항목에 "다시 볼 근거"가 붙어 표식이 뜻을 잃는다. 서버가 정한 시각이 무엇이었는지
+         * 여기서 한 번 읽어 두고 항목마다 대조한다.
+         */
+        ProposalEvidenceService.PlacementBaseline placementBaseline =
+                proposalEvidenceService.placementBaseline(proposalId, userId);
 
         boolean anyModified = false;
         List<AiProposalItemResponse> responses = new ArrayList<>();
@@ -573,6 +617,27 @@ public class AiProposalService {
             }
 
             anyModified = anyModified || modified;
+
+            /*
+             * 사용자가 고친 항목의 근거는 "수정 전 제안의 근거"가 된다. 지우지 않고 상태만
+             * 바꾼다 — 무엇이 왜 바뀌었는지 읽으려면 고치기 전 근거가 남아 있어야 한다.
+             * 날짜·시각을 바꾼 경우는 더 보수적으로 재검토 대상이다(그때의 배치 계산은 이
+             * 시각에 대한 것이 아니다).
+             */
+            if (modified) {
+                boolean placementChanged = !Objects.equals(scheduledDate, original.targetDate())
+                        || !Objects.equals(scheduledStartAt, original.scheduledStartAt())
+                        || !Objects.equals(scheduledEndAt, original.scheduledEndAt())
+                        || !Objects.equals(placementType, original.placementType());
+                boolean userChangedTime = placementChanged
+                        && (placementBaseline == null || !placementBaseline.isServerPlacement(
+                                item.getProposalItemId(), placementType, scheduledDate,
+                                scheduledStartAt, scheduledEndAt));
+                proposalEvidenceService.markEdited(item, userChangedTime,
+                        !Objects.equals(title, original.title())
+                                || !Objects.equals(description, original.description())
+                                || !Objects.equals(expectedMinutes, original.expectedMinutes()));
+            }
 
             // UNSCHEDULED는 날짜·시각을 갖지 않는다(REQ-EXECUTION-002) — 원본 payload의
             // 임시 targetDate나 편집값에 남아있을 수 있는 날짜를 여기서 확실히 비운다.

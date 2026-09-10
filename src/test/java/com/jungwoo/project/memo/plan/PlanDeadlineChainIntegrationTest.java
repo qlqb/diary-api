@@ -285,7 +285,7 @@ class PlanDeadlineChainIntegrationTest {
                 userId(), null, null, List.of(items), List.of(), start, List.of(), 30);
         createdProposalIds.add(proposal.getProposalId());
         aiProposalMapper.updatePlanMetadata(proposal.getProposalId(), userId(), start, end,
-                PlanIntensity.NORMAL, 600, strategyCodec.toJson(strategy));
+                PlanIntensity.NORMAL, 600, strategyCodec.toJson(strategy), null);
         return proposal.getProposalId();
     }
 

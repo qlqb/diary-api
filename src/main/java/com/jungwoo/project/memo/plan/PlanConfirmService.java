@@ -142,6 +142,9 @@ public class PlanConfirmService {
                 // 기간·강도와 같은 이유로, 클라이언트가 다시 보내면 사용자가 승인한 판단과
                 // 저장되는 판단이 달라질 수 있다.
                 .strategyJson(proposal.getPlanStrategyJson())
+                // 출처 스냅샷도 같은 이유로 옮긴다. 확정 요청은 이 값을 받지 않는다 —
+                // 클라이언트가 다시 보내면 사용자가 본 근거와 저장되는 근거가 달라진다.
+                .provenanceJson(proposal.getPlanProvenanceJson())
                 .sourceProposalId(proposalId)
                 .build();
         planVersionMapper.insert(planVersion);

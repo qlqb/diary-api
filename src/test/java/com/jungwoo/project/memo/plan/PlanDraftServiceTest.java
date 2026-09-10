@@ -133,7 +133,8 @@ class PlanDraftServiceTest {
         ReflectionTestUtils.setField(generator, "defaultTimeZoneId", "Asia/Seoul");
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
-                planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService);
+                planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService,
+                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec());
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
@@ -146,7 +147,7 @@ class PlanDraftServiceTest {
         when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(List.of());
         when(courseNoteMapper.findByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
         when(analysisMapper.findAppliedByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
-        when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt()))
+        when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
         givenAvailableMinutes(DEFAULT_AVAILABLE);
     }
@@ -181,7 +182,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getTargetMinutesReason()).isNull();
         assertThat(draft.getAvailabilityConfidenceSummary()).contains("기본 시간대");
         verify(aiProposalMapper).updatePlanMetadata(
-                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), isNull());
+                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), isNull(), any());
     }
 
     @Test
@@ -220,7 +221,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getTargetMinutes()).isZero();
         assertThat(draft.getAvailabilityConfidenceSummary()).isEqualTo("배치할 수 있는 시간이 없음");
         verify(aiConsultationClient, never()).streamTurn(any(), any(), anyInt());
-        verify(aiProposalService, never()).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
+        verify(aiProposalService, never()).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }
 
     // ===== 항목 상한과 예산 =====
@@ -257,7 +258,7 @@ class PlanDraftServiceTest {
         }
         // 상한은 기간과 무관하게 하나다.
         verify(aiProposalService, times(3))
-                .createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+                .createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30), any());
     }
 
     @Test
@@ -268,7 +269,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, PlanDraftRequest.builder()
                 .startDate(START).endDate(START.plusDays(29)).build());
 
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30), any());
     }
 
     /*
@@ -292,7 +293,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(7980);
         // 저장되는 목표도 깎인 값이다 — 스냅샷과 화면이 어긋나지 않는다.
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), any(), any(),
-                eq(PlanIntensity.FOCUSED), eq(3600), isNull());
+                eq(PlanIntensity.FOCUSED), eq(3600), isNull(), any());
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
@@ -415,7 +416,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         // 기간과 무관하게 30개. 개수는 주 제약이 아니라 폭주 방지선이다.
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30), any());
     }
 
     @Test
@@ -426,7 +427,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, PlanDraftRequest.builder()
                 .startDate(START).endDate(START.plusDays(29)).build());
 
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30));
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), eq(30), any());
     }
 
     @Test
@@ -443,7 +444,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt(), any());
         List<ProposalItem> items = captor.getValue();
         assertThat(items).hasSize(2);
         // 날짜를 안 준 항목은 UNSCHEDULED로, 준 항목은 DATE_ONLY로. 확정 시점에 솔버를
@@ -464,7 +465,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt(), any());
         assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnlyNulls();
     }
 
@@ -478,7 +479,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt(), any());
         assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnly(6L);
     }
 
@@ -489,7 +490,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt(), any());
         assertThat(captor.getValue()).extracting(ProposalItem::courseId).containsOnlyNulls();
     }
 
@@ -567,7 +568,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<List<ProposalItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt());
+        verify(aiProposalService).createFromItems(anyLong(), any(), any(), captor.capture(), any(), any(), any(), anyInt(), any());
         assertThat(captor.getValue()).extracting(ProposalItem::description).containsExactly(
                 "단일·중첩 반복문 코드 5개의 시간복잡도 판단 · 완료: 5개 중 4개 이상 설명 가능",
                 "마감이 있어서");
@@ -587,11 +588,11 @@ class PlanDraftServiceTest {
         PeriodPlanDraftGenerator.Generated generated = service.generate(USER_ID, request("집중으로"));
         service.persist(USER_ID, generated, 42L, 4201L);
 
-        verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30));
+        verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30), any());
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
-                eq(PlanIntensity.NORMAL), eq(BASELINE), isNull());
+                eq(PlanIntensity.NORMAL), eq(BASELINE), isNull(), any());
         // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.
-        verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
+        verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }
 
     // ===== fixture =====
@@ -626,7 +627,7 @@ class PlanDraftServiceTest {
 
         // 잘린 응답으로 반쪽짜리 계획을 저장하지 않는다.
         verify(aiProposalService, never()).createFromItems(
-                anyLong(), any(), any(), any(), any(), any(), any(), anyInt());
+                anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }
 
     private void givenAiResponse(Integer targetMinutes, String reason) {

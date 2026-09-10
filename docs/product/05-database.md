@@ -288,6 +288,45 @@ ai_proposal_schedule_previews
 Proposal 하나당 미리보기는 최신 계산 결과 하나만 보존한다(재계산은 upsert) — 이 표는 승인
 전까지 공식 `execution_items`가 아니며, 새로고침 후 미리보기를 복원하는 용도로만 쓴다.
 
+## 10.7 계획 생성 출처 (plan_provenance_json / evidence_json / provenance_json)
+
+2026-09-10부터 계획 초안은 "AI에게 무엇을 줬는가"를 함께 남긴다. DDL은
+`docs/sql/2026-09-10-plan-provenance.sql`.
+
+```text
+ai_proposals.plan_provenance_json   JSON nullable  이 초안을 만든 회차의 제공 정보 스냅샷
+ai_proposal_items.evidence_json     JSON nullable  이 항목의 근거(refId·서버 계산·AI 추정)와 상태
+plan_versions.provenance_json       JSON nullable  확정 시 위 스냅샷을 그대로 복사
+```
+
+세 컬럼 모두 **서버만 쓴다.** 모델 응답에는 항목별 인용 번호(refId)와 추정만 있고, 초안
+수정·확정 요청 DTO에는 이 필드가 없다. 그래서 "출처가 있다"가 "모델이 그렇게 주장했다"가
+되지 않는다.
+
+`plan_provenance_json`의 모양(schema_version 1):
+
+```text
+generationId, capturedAt, timezone, startDate, endDate, generator, modelName
+providedSources[]   refId · sourceType · sourceId · representation · providedValue · promptLine
+serverCalculations[] calculationId · kind · providedToModel · inputRefIds · inputLineage · result
+```
+
+- `providedSources`는 조회한 행이 아니라 **최종 프롬프트에 실제로 들어간 줄**이다. 요약·길이
+  제한이 이미 적용된 값이라, 잘려서 안 나간 것은 여기에도 없다. 스냅샷은 프롬프트를 만들면서
+  같은 자리에서 모은다(`ProvenanceCollector`) — DB를 다시 조회해 만들면 그 사이 바뀐 값이
+  "그때 준 값"으로 저장된다.
+- `serverCalculations`는 출처가 아니다. 가용시간 추정과 학습 예산은 서버가 만든 값이고, 원본
+  일정과 같은 목록에 두면 사용자가 추정을 확정된 사실로 읽는다. `inputLineage`는 그 계산의
+  입력이 전부 남았는지(COMPLETE) 일부인지(PARTIAL)를 구분한다 — 하루 기본 창(09~23시)과 현재
+  시각은 가리킬 원본 행이 없어 가용시간 추정은 항상 PARTIAL이다.
+- `evidence_json`을 `original_payload`에 넣지 않는다. 그쪽은 사용자가 고친 값이
+  `edited_payload`로 다시 쓰이는 자리다. 컬럼을 나눠 두면 "클라이언트가 서버 소유 값을
+  덮어쓸 수 있는가"를 검사 코드가 아니라 구조가 답한다.
+- 적용된 실행 조각에서 회차로 되짚는 경로는 기존 `ai_proposal_items.created_item_id`다. 새
+  연결 컬럼을 만들지 않는다.
+- 과거 데이터는 셋 다 NULL이고 그대로 둔다. 지금 DB로 역추정해 채우지 않는다 — 그건 스냅샷이
+  아니라 추측이고, 추측을 근거로 보여주는 것이 이 기능이 막으려는 바로 그것이다.
+
 ## 10.6 ai_conversation_drafts (진행 중 요청 상태)
 
 2026-09-08부터 상담 대화는 "아직 만들지 않은 일정 요청"의 확정된 조각을 서버가 들고 있는다.

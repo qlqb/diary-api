@@ -72,6 +72,15 @@ public class AiProposal {
      */
     private String planStrategyJson;
 
+    /**
+     * 이 초안을 만든 생성 회차에 <b>모델에 무엇을 줬는가</b>(PlanProvenance)의 JSON.
+     *
+     * 서버만 쓴다 — 모델 응답에도 클라이언트 요청에도 이 값이 없다. 확정이 읽어
+     * plan_versions.provenance_json으로 복사한다. 계획 경로가 아닌 제안과, 이 기능이
+     * 생기기 전의 제안은 NULL이고 화면은 "출처 기록 없음"으로 말한다.
+     */
+    private String planProvenanceJson;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

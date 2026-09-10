@@ -76,6 +76,14 @@ public class PlanVersion {
     private String strategyJson;
 
     /**
+     * 이 계획을 만든 회차에 모델에 제공한 정보(PlanProvenance)의 JSON. strategy_json과 같은
+     * 성격의 불변 역사다 — "왜 그렇게 하기로 했는가" 옆의 "무엇을 보고 그렇게 봤는가".
+     *
+     * 출처 기록이 생기기 전에 확정된 계획은 null이다. 지금 DB로 역추정해 채우지 않는다.
+     */
+    private String provenanceJson;
+
+    /**
      * 이 계획을 만들어낸 ai_proposals.proposal_id. UNIQUE 제약이 걸려 있어 같은 제안을
      * 두 번 확정할 수 없다. 제안 없이 만든 계획은 null이다.
      */

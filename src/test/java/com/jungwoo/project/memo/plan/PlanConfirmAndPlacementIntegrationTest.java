@@ -505,7 +505,7 @@ class PlanConfirmAndPlacementIntegrationTest {
                 userId(), null, null, items, List.of(), start, List.of(), 30);
         createdProposalIds.add(proposal.getProposalId());
         aiProposalMapper.updatePlanMetadata(
-                proposal.getProposalId(), userId(), start, end, PlanIntensity.FOCUSED, 1080, null);
+                proposal.getProposalId(), userId(), start, end, PlanIntensity.FOCUSED, 1080, null, null);
         return proposal.getProposalId();
     }
 
