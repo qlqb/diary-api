@@ -13,12 +13,16 @@ import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -259,6 +263,56 @@ class MaterialServiceTest {
         when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(null);
 
         assertThatThrownBy(() -> service.getActiveOwned(USER_ID, MATERIAL_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COURSE_MATERIAL_NOT_FOUND));
+    }
+
+    @Test
+    void openFile_returnsStoredFileWithOriginalNameAndType(@TempDir Path dir) throws Exception {
+        Path stored = dir.resolve("u.pdf");
+        Files.writeString(stored, "%PDF-1.4");
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(CourseMaterial.builder()
+                .materialId(MATERIAL_ID)
+                .originalFilename("빅데이터분석 강의계획서.pdf")
+                .storagePath("1/u.pdf")
+                .contentType("application/pdf")
+                .sizeBytes(8L)
+                .build());
+        when(fileStorageService.resolve("1/u.pdf")).thenReturn(stored);
+
+        MaterialService.MaterialFile file = service.openFile(USER_ID, MATERIAL_ID);
+
+        assertThat(file.filename()).isEqualTo("빅데이터분석 강의계획서.pdf");
+        assertThat(file.contentType()).isEqualTo("application/pdf");
+        assertThat(file.resource().exists()).isTrue();
+    }
+
+    /*
+     * 메타데이터는 ACTIVE인데 디스크에 파일이 없는 어긋남. 업로드/삭제 순서 규칙상 정상
+     * 경로로는 생기지 않지만, 생겼을 때 500이 아니라 404로 말해야 화면이 "열 수 없다"고
+     * 안내할 수 있다.
+     */
+    @Test
+    void openFile_throwsNotFoundWhenFileIsGoneFromDisk(@TempDir Path dir) {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(CourseMaterial.builder()
+                .materialId(MATERIAL_ID)
+                .originalFilename("자료구조.pdf")
+                .storagePath("1/gone.pdf")
+                .contentType("application/pdf")
+                .build());
+        when(fileStorageService.resolve("1/gone.pdf")).thenReturn(dir.resolve("gone.pdf"));
+
+        assertThatThrownBy(() -> service.openFile(USER_ID, MATERIAL_ID))
+                .isInstanceOfSatisfying(NotFoundException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_FILE_NOT_FOUND));
+    }
+
+    /** 삭제된 자료는 원본이 실제로 없다 — 이름만 남는 provenance 경로와 갈린다. */
+    @Test
+    void openFile_doesNotServeDeletedMaterial() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.openFile(USER_ID, MATERIAL_ID))
                 .isInstanceOfSatisfying(NotFoundException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COURSE_MATERIAL_NOT_FOUND));
     }

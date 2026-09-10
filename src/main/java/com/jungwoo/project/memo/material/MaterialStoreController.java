@@ -16,12 +16,17 @@ import com.jungwoo.project.memo.material.linkproposal.ProposalTrigger;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 
 /**
@@ -30,6 +35,7 @@ import java.util.List;
  * GET    /api/materials                        내 전체 자료 + 각 자료에 연결된 프로젝트
  * POST   /api/materials                        프로젝트 없이 업로드 (materialType을 받지 않는다)
  * GET    /api/materials/{id}                   단건 + 연결 목록 + 분석 이력
+ * GET    /api/materials/{id}/file              원본 파일 (inline)
  * DELETE /api/materials/{id}                   자료 삭제 (원본 파일까지)
  * POST   /api/materials/link-proposal          미연결 자료를 어디에 넣을지 제안 (저장하지 않는다)
  * POST   /api/materials/link-proposal/apply    승인한 제안을 적용 (단일 트랜잭션)
@@ -82,6 +88,35 @@ public class MaterialStoreController {
                 .material(materialService.getStoreItem(userId, materialId))
                 .analyses(materialAnalysisService.listByMaterial(userId, materialId))
                 .build());
+    }
+
+    /**
+     * 원본 파일을 그대로 내려준다. 자료 이름이 보이는 자리에서 "파일 열기"가 이 경로를 쓴다.
+     *
+     * inline으로 보내는 이유: PDF는 브라우저가 바로 그려 준다. 다른 형식(pptx)은 inline을
+     * 받아도 브라우저가 결국 내려받으므로, 여기서 형식을 갈라 헤더를 다르게 쓰지 않는다.
+     * 파일명은 RFC 5987로 인코딩한다 — 한글 파일명이 대부분이라 그냥 넣으면 깨진다.
+     *
+     * 인증은 다른 경로와 같은 Bearer 토큰이다. 쿼리 문자열 토큰이나 서명 URL을 만들지
+     * 않았다 — 만들면 링크 하나가 그대로 유출 경로가 되고, 화면 쪽에서 blob으로 받아 여는
+     * 것만으로 충분하다.
+     */
+    @GetMapping("/{materialId}/file")
+    public ResponseEntity<Resource> file(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long materialId
+    ) {
+        MaterialService.MaterialFile file = materialService.openFile(principal.getUserId(), materialId);
+        String encodedName = URLEncoder.encode(file.filename(), StandardCharsets.UTF_8).replace("+", "%20");
+        ResponseEntity.BodyBuilder response = ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename*=UTF-8''" + encodedName)
+                .contentType(file.contentType() != null
+                        ? MediaType.parseMediaType(file.contentType())
+                        : MediaType.APPLICATION_OCTET_STREAM);
+        if (file.sizeBytes() != null) {
+            response.contentLength(file.sizeBytes());
+        }
+        return response.body(file.resource());
     }
 
     /** 원본 파일까지 지운다. 연결 해제와는 다른 액션이다. */

@@ -16,10 +16,13 @@ import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import com.jungwoo.project.memo.material.dto.MaterialStoreItemResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -223,6 +226,39 @@ public class MaterialService {
             throw new NotFoundException(ErrorCode.COURSE_MATERIAL_NOT_FOUND);
         }
         return material;
+    }
+
+    /**
+     * 원본 파일 자체를 열어 준다. 화면에서 "PDF 열기"가 이 경로를 쓴다.
+     *
+     * 지금까지 원본은 업로드된 뒤 텍스트 추출에만 쓰였고 사용자가 다시 볼 길이 없었다.
+     * 자료 이름만 보이는 자리에서 "그래서 그 파일이 뭐였더라"를 확인하려면 자료함을 떠나
+     * 원래 파일을 찾아야 했다.
+     *
+     * DELETED 자료는 여기로 오지 않는다 — getActiveOwned가 막는다. 삭제는 디스크 파일까지
+     * 지우므로 열 원본이 실제로 없고, provenance 표시(findForProvenance)는 이름만 쓴다.
+     */
+    @Transactional(readOnly = true)
+    public MaterialFile openFile(Long userId, Long materialId) {
+        CourseMaterial material = getActiveOwned(userId, materialId);
+        if (material.getStoragePath() == null) {
+            throw new NotFoundException(ErrorCode.MATERIAL_FILE_NOT_FOUND);
+        }
+        Path path = fileStorageService.resolve(material.getStoragePath());
+        if (!Files.isReadable(path)) {
+            log.error("자료의 원본 파일이 없음: materialId={}, storagePath={}",
+                    materialId, material.getStoragePath());
+            throw new NotFoundException(ErrorCode.MATERIAL_FILE_NOT_FOUND);
+        }
+        return new MaterialFile(
+                new FileSystemResource(path),
+                sanitizeDisplayName(material.getOriginalFilename()),
+                material.getContentType(),
+                material.getSizeBytes());
+    }
+
+    /** 응답에 필요한 것만 — 컨트롤러가 CourseMaterial 전체를 만지지 않게 한다. */
+    public record MaterialFile(Resource resource, String filename, String contentType, Long sizeBytes) {
     }
 
     /**

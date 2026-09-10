@@ -93,6 +93,12 @@ public enum ErrorCode {
     ROUTINE_EXCEPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_020", "반복 일정의 예외를 찾을 수 없습니다"),
     COMMITMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_021", "약속을 찾을 수 없습니다"),
     SCHEDULE_SUGGESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_022", "일정 후보를 찾을 수 없습니다"),
+    /*
+     * 메타데이터는 ACTIVE인데 디스크에 원본이 없는 상태. 업로드/삭제 규칙상 정상적으로는
+     * 생기지 않지만(고아 파일은 반대 방향으로만 남는다), 파일을 직접 열어 주는 경로가
+     * 생겼으므로 이 어긋남을 500이 아니라 이 코드로 말한다.
+     */
+    MATERIAL_FILE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_023", "자료의 원본 파일을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
