@@ -101,6 +101,8 @@ class PlanDraftServiceTest {
     @Mock
     private com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper analysisMapper;
     @Mock
+    private com.jungwoo.project.memo.material.CourseMaterialMapper courseMaterialMapper;
+    @Mock
     private AvailabilityEstimateService availabilityEstimateService;
     /**
      * 기본 경로(AI)만 검증하는 스위트다. v0는 PlanBlockGeneratorV0Test가, 판단은
@@ -125,7 +127,7 @@ class PlanDraftServiceTest {
         // generator를 지나므로 프롬프트 단언은 generator 쪽 mock(aiConsultationClient)에서 잡는다.
         PeriodPlanDraftGenerator generator = new PeriodPlanDraftGenerator(aiConsultationClient,
                 aiUsageLimitService, planReviewService, courseMapper, topicService, courseNoteMapper,
-                analysisMapper, executionItemMapper, availabilityEstimateService,
+                analysisMapper, courseMaterialMapper, executionItemMapper, availabilityEstimateService,
                 Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);

@@ -82,6 +82,19 @@ public class ProvenanceCollector {
     public Marked mark(ProvenanceSourceType type, Long sourceId, Long sourceVersion,
                        LocalDateTime sourceUpdatedAt, ProvenanceRepresentation representation,
                        Map<String, Object> providedValue, String text) {
+        return mark(type, sourceId, sourceVersion, sourceUpdatedAt, representation, providedValue, text,
+                null, null);
+    }
+
+    /**
+     * {@link #mark(ProvenanceSourceType, Long, Long, LocalDateTime, ProvenanceRepresentation, Map, String)}에
+     * 당시 구조와 자료 파일 정보를 더한 형태. 이 둘은 모델에 준 값이 아니라 서버가 원문
+     * 탐색을 위해 붙이는 메타데이터라 providedValue와 다른 자리에 둔다.
+     */
+    public Marked mark(ProvenanceSourceType type, Long sourceId, Long sourceVersion,
+                       LocalDateTime sourceUpdatedAt, ProvenanceRepresentation representation,
+                       Map<String, Object> providedValue, String text,
+                       Long parentSourceId, ProvidedMaterial material) {
         if (sources.size() >= WARN_SOURCES && !overflowWarned) {
             overflowWarned = true;
             log.warn("계획 생성 출처 기록이 {}줄을 넘었다 — 전부 기록하지만 프롬프트 블록 상한을 "
@@ -90,7 +103,8 @@ public class ProvenanceCollector {
         String refId = "s" + nextRef++;
         String line = text + " [" + refId + "]";
         sources.add(new ProvidedSource(refId, type, sourceId, sourceVersion, sourceUpdatedAt,
-                representation, providedValue == null ? Map.of() : providedValue, line));
+                representation, providedValue == null ? Map.of() : providedValue, line,
+                parentSourceId, material));
         return new Marked(refId, line);
     }
 

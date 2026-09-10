@@ -303,13 +303,25 @@ plan_versions.provenance_json       JSON nullable  확정 시 위 스냅샷을 �
 수정·확정 요청 DTO에는 이 필드가 없다. 그래서 "출처가 있다"가 "모델이 그렇게 주장했다"가
 되지 않는다.
 
-`plan_provenance_json`의 모양(schema_version 1):
+`plan_provenance_json`의 모양(schema_version 2, 2026-09-11부터. 1판은 아래 두 필드가 없다):
 
 ```text
 generationId, capturedAt, timezone, startDate, endDate, generator, modelName
 providedSources[]   refId · sourceType · sourceId · representation · providedValue · promptLine
+                    · parentSourceId(2판) · material(2판: materialId · filename · contentType · fileHash · locator)
 serverCalculations[] calculationId · kind · providedToModel · inputRefIds · inputLineage · result
 ```
+
+- `parentSourceId`와 `material`은 **모델에 준 값이 아니다.** 서버가 "그때 이 파일이었다"를 말하려고
+  옆에 붙이는 메타데이터이고, 프롬프트에는 파일명·해시가 나가지 않는다. 모델이 받은 것은
+  `providedValue`(제목·위치 문자열)뿐이다.
+- `material.locator`는 "2주차" 같은 문자열이다. PDF 페이지가 아니며, 페이지로 해석하지 않는다.
+- `material.fileHash`는 당시 SHA-256이다. 지금 파일과 다르면 "원본이 변경됨"이지, 과거 파일을
+  복원할 수 있다는 뜻은 아니다(파일 버전 보관은 없다).
+- 1판 JSON은 그대로 읽히고(`@JsonIgnoreProperties`, 없는 필드는 null), 화면은 1판 스냅샷의 자료를
+  "현재 연결된 자료"로만 말한다. 1판을 2판으로 다시 쓰지 않는다.
+- 배포 순서: 2판은 같은 컬럼 안의 필드 추가라 **추가 DDL이 없다.** 2026-09-10 DDL이 적용된 DB에
+  API를 먼저 올리고 UI를 올린다. 옛 UI는 늘어난 필드를 무시하고, 새 UI는 없는 필드를 null로 본다.
 
 - `providedSources`는 조회한 행이 아니라 **최종 프롬프트에 실제로 들어간 줄**이다. 요약·길이
   제한이 이미 적용된 값이라, 잘려서 안 나간 것은 여기에도 없다. 스냅샷은 프롬프트를 만들면서

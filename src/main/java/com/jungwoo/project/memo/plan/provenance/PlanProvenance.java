@@ -23,7 +23,9 @@ import java.util.stream.Collectors;
  * 재생성하면 새 제안·새 회차가 만들어지고 기존 스냅샷은 그대로 남는다.
  *
  * @param schemaVersion 이 구조의 판. 늘어난 필드를 모르는 과거 코드가 통째로 실패하지
- *                      않도록 두는 값이다. 첫 판은 1
+ *                      않도록 두는 값이다. 1판은 원본 줄과 서버 계산만, 2판(2026-09-11)은
+ *                      원본 줄에 당시 구조(parentSourceId)와 자료 파일(material)을 더했다.
+ *                      1판 JSON은 그대로 읽히고 늘어난 필드는 null이다
  * @param generationId  이 생성 회차의 식별자. 항목의 근거가 어느 회차를 가리키는지 판별한다
  * @param capturedAt    스냅샷을 만든 시각. 프롬프트를 만든 시각과 같다
  * @param timezone      날짜 해석에 쓴 시간대. 값 자체는 기존 API 계약대로 오프셋 없는 시각이다
@@ -45,7 +47,7 @@ public record PlanProvenance(
         List<ServerCalculation> serverCalculations
 ) {
 
-    public static final int SCHEMA_VERSION = 1;
+    public static final int SCHEMA_VERSION = 2;
 
     /** 이번 회차에 실제로 제공한 refId 집합. 항목별 인용 검증이 이 집합만 인정한다. */
     public Set<String> refIds() {

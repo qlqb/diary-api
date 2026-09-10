@@ -17,9 +17,16 @@ import com.jungwoo.project.memo.execution.domain.ExecutionEventActorType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionItemEvent;
 import com.jungwoo.project.memo.learning.CourseTopicMapper;
+import com.jungwoo.project.memo.learning.domain.CourseTopic;
+import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
+import com.jungwoo.project.memo.material.MaterialService;
+import com.jungwoo.project.memo.material.domain.CourseMaterial;
+import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
+import com.jungwoo.project.memo.material.domain.MaterialStatus;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse.ItemView;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse.LinkView;
+import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse.MaterialView;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse.SourceView;
 import com.jungwoo.project.memo.routine.RoutineMapper;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +35,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 /**
  * "생성 시 참고한 정보"와 "이 항목의 근거"를 읽는 유일한 경로.
@@ -57,6 +67,8 @@ public class PlanProvenanceService {
     private final ExecutionItemMapper executionItemMapper;
     private final ExecutionItemEventMapper executionItemEventMapper;
     private final UserContextMapper userContextMapper;
+    private final CourseMaterialAnalysisMapper analysisMapper;
+    private final MaterialService materialService;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     /** 초안(제안) 하나의 생성 정보와 항목별 근거. */
@@ -195,15 +207,17 @@ public class PlanProvenanceService {
             return PlanProvenanceResponse.notRecorded(proposal.getProposalId(), planVersionId, itemViews);
         }
 
+        MaterialResolver materials = new MaterialResolver(userId, provenance.providedSources());
         List<SourceView> sources = new ArrayList<>();
         for (ProvidedSource source : provenance.providedSources()) {
             sources.add(new SourceView(
                     source.refId(), source.sourceType(), source.sourceId(), source.sourceVersion(),
                     source.sourceUpdatedAt(), source.representation(), source.providedValue(),
-                    source.promptLine(), resolveLink(userId, source)));
+                    source.promptLine(), resolveLink(userId, source), source.parentSourceId(),
+                    materials.viewOf(source)));
         }
 
-        return new PlanProvenanceResponse(true, proposal.getProposalId(), planVersionId,
+        return new PlanProvenanceResponse(true, provenance.schemaVersion(), proposal.getProposalId(), planVersionId,
                 provenance.generationId(), provenance.capturedAt(), provenance.timezone(),
                 provenance.startDate(), provenance.endDate(), provenance.generator(),
                 provenance.modelName(), sources, provenance.serverCalculations(), itemViews);
@@ -292,5 +306,146 @@ public class PlanProvenanceService {
 
     private LinkView deleted() {
         return LinkView.none("원본이 지워졌거나 볼 수 없어요");
+    }
+
+    // ===== 자료 파일 =====
+
+    /**
+     * 원본 줄이 나온 자료 파일을 <b>당시 기록</b>과 <b>지금 연결</b>로 나눠 푼다.
+     *
+     * <p>회차 하나의 자료를 한 번에 찾는다 — 줄마다 조회하면 학습 항목 30줄에 30번이다.
+     * 지워진 자료도 찾는다(이름을 남기기 위해). 파일 내용에는 접근하지 않는다.
+     *
+     * <p>★ 지금 파일을 당시 원문으로 가장하지 않는다. 같은 id라도 해시나 이름이 다르면
+     * "원본이 변경됨"이고, 학습 항목이 다른 자료로 다시 연결됐으면 "다른 자료가 연결됨"이다.
+     * 1판 스냅샷은 당시 연결을 모르므로 지금 연결을 "현재 연결된 자료"로만 말한다.
+     */
+    private final class MaterialResolver {
+
+        private final Map<Long, CourseTopic> topicsById = new HashMap<>();
+        private final Map<Long, CourseMaterialAnalysis> analysesById = new HashMap<>();
+        private final Map<Long, CourseMaterial> materialsById;
+
+        MaterialResolver(Long userId, List<ProvidedSource> sources) {
+            List<Long> materialIds = new ArrayList<>();
+            for (ProvidedSource source : sources) {
+                if (source.material() != null && source.material().materialId() != null) {
+                    materialIds.add(source.material().materialId());
+                }
+                if (source.sourceId() == null) {
+                    continue;
+                }
+                if (source.sourceType() == ProvenanceSourceType.TOPIC) {
+                    CourseTopic topic = topicsById.computeIfAbsent(source.sourceId(),
+                            id -> courseTopicMapper.findByIdAndUserId(id, userId));
+                    if (topic != null && topic.getSourceMaterialId() != null) {
+                        materialIds.add(topic.getSourceMaterialId());
+                    }
+                } else if (source.sourceType() == ProvenanceSourceType.MATERIAL_KEY_DATE) {
+                    CourseMaterialAnalysis analysis = analysesById.computeIfAbsent(source.sourceId(),
+                            id -> analysisMapper.findByIdAndUserId(id, userId));
+                    if (analysis != null && analysis.getMaterialId() != null) {
+                        materialIds.add(analysis.getMaterialId());
+                    }
+                }
+            }
+            this.materialsById = materialIds.isEmpty() ? Map.of()
+                    : materialService.findForProvenance(userId, materialIds);
+        }
+
+        MaterialView viewOf(ProvidedSource source) {
+            ProvidedMaterial recorded = source.material() != null && source.material().materialId() != null
+                    ? source.material() : null;
+            Long currentId = null;
+            String currentLocator = null;
+            if (source.sourceId() != null && source.sourceType() == ProvenanceSourceType.TOPIC) {
+                CourseTopic topic = topicsById.get(source.sourceId());
+                if (topic != null) {
+                    currentId = topic.getSourceMaterialId();
+                    currentLocator = topic.getSourceLocator();
+                }
+            } else if (source.sourceId() != null && source.sourceType() == ProvenanceSourceType.MATERIAL_KEY_DATE) {
+                CourseMaterialAnalysis analysis = analysesById.get(source.sourceId());
+                if (analysis != null) {
+                    currentId = analysis.getMaterialId();
+                }
+            }
+
+            if (recorded != null) {
+                return fromRecorded(recorded, currentId);
+            }
+            if (currentId != null) {
+                return fromCurrentLink(currentId, currentLocator);
+            }
+            return null;
+        }
+
+        private MaterialView fromRecorded(ProvidedMaterial recorded, Long currentId) {
+            CourseMaterial same = materialsById.get(recorded.materialId());
+            boolean relinked = currentId != null && !Objects.equals(currentId, recorded.materialId());
+            if (relinked) {
+                CourseMaterial current = materialsById.get(currentId);
+                boolean openable = current != null && current.getStatus() == MaterialStatus.ACTIVE;
+                return new MaterialView(openable ? currentId : null, recorded.materialId(), recorded.filename(),
+                        current != null ? current.getOriginalFilename() : null,
+                        current != null ? current.getContentType() : null, recorded.locator(),
+                        MaterialView.MaterialOrigin.RECORDED, MaterialView.MaterialState.RELINKED,
+                        openable ? openModeOf(current) : MaterialView.MaterialOpenMode.NONE,
+                        openable ? "생성 당시와 다른 자료가 연결돼 있어요 · 현재 파일을 열어요"
+                                : "생성 당시와 다른 자료가 연결돼 있고, 지금은 열 수 없어요");
+            }
+            if (same == null) {
+                return new MaterialView(null, recorded.materialId(), recorded.filename(), null,
+                        recorded.contentType(), recorded.locator(),
+                        MaterialView.MaterialOrigin.RECORDED, MaterialView.MaterialState.UNAVAILABLE,
+                        MaterialView.MaterialOpenMode.NONE, "이 자료를 지금은 찾을 수 없어요");
+            }
+            if (same.getStatus() == MaterialStatus.DELETED) {
+                return new MaterialView(null, recorded.materialId(), recorded.filename(), same.getOriginalFilename(),
+                        recorded.contentType(), recorded.locator(),
+                        MaterialView.MaterialOrigin.RECORDED, MaterialView.MaterialState.DELETED,
+                        MaterialView.MaterialOpenMode.NONE, "원본 자료가 지워졌어요");
+            }
+            boolean hashChanged = recorded.fileHash() != null && same.getFileHash() != null
+                    && !recorded.fileHash().equals(same.getFileHash());
+            boolean nameChanged = recorded.filename() != null
+                    && !recorded.filename().equals(same.getOriginalFilename());
+            if (hashChanged || nameChanged) {
+                return new MaterialView(same.getMaterialId(), recorded.materialId(), recorded.filename(), same.getOriginalFilename(),
+                        same.getContentType(), recorded.locator(),
+                        MaterialView.MaterialOrigin.RECORDED, MaterialView.MaterialState.CHANGED,
+                        openModeOf(same), "원본이 변경됨 · 현재 파일을 열어요");
+            }
+            return new MaterialView(same.getMaterialId(), recorded.materialId(), recorded.filename(), same.getOriginalFilename(),
+                    same.getContentType(), recorded.locator(),
+                    MaterialView.MaterialOrigin.RECORDED, MaterialView.MaterialState.AVAILABLE,
+                    openModeOf(same), null);
+        }
+
+        private MaterialView fromCurrentLink(Long currentId, String locator) {
+            CourseMaterial current = materialsById.get(currentId);
+            if (current == null) {
+                return new MaterialView(null, null, null, null, null, locator,
+                        MaterialView.MaterialOrigin.CURRENT_LINK, MaterialView.MaterialState.UNAVAILABLE,
+                        MaterialView.MaterialOpenMode.NONE, "연결된 자료를 지금은 찾을 수 없어요");
+            }
+            if (current.getStatus() == MaterialStatus.DELETED) {
+                return new MaterialView(null, null, current.getOriginalFilename(), current.getOriginalFilename(),
+                        current.getContentType(), locator,
+                        MaterialView.MaterialOrigin.CURRENT_LINK, MaterialView.MaterialState.DELETED,
+                        MaterialView.MaterialOpenMode.NONE, "현재 연결된 자료 · 지워졌어요");
+            }
+            return new MaterialView(current.getMaterialId(), null, current.getOriginalFilename(),
+                    current.getOriginalFilename(), current.getContentType(), locator,
+                    MaterialView.MaterialOrigin.CURRENT_LINK, MaterialView.MaterialState.AVAILABLE,
+                    openModeOf(current), "생성 당시 연결 기록이 없어 현재 연결된 자료를 열어요");
+        }
+
+        private MaterialView.MaterialOpenMode openModeOf(CourseMaterial material) {
+            String type = material.getContentType() != null ? material.getContentType().toLowerCase() : "";
+            String name = material.getOriginalFilename() != null ? material.getOriginalFilename().toLowerCase() : "";
+            boolean pdf = type.contains("pdf") || (type.isEmpty() && name.endsWith(".pdf"));
+            return pdf ? MaterialView.MaterialOpenMode.INLINE : MaterialView.MaterialOpenMode.DOWNLOAD;
+        }
     }
 }

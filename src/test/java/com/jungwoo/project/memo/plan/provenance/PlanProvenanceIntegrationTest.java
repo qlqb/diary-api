@@ -70,8 +70,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @SpringBootTest
 class PlanProvenanceIntegrationTest {
 
-    /** 이 스위트만 쓰는 사용자. 다른 DB 테스트들과 겹치지 않는 번호대다. */
-    private static final Long TEST_USER_ID = 999_000_061L;
+    /**
+     * 이 스위트만 쓰는 사용자. 매번 새로 만들고 끝나면 지운다.
+     *
+     * <p>id를 직접 정하지 않는다 — users는 다른 표들이 FK로 가리키고 있어 큰 번호를 직접
+     * 넣으면 auto_increment가 그 뒤로 옮겨가, 다음 실제 가입자가 그 번호대를 받는다.
+     */
+    private static Long TEST_USER_ID;
+    private static final String EMAIL_PREFIX = "prv-test-";
     private static final String TITLE_PREFIX = "PRV-";
 
     @Autowired
@@ -99,14 +105,17 @@ class PlanProvenanceIntegrationTest {
 
     @BeforeEach
     void createTestUser() throws Exception {
-        cleanUp();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(
-                     "INSERT INTO users (user_id, email, password_hash, nickname, role, status) "
-                             + "VALUES (?, ?, 'not-a-real-hash', 'prv-test', 'USER', 'ACTIVE')")) {
-            ps.setLong(1, TEST_USER_ID);
-            ps.setString(2, "prv-test-" + TEST_USER_ID + "@example.invalid");
+                     "INSERT INTO users (email, password_hash, nickname, role, status) "
+                             + "VALUES (?, 'not-a-real-hash', 'prv-test', 'USER', 'ACTIVE')",
+                     java.sql.Statement.RETURN_GENERATED_KEYS)) {
+            ps.setString(1, EMAIL_PREFIX + System.nanoTime() + "@example.invalid");
             ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                keys.next();
+                TEST_USER_ID = keys.getLong(1);
+            }
         }
     }
 
@@ -116,6 +125,9 @@ class PlanProvenanceIntegrationTest {
      */
     @AfterEach
     void cleanUp() throws Exception {
+        if (TEST_USER_ID == null) {
+            return;
+        }
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
                     "DELETE FROM execution_item_events WHERE user_id = ?",
@@ -132,6 +144,7 @@ class PlanProvenanceIntegrationTest {
                 }
             }
         }
+        TEST_USER_ID = null;
     }
 
     // ===== 초안에서 조회 =====

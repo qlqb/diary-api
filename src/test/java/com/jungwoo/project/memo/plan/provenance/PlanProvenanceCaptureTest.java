@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
+import com.jungwoo.project.memo.material.CourseMaterialMapper;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Generated;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Spec;
@@ -81,6 +82,8 @@ class PlanProvenanceCaptureTest {
     @Mock
     private CourseMaterialAnalysisMapper analysisMapper;
     @Mock
+    private CourseMaterialMapper courseMaterialMapper;
+    @Mock
     private ExecutionItemMapper executionItemMapper;
     @Mock
     private AvailabilityEstimateService availabilityEstimateService;
@@ -91,7 +94,7 @@ class PlanProvenanceCaptureTest {
     void setUp() {
         generator = new PeriodPlanDraftGenerator(aiConsultationClient, aiUsageLimitService,
                 planReviewService, courseMapper, topicService, courseNoteMapper, analysisMapper,
-                executionItemMapper, availabilityEstimateService,
+                courseMaterialMapper, executionItemMapper, availabilityEstimateService,
                 Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
@@ -126,7 +129,7 @@ class PlanProvenanceCaptureTest {
         String prompt = capturedPrompt();
         PlanProvenance provenance = generated.provenance();
         assertThat(provenance).isNotNull();
-        assertThat(provenance.schemaVersion()).isEqualTo(1);
+        assertThat(provenance.schemaVersion()).isEqualTo(PlanProvenance.SCHEMA_VERSION);
         assertThat(provenance.generationId()).startsWith("gen-");
         assertThat(provenance.timezone()).isEqualTo("Asia/Seoul");
         assertThat(provenance.modelName()).isEqualTo("test-model");
@@ -181,6 +184,69 @@ class PlanProvenanceCaptureTest {
         assertThat(prompt).contains("외 5개");
         assertThat(prompt).as("잘린 주제는 모델에게 가지 않는다").doesNotContain("주제34");
         assertThat(recordedTopicIds).as("잘린 주제는 스냅샷에도 없다").doesNotContain(234L);
+    }
+
+    // ===== 당시 구조와 자료 파일은 모델에 준 값과 다른 자리에 남는다 =====
+
+    /**
+     * 학습 항목 줄에는 부모 항목과 원본 자료 파일이 함께 기록된다. 둘 다 <b>모델에는 가지
+     * 않는다</b> — 프롬프트에는 제목과 위치 문자열만 있고, 파일명·해시는 스냅샷이 원문 탐색을
+     * 위해 옆에 붙이는 값이다. 화면이 "AI가 파일을 읽었다"고 말하지 않게 하려면 이 구분이
+     * 저장 단계에서부터 지켜져야 한다.
+     */
+    @Test
+    void topicLines_carryParentAndSourceMaterial_withoutSendingThemToTheModel() {
+        TopicResponse child = TopicResponse.builder().topicId(102L).parentTopicId(101L).title("소켓의 개념")
+                .sourceLocator("2주차").sourceMaterialId(657L).sourceMaterialFilename("네트워크 2주차.pdf").build();
+        TopicResponse parent = TopicResponse.builder().topicId(101L).title("네트워크와 소켓 프로그래밍")
+                .sourceLocator("2주차").sourceMaterialId(657L).sourceMaterialFilename("네트워크 2주차.pdf")
+                .children(List.of(child)).build();
+        givenTopics(parent);
+        when(courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(any(), anyLong())).thenReturn(List.of(
+                com.jungwoo.project.memo.material.domain.CourseMaterial.builder().materialId(657L)
+                        .originalFilename("네트워크 2주차.pdf").contentType("application/pdf")
+                        .fileHash("abc123").build()));
+        givenOneItem();
+
+        Generated generated = generator.generate(spec(null));
+        String prompt = capturedPrompt();
+
+        List<ProvidedSource> topics = generated.provenance().providedSources().stream()
+                .filter(s -> s.sourceType() == ProvenanceSourceType.TOPIC).toList();
+        assertThat(topics).extracting(ProvidedSource::sourceId).containsExactly(101L, 102L);
+        assertThat(topics.get(0).parentSourceId()).isNull();
+        assertThat(topics.get(1).parentSourceId()).isEqualTo(101L);
+        for (ProvidedSource topic : topics) {
+            assertThat(topic.material()).isNotNull();
+            assertThat(topic.material().materialId()).isEqualTo(657L);
+            assertThat(topic.material().filename()).isEqualTo("네트워크 2주차.pdf");
+            assertThat(topic.material().fileHash()).isEqualTo("abc123");
+            assertThat(topic.material().locator()).isEqualTo("2주차");
+            // 모델에 준 값에는 파일 정보가 없다.
+            assertThat(topic.providedValue()).doesNotContainKeys("filename", "fileHash", "materialId");
+        }
+        assertThat(prompt).doesNotContain("네트워크 2주차.pdf").doesNotContain("abc123");
+        assertThat(prompt).contains("소켓의 개념 (2주차)");
+    }
+
+    /** 자료 행을 못 찾아도 학습 항목이 아는 id와 이름은 남긴다. 자료 연결이 없으면 null이다. */
+    @Test
+    void topicWithoutAMaterialRow_keepsIdAndName_andTopicWithoutLinkHasNoMaterial() {
+        TopicResponse linked = TopicResponse.builder().topicId(101L).title("재귀").sourceLocator("2주차")
+                .sourceMaterialId(9L).sourceMaterialFilename("옛 자료.pdf").build();
+        TopicResponse unlinked = TopicResponse.builder().topicId(102L).title("정렬").build();
+        givenTopics(linked, unlinked);
+        when(courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(any(), anyLong())).thenReturn(List.of());
+        givenOneItem();
+
+        List<ProvidedSource> topics = generator.generate(spec(null)).provenance().providedSources().stream()
+                .filter(s -> s.sourceType() == ProvenanceSourceType.TOPIC).toList();
+
+        assertThat(topics.get(0).material()).isNotNull();
+        assertThat(topics.get(0).material().materialId()).isEqualTo(9L);
+        assertThat(topics.get(0).material().filename()).isEqualTo("옛 자료.pdf");
+        assertThat(topics.get(0).material().fileHash()).isNull();
+        assertThat(topics.get(1).material()).isNull();
     }
 
     // ===== 서버 계산은 출처가 아니다 =====

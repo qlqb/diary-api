@@ -20,6 +20,8 @@ import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.material.CourseMaterialAnalysisMapper;
+import com.jungwoo.project.memo.material.CourseMaterialMapper;
+import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import com.jungwoo.project.memo.material.dto.MaterialAnalysisPayload;
 import com.jungwoo.project.memo.plan.domain.PlanIntensity;
@@ -29,6 +31,7 @@ import com.jungwoo.project.memo.plan.provenance.PlanProvenance;
 import com.jungwoo.project.memo.plan.provenance.ProvenanceCollector;
 import com.jungwoo.project.memo.plan.provenance.ProvenanceRepresentation;
 import com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType;
+import com.jungwoo.project.memo.plan.provenance.ProvidedMaterial;
 import com.jungwoo.project.memo.plan.provenance.ServerCalculation;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
@@ -128,6 +131,7 @@ public class PeriodPlanDraftGenerator {
     private final TopicService topicService;
     private final CourseNoteMapper courseNoteMapper;
     private final CourseMaterialAnalysisMapper analysisMapper;
+    private final CourseMaterialMapper courseMaterialMapper;
     private final ExecutionItemMapper executionItemMapper;
     private final AvailabilityEstimateService availabilityEstimateService;
     private final Clock clock;
@@ -838,6 +842,11 @@ public class PeriodPlanDraftGenerator {
         if (!topicLines.isEmpty()) {
             sb.append("  [학습 항목]").append("\n");
             int shown = Math.min(topicLines.size(), MAX_TOPIC_LINES_PER_COURSE);
+            /*
+             * 실제로 실리는 줄의 자료만 찾는다. 파일명·MIME·해시는 모델에 주지 않는다 — 스냅샷이
+             * "그때 이 파일이었다"를 말하려고 서버가 옆에 붙이는 값이다(ProvidedMaterial).
+             */
+            Map<Long, CourseMaterial> materials = materialsOf(userId, topicLines.subList(0, shown));
             for (int i = 0; i < shown; i++) {
                 TopicLine topic = topicLines.get(i);
                 // 잘려서 안 실린 뒤쪽 항목은 mark를 부르지 않으므로 출처 목록에도 없다.
@@ -848,7 +857,12 @@ public class PeriodPlanDraftGenerator {
                                 "courseId", course.getCourseId(),
                                 "title", topic.title(),
                                 "sourceLocator", topic.sourceLocator()),
-                        topic.text()).text()).append("\n");
+                        topic.text(),
+                        topic.parentTopicId(),
+                        providedMaterial(
+                                topic.sourceMaterialId() == null ? null : materials.get(topic.sourceMaterialId()),
+                                topic.sourceMaterialId(), topic.sourceMaterialFilename(), topic.sourceLocator()))
+                        .text()).append("\n");
             }
             if (topicLines.size() > shown) {
                 sb.append("    … 외 ").append(topicLines.size() - shown).append("개\n");
@@ -858,12 +872,18 @@ public class PeriodPlanDraftGenerator {
         List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId());
         if (!scheduleLines.isEmpty()) {
             sb.append("  [일정·평가]").append("\n");
+            Map<Long, CourseMaterial> materials = materialsOfSchedule(userId, scheduleLines);
             for (ScheduleLine line : scheduleLines) {
+                CourseMaterial material = line.materialId() != null ? materials.get(line.materialId()) : null;
                 sb.append("  - ").append(collector.mark(
                         line.type(), line.sourceId(), null, null,
                         ProvenanceRepresentation.SELECTED_FIELDS,
                         ProvenanceCollector.value("courseId", course.getCourseId(), "text", line.text()),
-                        line.text()).text()).append("\n");
+                        line.text(),
+                        null,
+                        material == null ? null
+                                : providedMaterial(material, line.materialId(), material.getOriginalFilename(), null))
+                        .text()).append("\n");
             }
         }
         sb.append("\n");
@@ -875,11 +895,57 @@ public class PeriodPlanDraftGenerator {
      * <p>문자열만 모으면 나중에 "이 줄이 어느 topic인가"를 제목으로 되짚어야 하는데, 제목은
      * 겹치고 바뀐다. 줄을 만들 때 id를 함께 들고 있는 편이 짧다.
      */
-    private record TopicLine(Long topicId, String title, String sourceLocator, String text) {
+    private record TopicLine(Long topicId, Long parentTopicId, String title, String sourceLocator,
+                             Long sourceMaterialId, String sourceMaterialFilename, String text) {
     }
 
-    /** 프롬프트에 실을 일정·평가 한 줄과 그 원본의 종류. */
-    private record ScheduleLine(ProvenanceSourceType type, Long sourceId, String text) {
+    /**
+     * 프롬프트에 실을 일정·평가 한 줄과 그 원본의 종류.
+     *
+     * @param materialId 자료 분석에서 읽은 줄이면 그 분석의 자료. 과목 메모는 null
+     */
+    private record ScheduleLine(ProvenanceSourceType type, Long sourceId, String text, Long materialId) {
+    }
+
+    /** 실리는 학습 항목들의 자료. 삭제된 자료도 포함한다 — 당시 이름을 남기는 것이 목적이다. */
+    private Map<Long, CourseMaterial> materialsOf(Long userId, List<TopicLine> lines) {
+        List<Long> ids = lines.stream().map(TopicLine::sourceMaterialId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        return findMaterials(userId, ids);
+    }
+
+    private Map<Long, CourseMaterial> materialsOfSchedule(Long userId, List<ScheduleLine> lines) {
+        List<Long> ids = lines.stream().map(ScheduleLine::materialId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        return findMaterials(userId, ids);
+    }
+
+    private Map<Long, CourseMaterial> findMaterials(Long userId, List<Long> ids) {
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, CourseMaterial> byId = new java.util.HashMap<>();
+        List<CourseMaterial> found = courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(ids, userId);
+        for (CourseMaterial material : found == null ? List.<CourseMaterial>of() : found) {
+            byId.putIfAbsent(material.getMaterialId(), material);
+        }
+        return byId;
+    }
+
+    /**
+     * 스냅샷에 남길 자료 정보. 자료 행을 못 찾아도(지워진 지 오래) 학습 항목이 아는 id·이름은
+     * 남긴다 — "무엇이었는지"는 그것만으로도 말할 수 있다. 자료 연결이 없으면 null.
+     */
+    private static ProvidedMaterial providedMaterial(CourseMaterial material, Long materialId,
+                                                     String fallbackFilename, String locator) {
+        if (materialId == null) {
+            return null;
+        }
+        if (material == null) {
+            return new ProvidedMaterial(materialId, fallbackFilename, null, null, blankToNull(locator));
+        }
+        return new ProvidedMaterial(materialId, material.getOriginalFilename(), material.getContentType(),
+                material.getFileHash(), blankToNull(locator));
     }
 
     /*
@@ -892,7 +958,9 @@ public class PeriodPlanDraftGenerator {
         if (node.getSourceLocator() != null && !node.getSourceLocator().isBlank()) {
             line.append(" (").append(node.getSourceLocator()).append(")");
         }
-        out.add(new TopicLine(node.getTopicId(), node.getTitle(), node.getSourceLocator(), line.toString()));
+        out.add(new TopicLine(node.getTopicId(), node.getParentTopicId(), node.getTitle(),
+                node.getSourceLocator(), node.getSourceMaterialId(), node.getSourceMaterialFilename(),
+                line.toString()));
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
                 appendTopicLine(out, child, depth + 1);
@@ -924,7 +992,8 @@ public class PeriodPlanDraftGenerator {
                          * 남기고, 없는 쪽·문단 번호를 지어내지 않는다(handoff §3.1).
                          */
                         lines.add(new ScheduleLine(ProvenanceSourceType.MATERIAL_KEY_DATE,
-                                analysis.getAnalysisId(), keyDate.title() + ": " + detail));
+                                analysis.getAnalysisId(), keyDate.title() + ": " + detail,
+                                analysis.getMaterialId()));
                     }
                 }
             } catch (Exception e) {
@@ -934,7 +1003,7 @@ public class PeriodPlanDraftGenerator {
         courseNoteMapper.findByCourseIdAndUserId(courseId, userId).stream()
                 .filter(note -> CourseNoteCategory.ASSESSMENT.name().equals(String.valueOf(note.getCategory())))
                 .forEach(note -> lines.add(new ScheduleLine(ProvenanceSourceType.COURSE_NOTE,
-                        note.getNoteId(), note.getLabel() + ": " + note.getDetail())));
+                        note.getNoteId(), note.getLabel() + ": " + note.getDetail(), null)));
 
         List<ScheduleLine> distinct = new ArrayList<>();
         Set<String> seen = new java.util.HashSet<>();
@@ -1109,7 +1178,7 @@ public class PeriodPlanDraftGenerator {
                 + end.getMonthValue() + "월 " + end.getDayOfMonth() + "일 계획";
     }
 
-    private String blankToNull(String s) {
+    private static String blankToNull(String s) {
         return s == null || s.isBlank() ? null : s;
     }
 
