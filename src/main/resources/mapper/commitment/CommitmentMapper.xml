@@ -67,6 +67,20 @@
          ORDER BY c.start_at, c.commitment_id
     </select>
 
+    <!--
+      계획 확정 전용 잠금 조회. 미리보기 이후 생긴 약속을 최신 커밋 기준으로 본다.
+      잠금 순서는 commitment_id 오름차순으로 고정한다 - 다른 잠금 조회와 같은 규칙이다.
+    -->
+    <select id="findOverlappingForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.start_at &lt; #{rangeEnd}
+           AND c.end_at   &gt; #{rangeStart}
+         ORDER BY c.commitment_id
+         FOR UPDATE
+    </select>
+
     <update id="updateWithVersion">
         UPDATE one_off_commitments
            SET title         = #{title},

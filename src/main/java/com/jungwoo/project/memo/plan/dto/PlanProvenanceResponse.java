@@ -93,6 +93,9 @@ public record PlanProvenanceResponse(
      * @param recorded          이 항목에 근거 기록이 있는가. 레거시 제안은 false다
      * @param unknownRefCount   모델이 인용했지만 이번 회차에 없어 버린 개수. 정상 근거로
      *                          보여주지 않되, 있었다는 사실은 숨기지 않는다
+     * @param afterApplyChanges 적용된 뒤 이 조각에 일어난 변경(사용자가 읽는 문장). 근거는
+     *                          그대로이고 지금 내용·배치가 그때와 다르다는 뜻이다. 초안
+     *                          조회에서는 항상 비어 있다
      */
     public record ItemView(
             Long proposalItemId,
@@ -107,7 +110,8 @@ public record PlanProvenanceResponse(
             List<String> serverCalculationIds,
             EvidenceStatus evidenceStatus,
             List<String> staleReasons,
-            int unknownRefCount
+            int unknownRefCount,
+            List<String> afterApplyChanges
     ) {
     }
 }

@@ -28,14 +28,18 @@ import java.util.UUID;
 public class ProvenanceCollector {
 
     /**
-     * 한 회차에 담을 출처 줄 수의 안전 상한.
+     * 한 회차의 출처 줄 수가 이 값을 넘으면 경고를 남긴다. <b>기록을 멈추지는 않는다.</b>
      *
      * <p>프롬프트 자체가 이미 블록마다 상한을 갖고 있어(과목당 학습 항목 30줄, 일정 40줄 등)
      * 정상 흐름에서는 닿지 않는다. 닿았다는 것은 프롬프트가 예상보다 커졌다는 뜻이므로
-     * 조용히 자르지 않고 경고를 남긴다 — 스냅샷이 소리 없이 잘리면 그 회차의 대응 검증이
-     * 통째로 무의미해진다(handoff §8).
+     * 경고로 알린다.
+     *
+     * <p>★ 예전에는 이 값을 넘긴 줄을 인용 번호 없이 프롬프트에만 내보내고 스냅샷에서는
+     * 뺐다. 그러면 "모델에는 줬는데 기록에는 없는" 출처가 생기고, 그 회차의 스냅샷은 "실제로
+     * 제공한 정보"라는 이름을 잃는다. 지금은 프롬프트에 나간 줄은 전부 기록한다 — 준 것과
+     * 남은 것이 갈라지는 경로를 두지 않는다.
      */
-    private static final int MAX_SOURCES = 400;
+    static final int WARN_SOURCES = 400;
 
     private final String generationId;
     private final LocalDateTime capturedAt;
@@ -73,18 +77,15 @@ public class ProvenanceCollector {
      *
      * @param text 인용 번호가 붙기 전의 줄. 이미 요약·길이 제한이 적용된 최종 형태여야 한다
      * @return "원래 줄 [s3]" 형태. 번호를 줄 끝에 두는 것은 목록 들여쓰기를 깨지 않기
-     *         위해서다. 상한을 넘으면 번호 없이 원래 줄을 그대로 돌려준다
+     *         위해서다. 등록한 모든 줄에 번호가 붙는다 — 번호 없이 나가는 줄은 없다
      */
     public Marked mark(ProvenanceSourceType type, Long sourceId, Long sourceVersion,
                        LocalDateTime sourceUpdatedAt, ProvenanceRepresentation representation,
                        Map<String, Object> providedValue, String text) {
-        if (sources.size() >= MAX_SOURCES) {
-            if (!overflowWarned) {
-                overflowWarned = true;
-                log.warn("계획 생성 출처 기록이 상한({})에 닿았다 — 이후 줄은 인용 번호 없이 나간다. "
-                        + "프롬프트 블록 상한을 점검해야 한다. generationId={}", MAX_SOURCES, generationId);
-            }
-            return new Marked(null, text);
+        if (sources.size() >= WARN_SOURCES && !overflowWarned) {
+            overflowWarned = true;
+            log.warn("계획 생성 출처 기록이 {}줄을 넘었다 — 전부 기록하지만 프롬프트 블록 상한을 "
+                    + "점검해야 한다. generationId={}", WARN_SOURCES, generationId);
         }
         String refId = "s" + nextRef++;
         String line = text + " [" + refId + "]";
@@ -141,7 +142,7 @@ public class ProvenanceCollector {
     }
 
     /**
-     * 등록 결과. refId는 상한에 걸린 줄에서만 null이다.
+     * 등록 결과. refId는 항상 있다.
      *
      * @param text 프롬프트에 넣을 최종 문장
      */

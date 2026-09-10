@@ -53,6 +53,7 @@ public class PlanConfirmService {
     private final PlanSnapshotCodec snapshotCodec;
     private final ExecutionItemMapper executionItemMapper;
     private final CourseMapper courseMapper;
+    private final PlanConfirmScheduleGuard scheduleGuard;
 
     @Transactional
     public PlanVersion confirm(Long userId, Long proposalId, PlanConfirmRequest request) {
@@ -70,6 +71,12 @@ public class PlanConfirmService {
         if (days < 1 || days > MAX_PLAN_DAYS) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
+
+        // 0. 미리보기가 정한 시각이 지금의 일정과 겹치는지 최신 커밋 기준으로 본다. 미리보기와
+        //    확정 사이에 근무가 생겼으면 여기서 전체를 거절한다 — 겹친 항목만 빼고 확정하면
+        //    사용자가 승인한 계획과 저장된 계획이 조용히 달라진다.
+        scheduleGuard.ensureNoConflicts(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(),
+                request.getEditedItems());
 
         // 1. 제안 적용 → execution_items 생성. 승인 전 미반영 원칙은 여기서 이미 보장된다.
         AiProposalResponse applied = aiProposalService.apply(proposalId, userId,

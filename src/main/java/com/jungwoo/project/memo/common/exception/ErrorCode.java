@@ -122,6 +122,8 @@ public enum ErrorCode {
             "그 근무에는 같은 이동 블록이 이미 있습니다"),
     DERIVED_COMMITMENT_ORIGIN_CHANGED(HttpStatus.CONFLICT, "E409_015",
             "기준이 된 근무가 그 사이 바뀌었습니다. 후보를 다시 만들어 주세요"),
+    PLAN_CONFIRM_SCHEDULE_CONFLICT(HttpStatus.CONFLICT, "E409_016",
+            "미리보기 이후 일정이 바뀌어 겹치는 항목이 있습니다. 미리보기를 다시 계산해 주세요"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

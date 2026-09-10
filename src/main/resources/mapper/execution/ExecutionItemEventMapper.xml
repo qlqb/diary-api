@@ -21,6 +21,14 @@
         <result property="createdAt"             column="created_at"/>
     </resultMap>
 
+    <select id="findByExecutionItemIdAndUserId" resultMap="executionItemEventResultMap">
+        SELECT *
+        FROM execution_item_events
+        WHERE execution_item_id = #{executionItemId}
+          AND user_id           = #{userId}
+        ORDER BY occurred_at ASC, execution_item_event_id ASC
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="executionItemEventId">
         INSERT INTO execution_item_events (
             user_id,

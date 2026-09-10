@@ -160,6 +160,19 @@
         ORDER BY scheduled_start_at ASC
     </select>
 
+    <!-- 계획 확정 전용 잠금 조회. 잠금 순서를 execution_item_id 오름차순으로 고정한다. -->
+    <select id="findTimeFixedByUserIdAndDateRangeForUpdate" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND placement_type = 'TIME_FIXED'
+          AND status         != 'CANCELLED'
+          AND scheduled_date BETWEEN #{startDate} AND #{endDate}
+        ORDER BY execution_item_id ASC
+        FOR UPDATE
+    </select>
+
     <select id="findMaxOrderIndexByUserIdAndDate" resultType="java.lang.Integer">
         SELECT MAX(order_index)
         FROM execution_items

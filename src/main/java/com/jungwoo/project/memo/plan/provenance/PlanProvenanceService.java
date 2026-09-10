@@ -11,8 +11,11 @@ import com.jungwoo.project.memo.commitment.CommitmentMapper;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.execution.ExecutionItemEventMapper;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.domain.ExecutionEventActorType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.ExecutionItemEvent;
 import com.jungwoo.project.memo.learning.CourseTopicMapper;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse;
 import com.jungwoo.project.memo.plan.dto.PlanProvenanceResponse.ItemView;
@@ -52,6 +55,7 @@ public class PlanProvenanceService {
     private final RoutineMapper routineMapper;
     private final CommitmentMapper commitmentMapper;
     private final ExecutionItemMapper executionItemMapper;
+    private final ExecutionItemEventMapper executionItemEventMapper;
     private final UserContextMapper userContextMapper;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -72,6 +76,13 @@ public class PlanProvenanceService {
      * <p>새 연결을 만들지 않고 ai_proposal_items.created_item_id를 되짚는다. 그 조각을
      * 만든 제안 항목이 없으면(직접 만든 조각, 출처 추적 이전의 조각) "기록 없음"이다 —
      * 지금 DB로 역추정해 채우지 않는다.
+     *
+     * <p>★ created_item_id는 <b>조정 제안</b>(AI 이동·축소·보류)도 남긴다. 그쪽 행은 "이
+     * 제안이 바꾼 대상"을 가리킬 뿐 이 조각을 만든 회차가 아니다. 그래서 최근 행이 아니라
+     * 실제 CREATE 원본을 고른다 — 최근 행을 집으면 이동 뒤에 근거가 "기록 없음"으로 바뀐다.
+     *
+     * <p>적용된 뒤의 변경은 조각의 사건 기록에서 읽는다. 근거 JSON은 그대로 두고, 응답에
+     * "적용한 뒤 무엇이 바뀌었는가"를 따로 붙인다.
      */
     @Transactional(readOnly = true)
     public PlanProvenanceResponse forExecutionItem(Long userId, Long executionItemId) {
@@ -79,26 +90,106 @@ public class PlanProvenanceService {
         if (item == null) {
             throw new NotFoundException(ErrorCode.EXECUTION_ITEM_NOT_FOUND);
         }
-        List<AiProposalItem> origins = aiProposalItemMapper.findByCreatedItemIdAndUserId(executionItemId, userId);
-        if (origins.isEmpty()) {
+        AiProposalItem origin = createOriginOf(userId, executionItemId);
+        if (origin == null) {
             return PlanProvenanceResponse.notRecorded(null, item.getPlanVersionId(), List.of());
         }
-        AiProposalItem origin = origins.get(0);
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(origin.getProposalId(), userId);
         if (proposal == null) {
             return PlanProvenanceResponse.notRecorded(null, item.getPlanVersionId(), List.of());
         }
-        return build(userId, proposal, item.getPlanVersionId(), List.of(origin));
+        List<String> afterApply = changesAfterApply(userId, item);
+        return build(userId, proposal, item.getPlanVersionId(), List.of(origin), item.getTitle(), afterApply);
+    }
+
+    /**
+     * 이 조각을 <b>만든</b> 제안 항목. 같은 created_item_id를 가리키는 조정 행은 건너뛴다.
+     *
+     * <p>CREATE는 조각당 한 번뿐이라 여럿이 나올 수 없다. 만약 여럿이면 가장 이른 것이
+     * 원본이다 — 나중 것은 데이터 이상이고, 그때도 최근 것을 고르지 않는다.
+     */
+    private AiProposalItem createOriginOf(Long userId, Long executionItemId) {
+        List<AiProposalItem> rows = aiProposalItemMapper.findByCreatedItemIdAndUserId(executionItemId, userId);
+        AiProposalItem origin = null;
+        for (AiProposalItem row : rows) {
+            if (!isCreate(row)) {
+                continue;
+            }
+            if (origin == null || row.getProposalItemId() < origin.getProposalItemId()) {
+                origin = row;
+            }
+        }
+        return origin;
+    }
+
+    private boolean isCreate(AiProposalItem row) {
+        if (row.getTargetItemId() != null) {
+            return false;
+        }
+        String json = row.getOriginalPayload();
+        if (json == null) {
+            return false;
+        }
+        try {
+            return !objectMapper.readValue(json, ProposalItemPayload.class).isAdjustment();
+        } catch (Exception e) {
+            log.debug("근거 조회: 제안 항목 payload를 읽지 못했다. proposalItemId={}", row.getProposalItemId());
+            return false;
+        }
+    }
+
+    /**
+     * 적용된 뒤 이 조각에 일어난 변경. 사용자가 읽는 문장이다.
+     *
+     * <p>주체가 SYSTEM인 사건(롤링 배치 등)은 세지 않는다 — 그건 서버가 계획대로 시각을
+     * 정한 것이지 내용이 바뀐 것이 아니다. 생성 사건도 세지 않는다.
+     */
+    private List<String> changesAfterApply(Long userId, ExecutionItem item) {
+        List<String> changes = new ArrayList<>();
+        for (ExecutionItemEvent event : executionItemEventMapper.findByExecutionItemIdAndUserId(
+                item.getExecutionItemId(), userId)) {
+            if (event.getActorType() == ExecutionEventActorType.SYSTEM
+                    || event.getActorType() == ExecutionEventActorType.MIGRATION
+                    || event.getEventType() == null) {
+                continue;
+            }
+            String text = switch (event.getEventType()) {
+                case MOVED -> "적용한 뒤 날짜·시각을 옮겼어요. 아래 배치 근거는 옮기기 전 상태예요.";
+                case REDUCED -> "적용한 뒤 분량을 줄였어요. 아래는 줄이기 전 제안의 근거예요.";
+                case SPLIT -> "적용한 뒤 여러 조각으로 나눴어요.";
+                case PRIORITY_CHANGED -> "적용한 뒤 중요도를 바꿨어요.";
+                case HOLD -> "적용한 뒤 보류했어요.";
+                case CANCELLED -> "적용한 뒤 계획에서 뺐어요.";
+                case DELETED -> "적용한 뒤 지웠어요.";
+                case CREATED, RESUMED, REOPENED, RESTORED -> null;
+            };
+            if (text != null && !changes.contains(text)) {
+                changes.add(text);
+            }
+        }
+        return changes;
     }
 
     private PlanProvenanceResponse build(Long userId, AiProposal proposal, Long planVersionId,
                                          List<AiProposalItem> items) {
+        return build(userId, proposal, planVersionId, items, null, List.of());
+    }
+
+    /**
+     * @param currentTitle    적용된 조각의 지금 제목. null이면 제안 항목의 제목을 쓴다
+     * @param afterApply      적용된 뒤 일어난 변경. 초안 조회는 빈 목록이다
+     */
+    private PlanProvenanceResponse build(Long userId, AiProposal proposal, Long planVersionId,
+                                         List<AiProposalItem> items, String currentTitle,
+                                         List<String> afterApply) {
+        PlanProvenance provenance = codec.fromJson(proposal.getPlanProvenanceJson());
+        String generationId = provenance != null ? provenance.generationId() : null;
+
         List<ItemView> itemViews = new ArrayList<>();
         for (AiProposalItem item : items) {
-            itemViews.add(toItemView(item));
+            itemViews.add(toItemView(item, generationId, currentTitle, afterApply));
         }
 
-        PlanProvenance provenance = codec.fromJson(proposal.getPlanProvenanceJson());
         if (provenance == null) {
             // 이 기능이 생기기 전의 초안이거나 계획 경로가 아닌 제안이다.
             return PlanProvenanceResponse.notRecorded(proposal.getProposalId(), planVersionId, itemViews);
@@ -118,17 +209,33 @@ public class PlanProvenanceService {
                 provenance.modelName(), sources, provenance.serverCalculations(), itemViews);
     }
 
-    private ItemView toItemView(AiProposalItem item) {
+    /**
+     * @param generationId 제안 행의 회차. 항목 근거가 다른 회차를 가리키면 그 refId는 이
+     *                     스냅샷의 것이 아니므로 짝짓지 않는다 — 우연히 같은 번호("s1")가
+     *                     있어도 다른 회차의 다른 줄이다
+     */
+    private ItemView toItemView(AiProposalItem item, String generationId, String currentTitle,
+                                List<String> afterApply) {
         PlanItemEvidence evidence = codec.evidenceFromJson(item.getEvidenceJson());
-        String title = titleOf(item);
+        String title = currentTitle != null ? currentTitle : titleOf(item);
         if (evidence == null) {
             return new ItemView(item.getProposalItemId(), item.getCreatedItemId(), title, item.getStatus(),
-                    false, null, List.of(), null, List.of(), List.of(), null, List.of(), 0);
+                    false, null, List.of(), null, List.of(), List.of(), null, List.of(), 0, afterApply);
+        }
+        List<String> refIds = evidence.refIds();
+        List<String> staleReasons = evidence.staleReasons();
+        if (generationId != null && evidence.generationId() != null
+                && !generationId.equals(evidence.generationId())) {
+            log.warn("항목 근거의 회차가 제안의 회차와 다르다 — refId를 짝짓지 않는다. proposalItemId={}, "
+                    + "item={}, proposal={}", item.getProposalItemId(), evidence.generationId(), generationId);
+            refIds = List.of();
+            staleReasons = new ArrayList<>(staleReasons);
+            staleReasons.add("이 항목의 근거는 다른 생성 회차의 것이라 원본 정보와 짝지을 수 없어요.");
         }
         return new ItemView(item.getProposalItemId(), item.getCreatedItemId(), title, item.getStatus(),
-                true, evidence.generationId(), evidence.refIds(), evidence.reason(), evidence.aiEstimates(),
-                evidence.serverCalculationIds(), evidence.status(), evidence.staleReasons(),
-                evidence.unknownRefCount());
+                true, evidence.generationId(), refIds, evidence.reason(), evidence.aiEstimates(),
+                evidence.serverCalculationIds(), evidence.status(), staleReasons,
+                evidence.unknownRefCount(), afterApply);
     }
 
     /**

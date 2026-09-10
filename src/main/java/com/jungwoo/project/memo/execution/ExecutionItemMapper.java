@@ -171,6 +171,16 @@ public interface ExecutionItemMapper {
     );
 
     /**
+     * {@link #findTimeFixedByUserIdAndDateRange}의 잠금 조회. 계획 확정이 미리보기 이후에
+     * 시각이 박힌 조각이 생기지 않았는지 최신 커밋 기준으로 볼 때 쓴다.
+     */
+    List<ExecutionItem> findTimeFixedByUserIdAndDateRangeForUpdate(
+            @Param("userId") Long userId,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    /**
      * 해당 날짜의 현재 최대 order_index. AI 제안을 적용할 때 기존 항목 뒤에 이어 붙이는 용도.
      * 아무 항목도 없으면 null.
      */

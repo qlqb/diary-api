@@ -31,6 +31,19 @@ public interface CommitmentMapper {
                                      @Param("rangeEnd") LocalDateTime rangeEnd);
 
     /**
+     * {@link #findOverlapping}의 잠금 조회. 계획 확정이 "미리보기 이후 약속이 생기지 않았나"를
+     * 검사할 때 쓴다.
+     *
+     * <p>일반 조회는 트랜잭션이 처음 읽은 시점의 스냅샷을 보므로, 미리보기와 확정 사이에
+     * 커밋된 약속을 놓칠 수 있다. FOR UPDATE는 항상 최신 커밋을 읽고, 아직 커밋되지 않은
+     * 겹치는 INSERT가 있으면 그 트랜잭션이 끝날 때까지 기다린다 — 그래서 확정은 "검사할 때는
+     * 없었는데 커밋 직후에 생긴" 약속과 겹친 채 성립하지 않는다.
+     */
+    List<Commitment> findOverlappingForUpdate(@Param("userId") Long userId,
+                                              @Param("rangeStart") LocalDateTime rangeStart,
+                                              @Param("rangeEnd") LocalDateTime rangeEnd);
+
+    /**
      * 전체 교체 + 버전 증가. 갱신된 행 수가 1이 아니면 그 사이 누가 먼저 바꾼 것이다.
      *
      * <p>locationText는 COALESCE하지 않는다 — null이면 비운다. 수정이 PUT(전체 교체)이라
