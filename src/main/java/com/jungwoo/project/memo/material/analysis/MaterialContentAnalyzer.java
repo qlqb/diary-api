@@ -105,8 +105,9 @@ public class MaterialContentAnalyzer {
               한 페이지에 설명과 문제가 같이 있으면 구간을 나누거나 roles를 둘 다 적는다.
             - task는 그 구간이 요구하는 수행 내용이다(무엇을 입력·구현·제출·확인해야 하는지). 설명만 있으면 null.
             - excerpt는 원문에서 그대로 옮긴 300자 이내 발췌다. 요약이 아니라 인용이다.
-            - assignmentCue는 "제출", "과제", "보고서", "평가", "기한", "채점"처럼 제출·평가 단서가 그 구간에
-              실제로 있을 때만 true. "문제"라는 말만으로는 true가 아니다. true면 assignmentQuote에 그 원문 표현을 옮긴다.
+            - assignmentCue는 학생이 무언가를 만들어 "제출"해야 한다는 요구(과제 제출, 보고서 제출, 기한/마감)가 그 구간에
+              실제로 있을 때만 true. "문제"라는 말만으로는, 그리고 평가 비율·시험 일정·주차 계획(강의계획서의 "N주차 중간평가")
+              만으로는 true가 아니다. true면 assignmentQuote에 그 원문 표현을 그대로 옮긴다.
             - dates에는 그 구간에 적힌 날짜 표현을 넣는다. isoDate(YYYY-MM-DD)는 원문에 연도가 있거나
               문서에 연도가 명시돼 있을 때만 채운다. 연도를 모르면 isoDate는 null이고 monthDay("MM-DD")만 적는다.
               "다음 수업까지", "이번 주 금요일" 같은 표현은 relative=true이고 isoDate는 null이다.
@@ -365,7 +366,7 @@ public class MaterialContentAnalyzer {
         Long courseId = singleLinkedCourse(job.getUserId(), material.getMaterialId());
         int created = 0;
         for (MaterialSection section : sections) {
-            if (!section.isAssignmentCue()) {
+            if (!section.isAssignmentCue() || !looksLikeSubmission(section)) {
                 continue;
             }
             if (assignmentService.upsertCandidateFromSection(section, courseId, parseDate(documentDate))) {
@@ -373,6 +374,22 @@ public class MaterialContentAnalyzer {
             }
         }
         return created;
+    }
+
+    /**
+     * 제출 단서가 있어도 역할이 일정·운영 안내뿐이면(강의계획서의 평가 비율·주차 계획) 과제 후보로 만들지 않는다.
+     * 첫 실행에서 강의계획서의 "N주차 · 중간평가" 구간이 전부 후보가 됐다 — "평가"라는 말만으로는 제출 요구가 아니다.
+     */
+    static boolean looksLikeSubmission(MaterialSection section) {
+        String roles = section.getRolesJson() == null ? "" : section.getRolesJson();
+        boolean actionable = roles.contains("ASSIGNMENT") || roles.contains("EXERCISE") || roles.contains("EXAMPLE");
+        if (!actionable) {
+            return false;
+        }
+        String quote = section.getAssignmentQuote() == null ? "" : section.getAssignmentQuote();
+        return quote.contains("제출") || quote.contains("과제") || quote.contains("보고서") || quote.contains("기한")
+                || quote.contains("마감") || quote.toLowerCase(Locale.ROOT).contains("submit")
+                || quote.toLowerCase(Locale.ROOT).contains("due");
     }
 
     private Long singleLinkedCourse(Long userId, Long materialId) {
@@ -451,8 +468,9 @@ public class MaterialContentAnalyzer {
         return writeJson(new Checkpoint(new ArrayList<>(completed), unitCount, lastUnitNo, documentDate, weekLabel));
     }
 
-    private ContentAnalysisPayload parse(String json) {
-        if (json == null || json.isBlank()) {
+    private ContentAnalysisPayload parse(String raw) {
+        String json = ModelJson.unwrapObject(raw);
+        if (json == null) {
             return null;
         }
         try {

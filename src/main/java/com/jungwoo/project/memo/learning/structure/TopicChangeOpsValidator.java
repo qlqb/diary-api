@@ -256,7 +256,8 @@ public final class TopicChangeOpsValidator {
 
     /** op 대문자화, 제목 trim, role 닫힌 집합으로, 중복 sectionId 제거. */
     static TopicChangeOp normalize(TopicChangeOp op) {
-        String kind = op.op().trim().toUpperCase(Locale.ROOT);
+        // ADD/SPLIT의 children에는 op가 없다 — 자식은 언제나 ADD다.
+        String kind = op.op() == null ? TopicChangeOp.ADD : op.op().trim().toUpperCase(Locale.ROOT);
         List<Long> sections = op.sectionIds() == null ? null
                 : op.sectionIds().stream().filter(java.util.Objects::nonNull).distinct().toList();
         String role = op.role() == null ? null : SectionRole.parseOne(op.role()) == null ? null

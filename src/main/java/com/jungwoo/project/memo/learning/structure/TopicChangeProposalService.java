@@ -18,6 +18,7 @@ import com.jungwoo.project.memo.learning.domain.TopicLinkOrigin;
 import com.jungwoo.project.memo.material.CourseMaterialMapper;
 import com.jungwoo.project.memo.material.MaterialLinkMapper;
 import com.jungwoo.project.memo.material.MaterialSectionMapper;
+import com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.MaterialSection;
 import lombok.RequiredArgsConstructor;
@@ -59,6 +60,7 @@ public class TopicChangeProposalService {
     private final MaterialLinkMapper materialLinkMapper;
     private final MaterialSectionMapper sectionMapper;
     private final TopicTreeEditor treeEditor;
+    private final MaterialAnalysisJobService analysisJobService;
     private final ObjectMapper objectMapper;
 
     // ===== 생성(분석기) =====
@@ -178,6 +180,19 @@ public class TopicChangeProposalService {
         proposalMapper.updateStatus(proposalId, userId, TopicChangeProposalStatus.APPLIED.name(),
                 writeJson(Map.of("selected", selected, "created", applied.createdTopicIds(),
                         "reviewNotes", applied.reviewNotes())), LocalDateTime.now());
+        /*
+         * 같은 프로젝트의 다른 열린 변경안은 이제 옛 트리 기준이다. 사용자가 하나씩 눌러 충돌을 보게 하지 않고
+         * STALE로 내린 뒤 그 (자료, 프로젝트)의 LINK 분석을 앞순위로 다시 등록한다 — 적용된 새 구조를 보고
+         * 다시 제안하게 한다. 적용 전 변경안에는 저장된 사용자 편집이 없으므로 덮는 것이 없다.
+         */
+        for (TopicChangeProposal other : proposalMapper.findOpenByCourseId(proposal.getCourseId(), userId)) {
+            if (other.getProposalId().equals(proposalId)) {
+                continue;
+            }
+            proposalMapper.updateStatus(other.getProposalId(), userId, TopicChangeProposalStatus.STALE.name(), null,
+                    LocalDateTime.now());
+            analysisJobService.retryLink(userId, other.getMaterialId(), other.getCourseId(), other.getFileHash());
+        }
         log.info("변경안 적용: proposalId={}, courseId={}, link={}, add={}, rename={}, move={}, merge={}, split={}",
                 proposalId, proposal.getCourseId(), applied.linked(), applied.added(), applied.renamed(),
                 applied.moved(), applied.merged(), applied.split());

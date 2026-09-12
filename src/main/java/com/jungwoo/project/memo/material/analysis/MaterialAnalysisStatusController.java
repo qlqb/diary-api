@@ -55,6 +55,14 @@ public class MaterialAnalysisStatusController {
         return ResponseEntity.ok(statusService.retry(principal.getUserId(), materialId));
     }
 
+    /** 이 (자료, 프로젝트)의 연결 변경안을 다시 만든다. 변경안이 옛 트리 기준(stale)일 때 화면이 부른다. */
+    @PostMapping("/api/materials/{materialId}/analysis-status/retry-link")
+    public ResponseEntity<MaterialAnalysisStatusResponse> retryLink(@AuthenticationPrincipal UserPrincipal principal,
+                                                                    @PathVariable Long materialId,
+                                                                    @RequestParam("courseId") Long courseId) {
+        return ResponseEntity.ok(statusService.retryLink(principal.getUserId(), materialId, courseId));
+    }
+
     @GetMapping("/api/materials/{materialId}/sections")
     public ResponseEntity<List<MaterialSectionResponse>> sections(@AuthenticationPrincipal UserPrincipal principal,
                                                                   @PathVariable Long materialId) {

@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.material.analysis;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.AiChatResponseUtils;
 import com.jungwoo.project.memo.ai.AiConsultationClient;
@@ -313,14 +314,7 @@ public class TopicLinkAnalyzer {
             record(job, lastUsage.get(), UsageResultStatus.FAILED, "TRUNCATED", startedAt);
             throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "응답이 출력 한도에서 잘렸다");
         }
-        LinkPayload payload = null;
-        if (result.structuredJson() != null) {
-            try {
-                payload = objectMapper.readValue(result.structuredJson(), LinkPayload.class);
-            } catch (Exception e) {
-                log.warn("변경안 구조화 응답 파싱 실패: {}", e.getClass().getSimpleName());
-            }
-        }
+        LinkPayload payload = parsePayload(result.structuredJson());
         if (payload == null) {
             record(job, lastUsage.get(), UsageResultStatus.FAILED, "BAD_JSON", startedAt);
             throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "구조화 응답을 읽지 못했다");
@@ -328,6 +322,66 @@ public class TopicLinkAnalyzer {
         record(job, lastUsage.get(), UsageResultStatus.SUCCESS, null, startedAt);
         return new LinkPayload(payload.ops() == null ? List.of() : payload.ops(),
                 payload.assignments() == null ? List.of() : payload.assignments(), payload.summary());
+    }
+
+    /**
+     * 모델 출력을 너그럽게 읽는다. 코드 펜스, "S12"/"#7" 같은 접두어 id, 누락 필드를 받아 준다.
+     * 값을 지어내지는 않는다 — 숫자가 아닌 id는 null이 되어 검증에서 버려진다.
+     */
+    LinkPayload parsePayload(String raw) {
+        String json = ModelJson.unwrapObject(raw);
+        if (json == null) {
+            return null;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            List<TopicChangeOp> ops = new ArrayList<>();
+            JsonNode opsNode = root.get("ops");
+            if (opsNode != null && opsNode.isArray()) {
+                for (JsonNode node : opsNode) {
+                    ops.add(toOp(node));
+                }
+            }
+            List<AssignmentHint> hints = new ArrayList<>();
+            JsonNode hintNode = root.get("assignments");
+            if (hintNode != null && hintNode.isArray()) {
+                for (JsonNode node : hintNode) {
+                    hints.add(new AssignmentHint(ModelJson.longOf(node, "sectionId"), ModelJson.longOf(node, "topicId"),
+                            ModelJson.longOf(node, "sameAsAssignmentId")));
+                }
+            }
+            return new LinkPayload(ops, hints, ModelJson.textOf(root, "summary"));
+        } catch (Exception e) {
+            log.warn("변경안 구조화 응답 파싱 실패: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static TopicChangeOp toOp(JsonNode node) {
+        List<TopicChangeOp> children = null;
+        JsonNode childNodes = node.get("children");
+        if (childNodes != null && childNodes.isArray()) {
+            children = new ArrayList<>();
+            for (JsonNode child : childNodes) {
+                children.add(toOp(child));
+            }
+        }
+        List<Long> absorbed = ModelJson.longsOf(node, "absorbedTopicIds");
+        return new TopicChangeOp(
+                ModelJson.textOf(node, "op"),
+                ModelJson.textOf(node, "tempId"),
+                ModelJson.longOf(node, "topicId"),
+                ModelJson.longOf(node, "parentTopicId"),
+                ModelJson.textOf(node, "parentTempId"),
+                ModelJson.textOf(node, "title"),
+                ModelJson.textOf(node, "sourceType"),
+                ModelJson.textOf(node, "locator"),
+                ModelJson.longsOf(node, "sectionIds"),
+                ModelJson.textOf(node, "role"),
+                ModelJson.longOf(node, "survivingTopicId"),
+                absorbed.isEmpty() ? null : absorbed,
+                children,
+                ModelJson.textOf(node, "reason"));
     }
 
     private void record(MaterialAnalysisJob job, Usage usage, UsageResultStatus status, String errorCode, long startedAt) {
@@ -364,9 +418,12 @@ public class TopicLinkAnalyzer {
             }
             CourseAssignment candidate = byMaterialSection.get(hint.sectionId());
             if (candidate == null) {
-                // 모델이 제출 단서로 봤지만 CONTENT 단계가 후보로 안 만든 구간. 후보를 지금 만든다.
+                /*
+                 * 모델이 과제로 본 구간이지만 CONTENT 단계가 후보로 만들지 않은 것. 원문에 제출 단서가 실제로 있을 때만
+                 * 후보를 만든다 — 힌트만으로 만들면 "실습" 구간이 전부 과제 후보가 된다(첫 실행에서 그렇게 됐다).
+                 */
                 MaterialSection section = bySection.get(hint.sectionId());
-                if (!section.isAssignmentCue() && section.getExcerpt() == null) {
+                if (!section.isAssignmentCue() || !MaterialContentAnalyzer.looksLikeSubmission(section)) {
                     continue;
                 }
                 assignmentService.upsertCandidateFromSection(section, courseId, null);

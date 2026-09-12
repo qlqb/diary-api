@@ -194,6 +194,18 @@ public class MaterialAnalysisStatusService {
         }
     }
 
+    /** 연결 변경안 다시 만들기. 연결이 있어야 하고(없으면 404), 원문 분석이 끝나 있어야 의미가 있다. */
+    @Transactional
+    public MaterialAnalysisStatusResponse retryLink(Long userId, Long materialId, Long courseId) {
+        CourseMaterial material = materialService.getActiveOwned(userId, materialId);
+        materialService.getRequiredLink(userId, materialId, courseId);
+        String hash = jobService.hashOf(material);
+        if (hash != null) {
+            jobService.retryLink(userId, materialId, courseId, hash);
+        }
+        return statuses(userId, List.of(courseMaterialMapper.findByIdAndUserId(materialId, userId))).get(0);
+    }
+
     /** 사용자 재시도. 자료의 CONTENT 작업을 앞으로 당긴다. */
     @Transactional
     public MaterialAnalysisStatusResponse retry(Long userId, Long materialId) {

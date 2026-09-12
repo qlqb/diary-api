@@ -287,9 +287,10 @@ public class PlanItemDetailService {
         record(userId, usage.get(), UsageResultStatus.SUCCESS);
         AiStreamParser.Result result = parser.finish();
         DetailPayload payload = null;
-        if (result.structuredJson() != null) {
+        String json = com.jungwoo.project.memo.material.analysis.ModelJson.unwrapObject(result.structuredJson());
+        if (json != null) {
             try {
-                payload = objectMapper.readValue(result.structuredJson(), DetailPayload.class);
+                payload = objectMapper.readValue(json, DetailPayload.class);
             } catch (Exception e) {
                 log.warn("자세히 안내 파싱 실패: {}", e.getClass().getSimpleName());
             }
