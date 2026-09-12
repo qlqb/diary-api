@@ -392,16 +392,19 @@ class PlanProvenanceIntegrationTest {
      *
      * <p>확정 요청은 배치 미리보기의 시각을 그대로 싣는다. 그것까지 수정으로 세면 확정한
      * 모든 항목에 "다시 볼 근거"가 붙어 표식이 뜻을 잃는다 — 실제 화면에서 그렇게 나왔다.
+     *
+     * <p>픽스처는 배치 결과가 <b>반드시</b> 나오게 만든다: 계획은 내일부터 7일(미리보기 기본
+     * 창 안), 항목은 30분 하나, 이 사용자의 막힌 시간은 없다. 배치가 안 나오면 이 테스트는
+     * 실패다 — 건너뛰지 않는다.
      */
     @Test
     void confirmingTheServersOwnPreviewPlacement_isNotCountedAsAUserEdit() {
-        Fixture fixture = givenProposalWithProvenance(1);
+        Fixture fixture = givenPlaceableProposal();
 
         // 미리보기를 실제로 계산해 저장한다(OpenAI 호출 없음).
         SchedulePreviewResponse preview = schedulePreviewService.computePreview(
                 TEST_USER_ID, fixture.proposalId(), new SchedulePreviewRequest());
-        org.junit.jupiter.api.Assumptions.assumeTrue(!preview.getPlacedItems().isEmpty(),
-                "이 기간에 배치된 항목이 없으면 이 테스트가 볼 것이 없다");
+        assertThat(preview.getPlacedItems()).as("내일부터의 빈 시간에 30분 항목은 배치돼야 한다").hasSize(1);
 
         planConfirmService.confirm(TEST_USER_ID, fixture.proposalId(), PlanConfirmRequest.builder()
                 .title(TITLE_PREFIX + "미리보기 그대로 확정")
@@ -412,6 +415,31 @@ class PlanProvenanceIntegrationTest {
                 planProvenanceService.forProposal(TEST_USER_ID, fixture.proposalId()).items().get(0);
         assertThat(item.evidenceStatus()).isEqualTo(EvidenceStatus.CURRENT);
         assertThat(item.staleReasons()).isEmpty();
+    }
+
+    /** 같은 픽스처에서 미리보기 시각을 사용자가 바꾸면 재검토 대상이다 — 위와 짝이 되는 비교. */
+    @Test
+    void changingThePreviewPlacement_isCountedAsAUserEdit() {
+        Fixture fixture = givenPlaceableProposal();
+        SchedulePreviewResponse preview = schedulePreviewService.computePreview(
+                TEST_USER_ID, fixture.proposalId(), new SchedulePreviewRequest());
+        assertThat(preview.getPlacedItems()).hasSize(1);
+
+        List<AiProposalApplyRequest.EditedProposalItem> edits = previewAsEdits(preview);
+        AiProposalApplyRequest.EditedProposalItem edit = edits.get(0);
+        // 미리보기보다 한 시간 뒤로 옮긴다(같은 날, 여전히 미래).
+        edit.setScheduledStartAt(edit.getScheduledStartAt().plusHours(1));
+        edit.setScheduledEndAt(edit.getScheduledEndAt().plusHours(1));
+
+        planConfirmService.confirm(TEST_USER_ID, fixture.proposalId(), PlanConfirmRequest.builder()
+                .title(TITLE_PREFIX + "미리보기 시각 수정")
+                .editedItems(edits)
+                .build());
+
+        PlanProvenanceResponse.ItemView item =
+                planProvenanceService.forProposal(TEST_USER_ID, fixture.proposalId()).items().get(0);
+        assertThat(item.evidenceStatus()).isEqualTo(EvidenceStatus.NEEDS_REVIEW);
+        assertThat(item.staleReasons()).isNotEmpty();
     }
 
     // ===== 미리보기 이후 바뀐 일정 =====
@@ -550,6 +578,26 @@ class PlanProvenanceIntegrationTest {
 
     private Fixture givenProposalWithProvenance(int itemCount) {
         return givenProposalWithProvenance(itemCount, 999_000_001L);
+    }
+
+    /**
+     * 미리보기 기본 창(오늘부터 7일) 안에 들어오는 계획: 내일부터 7일, 30분 항목 하나. 이 사용자는
+     * 막힌 시간이 없으므로 기본 시간대(09~23시)에서 반드시 배치된다.
+     */
+    private Fixture givenPlaceableProposal() {
+        String generationId = "gen-test-" + System.nanoTime();
+        LocalDate start = LocalDate.now().plusDays(1);
+        LocalDate end = start.plusDays(6);
+        List<ProposalItem> items = List.of(new ProposalItem(TITLE_PREFIX + "배치 가능 항목", "이유", 30, "SHOULD",
+                PlacementType.UNSCHEDULED, null, null, start, end, null, null, null));
+        List<String> evidence = List.of(codec.toJson(PlanItemEvidence.of(
+                generationId, List.of("s1"), "이유", List.of("예상 소요 시간 30분"), List.of(), 0)));
+        AiProposalResponse proposal = aiProposalService.createFromItems(
+                TEST_USER_ID, null, null, items, List.of(), start, List.of(), 30, evidence);
+        aiProposalMapper.updatePlanMetadata(proposal.getProposalId(), TEST_USER_ID, start, end,
+                PlanIntensity.FOCUSED, 1080, null,
+                codec.toJson(provenanceOf(generationId, start, end, 999_000_001L)));
+        return new Fixture(proposal.getProposalId(), generationId);
     }
 
     /** @param commitmentId 스냅샷의 s1이 가리킬 약속. 없는 id를 주면 "지워진 원본"을 재현한다 */
