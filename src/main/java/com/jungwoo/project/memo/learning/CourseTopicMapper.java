@@ -35,4 +35,29 @@ public interface CourseTopicMapper {
     );
 
     Integer findMaxRootOrderIndex(@Param("courseId") Long courseId, @Param("userId") Long userId);
+
+    // ===== 구조 변경(변경안 적용 전용). TopicTreeEditor만 부른다. =====
+
+    /** ARCHIVED 포함. 병합된 항목의 행선지를 화면에 보여줄 때. */
+    List<CourseTopic> findByCourseIdAndUserIdIncludingArchived(@Param("courseId") Long courseId,
+                                                               @Param("userId") Long userId);
+
+    /** 변경안 적용이 트리 전체를 잠근다. 같은 프로젝트의 동시 적용을 직렬화하기 위해서다. */
+    List<CourseTopic> findActiveByCourseIdAndUserIdForUpdate(@Param("courseId") Long courseId,
+                                                             @Param("userId") Long userId);
+
+    int updateTitle(@Param("topicId") Long topicId, @Param("userId") Long userId, @Param("title") String title);
+
+    int updateParent(@Param("topicId") Long topicId, @Param("userId") Long userId,
+                     @Param("parentTopicId") Long parentTopicId, @Param("orderIndex") Integer orderIndex);
+
+    /** 병합: 흡수된 항목을 ARCHIVED로 내리고 살아남은 항목을 적는다. ID는 그대로다. */
+    int archiveMerged(@Param("topicId") Long topicId, @Param("userId") Long userId,
+                      @Param("survivingTopicId") Long survivingTopicId);
+
+    int updateReviewNote(@Param("topicId") Long topicId, @Param("userId") Long userId,
+                         @Param("reviewNote") String reviewNote);
+
+    Integer findMaxChildOrderIndex(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                                   @Param("parentTopicId") Long parentTopicId);
 }

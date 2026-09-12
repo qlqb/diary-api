@@ -59,4 +59,18 @@ public interface CourseMapper {
     void updateStatus(@Param("courseId") Long courseId,
                        @Param("userId") Long userId,
                        @Param("status") String status);
+
+    /**
+     * 학습 구조의 낙관적 잠금. 기대 버전과 같을 때만 1 올리고 1행을 돌려준다. 0행이면 그 사이
+     * 트리가 바뀐 것이다 — 호출자는 적용하지 않고 충돌로 처리한다.
+     */
+    int bumpTopicTreeVersion(@Param("courseId") Long courseId,
+                             @Param("userId") Long userId,
+                             @Param("expectedVersion") Long expectedVersion);
+
+    /** 대조 없이 올린다. 기존 append 경로처럼 "구조가 바뀌었다"는 사실만 기록할 때. */
+    int incrementTopicTreeVersion(@Param("courseId") Long courseId, @Param("userId") Long userId);
+
+    /** 프로젝트 행 잠금(FOR UPDATE). 변경안 적용이 트리 쓰기를 직렬화할 때 쓴다. */
+    Course findByIdAndUserIdForUpdate(@Param("courseId") Long courseId, @Param("userId") Long userId);
 }

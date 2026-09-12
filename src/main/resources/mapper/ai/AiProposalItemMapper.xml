@@ -44,6 +44,11 @@
         )
     </insert>
 
+    <select id="findByIdAndUserId" resultMap="aiProposalItemResultMap">
+        SELECT * FROM ai_proposal_items
+        WHERE proposal_item_id = #{proposalItemId} AND user_id = #{userId}
+    </select>
+
     <select id="findByProposalIdAndUserId" resultMap="aiProposalItemResultMap">
         SELECT *
         FROM ai_proposal_items

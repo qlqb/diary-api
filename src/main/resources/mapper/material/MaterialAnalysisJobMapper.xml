@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialAnalysisJobMapper">
+
+    <resultMap id="jobResultMap" type="com.jungwoo.project.memo.material.domain.MaterialAnalysisJob">
+        <id     property="jobId"           column="job_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="materialId"      column="material_id"/>
+        <result property="courseId"        column="course_id"/>
+        <result property="jobKind"         column="job_kind"/>
+        <result property="fileHash"        column="file_hash"/>
+        <result property="analysisVersion" column="analysis_version"/>
+        <result property="priority"        column="priority"/>
+        <result property="status"          column="status"/>
+        <result property="attempt"         column="attempt"/>
+        <result property="maxAttempts"     column="max_attempts"/>
+        <result property="nextRunAt"       column="next_run_at"/>
+        <result property="leaseOwner"      column="lease_owner"/>
+        <result property="leaseUntil"      column="lease_until"/>
+        <result property="leaseToken"      column="lease_token"/>
+        <result property="totalChunks"     column="total_chunks"/>
+        <result property="completedChunks" column="completed_chunks"/>
+        <result property="checkpointJson"  column="checkpoint_json"/>
+        <result property="errorCode"       column="error_code"/>
+        <result property="errorMessage"    column="error_message"/>
+        <result property="resultRefId"     column="result_ref_id"/>
+        <result property="createdAt"       column="created_at"/>
+        <result property="updatedAt"       column="updated_at"/>
+        <result property="finishedAt"      column="finished_at"/>
+    </resultMap>
+
+    <!--
+      INSERT IGNORE: uq_material_analysis_jobs_scope에 걸리면 0행. 등록은 여러 곳(업로드 직후,
+      폴러의 backlog, 링크 생성)에서 같은 범위로 들어올 수 있고, 어느 쪽이 먼저든 한 행이면 된다.
+    -->
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="jobId">
+        INSERT IGNORE INTO material_analysis_jobs (
+            user_id, material_id, course_id, job_kind, file_hash, analysis_version, priority,
+            status, max_attempts, next_run_at
+        ) VALUES (
+            #{userId}, #{materialId}, #{courseId}, #{jobKind}, #{fileHash}, #{analysisVersion}, #{priority},
+            #{status}, #{maxAttempts}, #{nextRunAt}
+        )
+    </insert>
+
+    <select id="findById" resultMap="jobResultMap">
+        SELECT * FROM material_analysis_jobs WHERE job_id = #{jobId}
+    </select>
+
+    <select id="findByScope" resultMap="jobResultMap">
+        SELECT * FROM material_analysis_jobs
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND job_kind = #{jobKind}
+          AND file_hash = #{fileHash} AND analysis_version = #{analysisVersion}
+    </select>
+
+    <!--
+      선점 후보. 일시중지한 사용자(material_analysis_controls.paused=1)의 작업은 빠진다.
+      RUNNING인데 임대가 만료된 행도 후보다 — 서버가 죽었거나 worker가 멈춘 것이다.
+    -->
+    <select id="findClaimable" resultMap="jobResultMap">
+        SELECT j.* FROM material_analysis_jobs j
+        WHERE ((j.status = 'QUEUED' AND j.next_run_at &lt;= #{now})
+               OR (j.status = 'RUNNING' AND j.lease_until IS NOT NULL AND j.lease_until &lt; #{now}))
+          AND NOT EXISTS (SELECT 1 FROM material_analysis_controls c WHERE c.user_id = j.user_id AND c.paused = 1)
+          <if test="minPriority != null">AND j.priority &gt;= #{minPriority}</if>
+        ORDER BY j.priority ASC, j.next_run_at ASC, j.job_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!--
+      원자적 선점. WHERE에 선점 조건을 다시 넣는다 — findClaimable과 이 UPDATE 사이에 다른
+      worker가 먼저 잡았으면 0행이 되고, 호출자는 실행하지 않는다.
+    -->
+    <update id="claim">
+        UPDATE material_analysis_jobs
+           SET status = 'RUNNING',
+               lease_owner = #{owner},
+               lease_until = #{leaseUntil},
+               lease_token = lease_token + 1,
+               attempt = attempt + 1,
+               error_code = NULL,
+               error_message = NULL
+         WHERE job_id = #{jobId}
+           AND ((status = 'QUEUED' AND next_run_at &lt;= #{now})
+                OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now}))
+    </update>
+
+    <update id="renewLease">
+        UPDATE material_analysis_jobs SET lease_until = #{leaseUntil}
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="updateProgress">
+        UPDATE material_analysis_jobs
+           SET total_chunks = #{totalChunks}, completed_chunks = #{completedChunks},
+               checkpoint_json = #{checkpointJson}
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="finish">
+        UPDATE material_analysis_jobs
+           SET status = #{status}, error_code = #{errorCode}, error_message = #{errorMessage},
+               result_ref_id = #{resultRefId}, finished_at = #{finishedAt},
+               lease_owner = NULL, lease_until = NULL
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="reschedule">
+        UPDATE material_analysis_jobs
+           SET status = 'QUEUED', next_run_at = #{nextRunAt}, error_code = #{errorCode},
+               error_message = #{errorMessage}, lease_owner = NULL, lease_until = NULL
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="requeue">
+        UPDATE material_analysis_jobs
+           SET status = 'QUEUED', attempt = 0, priority = #{priority}, next_run_at = #{now},
+               error_code = NULL, error_message = NULL, finished_at = NULL
+         WHERE job_id = #{jobId} AND user_id = #{userId}
+           AND status IN ('FAILED', 'UNAVAILABLE', 'PARTIAL', 'PAUSED', 'CANCELLED', 'DONE')
+    </update>
+
+    <update id="resumeAllPaused">
+        UPDATE material_analysis_jobs SET status = 'QUEUED', next_run_at = #{now}
+         WHERE user_id = #{userId} AND status = 'PAUSED'
+    </update>
+
+    <update id="pauseAllQueued">
+        UPDATE material_analysis_jobs SET status = 'PAUSED'
+         WHERE user_id = #{userId} AND status = 'QUEUED'
+    </update>
+
+    <update id="cancelOpenByMaterialId">
+        UPDATE material_analysis_jobs
+           SET status = 'CANCELLED', finished_at = NOW(), lease_token = lease_token + 1
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+           AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+    </update>
+
+    <update id="cancelOpenLinkJobs">
+        UPDATE material_analysis_jobs
+           SET status = 'CANCELLED', finished_at = NOW(), lease_token = lease_token + 1
+         WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+           AND job_kind = 'LINK' AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+    </update>
+
+    <select id="findByUserId" resultMap="jobResultMap">
+        SELECT * FROM material_analysis_jobs WHERE user_id = #{userId}
+        ORDER BY job_id DESC
+    </select>
+
+    <select id="findByMaterialIds" resultMap="jobResultMap">
+        SELECT * FROM material_analysis_jobs
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY job_id DESC
+    </select>
+
+    <select id="countStartedSince" resultType="int">
+        SELECT COUNT(*) FROM material_analysis_jobs
+        WHERE user_id = #{userId} AND attempt &gt; 0 AND updated_at &gt;= #{since}
+    </select>
+
+    <!--
+      CONTENT가 끝난(DONE/PARTIAL) 자료에 연결된 프로젝트 중 같은 해시·분석판의 LINK 작업이
+      아직 없는 것. 반환 행은 CONTENT 작업 행이고 course_id 자리에 링크의 course_id를 싣는다.
+      보관된 프로젝트는 대상이 아니다.
+    -->
+    <select id="findContentDoneWithoutLink" resultMap="jobResultMap">
+        SELECT j.job_id, j.user_id, j.material_id, l.course_id AS course_id, j.job_kind, j.file_hash,
+               j.analysis_version, j.priority, j.status, j.attempt, j.max_attempts, j.next_run_at,
+               j.lease_owner, j.lease_until, j.lease_token, j.total_chunks, j.completed_chunks,
+               j.checkpoint_json, j.error_code, j.error_message, j.result_ref_id,
+               j.created_at, j.updated_at, j.finished_at
+          FROM material_analysis_jobs j
+          JOIN material_links l ON l.material_id = j.material_id AND l.user_id = j.user_id
+          JOIN courses c ON c.course_id = l.course_id AND c.user_id = l.user_id AND c.status = 'ACTIVE'
+          JOIN course_materials cm ON cm.material_id = j.material_id AND cm.status = 'ACTIVE'
+                                   AND cm.file_hash = j.file_hash
+         WHERE j.job_kind = 'CONTENT' AND j.course_id = 0
+           AND j.status IN ('DONE', 'PARTIAL')
+           AND j.analysis_version = #{analysisVersion}
+           AND NOT EXISTS (SELECT 1 FROM material_analysis_jobs k
+                            WHERE k.material_id = j.material_id AND k.course_id = l.course_id
+                              AND k.job_kind = 'LINK' AND k.file_hash = j.file_hash
+                              AND k.analysis_version = j.analysis_version)
+         ORDER BY j.finished_at ASC, j.job_id ASC
+         LIMIT #{limit}
+    </select>
+
+</mapper>

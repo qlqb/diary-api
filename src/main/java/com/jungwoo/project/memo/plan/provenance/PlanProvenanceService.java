@@ -300,6 +300,9 @@ public class PlanProvenanceService {
                     ? LinkView.of("USER_CONTEXT", id) : deleted();
             // 자료 분석·과목 메모는 아직 단건으로 여는 화면이 없다. 없는 링크를 만들지 않는다.
             case COURSE_NOTE, MATERIAL_KEY_DATE -> LinkView.none("이 자료를 단건으로 여는 화면이 아직 없어요");
+            // 자료 구간은 옆의 material(원본 파일 열기)로 연다. 과제는 프로젝트의 과제 목록에서 본다.
+            case MATERIAL_SECTION -> LinkView.none("원본 자료 열기로 확인해요");
+            case ASSIGNMENT -> LinkView.none("프로젝트의 과제 목록에서 확인해요");
             case PLAN_REVIEW, TURN_INPUT -> LinkView.none("가리킬 원본이 없어요");
         };
     }

@@ -446,6 +446,33 @@ note = 기존 완료 데이터 이전: 실제 수행 시간 미확인
 
 신규 구조와 레거시 구조에 동시에 저장하지 않는다.
 
+## 17. 자료 자동 분석 · 자료 구간 · 토픽 연결 · 과제 · 계획 상세 (2026-09-13)
+
+`docs/sql/2026-09-13-material-auto-analysis.sql`. 전부 추가이며 재실행 가능하다. FK 없음(2026-08-16 이후 규칙), VARCHAR + CHECK.
+설계 근거는 15-material-auto-analysis.md.
+
+| 테이블 / 컬럼 | 뜻 | 유일성·상태 |
+|---|---|---|
+| `material_text_units` | 추출 단위(PDF 페이지·PPTX 슬라이드·텍스트 블록). `unit_no`는 사람이 보는 번호 | UNIQUE (material_id, file_hash, unit_index) |
+| `material_analysis_jobs` | 백그라운드 작업. kind CONTENT(course_id=0) / LINK. `lease_owner/until/token`, `checkpoint_json`, `attempt/max_attempts/next_run_at` | UNIQUE (material_id, course_id, job_kind, file_hash, analysis_version). status QUEUED·RUNNING·DONE·PARTIAL·FAILED·UNAVAILABLE·PAUSED·CANCELLED |
+| `material_sections` | 구간. `unit_start/end`(물리), `printed_page_*`(확인된 인쇄 쪽수만), `roles_json`, `task_text`, `excerpt`, `assignment_cue/quote`, `date_candidates_json` | UNIQUE (material_id, file_hash, analysis_version, dedupe_key). status ACTIVE·SUPERSEDED |
+| `topic_material_links` | 토픽↔구간 N:M. `section_id`=0은 자료 전체. `origin` BACKFILL_SOURCE·PROPOSAL_APPLIED·USER | UNIQUE (topic_id, material_id, section_id). status ACTIVE·REMOVED |
+| `topic_change_proposals` | 변경안. `base_tree_version`, `ops_json`, `summary_json`, `applied_ops_json` | 열린(PROPOSED) 변경안은 (material_id, course_id)당 하나(생성 컬럼 UNIQUE). PROPOSED·APPLIED·DISMISSED·CONFLICT·STALE·EMPTY |
+| `course_assignments` | 과제. `confirm_status`, `due_kind`(UNKNOWN·NONE·DATE·DATETIME) + 모양 CHECK, `due_source`(SOURCE·ESTIMATED·USER), `due_estimate_json`, `completed_at`, `title_edited/due_edited`, `duplicate_of_assignment_id`, `version` | UNIQUE (user_id, dedupe_key) |
+| `plan_item_details` | 「자세히」. `steps_json`, `user_text`, status CURRENT·STALE | UNIQUE (proposal_item_id, evidence_version) |
+| `material_analysis_controls` | 사용자별 일시중지 | PK user_id |
+| `courses.topic_tree_version` | 학습 구조 쓰기마다 +1. 변경안 적용의 낙관적 잠금 | |
+| `course_topics.merged_into_topic_id`, `review_note` | 병합 행선지, 승계가 애매할 때의 안내 | |
+| `course_materials.page_count` | 파일에서 센 물리 페이지/슬라이드 수 | |
+
+백필: `topic_material_links`에 `course_topics.source_material_id`를 (topic, material, 0)으로 1행씩 넣는다(NOT EXISTS). 작업 표는
+SQL로 채우지 않고 서버 폴러가 idempotent하게 등록한다. `course_materials.file_hash`가 NULL이던 옛 자료는 서버가 파일(없으면 원문
+텍스트)의 SHA-256으로 채운다.
+
+동시성 규칙: 작업 결과 저장은 `WHERE job_id=? AND lease_token=? AND status='RUNNING'`. 변경안 적용은 프로젝트 행 FOR UPDATE →
+`UPDATE courses SET topic_tree_version=+1 WHERE topic_tree_version=?`(0행이면 409) → 활성 항목 FOR UPDATE. 과제 갱신은 `version`
+대조(0행이면 409 VERSION_CONFLICT).
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

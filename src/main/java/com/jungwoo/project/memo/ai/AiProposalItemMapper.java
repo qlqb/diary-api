@@ -13,6 +13,9 @@ public interface AiProposalItemMapper {
 
     void insert(AiProposalItem item);
 
+    /** 제안 항목 단건. 「자세히」 안내가 항목의 근거(evidence_json)를 읽을 때 쓴다. */
+    AiProposalItem findByIdAndUserId(@Param("proposalItemId") Long proposalItemId, @Param("userId") Long userId);
+
     List<AiProposalItem> findByProposalIdAndUserId(
             @Param("proposalId") Long proposalId,
             @Param("userId") Long userId

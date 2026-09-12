@@ -63,6 +63,7 @@ public class PlanDraftService {
     private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final PlanItemService planItemService;
     private final PlanProvenanceCodec provenanceCodec;
+    private final PlanMaterialContextService materialContextService;
 
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.
@@ -98,7 +99,8 @@ public class PlanDraftService {
         PeriodPlanDraftGenerator.validatePeriod(request.getStartDate(), request.getEndDate());
         PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
-                request.getInstruction(), request.getTitle(), request.getCourseIds());
+                request.getInstruction(), request.getTitle(), request.getCourseIds(),
+                request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds());
 
         if ("V0".equalsIgnoreCase(generatorMode)) {
             log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}",
@@ -308,7 +310,27 @@ public class PlanDraftService {
                 .goalSummary(generated.goalSummary())
                 .proposal(proposal)
                 .strategy(PlanStrategyResponse.from(generated.strategy()))
+                .pendingMaterials(pendingMaterials(userId, spec))
                 .build();
+    }
+
+    /**
+     * 초안이 보지 못한 자료. 분석이 끝나지 않은 자료가 있어도 계획은 만든다 — 다만 그 사실을 응답에 싣는다.
+     * 조회 실패는 초안 실패가 아니다.
+     */
+    private List<PlanDraftResponse.PendingMaterial> pendingMaterials(Long userId, Spec spec) {
+        try {
+            List<Long> courseIds = spec.courseIds() == null || spec.courseIds().isEmpty()
+                    ? planningContextBuilder.resolveCourses(userId, List.of()).stream()
+                    .map(com.jungwoo.project.memo.course.domain.Course::getCourseId).toList()
+                    : spec.courseIds();
+            return materialContextService.pendingMaterials(userId, courseIds).stream()
+                    .map(p -> new PlanDraftResponse.PendingMaterial(p.materialId(), p.filename(), p.state(), p.courseId()))
+                    .toList();
+        } catch (Exception e) {
+            log.debug("미반영 자료 조회 실패: userId={}", userId, e);
+            return List.of();
+        }
     }
 
     /**

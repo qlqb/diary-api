@@ -4,11 +4,14 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
+import com.jungwoo.project.memo.material.domain.MaterialTextUnit;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 /**
  * 자료 관련 DB 쓰기의 트랜잭션 경계만 담당한다.
@@ -24,6 +27,8 @@ public class MaterialTxService {
 
     private final CourseMaterialMapper courseMaterialMapper;
     private final MaterialLinkMapper materialLinkMapper;
+    private final MaterialTextUnitMapper materialTextUnitMapper;
+    private final MaterialSectionMapper materialSectionMapper;
 
     /**
      * 자료 원본과 (courseId가 주어졌으면) 그 프로젝트 연결을 한 트랜잭션에 만든다.
@@ -33,7 +38,22 @@ public class MaterialTxService {
      */
     @Transactional
     public CourseMaterial createWithLink(CourseMaterial material, Long courseId, MaterialType materialType) {
+        return createWithLink(material, courseId, materialType, List.of());
+    }
+
+    /**
+     * 위와 같되 추출 단위(페이지·슬라이드)도 같은 트랜잭션에 넣는다. 단위는 자료 행의 id가 있어야
+     * 하므로 INSERT 뒤에 채운다. 단위가 없어도(추출 실패) 자료는 만들어진다.
+     */
+    @Transactional
+    public CourseMaterial createWithLink(CourseMaterial material, Long courseId, MaterialType materialType,
+                                         List<MaterialTextUnit> units) {
         courseMaterialMapper.insert(material);
+        for (MaterialTextUnit unit : units) {
+            unit.setMaterialId(material.getMaterialId());
+            unit.setUserId(material.getUserId());
+            materialTextUnitMapper.insert(unit);
+        }
         if (courseId != null) {
             materialLinkMapper.insert(MaterialLink.builder()
                     .userId(material.getUserId())
@@ -68,6 +88,10 @@ public class MaterialTxService {
         }
         materialLinkMapper.deleteAllByMaterialId(materialId, userId);
         courseMaterialMapper.markDeleted(materialId, userId);
+        // 원문 텍스트 사본도 지운다 — 삭제가 삭제여야 한다. 구간 행은 제목만 남기고 발췌를 비운다
+        // (확정 과제·근거가 그 구간 id를 가리키므로 행 자체는 남는다).
+        materialTextUnitMapper.deleteByMaterialId(materialId, userId);
+        materialSectionMapper.clearTextByMaterialId(materialId, userId);
         log.info("자료 삭제 표시: userId={}, materialId={}, storagePath={}",
                 userId, materialId, material.getStoragePath());
         return material;

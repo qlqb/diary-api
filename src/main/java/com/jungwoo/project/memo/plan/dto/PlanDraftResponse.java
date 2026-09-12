@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 계획 초안. 아직 execution_items도 plan_versions도 만들어지지 않았다 — 사용자가 확정해야
@@ -95,4 +96,21 @@ public class PlanDraftResponse {
      * 상담의 ASK_CLARIFICATION과 같은 패턴이며 새 상태 개념을 만들지 않는다.
      */
     private PlanJudgmentResult.Ask ask;
+
+    /**
+     * 대상 프로젝트에 연결됐지만 아직 자동 분석이 끝나지 않은 자료. 이 초안은 그 내용을 보지 못했다.
+     * 화면은 "아직 반영되지 않은 자료 N개"로 짧게 말한다. 없으면 빈 목록.
+     */
+    private List<PendingMaterial> pendingMaterials;
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PendingMaterial {
+        private Long materialId;
+        private String filename;
+        private String state;
+        private Long courseId;
+    }
 }

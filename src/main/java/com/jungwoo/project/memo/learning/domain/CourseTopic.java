@@ -45,6 +45,12 @@ public class CourseTopic {
      */
     private TopicUserMark userMark;
 
+    /** 병합으로 ARCHIVED 됐으면 살아남은 항목. 그 외 null. */
+    private Long mergedIntoTopicId;
+
+    /** 병합·분할에서 학습 기록 승계가 애매할 때 남기는 안내. 사용자가 확인하면 지운다. */
+    private String reviewNote;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

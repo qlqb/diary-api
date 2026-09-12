@@ -21,6 +21,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.mock.web.MockMultipartFile;
 
+import java.util.List;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 
@@ -55,9 +57,19 @@ class MaterialServiceTest {
     @Mock private MaterialTxService materialTxService;
     @Mock private FileStorageService fileStorageService;
     @Mock private TextExtractionService textExtractionService;
+    @Mock private MaterialTextUnitService materialTextUnitService;
+    @Mock private com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService analysisJobService;
+    @Mock private com.jungwoo.project.memo.learning.structure.TopicChangeProposalService topicChangeProposalService;
 
     @InjectMocks
     private MaterialService service;
+
+    @org.junit.jupiter.api.BeforeEach
+    void stubUnits() {
+        // 단위 추출은 이 테스트의 관심사가 아니다 — 비어 있는 결과로 두고 순서·저장만 본다.
+        org.mockito.Mockito.lenient().when(materialTextUnitService.extractUnits(any(), any(), any(), any(), any()))
+                .thenReturn(new MaterialTextUnitService.Extracted(List.of(), null));
+    }
 
     private MockMultipartFile pdf() {
         return new MockMultipartFile("file", "syllabus.pdf", "application/pdf", "%PDF-1.4".getBytes());
@@ -78,7 +90,7 @@ class MaterialServiceTest {
         InOrder order = inOrder(fileStorageService, textExtractionService, materialTxService);
         order.verify(fileStorageService).store(eq(USER_ID), any());
         order.verify(textExtractionService).extract(any(), eq("pdf"));
-        order.verify(materialTxService).createWithLink(any(), eq(COURSE_ID), eq(MaterialType.SYLLABUS));
+        order.verify(materialTxService).createWithLink(any(), eq(COURSE_ID), eq(MaterialType.SYLLABUS), any());
     }
 
     @Test
@@ -92,7 +104,7 @@ class MaterialServiceTest {
         service.upload(USER_ID, COURSE_ID, MaterialType.SYLLABUS, pdf());
 
         ArgumentCaptor<CourseMaterial> captor = ArgumentCaptor.forClass(CourseMaterial.class);
-        verify(materialTxService).createWithLink(captor.capture(), any(), any());
+        verify(materialTxService).createWithLink(captor.capture(), any(), any(), any());
         CourseMaterial saved = captor.getValue();
         // 추출을 트랜잭션 앞으로 옮겼으므로 INSERT 한 번에 결과까지 다 들어간다.
         assertThat(saved.getExtractionStatus()).isEqualTo(ExtractionStatus.SUCCESS);
@@ -112,7 +124,7 @@ class MaterialServiceTest {
         service.upload(USER_ID, null, null, pdf());
 
         verify(courseService, never()).getOwned(any(), any());
-        verify(materialTxService).createWithLink(any(), eq(null), eq(null));
+        verify(materialTxService).createWithLink(any(), eq(null), eq(null), any());
     }
 
     @Test

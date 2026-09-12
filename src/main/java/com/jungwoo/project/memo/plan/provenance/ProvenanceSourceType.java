@@ -52,5 +52,11 @@ public enum ProvenanceSourceType {
      *
      * <p>확정된 DB 맥락으로 가장하지 않는다(handoff §4). 저장된 행이 아니므로 sourceId는 없다.
      */
-    TURN_INPUT
+    TURN_INPUT,
+
+    /** 자료 구간(material_sections). 모델에 실제로 준 발췌·역할·위치. 자료 파일은 옆의 material로 연다. */
+    MATERIAL_SECTION,
+
+    /** 과제(course_assignments). 확정 여부·마감·완료를 서버가 붙여 준 줄. */
+    ASSIGNMENT
 }

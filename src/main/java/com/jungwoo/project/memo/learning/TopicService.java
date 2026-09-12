@@ -9,8 +9,13 @@ import com.jungwoo.project.memo.learning.domain.TopicLearningEvent;
 import com.jungwoo.project.memo.learning.domain.TopicProgress;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.domain.TopicSourceType;
+import com.jungwoo.project.memo.learning.domain.TopicMaterialLink;
 import com.jungwoo.project.memo.learning.domain.TopicUserMark;
 import com.jungwoo.project.memo.learning.domain.TopicStatus;
+import com.jungwoo.project.memo.material.MaterialSectionMapper;
+import com.jungwoo.project.memo.material.domain.MaterialSection;
+import com.jungwoo.project.memo.material.domain.MaterialStatus;
+import com.jungwoo.project.memo.material.domain.SectionRole;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.material.MaterialService;
@@ -44,6 +49,8 @@ public class TopicService {
     private final CourseTopicMapper courseTopicMapper;
     private final TopicProgressMapper topicProgressMapper;
     private final TopicLearningEventMapper topicLearningEventMapper;
+    private final TopicMaterialLinkMapper topicMaterialLinkMapper;
+    private final MaterialSectionMapper materialSectionMapper;
 
     /**
      * Material Agent 분석 결과(수정본 포함)를 course_topics로 확정 삽입한다.
@@ -120,23 +127,66 @@ public class TopicService {
                 .sorted(Comparator.comparing(CourseTopic::getOrderIndex))
                 .toList();
 
+        Map<Long, List<TopicResponse.LinkedMaterial>> linksByTopic = linkedMaterials(userId, topicIds);
+
         return roots.stream()
-                .map(root -> buildResponse(root, childrenByParent, progressByTopic, materialsById))
+                .map(root -> buildResponse(root, childrenByParent, progressByTopic, materialsById, linksByTopic))
                 .toList();
+    }
+
+    /**
+     * 토픽 ↔ 자료 구간 연결(다대다)을 항목별로 모은다. 백필된 "자료 전체" 연결(section 0)은
+     * 최초 출처(sourceMaterialId)와 같은 정보라 여기서 다시 싣지 않는다 — 구간이 있는 연결만.
+     */
+    private Map<Long, List<TopicResponse.LinkedMaterial>> linkedMaterials(Long userId, List<Long> topicIds) {
+        Map<Long, List<TopicResponse.LinkedMaterial>> out = new java.util.HashMap<>();
+        List<TopicMaterialLink> links = topicMaterialLinkMapper.findActiveByTopicIds(topicIds, userId);
+        List<Long> sectionIds = links.stream().map(TopicMaterialLink::getSectionId)
+                .filter(id -> id != null && id != TopicMaterialLink.WHOLE_MATERIAL).distinct().toList();
+        if (sectionIds.isEmpty()) {
+            return out;
+        }
+        Map<Long, MaterialSection> sections = materialSectionMapper.findByIdsAndUserId(sectionIds, userId).stream()
+                .collect(Collectors.toMap(MaterialSection::getSectionId, s -> s, (a, b) -> a));
+        Map<Long, CourseMaterial> materials = materialService.findForProvenance(userId,
+                links.stream().map(TopicMaterialLink::getMaterialId).toList());
+        for (TopicMaterialLink link : links) {
+            MaterialSection section = sections.get(link.getSectionId());
+            if (section == null) {
+                continue;
+            }
+            CourseMaterial material = materials.get(link.getMaterialId());
+            SectionRole role = SectionRole.parseOne(link.getRole());
+            out.computeIfAbsent(link.getTopicId(), k -> new ArrayList<>()).add(TopicResponse.LinkedMaterial.builder()
+                    .linkId(link.getLinkId())
+                    .materialId(link.getMaterialId())
+                    .filename(material == null ? null : material.getOriginalFilename())
+                    .materialDeleted(material != null && material.getStatus() == MaterialStatus.DELETED)
+                    .sectionId(section.getSectionId())
+                    .sectionTitle(section.getDisplayTitle())
+                    .locator(link.getLocator() != null ? link.getLocator() : section.locator())
+                    .role(link.getRole())
+                    .roleLabel(role == null ? null : role.label())
+                    .taskText(section.getTaskText())
+                    .build());
+        }
+        return out;
     }
 
     private TopicResponse buildResponse(CourseTopic topic, Map<Long, List<CourseTopic>> childrenByParent,
                                          Map<Long, TopicProgress> progressByTopic,
-                                         Map<Long, CourseMaterial> materialsById) {
+                                         Map<Long, CourseMaterial> materialsById,
+                                         Map<Long, List<TopicResponse.LinkedMaterial>> linksByTopic) {
         List<CourseTopic> childTopics = childrenByParent.getOrDefault(topic.getTopicId(), List.of()).stream()
                 .sorted(Comparator.comparing(CourseTopic::getOrderIndex))
                 .toList();
         List<TopicResponse> children = new ArrayList<>();
         for (CourseTopic child : childTopics) {
-            children.add(buildResponse(child, childrenByParent, progressByTopic, materialsById));
+            children.add(buildResponse(child, childrenByParent, progressByTopic, materialsById, linksByTopic));
         }
         return TopicResponse.of(topic, progressByTopic.get(topic.getTopicId()), children,
-                topic.getSourceMaterialId() == null ? null : materialsById.get(topic.getSourceMaterialId()));
+                topic.getSourceMaterialId() == null ? null : materialsById.get(topic.getSourceMaterialId()),
+                linksByTopic.getOrDefault(topic.getTopicId(), List.of()));
     }
 
     @Transactional(readOnly = true)

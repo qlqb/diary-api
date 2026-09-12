@@ -119,16 +119,34 @@ class PlanDraftServiceTest {
     @Mock
     private PlanItemService planItemService;
 
+    /*
+      후보 선택은 이제 PlanMaterialContextService가 한다. 프롬프트의 학습 항목 줄을 단언하는 테스트가
+      topicService mock을 그대로 쓰도록 실제 인스턴스를 만들고, 자료 구간·과제·작업 mapper는 빈 값을 주는
+      mock으로 채운다(자료 구간이 없을 때의 줄 모양은 예전과 같다).
+    */
+    private com.jungwoo.project.memo.plan.PlanMaterialContextService materialContextService;
+
+    @Mock
+    private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+
     private PlanDraftService service;
 
     @BeforeEach
     void setUp() {
         // 생성 규칙은 generator에, 저장은 service에 있다. 두 진입점(계획 화면·대화)이 같은
         // generator를 지나므로 프롬프트 단언은 generator 쪽 mock(aiConsultationClient)에서 잡는다.
+        materialContextService = new com.jungwoo.project.memo.plan.PlanMaterialContextService(topicService,
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.learning.TopicMaterialLinkMapper.class),
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class),
+                courseMaterialMapper,
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.assignment.CourseAssignmentService.class),
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService.class),
+                new com.fasterxml.jackson.databind.ObjectMapper());
         PeriodPlanDraftGenerator generator = new PeriodPlanDraftGenerator(aiConsultationClient,
                 aiUsageLimitService, planReviewService, courseMapper, topicService, courseNoteMapper,
                 analysisMapper, courseMaterialMapper, executionItemMapper, availabilityEstimateService,
-                Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
+                Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")),
+                materialContextService, userContextMapper);
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -136,7 +154,7 @@ class PlanDraftServiceTest {
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
                 planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService,
-                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec());
+                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
@@ -395,8 +413,8 @@ class PlanDraftServiceTest {
     void topicLinesAreCappedPerCourse_soManyProjectsDoNotBlowUpThePrompt() {
         givenAiResponse(BASELINE, null);
         List<TopicResponse> many = new java.util.ArrayList<>();
-        for (int i = 1; i <= 40; i++) {
-            many.add(TopicResponse.builder().title("항목 " + i).children(List.of()).build());
+        for (int i = 1; i <= 55; i++) {
+            many.add(TopicResponse.builder().topicId((long) i).title("항목 " + i).children(List.of()).build());
         }
         when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
 
@@ -404,10 +422,10 @@ class PlanDraftServiceTest {
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
-        // 뒤쪽 주차는 어차피 지금 계획할 범위가 아니다 — 접고 개수만 알린다.
+        // 상한(45줄)을 넘는 뒤쪽은 접고 개수만 알린다. 상한 안에서는 첫 미학습부터 순서대로다.
         assertThat(userPrompt.getValue())
-                .contains("- 항목 30")
-                .doesNotContain("- 항목 31")
+                .contains("- 항목 45")
+                .doesNotContain("- 항목 46")
                 .contains("… 외 10개");
     }
 
