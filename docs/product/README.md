@@ -21,7 +21,8 @@
 | 11 | 설계 | [11-period-plan.md](11-period-plan.md) | 기간형 계획(plan_versions). Project / PlanVersion / ExecutionItem / ExecutionRecord 네 층의 책임 — 기간형 계획의 기준 문서다 |
 | 12 | 제품 가설 | [12-product-thesis.md](12-product-thesis.md) | 무엇을 만드는 것이고 무엇은 아닌지 — 4층 구조, 현실층 갱신 원칙, 확장 순서 |
 | 13 | 설계 | [13-plan-judgment.md](13-plan-judgment.md) | 기간 학습 계획의 판단층. 현실 수집 → 전략 → 조각 → 배치, 마감 체인과 근거 등급 — 판단층의 기준 문서다 |
-| 14 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
+| 14 | 설계 | [15-material-auto-analysis.md](15-material-auto-analysis.md) | 자료 자동 분석·자료 구간·토픽 연결 변경안·과제·계획의 자료 입력 — 자료 분석의 기준 문서다 |
+| 14-1 | 설계 | [../api-spec.md](../api-spec.md) | 마크다운 기반 수동 API 명세 |
 | 15 | 설계 | [../openapi.yaml](../openapi.yaml) | OpenAPI(OAS) 표준 API 스펙 |
 | 16 | 이력 | [99-changelog.md](99-changelog.md) | 확정 변경 이력 |
 
@@ -45,5 +46,6 @@
 - 자료 공간, 컨텍스트, AI 초안, 사용자 승인, 일정/오늘/기록으로 이어지는 제품의 핵심 경험이 바뀌면 `10-core-experience.md`를 수정한다.
 - 기간형 계획(PlanVersion)의 구조나 네 층의 책임 경계가 바뀌면 `11-period-plan.md`를 수정한다.
 - 무엇을 만드는 것이고 무엇은 아닌지(제품 가설, 4층 구조, 현실층 갱신 원칙)가 바뀌면 `12-product-thesis.md`를 수정한다.
+- 자료 자동 분석·자료 구간·토픽 연결·과제·계획의 자료 입력 계약이 바뀌면 `15-material-auto-analysis.md`를 수정한다.
 - 아이디어가 확정되면 해당 문서와 `99-changelog.md`에 반영한다.
 - 중요한 결정은 확정 변경 이력인 `99-changelog.md`에 기록한다.

@@ -84,4 +84,19 @@ material_analysis_controls 사용자별 자동 분석 일시중지 (user_id PK, 
 
 ## 6. 진행 기록
 
-(작업하면서 채운다)
+- 2026-09-13 마이그레이션 로컬 적용(전후 행 수 동일: topics 280·progress 0·plans 5·analyses 13·links 26·materials 79·courses 23,
+  백필 280행, 재실행 OK). API 979건 통과(env 게이트 프로브 1 skip), UI 416건 통과, lint·build 통과.
+- 실호출 1차(`build/synthetic/verify-run1.log`): CONTENT·과제·초안·자세히 통과. 결함 둘 발견 — ADD children의 `op` 누락 NPE,
+  "S66" 접두어 id 파싱 실패(InvalidFormatException). 강의계획서의 평가 비율·주차 계획이 전부 과제 후보가 되는 잡음도 확인.
+- 고침: `TopicChangeOpsValidator.normalize`(children=ADD), `ModelJson`(코드 펜스·접두어 id 허용), `looksLikeSubmission`
+  (역할 실습·문제·제출 + 제출 어휘). 사용자 2의 잡음 후보 25행은 이 실행이 만든 것이라 SQL로 지웠다(39 → 14).
+- 변경안 적용 뒤 같은 프로젝트의 다른 열린 변경안을 STALE로 내리고 LINK를 다시 등록하도록 했다(1차에서 두 번째 변경안이
+  곧바로 409가 됐기 때문). `POST /materials/{id}/analysis-status/retry-link?courseId=` 추가.
+- 실호출 2차(`verify-run2.log`): 변경안 3건 생성(NPE 없음), 적용 뒤 나머지 둘이 새 트리 기준으로 다시 만들어짐(#32는 새 항목
+  대신 기존 「연결 리스트」에 LINK 1) — 표 8 통과. 초안 8항목 전부 refIds(MATERIAL_SECTION 27·ASSIGNMENT 4).
+- 브라우저(1536×760, 5174→8081, 합성 계정 auto-analysis-1789231862): 자료함 상태 요약·칩, 프로젝트의 변경안 카드(stale+다시 분석),
+  "과제인가요?" → 과제 맞아요·마감 없음·날짜 선택(9/18)·완료 체크 → 끝낸 과제, 계획 초안 [자세히] 4항목 단계 표시·원본 자료 열기,
+  오늘의 "마감이 있는 과제 1 · 9/18 금까지" 확인. 실호출 중 devtools가 8080(사용자 인스턴스)·8081 둘 다 새 클래스를 올려
+  worker가 두 인스턴스에서 돌았고 선점이 겹치지 않았다.
+- 남긴 합성 계정: auto-analysis-1789231862@example.com(user 999000275, course 672), auto-analysis-1789232290@example.com
+  (user 999000276, course 673). 정리는 사용자 판단.
