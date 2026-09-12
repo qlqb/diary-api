@@ -41,6 +41,18 @@ public interface RoutineExceptionMapper {
                                                          @Param("from") LocalDate from,
                                                          @Param("to") LocalDate to);
 
+    /**
+     * 위 두 조회의 잠금 판. 계획 확정이 루틴 본체·요일과 같은 기준(최신 커밋)으로 예외를 읽을
+     * 때 쓴다 — 본체만 최신이고 예외는 옛 스냅샷이면 보강 이동이 빠진 채 검사된다.
+     */
+    List<RoutineException> findByUserIdAndExceptionDateRangeForUpdate(@Param("userId") Long userId,
+                                                                      @Param("from") LocalDate from,
+                                                                      @Param("to") LocalDate to);
+
+    List<RoutineException> findByUserIdAndMovedDateRangeForUpdate(@Param("userId") Long userId,
+                                                                  @Param("from") LocalDate from,
+                                                                  @Param("to") LocalDate to);
+
     int update(@Param("routineExceptionId") Long routineExceptionId,
                @Param("exception") RoutineException exception);
 

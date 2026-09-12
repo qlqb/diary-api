@@ -71,6 +71,26 @@
          WHERE r.user_id = #{userId} AND r.is_deleted = 0
     </select>
 
+    <!--
+      계획 확정 전용 잠금 조회. 수정·예외 변경이 잡는 부모 행과 같은 행을 잡는다. 잠금 순서는
+      routine_id 오름차순으로 고정한다.
+    -->
+    <select id="findAllByUserIdForUpdate" resultMap="routineResultMap">
+        SELECT r.* FROM routines r
+         WHERE r.user_id = #{userId} AND r.is_deleted = 0
+         ORDER BY r.routine_id
+         FOR UPDATE
+    </select>
+
+    <select id="findWeekdaysByUserIdForUpdate" resultMap="routineWeekdayRowResultMap">
+        SELECT w.routine_id, w.day_of_week
+          FROM routine_weekdays w
+          JOIN routines r ON r.routine_id = w.routine_id
+         WHERE r.user_id = #{userId} AND r.is_deleted = 0
+         ORDER BY w.routine_id, w.day_of_week
+         FOR UPDATE
+    </select>
+
     <select id="findWeekdaysByRoutineId" resultType="java.lang.String">
         SELECT day_of_week FROM routine_weekdays WHERE routine_id = #{routineId}
     </select>

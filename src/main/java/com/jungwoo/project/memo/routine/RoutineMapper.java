@@ -35,6 +35,24 @@ public interface RoutineMapper {
     /** 루틴이 몇 개든 요일 조회는 이 한 번이다. */
     List<RoutineWeekdayRow> findWeekdaysByUserId(@Param("userId") Long userId);
 
+    /**
+     * {@link #findAllByUserId}의 잠금 조회. 계획 확정이 "그 사이 시간표가 바뀌지 않았나"를
+     * 최신 커밋 기준으로 보고, 검사와 커밋 사이에 바뀌지 못하게 할 때 쓴다.
+     *
+     * <p>일반 조회는 트랜잭션이 처음 읽은 시점의 스냅샷(REPEATABLE READ)이라, 확정 트랜잭션이
+     * 시작된 뒤 커밋된 수업 시각 변경을 보지 못한다. 잠금 조회는 항상 최신 커밋을 읽고, 수정·
+     * 예외 변경 경로가 먼저 잡는 부모 행 잠금({@link #findByIdAndUserIdForUpdate})과 같은 행을
+     * 잡으므로 아직 커밋되지 않은 변경은 끝날 때까지 기다린다. (user_id, is_deleted) 인덱스
+     * 범위를 훑으므로 같은 사용자의 새 루틴 INSERT도 확정이 끝날 때까지 기다린다.
+     */
+    List<Routine> findAllByUserIdForUpdate(@Param("userId") Long userId);
+
+    /**
+     * {@link #findWeekdaysByUserId}의 잠금 조회. 루틴 본체만 최신으로 읽고 요일은 옛 스냅샷으로
+     * 읽으면 "요일은 바뀌었는데 전개는 옛 요일" 같은 섞인 상태가 되므로 함께 잠금 조회한다.
+     */
+    List<RoutineWeekdayRow> findWeekdaysByUserIdForUpdate(@Param("userId") Long userId);
+
     List<String> findWeekdaysByRoutineId(@Param("routineId") Long routineId);
 
     /** 전체 교체. courseId·location·effectiveUntil은 COALESCE하지 않는다 — null이면 비운다. */

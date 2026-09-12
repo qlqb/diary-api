@@ -68,6 +68,30 @@
            AND e.moved_date BETWEEN #{from} AND #{to}
     </select>
 
+    <!-- 계획 확정 전용 잠금 조회. 잠금 순서는 routine_exception_id 오름차순. -->
+    <select id="findByUserIdAndExceptionDateRangeForUpdate" resultMap="routineExceptionResultMap">
+        SELECT e.*
+          FROM routine_exceptions e
+          JOIN routines r ON r.routine_id = e.routine_id
+         WHERE r.user_id = #{userId}
+           AND r.is_deleted = 0
+           AND e.exception_date BETWEEN #{from} AND #{to}
+         ORDER BY e.routine_exception_id
+         FOR UPDATE
+    </select>
+
+    <select id="findByUserIdAndMovedDateRangeForUpdate" resultMap="routineExceptionResultMap">
+        SELECT e.*
+          FROM routine_exceptions e
+          JOIN routines r ON r.routine_id = e.routine_id
+         WHERE r.user_id = #{userId}
+           AND r.is_deleted = 0
+           AND e.type = 'MOVED'
+           AND e.moved_date BETWEEN #{from} AND #{to}
+         ORDER BY e.routine_exception_id
+         FOR UPDATE
+    </select>
+
     <!--
       전체 교체다. SKIP으로 바꾸면 moved_* 가 전부 null이 되어야 하고(chk_routine_exceptions_moved),
       COALESCE로 "생략 = 유지"를 하면 그 전환이 불가능해진다.

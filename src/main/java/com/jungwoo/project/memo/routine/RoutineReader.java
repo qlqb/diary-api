@@ -34,15 +34,34 @@ public class RoutineReader {
         if (routines.isEmpty()) {
             return routines;
         }
+        attachAll(routines, routineMapper.findWeekdaysByUserId(userId));
+        return routines;
+    }
+
+    /**
+     * {@link #findAllWithWeekdays}의 잠금 판. 본체와 요일을 둘 다 잠금 조회로 읽어 같은 기준
+     * (최신 커밋)을 유지한다. 계획 확정처럼 "지금 시간표"와 겹침을 검사하는 쓰기 트랜잭션에서만
+     * 쓴다 — 목록·전개 화면이 이걸 쓰면 상담과 목록이 서로를 기다린다.
+     */
+    @Transactional
+    public List<Routine> findAllWithWeekdaysForUpdate(Long userId) {
+        List<Routine> routines = routineMapper.findAllByUserIdForUpdate(userId);
+        if (routines.isEmpty()) {
+            return routines;
+        }
+        attachAll(routines, routineMapper.findWeekdaysByUserIdForUpdate(userId));
+        return routines;
+    }
+
+    private static void attachAll(List<Routine> routines, List<RoutineWeekdayRow> rows) {
         Map<Long, Set<DayOfWeek>> byRoutine = new HashMap<>();
-        for (RoutineWeekdayRow row : routineMapper.findWeekdaysByUserId(userId)) {
+        for (RoutineWeekdayRow row : rows) {
             byRoutine.computeIfAbsent(row.getRoutineId(), key -> new LinkedHashSet<>())
                     .add(DayOfWeek.valueOf(row.getDayOfWeek()));
         }
         for (Routine routine : routines) {
             routine.setDaysOfWeek(byRoutine.getOrDefault(routine.getRoutineId(), new LinkedHashSet<>()));
         }
-        return routines;
     }
 
     /** 한 건. 없거나 남의 것이면 null이다 — 404/403 판단은 부르는 쪽이 한다. */

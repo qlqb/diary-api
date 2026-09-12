@@ -38,6 +38,28 @@ public class RoutineOccurrenceService {
      */
     @Transactional(readOnly = true)
     public List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to) {
+        return expand(userId, from, to, false);
+    }
+
+    /**
+     * 같은 전개를 <b>잠금 조회</b>로 읽어서 한다. 계획 확정처럼 "지금 시간표와 겹치지 않는가"를
+     * 검사하고 그 결과를 저장하는 쓰기 트랜잭션에서만 쓴다.
+     *
+     * <p>일반 조회는 트랜잭션이 처음 읽은 시점의 스냅샷이라, 확정이 시작된 뒤 커밋된 수업 시각
+     * 변경·요일 변경·보강 이동을 보지 못한다. 잠금 조회는 항상 최신 커밋을 읽고, 수정·예외 변경이
+     * 잡는 부모 행 잠금과 같은 행을 잡아 아직 커밋되지 않은 변경은 끝날 때까지 기다린다. 본체·
+     * 요일·예외를 <b>전부</b> 잠금 조회로 읽는다 — 본체만 최신이고 나머지는 옛 스냅샷이면
+     * 섞인 시간표를 검사하게 된다.
+     *
+     * <p>계산은 {@link #expand(Long, LocalDate, LocalDate)}와 같은 코드다. 확정 전용 전개를 따로
+     * 두면 자정 넘김·보강·학기 종료 처리가 갈라질 수 있다.
+     */
+    @Transactional
+    public List<RoutineOccurrence> expandForUpdate(Long userId, LocalDate from, LocalDate to) {
+        return expand(userId, from, to, true);
+    }
+
+    private List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to, boolean forUpdate) {
         if (from == null || to == null || to.isBefore(from)) {
             return List.of();
         }
@@ -50,7 +72,9 @@ public class RoutineOccurrenceService {
         LocalDateTime windowStart = from.atStartOfDay();
         LocalDateTime windowEnd = to.plusDays(1).atStartOfDay();
 
-        List<Routine> routines = routineReader.findAllWithWeekdays(userId);
+        List<Routine> routines = forUpdate
+                ? routineReader.findAllWithWeekdaysForUpdate(userId)
+                : routineReader.findAllWithWeekdays(userId);
         if (routines.isEmpty()) {
             return List.of();
         }
@@ -61,8 +85,10 @@ public class RoutineOccurrenceService {
 
         // (routineId, exceptionDate) -> 예외. 원본 발생일을 건너뛰는 데만 쓴다.
         Map<Long, Map<LocalDate, RoutineException>> exceptionsBySourceDate = new HashMap<>();
-        for (RoutineException exception :
-                routineExceptionMapper.findByUserIdAndExceptionDateRange(userId, scanFrom, to)) {
+        List<RoutineException> skipped = forUpdate
+                ? routineExceptionMapper.findByUserIdAndExceptionDateRangeForUpdate(userId, scanFrom, to)
+                : routineExceptionMapper.findByUserIdAndExceptionDateRange(userId, scanFrom, to);
+        for (RoutineException exception : skipped) {
             exceptionsBySourceDate
                     .computeIfAbsent(exception.getRoutineId(), key -> new HashMap<>())
                     .put(exception.getExceptionDate(), exception);
@@ -101,8 +127,10 @@ public class RoutineOccurrenceService {
          * movedDate에는 effectiveFrom/Until을 적용하지 않는다. 마지막 수업 보강이 종강
          * 다음 날로 밀리는 것은 정상이고, 학기 밖으로 옮겼다고 무효 처리하면 안 된다.
          */
-        for (RoutineException exception :
-                routineExceptionMapper.findByUserIdAndMovedDateRange(userId, scanFrom, to)) {
+        List<RoutineException> movedIn = forUpdate
+                ? routineExceptionMapper.findByUserIdAndMovedDateRangeForUpdate(userId, scanFrom, to)
+                : routineExceptionMapper.findByUserIdAndMovedDateRange(userId, scanFrom, to);
+        for (RoutineException exception : movedIn) {
             if (exception.getType() != RoutineExceptionType.MOVED || exception.getMovedDate() == null) {
                 continue;
             }
