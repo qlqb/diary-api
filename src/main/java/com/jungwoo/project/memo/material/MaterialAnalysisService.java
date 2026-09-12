@@ -362,6 +362,10 @@ public class MaterialAnalysisService {
                 : payload.topics().stream().map(this::toTopicDraft).toList();
         int createdCount = drafts.isEmpty() ? 0
                 : topicService.applyAnalyzedTopics(userId, analysis.getCourseId(), analysis.getMaterialId(), drafts);
+        if (createdCount > 0) {
+            // 트리가 바뀌었다 — 열린 변경안이 있으면 적용 시 버전 대조에서 걸리게 한다.
+            courseMapper.incrementTopicTreeVersion(analysis.getCourseId(), userId);
+        }
 
         List<CourseNoteDraft> noteDrafts = payload.courseNotes() == null ? List.of()
                 : payload.courseNotes().stream().map(this::toCourseNoteDraft).toList();

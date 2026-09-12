@@ -12,6 +12,7 @@
         <result property="storagePath"      column="storage_path"/>
         <result property="contentType"      column="content_type"/>
         <result property="sizeBytes"        column="size_bytes"/>
+        <result property="pageCount"        column="page_count"/>
         <result property="fileHash"         column="file_hash"/>
         <result property="extractionStatus" column="extraction_status"/>
         <result property="extractedText"    column="extracted_text"/>
@@ -24,10 +25,10 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
         INSERT INTO course_materials (
             user_id, original_filename, stored_filename, storage_path,
-            content_type, size_bytes, file_hash, extraction_status, extracted_text, extraction_error
+            content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error
         ) VALUES (
             #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
-            #{contentType}, #{sizeBytes}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
+            #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
         )
     </insert>
 
@@ -82,6 +83,35 @@
         UPDATE course_materials
         SET status = 'DELETED', extracted_text = NULL
         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <update id="updatePageCount">
+        UPDATE course_materials SET page_count = #{pageCount}
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      자동 분석 등록 대상: 추출에 성공한 ACTIVE 자료 중 현재 파일 해시·분석판의 CONTENT 작업이
+      없는 것. file_hash가 NULL인 옛 자료는 서비스가 먼저 해시를 채운 뒤 다시 걸린다.
+      폴러가 틱마다 상한(limit)만큼 집어 간다 — 한 번에 전부 등록하면 첫 틱이 길어진다.
+    -->
+    <select id="findAnalysisBacklog" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        WHERE cm.status = 'ACTIVE' AND cm.extraction_status = 'SUCCESS'
+          AND NOT EXISTS (
+              SELECT 1 FROM material_analysis_jobs j
+               WHERE j.material_id = cm.material_id AND j.job_kind = 'CONTENT'
+                 AND j.course_id = 0
+                 AND j.analysis_version = #{analysisVersion}
+                 AND (cm.file_hash IS NULL OR j.file_hash = cm.file_hash))
+        ORDER BY cm.material_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 해시가 없던 옛 자료에 디스크에서 계산한 해시를 채운다. 값이 이미 있으면 건드리지 않는다. -->
+    <update id="fillFileHashIfMissing">
+        UPDATE course_materials SET file_hash = #{fileHash}
+         WHERE material_id = #{materialId} AND file_hash IS NULL
     </update>
 
 </mapper>

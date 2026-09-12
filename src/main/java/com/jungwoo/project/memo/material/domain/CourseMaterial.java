@@ -35,6 +35,9 @@ public class CourseMaterial {
 
     private Long sizeBytes;
 
+    /** PDF 물리 페이지 수 / PPTX 슬라이드 수. 파일에서 계산한 값이고 인쇄 쪽수가 아니다. 모르면 null. */
+    private Integer pageCount;
+
     /** SHA-256. 신규 업로드부터만 채워진다 — 기존 자료는 NULL일 수 있다. 판단에 쓰지 않는다. */
     private String fileHash;
 

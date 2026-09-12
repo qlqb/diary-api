@@ -37,10 +37,37 @@ public class TopicResponse {
     private int reviewCount;
     /** 사용자가 직접 말한 사실(KNOWN/DEFER). 없으면 null. progressStatus와 다른 축이다. */
     private TopicUserMark userMark;
+    /** 병합·분할에서 학습 기록 승계가 애매할 때 서버가 남긴 안내. 없으면 null. */
+    private String reviewNote;
+    /**
+     * 이 항목에 연결된 자료 구간(topic_material_links). 한 항목에 여러 자료·여러 역할이 있을 수 있다.
+     * sourceMaterialId(최초 출처)와 별개다. 비어 있으면 아직 구간 연결이 없다.
+     */
+    private List<LinkedMaterial> linkedMaterials;
     private List<TopicResponse> children;
+
+    @Getter
+    @Builder
+    public static class LinkedMaterial {
+        private Long linkId;
+        private Long materialId;
+        private String filename;
+        private boolean materialDeleted;
+        private Long sectionId;
+        private String sectionTitle;
+        private String locator;
+        private String role;
+        private String roleLabel;
+        private String taskText;
+    }
 
     public static TopicResponse of(CourseTopic topic, TopicProgress progress, List<TopicResponse> children,
                                     CourseMaterial sourceMaterial) {
+        return of(topic, progress, children, sourceMaterial, List.of());
+    }
+
+    public static TopicResponse of(CourseTopic topic, TopicProgress progress, List<TopicResponse> children,
+                                    CourseMaterial sourceMaterial, List<LinkedMaterial> linkedMaterials) {
         return TopicResponse.builder()
                 .topicId(topic.getTopicId())
                 .parentTopicId(topic.getParentTopicId())
@@ -56,6 +83,8 @@ public class TopicResponse {
                 .lastReviewedAt(progress != null ? progress.getLastReviewedAt() : null)
                 .reviewCount(progress != null && progress.getReviewCount() != null ? progress.getReviewCount() : 0)
                 .userMark(topic.getUserMark())
+                .reviewNote(topic.getReviewNote())
+                .linkedMaterials(linkedMaterials == null ? List.of() : linkedMaterials)
                 .children(children)
                 .build();
     }

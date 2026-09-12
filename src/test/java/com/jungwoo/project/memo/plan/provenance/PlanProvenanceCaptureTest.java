@@ -88,14 +88,32 @@ class PlanProvenanceCaptureTest {
     @Mock
     private AvailabilityEstimateService availabilityEstimateService;
 
+    /*
+      후보 선택은 이제 PlanMaterialContextService가 한다. 프롬프트의 학습 항목 줄을 단언하는 테스트가
+      topicService mock을 그대로 쓰도록 실제 인스턴스를 만들고, 자료 구간·과제·작업 mapper는 빈 값을 주는
+      mock으로 채운다(자료 구간이 없을 때의 줄 모양은 예전과 같다).
+    */
+    private com.jungwoo.project.memo.plan.PlanMaterialContextService materialContextService;
+
+    @Mock
+    private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+
     private PeriodPlanDraftGenerator generator;
 
     @BeforeEach
     void setUp() {
+        materialContextService = new com.jungwoo.project.memo.plan.PlanMaterialContextService(topicService,
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.learning.TopicMaterialLinkMapper.class),
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class),
+                courseMaterialMapper,
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.assignment.CourseAssignmentService.class),
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService.class),
+                new com.fasterxml.jackson.databind.ObjectMapper());
         generator = new PeriodPlanDraftGenerator(aiConsultationClient, aiUsageLimitService,
                 planReviewService, courseMapper, topicService, courseNoteMapper, analysisMapper,
                 courseMaterialMapper, executionItemMapper, availabilityEstimateService,
-                Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")));
+                Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")),
+                materialContextService, userContextMapper);
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -167,7 +185,7 @@ class PlanProvenanceCaptureTest {
     @Test
     void topicsCutByThePromptLimit_areInNeitherThePromptNorTheSnapshot() {
         List<TopicResponse> many = new ArrayList<>();
-        for (int i = 0; i < 35; i++) {
+        for (int i = 0; i < 50; i++) {
             many.add(topic(200L + i, "주제" + i, i + "주차"));
         }
         when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(many);
@@ -180,10 +198,10 @@ class PlanProvenanceCaptureTest {
                 .filter(s -> s.sourceType() == ProvenanceSourceType.TOPIC)
                 .map(ProvidedSource::sourceId).toList();
 
-        assertThat(recordedTopicIds).as("프롬프트 상한(30줄)까지만 실린다").hasSize(30);
+        assertThat(recordedTopicIds).as("프롬프트 상한(45줄)까지만 실린다").hasSize(45);
         assertThat(prompt).contains("외 5개");
-        assertThat(prompt).as("잘린 주제는 모델에게 가지 않는다").doesNotContain("주제34");
-        assertThat(recordedTopicIds).as("잘린 주제는 스냅샷에도 없다").doesNotContain(234L);
+        assertThat(prompt).as("잘린 주제는 모델에게 가지 않는다").doesNotContain("주제49");
+        assertThat(recordedTopicIds).as("잘린 주제는 스냅샷에도 없다").doesNotContain(249L);
     }
 
     // ===== 당시 구조와 자료 파일은 모델에 준 값과 다른 자리에 남는다 =====

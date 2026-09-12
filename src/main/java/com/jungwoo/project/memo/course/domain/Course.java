@@ -42,6 +42,9 @@ public class Course {
 
     private CourseStatus status;
 
+    /** 학습 구조(course_topics)를 바꾸는 쓰기마다 1 오른다. 변경안 적용의 낙관적 잠금 기준. */
+    private Long topicTreeVersion;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;

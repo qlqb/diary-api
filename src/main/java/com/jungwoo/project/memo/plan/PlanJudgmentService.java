@@ -206,6 +206,18 @@ public class PlanJudgmentService {
         for (TopicTreatment topic : strategy.topics()) {
             TopicContext fact = topicsById.get(topic.topicId());
             TopicUserMark mark = fact == null ? null : fact.userMark();
+            if (mark == null && fact != null && topic.treatment() == Treatment.SKIP && onlyUserMarkEvidence(topic)) {
+                /*
+                 * 「다시 포함」: 표식을 지웠고, 그 SKIP의 근거가 표식뿐이었다면 FULL로 되돌린다.
+                 * 다른 근거(맥락·학습 완료)가 섞인 SKIP은 건드리지 않는다 — 그건 재판단의 몫이다.
+                 */
+                List<Evidence> evidence = new ArrayList<>(topic.evidence());
+                evidence.removeIf(one -> one.type() == EvidenceType.USER_MARK);
+                adjusted.add(topic.withTreatment(Treatment.FULL, "표식을 지워 다시 포함했어요", evidence,
+                        AdjustedBy.SERVER));
+                changed++;
+                continue;
+            }
             if (mark == null || topic.treatment() == Treatment.SKIP) {
                 adjusted.add(topic);
                 continue;
@@ -226,6 +238,14 @@ public class PlanJudgmentService {
         return new PlanStrategy(strategy.goal(), strategy.strategySummary(), strategy.strategySource(),
                 strategy.reusedFromVersionId(), strategy.referencedContextIds(), strategy.courses(),
                 adjusted, strategy.planningRules());
+    }
+
+    /** 그 취급의 근거가 사용자 표식뿐인가(비어 있으면 false — 근거 없는 SKIP은 모델 판단이다). */
+    private static boolean onlyUserMarkEvidence(TopicTreatment topic) {
+        if (topic.evidence() == null || topic.evidence().isEmpty()) {
+            return false;
+        }
+        return topic.evidence().stream().allMatch(one -> one.type() == EvidenceType.USER_MARK);
     }
 
     // ===== 되묻기 =====

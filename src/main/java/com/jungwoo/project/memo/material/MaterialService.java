@@ -7,7 +7,12 @@ import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.learning.structure.TopicChangeProposalService;
+import com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService;
+import com.jungwoo.project.memo.material.domain.AnalysisJobKind;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
+import com.jungwoo.project.memo.material.domain.ExtractionStatus;
+import com.jungwoo.project.memo.material.domain.MaterialAnalysisJob;
 import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialStatus;
 import com.jungwoo.project.memo.material.domain.MaterialType;
@@ -47,6 +52,9 @@ public class MaterialService {
     private final MaterialTxService materialTxService;
     private final FileStorageService fileStorageService;
     private final TextExtractionService textExtractionService;
+    private final MaterialTextUnitService materialTextUnitService;
+    private final MaterialAnalysisJobService analysisJobService;
+    private final TopicChangeProposalService topicChangeProposalService;
 
     /**
      * 업로드 순서가 중요하다: 파일 저장 -> 텍스트 추출 -> [트랜잭션: material + link INSERT].
@@ -68,6 +76,10 @@ public class MaterialService {
 
         Path savedPath = fileStorageService.resolve(stored.storagePath());
         TextExtractionService.ExtractionResult result = textExtractionService.extract(savedPath, stored.extension());
+        // 페이지·슬라이드 단위. 전체 텍스트와 별개로, 구간 분석이 "몇 페이지"를 말하기 위한 원본이다.
+        MaterialTextUnitService.Extracted units = result.status() == ExtractionStatus.SUCCESS
+                ? materialTextUnitService.extractUnits(savedPath, stored.extension(), userId, null, stored.fileHash())
+                : new MaterialTextUnitService.Extracted(List.of(), null);
 
         CourseMaterial material = CourseMaterial.builder()
                 .userId(userId)
@@ -76,16 +88,25 @@ public class MaterialService {
                 .storagePath(stored.storagePath())
                 .contentType(file.getContentType())
                 .sizeBytes(file.getSize())
+                .pageCount(units.pageCount())
                 .fileHash(stored.fileHash())
                 .extractionStatus(result.status())
                 .extractedText(result.text())
                 .extractionError(result.error())
                 .status(MaterialStatus.ACTIVE)
                 .build();
-        materialTxService.createWithLink(material, courseId, materialType);
+        materialTxService.createWithLink(material, courseId, materialType, units.units());
 
-        log.info("자료 업로드 완료: userId={}, courseId={}, materialId={}, extractionStatus={}",
-                userId, courseId, material.getMaterialId(), result.status());
+        log.info("자료 업로드 완료: userId={}, courseId={}, materialId={}, extractionStatus={}, units={}",
+                userId, courseId, material.getMaterialId(), result.status(), units.units().size());
+
+        // 자동 분석 등록. 커밋 뒤라 worker가 바로 집어도 자료 행이 보인다. 등록 실패는 업로드 실패가
+        // 아니다 — 폴러의 backlog 등록이 같은 자료를 다시 잡는다.
+        try {
+            analysisJobService.enqueueContent(material, MaterialAnalysisJobService.PRIORITY_NEW_UPLOAD);
+        } catch (Exception e) {
+            log.warn("업로드 후 분석 등록 실패(backlog가 다시 시도): materialId={}", material.getMaterialId(), e);
+        }
 
         return MaterialResponse.of(material, courseId, materialType);
     }
@@ -142,6 +163,10 @@ public class MaterialService {
      */
     public void delete(Long userId, Long materialId) {
         CourseMaterial material = materialTxService.markDeleted(userId, materialId);
+        // 늦게 끝난 worker가 지운 자료의 토픽·과제를 되살리지 못하게: 열린 작업 취소(임대 토큰이 바뀌어
+        // 진행 중인 결과 저장도 0행이 된다), 열린 변경안은 STALE.
+        analysisJobService.cancelForMaterial(userId, materialId);
+        topicChangeProposalService.staleFor(userId, materialId, null);
         fileStorageService.deleteQuietly(materialId, material.getStoragePath());
     }
 
@@ -169,6 +194,7 @@ public class MaterialService {
         materialLinkMapper.insert(link);
         log.info("자료 연결: userId={}, materialId={}, courseId={}, type={}",
                 userId, materialId, courseId, materialType);
+        enqueueLinkIfContentReady(userId, materialId, courseId);
         return MaterialLinkResponse.of(link, course.getTitle());
     }
 
@@ -206,7 +232,33 @@ public class MaterialService {
     public void removeLink(Long userId, Long materialId, Long courseId) {
         getRequiredLink(userId, materialId, courseId);
         materialLinkMapper.delete(materialId, courseId, userId);
+        // 이 프로젝트 맥락의 분석은 더 이상 유효하지 않다. 원문 분석(CONTENT)과 다른 프로젝트 연결은 남는다.
+        analysisJobService.cancelLinkJobs(userId, materialId, courseId);
+        topicChangeProposalService.staleFor(userId, materialId, courseId);
         log.info("자료 연결 해제: userId={}, materialId={}, courseId={}", userId, materialId, courseId);
+    }
+
+    /**
+     * 프로젝트에 연결되는 순간, 원문 분석이 이미 끝나 있으면 그 결과를 재사용해 연결 변경안(LINK)만 만든다.
+     * 아직이면 폴러가 CONTENT 완료 뒤에 LINK를 등록한다(registerLinkBacklog).
+     */
+    private void enqueueLinkIfContentReady(Long userId, Long materialId, Long courseId) {
+        try {
+            CourseMaterial material = courseMaterialMapper.findByIdAndUserId(materialId, userId);
+            if (material == null || material.getFileHash() == null) {
+                return;
+            }
+            for (MaterialAnalysisJob job : analysisJobService.findByMaterials(userId, List.of(materialId))) {
+                if (job.getJobKind() == AnalysisJobKind.CONTENT && material.getFileHash().equals(job.getFileHash())
+                        && job.getStatus() != null && job.getStatus().hasUsableResult()) {
+                    analysisJobService.enqueueLink(userId, materialId, courseId, material.getFileHash(),
+                            MaterialAnalysisJobService.PRIORITY_NEW_UPLOAD);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("연결 후 LINK 등록 실패(backlog가 다시 시도): materialId={}, courseId={}", materialId, courseId, e);
+        }
     }
 
     private Map<Long, String> courseTitles(Long userId, List<MaterialLink> links) {

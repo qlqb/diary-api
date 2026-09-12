@@ -56,4 +56,10 @@ public class PlanDraftRequest {
 
     /** 그 되묻기가 대상으로 삼았던 학습 항목. 응답의 {@code ask.topicIds}를 그대로 돌려보낸다. */
     private List<Long> familiarityTopicIds;
+
+    /**
+     * 「이번 계획에서 제외」. 이 요청에서만 후보에서 뺀다. 저장하지 않는다 — 영구 표식(KNOWN/DEFER)과 다르고,
+     * 다음 계획에는 다시 후보로 돌아온다.
+     */
+    private List<Long> excludeTopicIds;
 }

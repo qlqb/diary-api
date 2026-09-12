@@ -62,6 +62,9 @@ public enum ErrorCode {
 
     ROUTINE_EXCEPTION_MOVED_INVALID(HttpStatus.BAD_REQUEST, "E400_025",
             "옮기려면 옮길 날짜가 필요하고, 옮길 시각은 둘 다 있거나 둘 다 없어야 합니다"),
+    TOPIC_CHANGE_INVALID(HttpStatus.BAD_REQUEST, "E400_030", "적용할 수 없는 학습 구조 변경입니다"),
+    ASSIGNMENT_DUE_INVALID(HttpStatus.BAD_REQUEST, "E400_031", "마감 입력이 올바르지 않습니다"),
+    PLAN_ITEM_DETAIL_UNAVAILABLE(HttpStatus.BAD_REQUEST, "E400_032", "이 항목에는 자세한 안내를 만들 근거가 없습니다"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -99,6 +102,10 @@ public enum ErrorCode {
      * 생겼으므로 이 어긋남을 500이 아니라 이 코드로 말한다.
      */
     MATERIAL_FILE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_023", "자료의 원본 파일을 찾을 수 없습니다"),
+    TOPIC_CHANGE_PROPOSAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_024", "자료 정리 변경안을 찾을 수 없습니다"),
+    ASSIGNMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_025", "과제를 찾을 수 없습니다"),
+    MATERIAL_ANALYSIS_JOB_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_026", "분석 작업을 찾을 수 없습니다"),
+    MATERIAL_SECTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_027", "자료 구간을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -124,6 +131,9 @@ public enum ErrorCode {
             "기준이 된 근무가 그 사이 바뀌었습니다. 후보를 다시 만들어 주세요"),
     PLAN_CONFIRM_SCHEDULE_CONFLICT(HttpStatus.CONFLICT, "E409_016",
             "미리보기 이후 일정이 바뀌어 겹치는 항목이 있습니다. 미리보기를 다시 계산해 주세요"),
+    TOPIC_TREE_CONFLICT(HttpStatus.CONFLICT, "E409_017",
+            "이 변경안을 만든 뒤 학습 구조가 바뀌었습니다. 자료를 다시 분석하면 새 변경안이 만들어집니다"),
+    TOPIC_CHANGE_PROPOSAL_RESOLVED(HttpStatus.CONFLICT, "E409_018", "이미 처리된 변경안입니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

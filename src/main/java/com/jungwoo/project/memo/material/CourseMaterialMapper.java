@@ -45,4 +45,17 @@ public interface CourseMaterialMapper {
 
     /** soft delete. 파일 원문은 이 호출 이후 서비스가 별도로 디스크에서 지운다. */
     void markDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
+
+    int updatePageCount(@Param("materialId") Long materialId, @Param("userId") Long userId,
+                        @Param("pageCount") Integer pageCount);
+
+    /**
+     * 자동 분석 등록 대상(추출 성공 + 현재 해시·분석판의 CONTENT 작업 없음). 사용자 구분 없이
+     * 서버 전체 — 폴러가 부른다. limit만큼만.
+     */
+    List<CourseMaterial> findAnalysisBacklog(@Param("analysisVersion") Integer analysisVersion,
+                                             @Param("limit") int limit);
+
+    /** 해시가 없던 옛 자료에 채운다. 이미 값이 있으면 0행. */
+    int fillFileHashIfMissing(@Param("materialId") Long materialId, @Param("fileHash") String fileHash);
 }
