@@ -76,9 +76,18 @@ public class SchedulePreviewService {
     @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
     private String defaultTimeZoneId = "Asia/Seoul";
 
+    /**
+     * 같은 초안의 미리보기 요청은 제안 행 잠금으로 직렬화한다.
+     *
+     * <p>저장이 "조회 후 INSERT"라서, 같은 초안에 대한 두 요청이 겹치면 둘 다 "없다"를 보고 둘 다
+     * INSERT해 uq_ai_proposal_schedule_previews_proposal에 걸려 한쪽이 500이 났다(초안 화면이
+     * 뜰 때 실제로 그렇게 났다). 잠금을 잡으면 뒤의 요청은 앞의 요청이 커밋한 뒤에 들어와
+     * 기존 행을 보고 UPDATE한다. 각 요청은 <b>자기 입력으로 계산한 자기 결과</b>를 돌려받는다 —
+     * 뒤의 요청에 앞의 결과를 돌려주지 않는다. 저장된 행은 마지막에 커밋한 요청의 것이다.
+     */
     @Transactional
     public SchedulePreviewResponse computePreview(Long userId, Long proposalId, SchedulePreviewRequest request) {
-        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        AiProposal proposal = aiProposalMapper.findByIdAndUserIdForUpdate(proposalId, userId);
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }

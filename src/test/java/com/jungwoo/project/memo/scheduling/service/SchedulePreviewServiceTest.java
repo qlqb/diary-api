@@ -109,7 +109,8 @@ class SchedulePreviewServiceTest {
 
     @Test
     void computePreview_deniesAccess_whenProposalNotOwnedByCurrentUser() {
-        when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, OTHER_USER_ID)).thenReturn(null);
+        // 계산 경로는 제안 행을 잠그고 읽는다(같은 초안의 동시 미리보기를 직렬화하기 위해).
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, OTHER_USER_ID)).thenReturn(null);
 
         assertThatThrownBy(() -> service.computePreview(OTHER_USER_ID, PROPOSAL_ID, SchedulePreviewRequest.builder().build()))
                 .isInstanceOfSatisfying(NotFoundException.class,
@@ -129,7 +130,7 @@ class SchedulePreviewServiceTest {
 
     @Test
     void placesAllCandidates_whenPlentyOfAvailableTime() {
-        when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(List.of(
                 proposalItem(1L, "강의 1", 30, "MUST", null),
                 proposalItem(2L, "강의 2", 30, "SHOULD", null)
@@ -150,7 +151,7 @@ class SchedulePreviewServiceTest {
 
     @Test
     void leavesLowerPriorityUnplaced_whenNotEnoughAvailableTime() {
-        when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
 
         // 하루 안에만 배치 가능하도록 짧은 horizon(오늘 하루)을 쓰고, 그날 20:00까지를 근무로
         // 막아 남는 시간을 3시간으로 만든다. 부족한 상태를 기본 창 크기에 기대지 않고 여기서
@@ -184,7 +185,7 @@ class SchedulePreviewServiceTest {
 
     @Test
     void doesNotPlaceEitherItem_whenDeadlineIsInThePast() {
-        when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
                 .thenReturn(List.of(proposalItem(1L, "마감 지난 후보", 30, "MUST", TODAY.minusDays(1))));
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
@@ -198,7 +199,7 @@ class SchedulePreviewServiceTest {
 
     @Test
     void restoresStoredPreview_afterRecompute() {
-        when(aiProposalMapper.findByIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))
                 .thenReturn(List.of(proposalItem(1L, "강의", 30, "SHOULD", null)));
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
