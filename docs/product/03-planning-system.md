@@ -1,196 +1,215 @@
 # 03. Planning System
 
-## 1. 계획 시스템의 목적
+## 1. 목적
 
-계획 시스템은 연간 목표에서 하루 계획으로 내려오는 하향식 구조가 아니다.
-
-v2.1 기준 계획 시스템의 핵심은 DailyPlan, ScheduleBlock, Todo의 역할을 분리하고, 사용자가 오늘 실제로 할 수 있는 행동과 조정 이력을 남기는 것이다.
-
-기본 흐름은 다음과 같다.
+계획 시스템의 목적은 거대한 계획표를 만드는 것이 아니라, 대화에서 나온 의도를 실제로 관리 가능한 실행 조각으로 바꾸고 계획과 실제의 차이를 다음 계획에 반영하는 것이다.
 
 ```text
-오늘 기록
-→ 반복 행동
-→ 주간 패턴
-→ 월간 집중 후보
-→ 장기 방향 후보
+자연어 상담
+→ PlanItem 초안
+→ ExecutionItem 후보
+→ 사용자 수정·적용
+→ 실제 수행 ExecutionRecord
+→ 조정 ExecutionItemEvent
+→ 다음 상담
 ```
 
-월간/연간/LifeGoal은 장기 확장 방향으로만 남긴다. MVP에서는 테이블과 화면을 만들지 않는다.
+## 2. 핵심 모델
 
-## 2. 핵심 모델 역할
+| 모델 | 한 문장 정의 |
+| --- | --- |
+| PlanItem | 앞으로 하려는 의도·범위·기간 |
+| ExecutionItem | 실제로 날짜·시간에 배치하고 조정하는 실행 조각 |
+| ExecutionRecord | 실제로 수행한 결과 |
+| ExecutionItemEvent | 실행 조각을 이동·축소·보류·분할한 사건 |
+| DailyState | 특정 날짜의 컨디션과 운영 설정 |
+| ContextItem | 다음 상담과 계획에 재사용할 장기 기억 |
+| AIProposal / Item | 적용 전 AI 변경안과 항목별 사용자 반응 |
 
-| 모델 | 역할 |
-|---|---|
-| DailyPlan | 오늘 하루의 보기 방식과 운영 상태 |
-| ScheduleBlock | Today 화면에 올라온 오늘의 실행 카드 |
-| Todo | 아직 날짜가 확정되지 않은 실행 후보 대기열 |
+## 3. PlanItem에서 실행까지
 
-역할 구분은 다음과 같다.
+PlanItem 하나는 여러 ExecutionItem으로 나뉠 수 있다.
 
 ```text
-Todo = 나중에 해볼 실행 후보
-ScheduleBlock = 오늘 해볼 실행 카드
-DailyPlan = 오늘을 어떤 방식과 강도로 운영할지
+PlanItem: 포트폴리오 배포 준비
+  → ExecutionItem: README 초안 작성
+  → ExecutionItem: 환경변수 정리
+  → ExecutionItem: 배포 오류 1개 수정
 ```
 
-1차-A 기준 사용자 화면의 "오늘 해볼 것"은 내부적으로 ScheduleBlock으로 저장한다. Todo는 아직 날짜가 확정되지 않은 실행 후보 대기열이며, 1차-A 사용자 화면에서는 노출하지 않는다.
+모든 실행 조각이 PlanItem을 가져야 하는 것은 아니다. 임시 일정, 휴식, 갑자기 생긴 할 일은 상위 계획 없이 만들 수 있다. 반대로 PlanItem은 실행 조각이 만들어지기 전 초안 상태로 존재할 수 있다.
 
-모든 Todo가 ScheduleBlock으로 배치될 필요는 없다.
+## 4. ExecutionItem 배치
 
-모든 ScheduleBlock이 Todo에서 올 필요도 없다. 사용자는 임시 일정, 휴식, 메모성 블록을 직접 만들 수 있다.
-
-## 3. DailyPlan
-
-DailyPlan은 날짜별 하루 운영 단위다.
-
-필드는 다음 개념을 가진다.
+배치 유형은 다음 세 가지다.
 
 ```text
-planDate
-view_mode
-view_mode_source
-intensity
-condition_note
-main_goal
+UNSCHEDULED   아직 날짜가 없는 실행 후보
+DATE_ONLY     날짜만 정해진 실행 조각
+TIME_FIXED    시작·종료 시각이 정해진 실행 조각
+```
+
+`TIME_FIXED`는 시작·종료 시각을 모두 가지며 종료가 시작보다 늦어야 한다. `scheduled_date`는 실제 달력 배치 날짜이며 `scheduled_start_at`의 날짜와 일치한다. 자정을 넘긴 “운영일”이 필요하면 별도 정책으로 다루고 같은 필드에 두 의미를 섞지 않는다.
+
+우선순위는 다음 값을 사용한다.
+
+```text
+MUST / SHOULD / OPTIONAL
+```
+
+상태는 현재 상태만 표현한다.
+
+```text
+PLANNED / PARTIAL / HOLD / DONE / CANCELLED
+```
+
+이동·축소·분할은 상태가 아니라 Event다.
+
+## 5. 실제 수행 기록
+
+ExecutionRecord는 계획과 별도로 실제 사실을 저장한다.
+
+```text
+COMPLETED   completionPercent = 100
+PARTIAL     completionPercent = 1~99
+NOT_DONE    completionPercent = 0
+```
+
+실제 시작·종료 시각이나 실제 분량을 모르면 `NULL`로 둔다. 없는 값을 추정해 채우지 않는다.
+
+### 부분 수행
+
+부분 수행은 다음 세 작업을 하나의 트랜잭션으로 처리한다.
+
+1. 원래 ExecutionItem에 `PARTIAL` ExecutionRecord를 만든다.
+2. 남은 분량을 새 ExecutionItem으로 만든다.
+3. 두 항목의 연결과 전후 상태를 `SPLIT` Event로 남긴다.
+
+원래 항목을 단순 DONE 처리하거나 제목만 바꿔 남은 분량을 잃어버리면 안 된다.
+
+## 6. 조정 액션
+
+| 액션 | 공식 데이터 변화 |
+| --- | --- |
+| 이동 | 날짜·시간 변경 + `MOVED` Event |
+| 축소 | 제목·분량·예상 시간 변경 + `REDUCED` Event |
+| 보류 | 상태 `HOLD` + `HOLD` Event |
+| 재개 | 상태 `PLANNED` + `RESUMED` Event |
+| 취소 | 상태 `CANCELLED` + `CANCELLED` Event |
+| 삭제 | soft delete + `DELETED` Event |
+| 부분 수행 | `PARTIAL` Record + 남은 Item + `SPLIT` Event |
+| 완료 | `COMPLETED` Record + 상태 `DONE` |
+
+필드 수정과 Event/Record 저장은 같은 트랜잭션으로 처리한다. 중간 실패 시 일부만 남지 않아야 한다.
+
+## 7. DailyState
+
+기존 `daily_plans`의 실제 책임은 상위 계획이 아니라 하루 상태에 가깝다. 목표 구조에서는 `daily_states`로 분리한다.
+
+```text
+stateDate
+viewMode        TIME_TABLE / CHECKLIST
+viewModeSource  USER_DEFAULT / USER_SELECTED / SYSTEM_SUGGESTED / AI_RECOMMENDED
+intensity       LIGHT / NORMAL / FOCUSED
+conditionNote
+focusNote
 memo
-conditionTags
 ```
 
-`view_mode`는 다음 두 값을 사용한다.
+ExecutionItem이 DailyState를 부모로 가지면 안 된다. 오늘 화면은 `state_date = 오늘` DailyState와 `scheduled_date = 오늘` ExecutionItem을 각각 조회해 합성한다.
+
+## 8. 장기 컨텍스트
+
+ContextItem 유형은 다음을 기본으로 한다.
 
 ```text
-TIME_TABLE
-CHECKLIST
+GOAL / DECISION / CONSTRAINT / PREFERENCE
+CONCERN / OBSERVATION / INSIGHT / UNKNOWN
 ```
 
-`view_mode_source`는 다음 두 값을 사용한다.
+확인 상태는 다음 세 단계다.
 
 ```text
-USER_DEFAULT
-USER_SELECTED
+UNCONFIRMED / AI_INFERRED / USER_CONFIRMED
 ```
 
-`intensity`는 다음 세 값을 사용한다.
+AI 추정은 사용자 확정과 동일하지 않다. 다음 계획에는 관련성이 높은 활성 컨텍스트만 넣고, 출처와 확인 상태를 함께 전달한다.
+
+컨텍스트가 바뀌었을 때 과거 내용을 조용히 덮어쓰지 않는다. `validFrom/validTo`, `supersedesContextItemId`, `withdrawnAt`으로 유효 기간과 교체·철회를 표현한다. 수명주기는 `PENDING / ACTIVE / SUPERSEDED / WITHDRAWN / ARCHIVED`를 사용한다.
+
+## 9. AI 제안 생애주기
+
+AI 제안 상태는 다음과 같다.
 
 ```text
-LIGHT
-NORMAL
-FOCUSED
+PROPOSED
+APPLIED
+MODIFIED_APPLIED
+DISMISSED
+EXPIRED
 ```
 
-conditionTags는 자유 태그다. 사용자가 실제로 쓰는 표현을 수집하기 위한 값이므로 enum으로 미리 고정하지 않는다.
+제안 항목은 원본 payload, 사용자가 수정한 payload, 대상 항목 ID, 제안 생성 당시 `baseVersion`, 적용 후 생성된 항목을 저장한다.
 
-`viewMode`는 확정된 정답이 아니라 30일 자가사용으로 검증할 가설이다.
+적용 절차:
 
-## 4. ScheduleBlock
+1. AI가 변경안을 AIProposal/Item으로 만든다.
+2. 프런트가 리스트 또는 시간표에 ghost/diff로 표시한다.
+3. 사용자가 항목별로 수정·적용·무시한다.
+4. 서버가 대상 ExecutionItem/PlanItem의 현재 version과 baseVersion을 비교한다.
+5. 같을 때만 공식 데이터와 Event를 한 트랜잭션으로 갱신한다.
+6. 다르면 `409 Conflict`로 적용을 거부하고 새 제안을 요청한다.
 
-ScheduleBlock은 하루 안에 배치되는 행동 단위다.
+외부 ChatGPT 대화 텍스트나 파일을 가져오는 경우에도 같은 흐름을 사용한다. 가져온 원문을 공식 PlanItem/ContextItem으로 바로 저장하지 않고 AIProposal로 변환해 검토한다.
 
-`blockDate`는 실제 날짜가 아니라 이 블록이 속한 하루를 의미한다. `startTime`/`endTime`은 실제 시각이다. 따라서 `blockDate`와 `startTime`/`endTime`의 날짜가 반드시 같을 필요는 없다.
+## 10. 실시간 화면 변경 원칙
 
-예를 들어 `blockDate = 2026-07-08`, `startTime = 2026-07-09T01:30`, `endTime = 2026-07-09T02:00`인 블록은 실제 시각으로는 7월 9일 새벽에 실행되지만, 사용자의 하루 운영 기준으로는 7월 8일에 속할 수 있으므로 허용한다.
-
-`block_type`은 다음 두 값을 사용한다.
+대화 중 화면은 즉시 반응하되 두 상태를 구분한다.
 
 ```text
-TIME_FIXED
-TASK
+공식 상태     DB에 저장된 현재 계획과 실행
+제안 상태     아직 적용되지 않은 신규/변경/삭제 미리보기
 ```
 
-`TIME_FIXED`는 `startTime`/`endTime`을 반드시 가진다. `TASK`는 시간 미지정 작업이므로 `startTime`/`endTime`을 가지지 않는다. `startTime`/`endTime` 중 하나만 있는 값은 허용하지 않으며, 둘 다 있는 경우 `endTime`은 `startTime`보다 이후여야 한다.
+초기 구현 순서는 다음과 같다.
 
-서비스와 DB에는 `DATE(start_time)=block_date` 같은 검증을 두지 않는다. `operationalDate` 계산은 추후 공통 유틸로 분리한다.
+1. 리스트: TodayView와 ExecutionView에서 신규·변경·삭제 상태 표시
+2. 시간표: 같은 diff 계약을 TimetableView 블록에 표시
+3. 캘린더: 리스트와 시간표 검증 후 별도 구현
 
-`priority`는 viewMode가 아니라 행동 속성이다.
+## 11. 오늘과 실행의 경계
+
+- 오늘은 `scheduled_date = 오늘`인 ExecutionItem과 당일 조정에 집중한다.
+- 실행은 여러 날짜의 ExecutionItem을 목록·주간 시간표로 운영한다.
+- 같은 항목을 두 화면이 각각 소유하지 않는다.
+- 오늘에서 바꾼 항목은 실행에도, 실행에서 바꾼 오늘 항목은 오늘에도 즉시 반영된다.
+
+## 12. 7일 범위 일정 후보 배치 (2026-08-06)
+
+사용자가 여러 날에 걸친 계획("이번 주 안에 강의 4개")을 요청하면, PROPOSAL 항목은 특정 날짜에
+묶이지 않은 `placementType=UNSCHEDULED` 후보로 만들어진다. 실제 날짜와 시각은 GPT가 정하지
+않는다 — 서버가 가용시간을 추정하고 Timefold Solver가 최대 7일 범위 안에서 계산한다.
 
 ```text
-MUST
-SHOULD
-OPTIONAL
+PROPOSAL(UNSCHEDULED 후보 1~5개 + 대화에서 파악한 사용 불가 시간)
+→ AvailabilityEstimateService: 기존 TIME_FIXED 일정 + 사용 불가 시간 + 기본 추정 시간대
+→ SchedulingSolverService(Timefold): 겹치지 않게, 마감 안 넘기게, 우선순위 순으로 배치
+→ 배치 결과 미리보기(placedItems/unplacedItems) 저장
+→ 사용자가 예외 수정 또는 항목 고정 → Timefold만 재계산(OpenAI 재호출 없음)
+→ 사용자가 최종 확인한 날짜·시간으로 승인 → ExecutionItem 생성(TIME_FIXED/DATE_ONLY/UNSCHEDULED)
 ```
 
-`orderIndex`는 CHECKLIST 모드에서 순서 중심 표시를 위해 사용한다.
+계산 모델(`scheduling.domain/solver/service` 패키지)은 ExecutionItem·AiProposalItem과 완전히
+분리된 별도 모델이다. Timefold 어노테이션은 DB 엔티티에 붙지 않는다. Solver는 상시 실행되지
+않고, 요청마다(주로 "다시 배치" 클릭) 짧게(기본 5초 상한) 한 번 돌고 버려진다.
 
-`status`는 현재 상태만 표현한다.
+미배치는 오류가 아니라 "배치 가능한 시간이 부족함" 같은 사유로 남는다. 사용자는 미배치 항목을
+그대로 `UNSCHEDULED`로 남기거나, 날짜·시간을 직접 고정하거나, 제외할 수 있다. 이번 범위는 새
+PROPOSAL 항목의 최초 배치만 다룬다 — 기존 ExecutionItem을 옮기거나 줄이는 PATCH 재계획은 다루지
+않는다(`07-ideas.md`).
 
-```text
-PLANNED
-DONE
-HOLD
-CANCELLED
-```
+## 13. 레거시 전환
 
-MOVED, REDUCED는 status가 아니다. 사용자가 조정한 사건이므로 plan_item_events에 event로 기록한다.
+현재 구현의 `todos + schedule_blocks`는 목표 구조에서 `execution_items`로 통합한다. `plan_item_events`는 `execution_item_events`로, 완료 사실은 `execution_records`로 옮긴다. `daily_plans`는 `daily_states`로 책임을 바꾼다.
 
-`HOLD`는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태다. 따라서 아직 결론을 내리지 않은 상태인 pending과 구분한다.
-
-1차-A에서는 hold 액션으로 ScheduleBlock의 상태를 `HOLD`로 바꾸고 `HOLD` 이벤트를 저장하는 것까지만 범위로 둔다. HOLD 항목은 나중에 별도 보류함 또는 다시 계획하기 흐름에서 다룬다. HOLD를 다시 계획하는 흐름은 추후 `RESUMED` 이벤트로 확장할 수 있다.
-
-보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 1차-A에서 구현하지 않는다.
-
-### Pending
-
-pending은 기준 운영일보다 이전 날짜에 속했지만, 아직 사용자가 결론을 내리지 않은 `PLANNED` ScheduleBlock이다. pending은 실패가 아니라 아직 정리되지 않은 이전 계획 항목이다.
-
-`HOLD`, `DONE`, `CANCELLED`, 삭제된 항목은 pending이 아니다. 특히 HOLD 항목은 이미 보류로 결론을 낸 항목이므로 pending 카드에 반복 노출하지 않는다.
-
-1차-A에서는 ScheduleBlock만 pending 대상으로 삼는다. 미배치 Todo의 pending 처리는 1차-B Todo 액션 확장에서 다룬다.
-
-pending 판단은 `block_date` 기준으로 한다. `start_time`/`end_time`의 실제 시각 기준으로 pending을 판단하지 않고, `DATE(start_time)=block_date` 같은 조건도 사용하지 않는다.
-
-pending 판단과 알림 정책은 분리한다. 기본 UX 방향은 사용자를 즉시 압박하지 않고 다음 날 아침에 이전 운영일의 pending을 정리하게 돕는 것이다. 실제 알림 기능과 설정은 `07-ideas.md`에 아이디어로 두며, 푸시 알림 구현은 MVP 제외다.
-
-## 5. Todo
-
-Todo는 아직 날짜가 확정되지 않은 실행 후보 대기열이다.
-
-Todo는 독립적으로 존재할 수 있고, 필요하면 ScheduleBlock에 연결될 수 있다.
-
-예시는 다음과 같다.
-
-```text
-Todo: 자료구조 연결 리스트 문제 3개 풀기
-ScheduleBlock: 20:00-21:00 자료구조 문제 풀기
-```
-
-Todo는 후보이고, ScheduleBlock은 오늘의 실행 카드다.
-
-## 6. v2 개념 정리
-
-v2에서 사용하던 일부 계획 모드는 v2.1에서 다음처럼 정리한다.
-
-| 기존 개념 | v2.1 정리 |
-|---|---|
-| RECOVERY | 별도 mode가 아니라 `intensity + conditionTags`로 흡수 |
-| FLOW | 순서 있는 체크리스트 표시를 위한 `orderIndex`로 흡수 |
-| PRIORITY | viewMode가 아니라 ScheduleBlock의 행동 속성으로 정리 |
-
-## 7. 조정 중심 흐름
-
-계획 시스템은 계획 생성보다 조정 이력을 중요하게 본다.
-
-사용자는 ScheduleBlock에 대해 다음 액션을 수행할 수 있다.
-
-- 완료
-- 이동
-- 축소
-- 보류
-
-이 액션은 단순 필드 변경으로 끝나지 않고 plan_item_events에 기록된다.
-
-예시:
-
-```text
-오늘 못 한 블록을 내일로 이동
-→ 기존 ScheduleBlock row의 blockDate와 dailyPlanId 갱신
-→ MOVED 이벤트 저장
-```
-
-## 8. MVP 적용 범위
-
-MVP에서는 DailyPlan, ScheduleBlock, Todo, plan_item_events를 중심으로 구현한다.
-
-월간 계획, 연간 계획, LifeGoal은 장기 확장 방향이다. MVP에서는 테이블도 화면도 만들지 않는다.
-
-AI 주간 요약은 1.5차에 둔다. 먼저 이벤트 집계 기반 주간 회고 화면을 만든 뒤, 데이터가 쌓였을 때 사용자가 요청하면 AI가 참고용 요약 후보를 제공한다.
+전환 중 두 구조에 동시에 저장하지 않는다. 신규 테이블 생성 → 데이터 복사·검증 → MyBatis 전환 → 레거시 쓰기 중단 순서를 따른다.

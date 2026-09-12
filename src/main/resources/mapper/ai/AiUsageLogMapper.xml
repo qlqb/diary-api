@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.AiUsageLogMapper">
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="usageLogId">
+        INSERT INTO ai_usage_logs (
+            user_id,
+            conversation_id,
+            workflow_id,
+            agent_run_id,
+            request_message_id,
+            feature,
+            model,
+            input_tokens,
+            cached_tokens,
+            output_tokens,
+            latency_ms,
+            result_status,
+            error_code,
+            provider_request_id,
+            request_id
+        ) VALUES (
+            #{userId},
+            #{conversationId},
+            #{workflowId},
+            #{agentRunId},
+            #{requestMessageId},
+            #{feature},
+            #{model},
+            #{inputTokens},
+            #{cachedTokens},
+            #{outputTokens},
+            #{latencyMs},
+            #{resultStatus},
+            #{errorCode},
+            #{providerRequestId},
+            #{requestId}
+        )
+    </insert>
+
+    <select id="countByUserIdSince" resultType="int">
+        SELECT COUNT(*)
+        FROM ai_usage_logs
+        WHERE user_id    = #{userId}
+          AND created_at &gt;= #{sinceInclusive}
+    </select>
+
+</mapper>

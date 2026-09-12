@@ -19,6 +19,7 @@ import java.util.stream.Collectors;
  *   "timestamp": "2026-05-11T12:30:45",
  *   "code": "E404_003",
  *   "message": "일기를 찾을 수 없습니다",
+ *   // details: 오류가 구조화된 부가 정보를 낼 때만 포함된다
  *   "errors": [
  *     {
  *       "field": "title",
@@ -46,17 +47,39 @@ public class ErrorResponse {
     private final List<FieldError> errors;
 
     /**
+     * 오류별 구조화된 부가 정보. 대부분의 응답에는 없다(NON_NULL이라 JSON에서 빠진다).
+     *
+     * <p>errors[]와 역할이 다르다. errors[]는 BindingResult 전용이라 field/value/reason
+     * 문자열 3개뿐이고, "어떤 예외 id들이 걸렸는가" 같은 구조를 담을 자리가 아니다. 그렇다고
+     * message에 나열하면 서버 문구와 화면이 결합되어 문구를 다듬는 순간 화면이 깨진다.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private final Object details;
+
+    /**
      * ErrorCode로부터 ErrorResponse 생성
      *
      * @param errorCode ErrorCode
      * @return ErrorResponse
      */
     public static ErrorResponse of(ErrorCode errorCode) {
+        return of(errorCode, (Object) null);
+    }
+
+    /**
+     * ErrorCode와 구조화된 부가 정보로부터 ErrorResponse 생성
+     *
+     * @param errorCode ErrorCode
+     * @param details 화면이 읽을 부가 정보. null이면 응답에서 빠진다
+     * @return ErrorResponse
+     */
+    public static ErrorResponse of(ErrorCode errorCode, Object details) {
         return ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
                 .code(errorCode.getCode())
                 .message(errorCode.getMessage())
                 .errors(new ArrayList<>())
+                .details(details)
                 .build();
     }
 

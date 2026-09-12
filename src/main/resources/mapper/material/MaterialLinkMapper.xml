@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialLinkMapper">
+
+    <resultMap id="materialLinkResultMap" type="com.jungwoo.project.memo.material.domain.MaterialLink">
+        <id     property="linkId"       column="link_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="materialId"   column="material_id"/>
+        <result property="courseId"     column="course_id"/>
+        <result property="materialType" column="material_type"/>
+        <result property="linkedAt"     column="linked_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="linkId">
+        INSERT INTO material_links (user_id, material_id, course_id, material_type)
+        VALUES (#{userId}, #{materialId}, #{courseId}, #{materialType})
+    </insert>
+
+    <select id="findByMaterialIdAndCourseIdAndUserId" resultMap="materialLinkResultMap">
+        SELECT * FROM material_links
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByCourseIdAndUserId" resultMap="materialLinkResultMap">
+        SELECT * FROM material_links
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <!--
+      전역 자료함(GET /materials/{id})의 연결 목록. 보관(ARCHIVED)된 프로젝트로의 연결은
+      제외한다 — material_links 행 자체는 지우지 않고 courses.status로만 걸러서,
+      보관 해제되면 다시 보이게 한다.
+    -->
+    <select id="findByMaterialIdAndUserId" resultMap="materialLinkResultMap">
+        SELECT ml.* FROM material_links ml
+        JOIN courses c ON c.course_id = ml.course_id AND c.user_id = ml.user_id
+        WHERE ml.material_id = #{materialId} AND ml.user_id = #{userId} AND c.status = 'ACTIVE'
+        ORDER BY ml.linked_at ASC
+    </select>
+
+    <!-- 전역 자료함 목록(GET /materials)의 연결 목록. 위와 같은 이유로 ARCHIVED 프로젝트는 제외한다. -->
+    <select id="findByUserId" resultMap="materialLinkResultMap">
+        SELECT ml.* FROM material_links ml
+        JOIN courses c ON c.course_id = ml.course_id AND c.user_id = ml.user_id
+        WHERE ml.user_id = #{userId} AND c.status = 'ACTIVE'
+        ORDER BY ml.linked_at ASC
+    </select>
+
+    <update id="updateMaterialType">
+        UPDATE material_links
+        SET material_type = #{materialType}
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM material_links
+        WHERE material_id = #{materialId} AND course_id = #{courseId} AND user_id = #{userId}
+    </delete>
+
+    <delete id="deleteAllByMaterialId">
+        DELETE FROM material_links WHERE material_id = #{materialId} AND user_id = #{userId}
+    </delete>
+
+</mapper>

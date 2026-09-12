@@ -1,0 +1,145 @@
+{
+  "isScheduleTable": true,
+  "title": "Weekly Schedule 9.7 ~ 13",
+  "period": {
+    "startMonth": 9,
+    "startDay": 7,
+    "endMonth": 9,
+    "endDay": 13,
+    "year": null
+  },
+  "legend": {
+    "OP": "14~23",
+    "CL": "15~00"
+  },
+  "scheduleColumns": [
+    "이름",
+    "세부",
+    "월",
+    "화",
+    "수",
+    "목",
+    "금",
+    "토",
+    "일"
+  ],
+  "rows": [
+    {
+      "name": "사원B",
+      "tag": "SR",
+      "cells": [
+        "OP",
+        "OP",
+        "D/O",
+        "OP",
+        "D/O",
+        "OP",
+        "OP"
+      ]
+    },
+    {
+      "name": "사원C",
+      "tag": "JR",
+      "cells": [
+        "D/O",
+        "D/O",
+        "CL",
+        "CL",
+        "CL",
+        "CL",
+        "CL"
+      ]
+    },
+    {
+      "name": "사원D",
+      "tag": "JR",
+      "cells": [
+        "D/O",
+        "D/O",
+        "CL",
+        "CL",
+        "CL",
+        "CL",
+        "CL"
+      ]
+    },
+    {
+      "name": "사원E",
+      "tag": "JR",
+      "cells": [
+        "CL",
+        "CL",
+        "D/O",
+        "CL",
+        "D/O",
+        "CL",
+        "CL"
+      ]
+    },
+    {
+      "name": "사원F",
+      "tag": "JR",
+      "cells": [
+        "D/O",
+        "D/O",
+        "OP",
+        "OP",
+        "OP",
+        "OP",
+        "OP"
+      ]
+    },
+    {
+      "name": "사원G",
+      "tag": "ASSI",
+      "cells": [
+        "OP",
+        "OP",
+        "OP",
+        "D/O",
+        "OP",
+        "OP",
+        "D/O"
+      ]
+    },
+    {
+      "name": "사원H",
+      "tag": "ASSI",
+      "cells": [
+        "CL",
+        "CL",
+        "CL",
+        "D/O",
+        "CL",
+        "CL",
+        "D/O"
+      ]
+    },
+    {
+      "name": "본인",
+      "tag": "PT",
+      "cells": [
+        "17~23",
+        "18~23",
+        "18~23",
+        "17~22",
+        "18~23",
+        "D/O",
+        "D/O"
+      ]
+    },
+    {
+      "name": "사원I",
+      "tag": "PT",
+      "cells": [
+        "18~00",
+        "D/O",
+        "D/O",
+        "D/O",
+        "D/O",
+        "D/O",
+        "D/O"
+      ]
+    }
+  ]
+}
