@@ -259,6 +259,23 @@ class PlanMaterialSelectionFlowTest {
         assertThat(summary.selectionInputTokens()).allMatch(t -> t <= 6000);
     }
 
+    @Test
+    void T7_판단_사실만으로_접어도_상한을_넘으면_호출하지_않고_범위를_좁혀_달라고_한다() {
+        f.material(10, "big.pdf", 1L);
+        for (long id = 1; id <= 40; id++) {
+            f.topic(1, id, null, "진행 중인 단원 " + id + "의 아주 긴 제목 — 세부 설명이 이어진다", id + "주차",
+                    TopicProgressStatus.IN_PROGRESS);
+        }
+        ReflectionTestUtils.setField(f.selector, "inputTokenBudget", 300);
+        ReflectionTestUtils.setField(f.selector, "maxInputTokens", 600);
+
+        assertThatThrownBy(() -> f.generate(null))
+                .isInstanceOf(BadRequestException.class)
+                .extracting(e -> ((BadRequestException) e).getErrorCode())
+                .isEqualTo(ErrorCode.PLAN_SCOPE_TOO_LARGE);
+        assertThat(f.calls).isEmpty();
+    }
+
     @Nested
     class T8_돌아온_id의_검증 {
 
@@ -369,6 +386,17 @@ class PlanMaterialSelectionFlowTest {
             assertThat(f.planPrompt()).doesNotContain("[고른 자료 구간 — 저장된 원문에서 읽음]").doesNotContain("탐색-원문")
                     .contains("이번에 읽은 원문은 없다");
         }
+
+        @Test
+        void 계획_호출이_성공했지만_항목이_없으면_호출_실패와_다른_오류로_알린다() {
+            f.selectionAnswer = prompt -> PlanSelectionFixture.emptySelection();
+            f.planJson = "{\"title\":\"계획\",\"goalSummary\":\"과제 외 학습 항목이 없다\",\"items\":[]}";
+
+            assertThatThrownBy(() -> f.generate(null))
+                    .extracting(e -> ((ServiceUnavailableException) e).getErrorCode())
+                    .isEqualTo(ErrorCode.PLAN_DRAFT_NO_ITEMS);
+            assertThat(f.planPrompts()).hasSize(1);
+        }
     }
 
     @Test
@@ -411,6 +439,63 @@ class PlanMaterialSelectionFlowTest {
         assertThat(generated.provenance().serverCalculations())
                 .extracting(ServerCalculation::kind).contains(ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION);
         assertThat(first.materialSelection().selectionCalls()).isEqualTo(1);
+    }
+
+    @Test
+    void T18_미완료_과제는_마감_사실로만_남고_과제_수행을_넣으라는_지시가_없으며_요청하지_않으면_배치_규칙이_막는다() {
+        f.material(10, "ds.pdf", 1L);
+        f.topic(1, 1, null, "해시", "9주차", TopicProgressStatus.NOT_STARTED);
+        f.section(101, 10, "과제 3 해시 구현 제출", rolesJson("ASSIGNMENT"), 10, "과제3-원문");
+        f.link(1, 1, 101);
+        f.assignment(900, 1, 1L, 101L, "과제 3 해시 구현", LocalDate.of(2026, 9, 18), false);
+
+        Generated generated = f.generate(null);
+
+        String system = f.calls.stream().filter(c -> !PlanSelectionFixture.isSelection(c[0])).findFirst().orElseThrow()[0];
+        assertThat(system).contains("과제 제출·과제 수행 자체를 항목으로 만들거나 시간을 잡는 것은 [사용자 지시]가 요청했을 때만 한다")
+                .contains("마감이 있다는 사실만으로 과제 작업 시간을 넣지 않는다");
+        assertThat(f.planPrompt()).contains("과제: 과제 3 해시 구현 · 마감 2026-09-18(원문에 명시)");
+        // 서버는 과제를 항목으로 만들지 않는다 — 항목은 모델이 낸 것뿐이고 날짜도 모델이 정하지 않았으면 비어 있다.
+        assertThat(generated.items()).hasSize(1);
+        assertThat(generated.items().get(0).title()).doesNotContain("과제 3");
+    }
+
+    @Test
+    void T18_구간만_가리키는_과제도_그_구간에_연결된_첫_미학습_항목을_과제의_항목으로_표시한다() {
+        f.material(10, "app.pdf", 1L);
+        f.topic(1, 1, null, "로그인 화면 프로토타입 제출", "p.1", TopicProgressStatus.NOT_STARTED);
+        f.section(101, 10, "로그인 화면 프로토타입 제출", rolesJson("SUBMISSION"), 1, "과제A-원문");
+        f.link(1, 1, 101);
+        f.assignment(902, 1, null, 101L, "과제 A · 로그인 화면 프로토타입", null, false);
+
+        f.generate("개념부터 이해하고 싶어");
+
+        String system = f.calls.stream().filter(c -> !PlanSelectionFixture.isSelection(c[0])).findFirst().orElseThrow()[0];
+        assertThat(system).contains("\"미완료 과제의 항목\"은 과제 자체다");
+        assertThat(f.planPrompt()).contains("로그인 화면 프로토타입 제출 (p.1) · ← 첫 미학습 · 미완료 과제의 항목");
+    }
+
+    @Test
+    void T19_완료한_과제의_구간을_모델이_골라도_완료_사실이_원문과_함께_실려_다시_수행하지_않게_한다() {
+        f.material(10, "ds.pdf", 1L);
+        f.topic(1, 1, "정렬");
+        f.section(101, 10, "과제 2 정렬 구현", rolesJson("ASSIGNMENT", "EXERCISE"), 4, "과제2-원문: 퀵정렬을 구현해 제출하시오");
+        f.link(1, 1, 101);
+        f.assignment(901, 1, 1L, 101L, "과제 2 정렬 구현", null, true);
+        f.selectionAnswer = prompt -> {
+            assertThat(prompt).contains("완료한 과제: 과제 2 정렬 구현").contains("완료한 과제의 구간");
+            return selection(List.of(handleOf(prompt, "과제 2 정렬 구현 (p.4)")), List.of(), List.of());
+        };
+
+        f.generate("정렬 개념 복습");
+
+        String plan = f.planPrompt();
+        assertThat(plan).contains("완료한 과제: 과제 2 정렬 구현").contains("사용자가 완료함. 과제를 다시 수행하게 하지 않는다");
+        assertThat(plan.lines().filter(l -> l.contains("과제 2 정렬 구현 (p.4)") && l.contains("[s")).findFirst().orElseThrow())
+                .contains("사용자가 완료한 과제의 구간 — 과제를 다시 수행하게 하지 않는다");
+        assertThat(plan).contains("과제2-원문");
+        String system = f.calls.stream().filter(c -> !PlanSelectionFixture.isSelection(c[0])).findFirst().orElseThrow()[0];
+        assertThat(system).contains("완료한 과제는 원문에 과제 문구가 남아 있어도 다시 수행하게 하지 않는다");
     }
 
     @Test

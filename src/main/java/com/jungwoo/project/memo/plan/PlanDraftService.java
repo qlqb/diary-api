@@ -71,7 +71,8 @@ public class PlanDraftService {
     private final PlanMaterialContextService materialContextService;
 
     private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.

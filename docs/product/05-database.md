@@ -469,6 +469,10 @@ note = 기존 완료 데이터 이전: 실제 수행 시간 미확인
 SQL로 채우지 않고 서버 폴러가 idempotent하게 등록한다. `course_materials.file_hash`가 NULL이던 옛 자료는 서버가 파일(없으면 원문
 텍스트)의 SHA-256으로 채운다.
 
+`ai_proposals.plan_request_json LONGTEXT NULL`(2026-09-15, `docs/sql/2026-09-15-plan-request-context.sql`, 추가 전용·재실행 가능):
+기간 계획 초안을 만든 요청(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
+requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/proposals/{id}/redraft`가 읽는다. 이전 초안은 NULL이다.
+
 동시성 규칙: 작업 결과 저장은 `WHERE job_id=? AND lease_token=? AND status='RUNNING'`. 변경안 적용은 프로젝트 행 FOR UPDATE →
 `UPDATE courses SET topic_tree_version=+1 WHERE topic_tree_version=?`(0행이면 409) → 활성 항목 FOR UPDATE. 과제 갱신은 `version`
 대조(0행이면 409 VERSION_CONFLICT).

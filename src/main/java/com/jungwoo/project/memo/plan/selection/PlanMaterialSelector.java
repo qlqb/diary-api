@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiStreamParser;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
 import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
+import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.material.analysis.ModelJson;
@@ -77,6 +78,13 @@ public class PlanMaterialSelector {
     @Value("${plan.selection.input-token-budget:16000}")
     private int inputTokenBudget = 16000;
 
+    /**
+     * 넘으면 호출하지 않는 상한. 예산은 접기·펼치기의 기준이고, 판단 사실·지정 자료만으로 접어도 예산을 넘을 때 여기까지는
+     * 보낸다. 이것마저 넘으면 무한히 키우지 않고 범위를 좁혀 달라고 알린다(E400_034).
+     */
+    @Value("${plan.selection.max-input-tokens:32000}")
+    private int maxInputTokens = 32000;
+
     /** gpt-5 계열은 reasoning 토큰도 이 상한을 쓴다. 선택 JSON은 짧지만 여유를 둔다. */
     @Value("${plan.selection.max-completion-tokens:6000}")
     private int maxCompletionTokens = 6000;
@@ -141,11 +149,15 @@ public class PlanMaterialSelector {
             고르는 법:
             - 사용자 지시와 선호를 따른다(예: "개념 먼저", "문제부터", "이 PDF 중심으로"). 역할에 정해진 순서는 없다 —
               문제·예제·설명 어느 쪽이든 이번 계획에 필요한 것을 고른다.
-            - 지정 자료가 있으면 그 자료의 후보를 먼저 검토하고 관련 구간을 고른다. 관련이 없거나 부족하면
-              insufficientEvidence를 true로 하고 note에 무엇이 부족한지 적는다.
+            - [요청]에 "이번 요청에서 지정한 자료"가 있을 때만 지정 자료가 있는 것이다(없으면 이유에 "지정 자료"라고 쓰지 않는다).
+              사용자가 지정한 자료는 이번 계획의 중심이다. 그 자료의 후보를 먼저 검토하고, 이번 기간에 볼 구간을 반드시
+              고른다. 마감·첫 미학습·진행 중 사실 때문에 지정 자료를 건너뛰지 않는다 — 그 사실은 계획 단계에 따로 간다.
+              지정 자료에 학습에 쓸 구간이 없을 때만(행정 안내뿐 등) insufficientEvidence를 true로 하고 note에 적는다.
             - 진행 중인 항목과 첫 미학습 위치, 다가오는 마감을 보고 이번 기간에 볼 범위를 정한다. 사용자가 다른 목표를
               말했으면 그 목표가 먼저다.
             - 완료한 과제의 구간은 과제를 다시 하려고 고르지 않는다. 개념이 필요할 때만 고르고 이유에 그렇게 적는다.
+            - 미완료 과제의 안내 구간을 "과제를 하려고" 고르지 않는다. 과제 수행은 사용자가 요청했을 때만 계획에 들어간다.
+              사용자가 요청하지 않았으면 과제에 필요한 개념·연습 구간을 고른다.
             - 이번 기간에 실제로 볼 만큼만 고른다(보통 구간 3~15개). 제목만 보고 내용을 안다고 가정하지 마라.
             - 학습 항목(t)을 고르면 "이번 계획의 초점"이라는 뜻이다. 그 항목의 원문을 읽히려면 구간(m)을 따로 고른다.
             - 접힌 묶음 안을 봐야 판단할 수 있으면 expandGroupIds에 적는다. 펼칠 기회는 이번 요청에서 한 번뿐이다.
@@ -192,8 +204,11 @@ public class PlanMaterialSelector {
         List<Integer> estimates = new ArrayList<>();
         estimates.add(estimator.estimateCall(SYSTEM_PROMPT, round1.prompt()));
         if (estimates.get(0) > inputTokenBudget) {
-            log.warn("자료 선택: 접어도 입력 예산을 넘는다(판단 사실·지정 자료가 크다). 추정={}/{}",
-                    estimates.get(0), inputTokenBudget);
+            log.warn("자료 선택: 접어도 입력 예산을 넘는다(판단 사실·지정 자료가 크다). 추정={}/{} 상한={}",
+                    estimates.get(0), inputTokenBudget, maxInputTokens);
+            if (estimates.get(0) > maxInputTokens) {
+                throw new BadRequestException(ErrorCode.PLAN_SCOPE_TOO_LARGE);
+            }
         }
 
         Parsed first = call(request, SYSTEM_PROMPT, round1.prompt(), round1.shown(), true);
@@ -560,7 +575,7 @@ public class PlanMaterialSelector {
             int sections = (int) group.sections.stream()
                     .filter(s -> !shownItems.contains(registry.sectionHandle.get(s.section().getSectionId()))).count();
             if (topics + sections > 0) {
-                out.add(new Unreviewed(courseTitle(group.catalog), group.title, topics, sections,
+                out.add(new Unreviewed(plainCourseTitle(group.catalog), group.title, topics, sections,
                         mode == Mode.FOLDED_GROUPS));
             }
         }
@@ -569,6 +584,11 @@ public class PlanMaterialSelector {
 
     private int withMargin(int raw) {
         return (int) Math.ceil(raw * (1.0 + estimator.safetyMargin()));
+    }
+
+    /** 화면에 보일 이름(프롬프트용 "프로젝트 " 접두어 없이). */
+    static String plainCourseTitle(CourseCatalog catalog) {
+        return catalog.courseId() == null ? "프로젝트에 연결되지 않은 지정 자료" : catalog.courseTitle();
     }
 
     static String courseTitle(CourseCatalog catalog) {

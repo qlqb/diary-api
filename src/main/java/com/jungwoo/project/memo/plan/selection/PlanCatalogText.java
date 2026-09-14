@@ -45,7 +45,7 @@ public final class PlanCatalogText {
             sb.append(" · ← 첫 미학습");
         }
         if (topic.assignmentLinked()) {
-            sb.append(" · 미완료 과제 연결");
+            sb.append(" · 미완료 과제의 항목");
             if (topic.assignmentDue() != null) {
                 sb.append("(마감 ").append(topic.assignmentDue()).append(")");
             }

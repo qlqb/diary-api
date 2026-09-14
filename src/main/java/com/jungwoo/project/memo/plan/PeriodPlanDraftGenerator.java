@@ -161,6 +161,10 @@ public class PeriodPlanDraftGenerator {
     @Value("${plan.draft.input-token-budget:24000}")
     private int planInputTokenBudget = 24000;
 
+    /** 원문을 모두 빼도 이 상한을 넘으면 호출하지 않고 범위를 좁혀 달라고 알린다(E400_034). */
+    @Value("${plan.draft.max-input-tokens:48000}")
+    private int planMaxInputTokens = 48000;
+
     /** 구간 하나에 싣는 원문 글자 상한의 단계. 예산에 맞을 때까지 앞에서부터 시도한다. */
     static final int[] RETRIEVAL_CAPS = {2400, 1600, 1000, 600, 300};
 
@@ -491,8 +495,11 @@ public class PeriodPlanDraftGenerator {
             List<Long> still = retrieved.stream().filter(r -> r.outcome().retrieved())
                     .map(r -> r.target().sectionId()).filter(id -> !budgetDropped.contains(id)).toList();
             if (still.isEmpty()) {
-                log.warn("계획 초안: 원문을 모두 빼도 입력 예산을 넘는다(판단 사실·일정이 크다). 추정={}/{}",
-                        prompt.estimatedTokens(), planInputTokenBudget);
+                log.warn("계획 초안: 원문을 모두 빼도 입력 예산을 넘는다(판단 사실·일정이 크다). 추정={}/{} 상한={}",
+                        prompt.estimatedTokens(), planInputTokenBudget, planMaxInputTokens);
+                if (prompt.estimatedTokens() > planMaxInputTokens) {
+                    throw new BadRequestException(ErrorCode.PLAN_SCOPE_TOO_LARGE);
+                }
                 break;
             }
             int drop = Math.max(1, (int) Math.ceil(still.size() * 0.2));
@@ -506,7 +513,14 @@ public class PeriodPlanDraftGenerator {
 
         Normalized normalized = toProposalItems(ai, spec.start(), spec.end(), courses, collector);
         if (normalized.items().isEmpty()) {
-            throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+            /*
+             * 호출·파싱은 성공했는데 쓸 항목이 없다 — 모델이 빈 배열을 냈거나 제목 없는 항목만 냈다. 호출 실패(E503_002)와
+             * 구분해 사용자가 "다시 누르기"가 아니라 "조건 바꾸기"를 고를 수 있게 한다. 빈 계획은 저장하지 않는다.
+             * (2026-09-15 실호출: 학습 항목 대부분이 미완료 과제인 과목에서 과제 수행을 요청하지 않자 한 번 재현됐다.)
+             */
+            log.warn("계획 초안: 쓸 항목이 없다. userId={}, 모델 항목 수={}, 고른 구간={}, workflowId={}", spec.userId(),
+                    ai.items() == null ? 0 : ai.items().size(), selection.sections().size(), generationId);
+            throw new ServiceUnavailableException(ErrorCode.PLAN_DRAFT_NO_ITEMS);
         }
 
         MaterialSelectionSummary summary = summarize(inputs, prompt);
@@ -713,11 +727,18 @@ public class PeriodPlanDraftGenerator {
               판단하고 reason에 한 문장으로 적는다. 서버는 역할(문제/예제/설명)의 순서를 정하지 않는다.
             - [판단에 필요한 사실]은 서버가 반드시 보여 주는 사실이지 "이 항목을 꼭 넣어라"는 지시가 아니다.
               "진행 중"은 이어서 하고, "← 첫 미학습"은 기록이 없는 사용자가 출발할 기본 자리다 — 사용자가 다른 목표를
-              말했으면 그 목표가 먼저다. "학습 완료"는 사용자 지시나 시험 근거가 있을 때만 "복습"임을 밝혀 넣는다.
+              말했으면 그 목표가 먼저다. "미완료 과제의 항목"은 과제 자체다 — 첫 미학습이어도 요청 없이 그 과제를
+              만들거나 구현하는 항목을 넣지 않는다. "학습 완료"는 사용자 지시나 시험 근거가 있을 때만 "복습"임을 밝혀 넣는다.
             - 과제: "(확인 전)" 후보는 과제로 단정하지 않고, 마감이 "추정"인 것은 확정 마감처럼 다루지 않는다.
               과제 제출·과제 수행 자체를 항목으로 만들거나 시간을 잡는 것은 [사용자 지시]가 요청했을 때만 한다 —
               마감이 있다는 사실만으로 과제 작업 시간을 넣지 않는다. 대신 과제에 필요한 개념 학습·연습은 제안해도 된다.
+              요청이 없을 때 만들지 않는 예: "과제 보고서 초안 작성", "프로토타입 구현 착수", "과제 제출 준비",
+              "제출물 점검". 과제 안내를 읽고 조건을 정리하는 항목도 과제 수행의 일부로 보고 요청이 없으면 넣지 않는다.
+              만들 수 있는 예: 과제에 쓰이는 개념을 이해하는 학습, 과제와 같은 기법의 연습 문제.
               완료한 과제는 원문에 과제 문구가 남아 있어도 다시 수행하게 하지 않는다.
+              후보 대부분이 과제여서 과제 수행 항목을 뺐더니 남는 것이 없어 보여도 items를 비우지 않는다 — 과제·연습
+              구간의 원문에 드러난 개념을 이해하는 학습, 같은 기법의 작은 연습처럼 과제를 대신 해 주지 않는 항목을 만든다.
+              만들 학습 행동이 정말 하나도 없을 때만 items를 비우고 goalSummary에 무엇이 없는지 적는다.
             - description에는 "어느 자료의 어느 부분을 어떤 순서로 보고, 어디에 집중할지"가 드러나게 쓴다.
               제목을 길게 만들지 말고, 원문에 없는 문제 번호·페이지는 만들지 않는다.
             - 제목은 짧고 구체적으로. 보는 순서·집중할 부분·참고할 자료는 description에 적는다.
@@ -1114,6 +1135,9 @@ public class PeriodPlanDraftGenerator {
             appendAssignmentLine(sb, courseId, line, collector);
             anyFact = true;
         }
+        if (!catalog.open().isEmpty()) {
+            sb.append("  - (위 과제의 마감은 판단 근거다. 과제 수행·작성·제출 항목은 [사용자 지시]가 요청했을 때만 만든다)\n");
+        }
         for (PlanMaterialContextService.AssignmentLine line : catalog.completed()) {
             appendAssignmentLine(sb, courseId, line, collector);
             anyFact = true;
@@ -1178,7 +1202,11 @@ public class PeriodPlanDraftGenerator {
             boolean completedAssignment = selection.sections().stream()
                     .anyMatch(sel -> sel.line().section().getSectionId().equals(r.target().sectionId())
                             && sel.line().completedAssignment());
-            appendRetrievedSection(sb, courseId, r, inputs.cap(), completedAssignment, collector, refBySection, rendered);
+            boolean openAssignment = selection.sections().stream()
+                    .anyMatch(sel -> sel.line().section().getSectionId().equals(r.target().sectionId())
+                            && sel.line().openAssignment());
+            appendRetrievedSection(sb, courseId, r, inputs.cap(), completedAssignment, openAssignment, collector,
+                    refBySection, rendered);
         }
         if (droppedChanged > 0) {
             sb.append("  (고른 구간 중 ").append(droppedChanged)
@@ -1276,7 +1304,7 @@ public class PeriodPlanDraftGenerator {
      * 인용 번호는 줄에 붙는다 — 이 번호를 인용하면 "이 원문을 읽었다"는 뜻이다.
      */
     private void appendRetrievedSection(StringBuilder sb, Long courseId, PlanMaterialRetriever.Retrieved r, int cap,
-                                        boolean completedAssignment,
+                                        boolean completedAssignment, boolean openAssignment,
                                         ProvenanceCollector collector, Map<Long, String> refBySection,
                                         Map<Long, PlanMaterialRetriever.Rendered> rendered) {
         MaterialSection section = r.section();
@@ -1301,6 +1329,8 @@ public class PeriodPlanDraftGenerator {
         text.append(" · 읽은 범위: ").append(body.rangeLabel());
         if (completedAssignment) {
             text.append(" · 사용자가 완료한 과제의 구간 — 과제를 다시 수행하게 하지 않는다");
+        } else if (openAssignment) {
+            text.append(" · 미완료 과제의 안내가 담긴 구간 — 과제 수행·작성·제출 항목은 사용자가 요청했을 때만");
         }
         ProvenanceCollector.Marked marked = collector.mark(
                 ProvenanceSourceType.MATERIAL_SECTION, section.getSectionId(), null, section.getCreatedAt(),

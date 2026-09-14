@@ -184,14 +184,36 @@ public class PlanMaterialContextService {
         }
 
         List<CourseAssignment> assignmentRows = assignmentService.findByCourses(userId, List.of(courseId));
+        List<TopicMaterialLink> courseLinks = topicLinkMapper.findActiveByCourseId(courseId, userId);
         Map<Long, LocalDate> dueByTopic = new HashMap<>();
         Set<Long> openTopicIds = new HashSet<>();
+        /*
+         * 과제가 가리키는 학습 항목: 과제 행의 topicId, 그리고 과제 구간(sectionId)에 연결된 학습 항목.
+         * 자동 분석이 만든 과제는 구간만 갖는 경우가 많다 — topicId만 보면 "첫 미학습"이 사실 과제 제출 항목인데도
+         * 과제 표시 없이 실려, 모델이 과제를 대신 수행하는 항목을 만들었다(2026-09-15 실호출).
+         */
+        Map<Long, List<Long>> linkedTopicsBySection = new HashMap<>();
+        for (TopicMaterialLink link : courseLinks) {
+            if (link.getSectionId() != null && link.getSectionId() != TopicMaterialLink.WHOLE_MATERIAL) {
+                linkedTopicsBySection.computeIfAbsent(link.getSectionId(), k -> new ArrayList<>()).add(link.getTopicId());
+            }
+        }
         for (CourseAssignment a : assignmentRows) {
-            if (a.getConfirmStatus() == AssignmentConfirmStatus.CONFIRMED && !a.isCompleted() && a.getTopicId() != null) {
-                openTopicIds.add(a.getTopicId());
-                LocalDate due = a.dueDay();
+            if (a.getConfirmStatus() != AssignmentConfirmStatus.CONFIRMED || a.isCompleted()) {
+                continue;
+            }
+            Set<Long> topics = new HashSet<>();
+            if (a.getTopicId() != null) {
+                topics.add(a.getTopicId());
+            }
+            if (a.getSectionId() != null) {
+                topics.addAll(linkedTopicsBySection.getOrDefault(a.getSectionId(), List.of()));
+            }
+            LocalDate due = a.dueDay();
+            for (Long topicId : topics) {
+                openTopicIds.add(topicId);
                 if (due != null) {
-                    dueByTopic.merge(a.getTopicId(), due, (x, y) -> x.isBefore(y) ? x : y);
+                    dueByTopic.merge(topicId, due, (x, y) -> x.isBefore(y) ? x : y);
                 }
             }
         }
@@ -233,7 +255,7 @@ public class PlanMaterialContextService {
 
         Map<Long, List<Long>> topicsBySection = new HashMap<>();
         Map<Long, Boolean> linkedOnlyToExcluded = new HashMap<>();
-        for (TopicMaterialLink link : topicLinkMapper.findActiveByCourseId(courseId, userId)) {
+        for (TopicMaterialLink link : courseLinks) {
             if (link.getSectionId() == null || link.getSectionId() == TopicMaterialLink.WHOLE_MATERIAL) {
                 continue;
             }

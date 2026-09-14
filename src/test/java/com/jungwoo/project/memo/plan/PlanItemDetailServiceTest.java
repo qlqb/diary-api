@@ -159,6 +159,35 @@ class PlanItemDetailServiceTest {
     }
 
     @Test
+    void T20_자료_선택이_남긴_원문_조회_출처로_새_판을_만들고_메모는_옮기며_계획_항목은_건드리지_않는다() {
+        // 새 흐름의 스냅샷: MATERIAL_SECTION 줄에 읽은 범위·조회 방식이 함께 남는다. 상세는 같은 sourceId로 근거를 찾는다.
+        AiProposal proposal = new AiProposal();
+        proposal.setProposalId(5L);
+        proposal.setPlanProvenanceJson(codec.toJson(new PlanProvenance(PlanProvenance.SCHEMA_VERSION, "gen-2",
+                LocalDateTime.of(2026, 9, 15, 10, 0), "Asia/Seoul", LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20),
+                "AI", "test-model",
+                List.of(new ProvidedSource("s3", ProvenanceSourceType.MATERIAL_SECTION, 40L, null, null,
+                        ProvenanceRepresentation.EXCERPT,
+                        Map.of("title", "실습 3", "retrievedRange", "p.36 원문 전체(820자)", "retrieval", "FULL"),
+                        "· [문제] 실습 3 (p.36) · 자료 ds.pdf · 읽은 범위: p.36 원문 전체(820자) [s3]", 7L, null)),
+                List.of())));
+        when(proposalMapper.findByIdAndUserId(5L, USER)).thenReturn(proposal);
+        when(detailMapper.findByItemAndVersion(eq(ITEM), any(), eq(USER))).thenReturn(null);
+        when(detailMapper.findByItem(ITEM, USER)).thenReturn(List.of(stored(3L, "old-version", "CURRENT", "내 메모")));
+        givenModelSteps();
+
+        PlanItemDetailResponse response = service.forProposalItem(USER, ITEM, true);
+
+        assertThat(response.getSteps().get(0).sectionIds()).containsExactly(40L);
+        ArgumentCaptor<PlanItemDetail> saved = ArgumentCaptor.forClass(PlanItemDetail.class);
+        verify(detailMapper).insertIgnore(saved.capture());
+        assertThat(saved.getValue().getUserText()).isEqualTo("내 메모");
+        // 계획 항목(시간·마감·선택·근거)은 읽기만 한다.
+        verify(itemMapper).findByIdAndUserId(ITEM, USER);
+        org.mockito.Mockito.verifyNoMoreInteractions(itemMapper);
+    }
+
+    @Test
     void 같은_근거판이_이미_있으면_POST도_모델을_다시_부르지_않는다() {
         // 첫 호출로 지금 근거판을 알아내고, 그 판이 저장돼 있다고 답하게 한다.
         when(detailMapper.findByItemAndVersion(eq(ITEM), any(), eq(USER))).thenAnswer(inv ->
