@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.execution.ExecutionRecordMapper">
+
+    <resultMap id="executionRecordResultMap"
+               type="com.jungwoo.project.memo.execution.domain.ExecutionRecord">
+        <id     property="executionRecordId"        column="execution_record_id"/>
+        <result property="userId"                   column="user_id"/>
+        <result property="executionItemId"          column="execution_item_id"/>
+        <result property="outcome"                  column="outcome"/>
+        <result property="startedAt"                column="started_at"/>
+        <result property="endedAt"                  column="ended_at"/>
+        <result property="actualMinutes"             column="actual_minutes"/>
+        <result property="completionPercent"        column="completion_percent"/>
+        <result property="note"                     column="note"/>
+        <result property="remainingExecutionItemId" column="remaining_execution_item_id"/>
+        <result property="recordedAt"               column="recorded_at"/>
+        <result property="createdAt"                column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="executionRecordId">
+        INSERT INTO execution_records (
+            user_id,
+            execution_item_id,
+            outcome,
+            started_at,
+            ended_at,
+            actual_minutes,
+            completion_percent,
+            note,
+            remaining_execution_item_id
+        ) VALUES (
+            #{userId},
+            #{executionItemId},
+            #{outcome},
+            #{startedAt},
+            #{endedAt},
+            #{actualMinutes},
+            #{completionPercent},
+            #{note},
+            #{remainingExecutionItemId}
+        )
+    </insert>
+
+    <select id="findByUserIdAndDateRange" resultType="com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse">
+        SELECT
+            r.execution_record_id AS executionRecordId,
+            r.execution_item_id   AS executionItemId,
+            i.title               AS title,
+            i.scheduled_date      AS scheduledDate,
+            i.course_id           AS courseId,
+            r.outcome             AS outcome,
+            r.actual_minutes      AS actualMinutes,
+            r.completion_percent  AS completionPercent,
+            r.note                AS note,
+            r.recorded_at         AS recordedAt
+        FROM execution_records r
+        LEFT JOIN execution_items i
+               ON i.execution_item_id = r.execution_item_id
+              AND i.user_id           = r.user_id
+        WHERE r.user_id = #{userId}
+          AND DATE(r.recorded_at) BETWEEN #{startDate} AND #{endDate}
+        ORDER BY r.recorded_at DESC, r.execution_record_id DESC
+    </select>
+
+
+    <!--
+      회고용. 항목별 최신 1건 선택과 건수 집계는 서비스가 한다 — 계획 하나 분량(최대 30개
+      항목)이라 SQL에서 윈도우 함수로 1건만 뽑는 복잡도를 들일 이유가 없고, "몇 건이었는지"도
+      응답에 실어야 하므로 어차피 전량이 필요하다.
+    -->
+    <select id="findByExecutionItemIds" resultMap="executionRecordResultMap">
+        SELECT *
+        FROM execution_records
+        WHERE user_id = #{userId}
+          AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY execution_item_id ASC, recorded_at DESC
+    </select>
+
+</mapper>

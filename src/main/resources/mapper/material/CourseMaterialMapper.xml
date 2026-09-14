@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.CourseMaterialMapper">
+
+    <resultMap id="courseMaterialResultMap" type="com.jungwoo.project.memo.material.domain.CourseMaterial">
+        <id     property="materialId"       column="material_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="storedFilename"   column="stored_filename"/>
+        <result property="storagePath"      column="storage_path"/>
+        <result property="contentType"      column="content_type"/>
+        <result property="sizeBytes"        column="size_bytes"/>
+        <result property="pageCount"        column="page_count"/>
+        <result property="fileHash"         column="file_hash"/>
+        <result property="extractionStatus" column="extraction_status"/>
+        <result property="extractedText"    column="extracted_text"/>
+        <result property="extractionError"  column="extraction_error"/>
+        <result property="status"           column="status"/>
+        <result property="createdAt"        column="created_at"/>
+        <result property="updatedAt"        column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
+        INSERT INTO course_materials (
+            user_id, original_filename, stored_filename, storage_path,
+            content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error
+        ) VALUES (
+            #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
+            #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </select>
+
+    <select id="findByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      §4 호환: statement id와 시그니처(courseId, userId)는 그대로 둔다 — 단계 3의 "기존 API
+      겉보기 무변화" 게이트가 이 이름에 걸려 있다. 내부만 course_id 직접 참조에서
+      material_links JOIN으로 바뀐다.
+    -->
+    <select id="findByCourseIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        JOIN material_links l ON l.material_id = cm.material_id AND l.course_id = #{courseId}
+        WHERE cm.user_id = #{userId} AND cm.status = 'ACTIVE'
+        ORDER BY cm.created_at DESC
+    </select>
+
+    <select id="findAllByUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+    </select>
+
+    <!--
+      연결 제안 apply의 사전 검증용 잠금. 이 잠금이 지키는 불변식은 "같은 자료로 중복
+      프로젝트를 만들지 않는다"이지 "자료당 링크 1개"가 아니다 — 자료와 프로젝트는 N:M이고
+      여러 링크는 정상이다.
+
+      ORDER BY를 FOR UPDATE와 함께 두는 이유는 잠금 획득 순서를 materialId 오름차순으로
+      고정하기 위해서다. 두 요청이 서로 다른 순서로 같은 행들을 잠그면 데드락이 난다.
+    -->
+    <select id="lockActiveByIdsAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id
+        FOR UPDATE
+    </select>
+
+    <update id="markDeleted">
+        UPDATE course_materials
+        SET status = 'DELETED', extracted_text = NULL
+        WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <update id="updatePageCount">
+        UPDATE course_materials SET page_count = #{pageCount}
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      자동 분석 등록 대상: 추출에 성공한 ACTIVE 자료 중 현재 파일 해시·분석판의 CONTENT 작업이
+      없는 것. file_hash가 NULL인 옛 자료는 서비스가 먼저 해시를 채운 뒤 다시 걸린다.
+      폴러가 틱마다 상한(limit)만큼 집어 간다 — 한 번에 전부 등록하면 첫 틱이 길어진다.
+    -->
+    <select id="findAnalysisBacklog" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        WHERE cm.status = 'ACTIVE' AND cm.extraction_status = 'SUCCESS'
+          AND NOT EXISTS (
+              SELECT 1 FROM material_analysis_jobs j
+               WHERE j.material_id = cm.material_id AND j.job_kind = 'CONTENT'
+                 AND j.course_id = 0
+                 AND j.analysis_version = #{analysisVersion}
+                 AND (cm.file_hash IS NULL OR j.file_hash = cm.file_hash))
+        ORDER BY cm.material_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 해시가 없던 옛 자료에 디스크에서 계산한 해시를 채운다. 값이 이미 있으면 건드리지 않는다. -->
+    <update id="fillFileHashIfMissing">
+        UPDATE course_materials SET file_hash = #{fileHash}
+         WHERE material_id = #{materialId} AND file_hash IS NULL
+    </update>
+
+</mapper>

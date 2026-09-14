@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.assignment.CourseAssignmentMapper">
+
+    <resultMap id="assignmentResultMap" type="com.jungwoo.project.memo.assignment.domain.CourseAssignment">
+        <id     property="assignmentId"             column="assignment_id"/>
+        <result property="userId"                   column="user_id"/>
+        <result property="courseId"                 column="course_id"/>
+        <result property="materialId"               column="material_id"/>
+        <result property="sectionId"                column="section_id"/>
+        <result property="topicId"                  column="topic_id"/>
+        <result property="title"                    column="title"/>
+        <result property="sourceQuote"              column="source_quote"/>
+        <result property="confirmStatus"            column="confirm_status"/>
+        <result property="dueKind"                  column="due_kind"/>
+        <result property="dueDate"                  column="due_date"/>
+        <result property="dueAt"                    column="due_at"/>
+        <result property="dueSource"                column="due_source"/>
+        <result property="dueQuote"                 column="due_quote"/>
+        <result property="dueEstimateJson"          column="due_estimate_json"/>
+        <result property="completedAt"              column="completed_at"/>
+        <result property="titleEdited"              column="title_edited"/>
+        <result property="dueEdited"                column="due_edited"/>
+        <result property="duplicateOfAssignmentId"  column="duplicate_of_assignment_id"/>
+        <result property="dedupeKey"                column="dedupe_key"/>
+        <result property="version"                  column="version"/>
+        <result property="createdAt"                column="created_at"/>
+        <result property="updatedAt"                column="updated_at"/>
+    </resultMap>
+
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="assignmentId">
+        INSERT IGNORE INTO course_assignments (
+            user_id, course_id, material_id, section_id, topic_id, title, source_quote, confirm_status,
+            due_kind, due_date, due_at, due_source, due_quote, due_estimate_json, dedupe_key
+        ) VALUES (
+            #{userId}, #{courseId}, #{materialId}, #{sectionId}, #{topicId}, #{title}, #{sourceQuote}, #{confirmStatus},
+            #{dueKind}, #{dueDate}, #{dueAt}, #{dueSource}, #{dueQuote}, #{dueEstimateJson}, #{dedupeKey}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments WHERE assignment_id = #{assignmentId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByDedupeKey" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments WHERE user_id = #{userId} AND dedupe_key = #{dedupeKey}
+    </select>
+
+    <select id="findByCourseId" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+        ORDER BY (completed_at IS NOT NULL) ASC, COALESCE(due_date, DATE(due_at)) IS NULL ASC,
+                 COALESCE(due_date, DATE(due_at)) ASC, assignment_id ASC
+    </select>
+
+    <select id="findByCourseIds" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments
+        WHERE user_id = #{userId}
+        AND course_id IN
+        <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY course_id ASC, COALESCE(due_date, DATE(due_at)) IS NULL ASC, COALESCE(due_date, DATE(due_at)) ASC, assignment_id ASC
+    </select>
+
+    <select id="findOpenConfirmed" resultMap="assignmentResultMap">
+        SELECT a.* FROM course_assignments a
+        LEFT JOIN courses c ON c.course_id = a.course_id AND c.user_id = a.user_id
+        WHERE a.user_id = #{userId} AND a.confirm_status = 'CONFIRMED' AND a.completed_at IS NULL
+          AND (a.course_id IS NULL OR c.status = 'ACTIVE')
+        ORDER BY COALESCE(a.due_date, DATE(a.due_at)) IS NULL ASC, COALESCE(a.due_date, DATE(a.due_at)) ASC, a.assignment_id ASC
+    </select>
+
+    <select id="findByMaterialId" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments WHERE material_id = #{materialId} AND user_id = #{userId}
+        ORDER BY assignment_id ASC
+    </select>
+
+    <update id="refreshCandidate">
+        UPDATE course_assignments
+           SET source_quote = COALESCE(#{sourceQuote}, source_quote),
+               due_quote = CASE WHEN due_edited = 1 THEN due_quote ELSE COALESCE(#{dueQuote}, due_quote) END,
+               due_estimate_json = CASE WHEN due_edited = 1 THEN due_estimate_json ELSE #{dueEstimateJson} END,
+               topic_id = COALESCE(topic_id, #{topicId}),
+               course_id = COALESCE(course_id, #{courseId})
+         WHERE assignment_id = #{assignmentId} AND confirm_status = 'CANDIDATE'
+    </update>
+
+    <update id="updateConfirmStatus">
+        UPDATE course_assignments
+           SET confirm_status = #{confirmStatus}, duplicate_of_assignment_id = #{duplicateOfAssignmentId},
+               version = version + 1
+         WHERE assignment_id = #{assignmentId} AND user_id = #{userId} AND version = #{version}
+    </update>
+
+    <update id="updateDue">
+        UPDATE course_assignments
+           SET due_kind = #{dueKind}, due_date = #{dueDate}, due_at = #{dueAt}, due_source = #{dueSource},
+               due_edited = 1, version = version + 1
+         WHERE assignment_id = #{assignmentId} AND user_id = #{userId} AND version = #{version}
+    </update>
+
+    <update id="updateTitle">
+        UPDATE course_assignments
+           SET title = #{title}, title_edited = 1, version = version + 1
+         WHERE assignment_id = #{assignmentId} AND user_id = #{userId} AND version = #{version}
+    </update>
+
+    <update id="updateCompleted">
+        UPDATE course_assignments
+           SET completed_at = #{completedAt}, version = version + 1
+         WHERE assignment_id = #{assignmentId} AND user_id = #{userId} AND version = #{version}
+    </update>
+
+    <update id="attachCourseIfMissing">
+        UPDATE course_assignments
+           SET course_id = COALESCE(course_id, #{courseId}), topic_id = COALESCE(topic_id, #{topicId})
+         WHERE assignment_id = #{assignmentId}
+    </update>
+
+</mapper>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialTextUnitMapper">
+
+    <resultMap id="unitResultMap" type="com.jungwoo.project.memo.material.domain.MaterialTextUnit">
+        <id     property="unitId"     column="unit_id"/>
+        <result property="userId"     column="user_id"/>
+        <result property="materialId" column="material_id"/>
+        <result property="fileHash"   column="file_hash"/>
+        <result property="unitIndex"  column="unit_index"/>
+        <result property="unitType"   column="unit_type"/>
+        <result property="unitNo"     column="unit_no"/>
+        <result property="charCount"  column="char_count"/>
+        <result property="text"       column="text"/>
+        <result property="createdAt"  column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="unitId">
+        INSERT INTO material_text_units (
+            user_id, material_id, file_hash, unit_index, unit_type, unit_no, char_count, text
+        ) VALUES (
+            #{userId}, #{materialId}, #{fileHash}, #{unitIndex}, #{unitType}, #{unitNo}, #{charCount}, #{text}
+        )
+    </insert>
+
+    <select id="findByMaterialIdAndHash" resultMap="unitResultMap">
+        SELECT * FROM material_text_units
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+        ORDER BY unit_index ASC
+    </select>
+
+    <select id="countByMaterialIdAndHash" resultType="int">
+        SELECT COUNT(*) FROM material_text_units
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+    </select>
+
+    <delete id="deleteByMaterialIdAndHash">
+        DELETE FROM material_text_units WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+    </delete>
+
+    <delete id="deleteByMaterialId">
+        DELETE FROM material_text_units WHERE material_id = #{materialId} AND user_id = #{userId}
+    </delete>
+
+</mapper>

@@ -6,63 +6,6 @@ servers:
 - url: http://localhost:8080
   description: Generated server url
 paths:
-  /api/todos/{todoId}:
-    get:
-      tags:
-      - todo-controller
-      operationId: getTodo
-      parameters:
-      - name: todoId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoResponse"
-    put:
-      tags:
-      - todo-controller
-      operationId: updateTodo
-      parameters:
-      - name: todoId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TodoUpdateRequest"
-        required: true
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoResponse"
-    delete:
-      tags:
-      - todo-controller
-      operationId: deleteTodo
-      parameters:
-      - name: todoId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      responses:
-        "200":
-          description: OK
   /api/diaries/{diaryId}:
     get:
       tags:
@@ -120,52 +63,6 @@ paths:
       responses:
         "200":
           description: OK
-  /api/todos:
-    get:
-      tags:
-      - todo-controller
-      operationId: getTodosByDate
-      parameters:
-      - name: date
-        in: query
-        required: true
-        schema:
-          type: string
-          format: date
-      - name: status
-        in: query
-        required: false
-        schema:
-          type: string
-          enum:
-          - TODO
-          - DONE
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TodoResponse"
-    post:
-      tags:
-      - todo-controller
-      operationId: createTodo
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TodoCreateRequest"
-        required: true
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoResponse"
   /api/diaries:
     get:
       tags:
@@ -276,44 +173,6 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/AuthResponse"
-  /api/todos/{todoId}/todo:
-    patch:
-      tags:
-      - todo-controller
-      operationId: markAsTodo
-      parameters:
-      - name: todoId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoResponse"
-  /api/todos/{todoId}/done:
-    patch:
-      tags:
-      - todo-controller
-      operationId: markAsDone
-      parameters:
-      - name: todoId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoResponse"
   /api/diaries/{diaryId}/favorite:
     patch:
       tags:
@@ -357,25 +216,6 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/UserResponse"
-  /api/todos/statistics/daily:
-    get:
-      tags:
-      - todo-controller
-      operationId: getDailyStatistics
-      parameters:
-      - name: date
-        in: query
-        required: true
-        schema:
-          type: string
-          format: date
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/TodoDailyStatisticsResponse"
   /api/diaries/{diaryId}/revisions:
     get:
       tags:
@@ -482,190 +322,8 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/PageResponseDiaryResponse"
-  /api/schedule-blocks/{scheduleBlockId}/reduce:
-    post:
-      tags:
-      - schedule-block-action-controller
-      operationId: reduceScheduleBlock
-      parameters:
-      - name: scheduleBlockId
-        in: path
-        required: true
-        schema:
-          type: integer
-          format: int64
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ScheduleBlockReduceRequest"
-        required: true
-      responses:
-        "200":
-          description: OK
-          content:
-            '*/*':
-              schema:
-                $ref: "#/components/schemas/ScheduleBlockResponse"
 components:
   schemas:
-    ScheduleBlockReduceRequest:
-      type: object
-      properties:
-        reducedTitle:
-          type: string
-          maxLength: 255
-          minLength: 1
-          description: 공식 필드. 작게 줄인 결과 제목.
-        afterTitle:
-          type: string
-          deprecated: true
-          description: reducedTitle의 하위 호환 alias. 신규 클라이언트는 사용하지 않는다.
-        timeMode:
-          $ref: "#/components/schemas/ScheduleBlockReduceTimeMode"
-        memo:
-          type: string
-        blockType:
-          $ref: "#/components/schemas/ScheduleBlockType"
-        startTime:
-          type: string
-          format: date-time
-          nullable: true
-        endTime:
-          type: string
-          format: date-time
-          nullable: true
-      anyOf:
-      - required:
-        - reducedTitle
-      - required:
-        - afterTitle
-    ScheduleBlockReduceTimeMode:
-      type: string
-      enum:
-      - KEEP
-      - SHRINK
-      - CLEAR
-      description: KEEP은 기존 시간 유지, SHRINK는 TIME_FIXED 시간 조정, CLEAR는 TASK로 시간 해제.
-    ScheduleBlockType:
-      type: string
-      enum:
-      - TIME_FIXED
-      - TASK
-    ScheduleBlockResponse:
-      type: object
-      properties:
-        scheduleBlockId:
-          type: integer
-          format: int64
-        userId:
-          type: integer
-          format: int64
-        dailyPlanId:
-          type: integer
-          format: int64
-        todoId:
-          type: integer
-          format: int64
-        blockDate:
-          type: string
-          format: date
-        title:
-          type: string
-        blockType:
-          $ref: "#/components/schemas/ScheduleBlockType"
-        startTime:
-          type: string
-          format: date-time
-          nullable: true
-        endTime:
-          type: string
-          format: date-time
-          nullable: true
-        memo:
-          type: string
-        status:
-          type: string
-          enum:
-          - PLANNED
-          - DONE
-          - HOLD
-          - CANCELLED
-        originType:
-          type: string
-        modifiedAfterCreation:
-          type: boolean
-        isDeleted:
-          type: boolean
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
-    TodoUpdateRequest:
-      type: object
-      properties:
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-        content:
-          type: string
-        priority:
-          type: string
-          enum:
-          - HIGH
-          - MEDIUM
-          - LOW
-    TodoResponse:
-      type: object
-      properties:
-        todoId:
-          type: integer
-          format: int64
-        userId:
-          type: integer
-          format: int64
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-        content:
-          type: string
-        status:
-          type: string
-          enum:
-          - TODO
-          - DONE
-        priority:
-          type: string
-          enum:
-          - HIGH
-          - MEDIUM
-          - LOW
-        originType:
-          type: string
-          enum:
-          - MANUAL
-          - AI_SUGGESTED
-          - ROUTINE_GENERATED
-        modifiedAfterCreation:
-          type: boolean
-        routineId:
-          type: integer
-          format: int64
-        completedAt:
-          type: string
-          format: date-time
-        createdAt:
-          type: string
-          format: date-time
-        updatedAt:
-          type: string
-          format: date-time
     DiaryUpdateRequest:
       type: object
       properties:
@@ -714,26 +372,6 @@ components:
         updatedAt:
           type: string
           format: date-time
-    TodoCreateRequest:
-      type: object
-      properties:
-        todoDate:
-          type: string
-          format: date
-        title:
-          type: string
-          minLength: 1
-        content:
-          type: string
-        priority:
-          type: string
-          enum:
-          - HIGH
-          - MEDIUM
-          - LOW
-      required:
-      - title
-      - todoDate
     DiaryCreateRequest:
       type: object
       properties:
@@ -826,21 +464,6 @@ components:
         updatedAt:
           type: string
           format: date-time
-    TodoDailyStatisticsResponse:
-      type: object
-      properties:
-        date:
-          type: string
-          format: date
-        totalCount:
-          type: integer
-          format: int32
-        doneCount:
-          type: integer
-          format: int32
-        achievementRate:
-          type: number
-          format: double
     DiaryFilterRequest:
       type: object
       properties:

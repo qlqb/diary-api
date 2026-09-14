@@ -12,6 +12,13 @@ Authorization: Bearer {token}
 
 인증 없이 호출 가능한 API는 `/api/auth/signup`, `/api/auth/login`입니다.
 
+이 문서는 Auth / Users / Diaries만 다룹니다. 실행 조각(`/api/execution-items`), 프로젝트,
+자료, AI 상담 엔드포인트는 `docs/openapi.yaml`을 기준으로 합니다.
+
+2026-08-23에 `/api/todos`와 `/api/schedule-blocks` 절을 삭제했습니다. 해당 기능은
+`execution_items`로 이관 완료 후 제거되었습니다 —
+`docs/sql/2026-08-23-remove-legacy-tables.sql` 참고.
+
 ## 공통 오류 응답
 
 ```json
@@ -284,268 +291,60 @@ Response examples:
 }
 ```
 
-## Todos
 
-Todo API는 인증된 사용자의 Todo만 조회/수정/삭제합니다. 다른 사용자의 `todoId`로 접근하면 조회되지 않습니다.
-
-Enum 값:
-
-- `status`: `TODO`, `DONE`
-- `priority`: `HIGH`, `MEDIUM`, `LOW`
-- `originType`: `MANUAL`, `AI_SUGGESTED`, `ROUTINE_GENERATED`
-
-### Todo 생성
-
-`POST /api/todos`
-
-Request:
-
-```json
-{
-  "todoDate": "2026-06-28",
-  "title": "운동하기",
-  "content": "30분 걷기",
-  "priority": "MEDIUM"
-}
-```
-
-Request fields:
-
-- `todoDate`: 필수
-- `title`: 필수
-- `content`: 선택
-- `priority`: 선택, 생략 시 `MEDIUM`
-
-Response `201 Created`:
-
-```json
-{
-  "todoId": 1,
-  "userId": 1,
-  "todoDate": "2026-06-28",
-  "title": "운동하기",
-  "content": "30분 걷기",
-  "status": "TODO",
-  "priority": "MEDIUM",
-  "originType": "MANUAL",
-  "modifiedAfterCreation": false,
-  "routineId": null,
-  "completedAt": null,
-  "createdAt": "2026-06-28T10:00:00",
-  "updatedAt": "2026-06-28T10:00:00"
-}
-```
-
-### 날짜별 Todo 목록
-
-`GET /api/todos?date=2026-06-28`
-
-`GET /api/todos?date=2026-06-28&status=TODO`
-
-`GET /api/todos?date=2026-06-28&status=DONE`
-
-Query:
-
-- `date`: 필수
-- `status`: 선택. 없으면 전체 조회, 있으면 해당 상태만 조회
-
-Response `200 OK`: `TodoResponse` 배열을 반환합니다.
-
-### Todo 상세
-
-`GET /api/todos/{todoId}`
-
-Response `200 OK`: `TodoResponse`를 반환합니다.
-
-### Todo 수정
-
-`PUT /api/todos/{todoId}`
-
-Request:
-
-```json
-{
-  "todoDate": "2026-06-28",
-  "title": "수정된 제목",
-  "content": "수정된 메모",
-  "priority": "HIGH"
-}
-```
-
-Response `200 OK`: 수정된 `TodoResponse`를 반환합니다.
-
-### Todo 완료/미완료
-
-- `PATCH /api/todos/{todoId}/done`: 완료 처리, `TODO` → `DONE`
-- `PATCH /api/todos/{todoId}/todo`: 미완료 처리, `DONE` → `TODO`
-
-Response `200 OK`: 변경된 `TodoResponse`를 반환합니다.
-
-### Todo 삭제
-
-`DELETE /api/todos/{todoId}`
-
-Response `204 No Content`
-
-### Todo 일별 통계
-
-`GET /api/todos/statistics/daily?date=2026-06-28`
-
-Response `200 OK`:
-
-```json
-{
-  "date": "2026-06-28",
-  "totalCount": 5,
-  "doneCount": 3,
-  "achievementRate": 60.0
-}
-```
-
-## ScheduleBlocks
-
-ScheduleBlock API는 인증된 사용자의 블록만 조회/수정/삭제합니다.
-
-Enum 값:
-
-- `blockType`: `TIME_FIXED`, `TASK`
-
-시간 정책:
-
-- `TIME_FIXED`는 `startTime`/`endTime`을 반드시 가져야 합니다.
-- `TASK`는 `startTime`/`endTime`을 가지면 안 됩니다.
-- `startTime`/`endTime` 중 하나만 있으면 `PARTIAL_TIME_RANGE` 오류입니다.
-- `startTime`/`endTime`이 모두 있으면 `endTime`은 `startTime`보다 이후여야 합니다.
-- `blockDate`는 이 블록이 속한 하루이고, `startTime`/`endTime`은 실제 시각입니다. 두 날짜가 달라도 허용합니다.
-
-### ScheduleBlock 생성 smoke 예시
-
-`POST /api/schedule-blocks`
-
-TASK + 시간 없음: 성공
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "연결 리스트 문제 풀기",
-  "blockType": "TASK"
-}
-```
-
-TASK + 시간 있음: `400 TASK_MUST_NOT_HAVE_TIME`
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "연결 리스트 문제 풀기",
-  "blockType": "TASK",
-  "startTime": "2026-07-08T20:00:00",
-  "endTime": "2026-07-08T21:00:00"
-}
-```
-
-TIME_FIXED + 시간 있음: 성공
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "스터디",
-  "blockType": "TIME_FIXED",
-  "startTime": "2026-07-08T20:00:00",
-  "endTime": "2026-07-08T21:00:00"
-}
-```
-
-TIME_FIXED + 시간 없음: `400 TIME_FIXED_REQUIRES_TIME`
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "스터디",
-  "blockType": "TIME_FIXED"
-}
-```
-
-startTime만 있음: `400 PARTIAL_TIME_RANGE`
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "스터디",
-  "blockType": "TIME_FIXED",
-  "startTime": "2026-07-08T20:00:00"
-}
-```
-
-blockDate와 실제 시각 날짜가 다름: 성공
-
-```json
-{
-  "blockDate": "2026-07-08",
-  "title": "새벽 정리",
-  "blockType": "TIME_FIXED",
-  "startTime": "2026-07-09T01:30:00",
-  "endTime": "2026-07-09T02:00:00"
-}
-```
-
-### ScheduleBlock reduce 액션
-
-`POST /api/schedule-blocks/{id}/reduce`
-
-reduce는 "작게 줄이기" 도메인 액션입니다. 신규 클라이언트는 `reducedTitle`을 사용합니다. 기존 `afterTitle` 요청은 하위 호환을 위해 임시 허용합니다.
-
-제목만 줄이기:
-
-```json
-{
-  "reducedTitle": "영어 단어 5개",
-  "timeMode": "KEEP",
-  "memo": "오늘 시간이 부족해서 작게 줄임"
-}
-```
-
-제목과 시간을 함께 줄이기:
-
-```json
-{
-  "reducedTitle": "영어 단어 5개",
-  "timeMode": "SHRINK",
-  "blockType": "TIME_FIXED",
-  "startTime": "2026-07-09T20:00:00",
-  "endTime": "2026-07-09T20:30:00",
-  "memo": "오늘 시간이 부족해서 작게 줄임"
-}
-```
-
-시간 없는 작업으로 줄이기:
-
-```json
-{
-  "reducedTitle": "영어 단어 5개",
-  "timeMode": "CLEAR",
-  "blockType": "TASK",
-  "startTime": null,
-  "endTime": null,
-  "memo": "시간은 정하지 않고 가볍게 하기"
-}
-```
-
-- `timeMode`는 `KEEP`, `SHRINK`, `CLEAR` 중 하나입니다.
-- `timeMode`가 없으면 하위 호환을 위해 `KEEP`으로 처리합니다.
-- `KEEP`은 기존 시간 정보를 유지하고, `blockType`/`startTime`/`endTime`이 들어오면 `400 Bad Request`입니다.
-- `SHRINK`는 `blockType=TIME_FIXED`와 `startTime`/`endTime`을 모두 요구하며, `endTime`은 `startTime`보다 뒤여야 합니다.
-- `CLEAR`는 `blockType=TASK`와 `startTime=null`, `endTime=null`을 요구합니다.
-- 제목 축소, 선택적 시간 조정, `REDUCED` 이벤트 저장은 하나의 트랜잭션으로 처리합니다.
-- reduce 후 ScheduleBlock `status`는 `PLANNED`를 유지합니다.
-- 프론트는 reduce 후 별도 PATCH로 시간을 수정하지 않습니다.
-
-### Pending 조회
-
-`GET /api/schedule-blocks/pending?date=2026-07-09`
-
-`date` 파라미터는 실제 오늘 날짜가 아니라 pending 판단 기준 운영일(`baseOperationalDate`)입니다. 사용자가 날짜를 보내면 그 날짜를 우선하고, 생략하면 현재 구현은 임시로 `LocalDate.now()`를 사용합니다. 새벽 4시 기준 `operationalDate` 계산은 추후 공통 유틸로 분리할 예정입니다.
-
-pending은 `block_date < baseOperationalDate`, `status=PLANNED`, `is_deleted=false`인 ScheduleBlock입니다. 오늘 항목, 미래 항목, DONE/HOLD/CANCELLED/삭제 항목은 pending이 아닙니다. pending 판단에는 `startTime`/`endTime`의 실제 시각을 사용하지 않습니다.
-
-HOLD는 사용자가 "지금은 하지 않겠다"고 결론 낸 상태이므로 pending 카드에 반복 노출하지 않습니다. 1차-A의 hold 액션은 상태를 HOLD로 바꾸고 HOLD 이벤트를 저장하는 것까지만 담당합니다. 보류함 화면, 보류 해제 API, 보류 재검토 알림, 보류 사유 입력은 이후 범위입니다.
+## Material Analysis (자동 분석 상태) — 2026-09-13
+
+업로드된 자료는 서버가 뒤에서 자동으로 읽는다. 여기는 그 상태 조회와 제어다. 설계는 `docs/product/15-material-auto-analysis.md`.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/materials/analysis/overview` | `{paused, serviceAvailable, queued, running, partial, done, failed, unavailable, materials[]}` |
+| POST | `/api/materials/analysis/pause` · `/resume` | 내 자동 분석 일시중지/재개(QUEUED↔PAUSED). 응답은 overview |
+| GET | `/api/materials/{id}/analysis-status` | `{materialId, state(NONE|QUEUED|RUNNING|PARTIAL|DONE|FAILED|UNAVAILABLE|PAUSED|NO_TEXT), totalChunks, completedChunks, errorCode, message, sectionCount, assignmentCandidateCount, pageCount, linkStates[{courseId,state,proposalId}]}` |
+| POST | `/api/materials/{id}/analysis-status/retry` | 다시 시도(작업을 앞으로 당긴다) |
+| GET | `/api/materials/{id}/sections` | 분석된 구간 `[{sectionId, locator, unitStart, unitEnd, unitType, printedPageStart, printedPageEnd, label, title, roles[], roleLabels[], taskText, excerpt, assignmentCue, assignmentQuote, dates[]}]` |
+| GET | `/api/material-sections/{sectionId}` | 구간 단건 |
+
+## Topic Change Proposals (자료 정리 변경안)
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/courses/{courseId}/topic-change-proposals?includeResolved=false` | 열린 변경안. `{proposalId, materialId, materialFilename, status, baseTreeVersion, currentTreeVersion, stale, summary{link,add,rename,move,merge,split,structural}, ops[], topicTitles{}, sections[]}` |
+| GET | `/api/topic-change-proposals/{id}` | 단건 |
+| POST | `/api/topic-change-proposals/{id}/apply` | `{selectedOpIndexes?: number[], titleOverrides?: {index: title}}`. 한 트랜잭션, 전부 아니면 전무. 409 `E409_017`(구조가 바뀜) · `E409_018`(이미 처리됨) · 400 `E400_030`(적용 불가) |
+| POST | `/api/topic-change-proposals/{id}/dismiss` | 제외 |
+
+ops: `LINK(topicId, sectionIds, role)` · `ADD(tempId, parentTopicId|parentTempId, title, sourceType, locator, sectionIds, children)` ·
+`RENAME(topicId, title)` · `MOVE(topicId, parentTopicId|null)` · `MERGE(survivingTopicId, absorbedTopicIds)` · `SPLIT(topicId, children)`.
+
+`GET /api/courses/{courseId}/topics` 응답의 각 항목에 `linkedMaterials[{linkId, materialId, filename, materialDeleted, sectionId,
+sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐다.
+
+## Assignments (과제)
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/courses/{courseId}/assignments` | 프로젝트의 과제 전부(후보·확정·완료). `{assignmentId, courseId, materialId, materialFilename, materialDeleted, sectionId, sectionLocator, topicId, title, sourceQuote, confirmStatus(CANDIDATE|CONFIRMED|NOT_ASSIGNMENT|LATER|DUPLICATE), dueKind(UNKNOWN|NONE|DATE|DATETIME), dueDate, dueAt, dueSource(SOURCE|ESTIMATED|USER), dueQuote, dueEstimates[], completedAt, completed, overdue, titleEdited, dueEdited, duplicateOfAssignmentId, duplicateOfTitle, version}` |
+| GET | `/api/assignments` | 확정·미완료 과제 전부(마감 순). 오늘 화면용 |
+| POST | `/api/assignments` | 직접 추가 `{courseId?, title, dueKind?, dueDate?, dueAt?}` |
+| PATCH | `/api/assignments/{id}/answer` | `{answer, duplicateOfAssignmentId?, version}` |
+| PATCH | `/api/assignments/{id}/due` | `{dueKind, dueDate?, dueAt?, version}`. 「이 날짜 맞아요」도 이 요청이다 |
+| PATCH | `/api/assignments/{id}/title` | `{title, version}` |
+| PATCH | `/api/assignments/{id}/completed` | `{completed, version}` |
+
+모든 변경은 `version` 대조. 어긋나면 409 `E409_004`. 마감 입력 오류는 400 `E400_031`.
+
+## Plan Item Detail (「자세히」)
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/plans/drafts/items/{proposalItemId}/detail` | 있으면 그대로. 없으면 `available=false, canGenerate` |
+| POST | `/api/plans/drafts/items/{proposalItemId}/detail` | 지금 근거판이 없을 때만 만든다(모델 1회). 이전 판이 오래됐으면(stale) 새 판을 만들고 `userText`를 옮긴다. 같은 판이 있으면 그대로 돌려준다. 항목·시간·마감은 그대로 |
+| GET / POST | `/api/plans/items/{executionItemId}/detail` | 확정된 조각(만든 제안 항목 기준) |
+| PATCH | `/api/plans/item-details/{detailId}` | `{userText}` |
+
+응답 `{detailId, proposalItemId, evidenceVersion, steps[{text, refIds, sectionIds}], userText, stale, available, canGenerate,
+sections[{sectionId, materialId, title, locator}]}`. 인용한 구간이 없으면 400 `E400_032`.
+
+`POST /api/plans/draft`에 `excludeTopicIds`(이번 요청에서만 제외)가 추가됐고, 응답에 `pendingMaterials[{materialId, filename,
+state, courseId}]`가 추가됐다.
