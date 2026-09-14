@@ -52,6 +52,13 @@ public interface AiProposalMapper {
             @Param("planProvenanceJson") String planProvenanceJson
     );
 
+    /** 초안을 만든 요청(PlanRequestContext JSON). 같은 조건으로 다시 만들기가 읽는다. */
+    int updatePlanRequest(
+            @Param("proposalId") Long proposalId,
+            @Param("userId") Long userId,
+            @Param("planRequestJson") String planRequestJson
+    );
+
     /** 이 ASSISTANT 메시지가 만든 제안(있으면 하나뿐). 대화 이력 표시·idempotency 재생용. */
     AiProposal findBySourceMessageIdAndUserId(
             @Param("sourceMessageId") Long sourceMessageId,

@@ -62,4 +62,11 @@ public class PlanDraftRequest {
      * 다음 계획에는 다시 후보로 돌아온다.
      */
     private List<Long> excludeTopicIds;
+    /**
+     * 이번 요청에서 사용자가 지정한 자료(자료함의 [이 자료로 계획], 되묻기 선택). 연결 출처(origin=USER)나 업로드 여부와
+     * 다른 것이다. 소유·활성·범위를 검증하고 맞지 않으면 400이다. 지시 문장 속 파일 이름은 서버가 접근 가능한 목록에서 따로 찾는다.
+     */
+    private List<Long> requestedMaterialIds;
+    /** 이번 요청에서 지정한 구간. */
+    private List<Long> requestedSectionIds;
 }

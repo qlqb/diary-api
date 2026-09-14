@@ -34,6 +34,8 @@ ext {
 dependencies {
     implementation platform("org.springframework.ai:spring-ai-bom:${springAiVersion}")
     implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+    // 계획 자료 선택의 입력 토큰 추정(o200k_base). Spring AI가 이미 같은 버전을 끌어오지만, 직접 쓰므로 명시한다.
+    implementation 'com.knuddels:jtokkit:1.1.0'
 
     implementation 'org.springframework.boot:spring-boot-h2console'
     implementation 'org.springframework.boot:spring-boot-starter-security'
