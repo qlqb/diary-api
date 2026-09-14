@@ -35,6 +35,13 @@ public interface MaterialAnalysisJobMapper {
     int claim(@Param("jobId") Long jobId, @Param("owner") String owner,
               @Param("now") LocalDateTime now, @Param("leaseUntil") LocalDateTime leaseUntil);
 
+    /**
+     * 결과 쓰기 직전의 잠금. 토큰이 맞고 RUNNING인 작업 행을 FOR UPDATE로 잡아 트랜잭션이 끝날 때까지 쥔다.
+     * null이면 임대를 잃은 것이라 아무것도 쓰지 않는다. 잠긴 동안 취소·재선점 UPDATE는 기다리고,
+     * 풀린 뒤에는 토큰이 바뀌어 다음 쓰기가 막힌다.
+     */
+    Long lockIfLeased(@Param("jobId") Long jobId, @Param("leaseToken") Long leaseToken);
+
     /** 임대 연장. 0행이면 임대를 잃은 것이다 — 즉시 중단한다. */
     int renewLease(@Param("jobId") Long jobId, @Param("leaseToken") Long leaseToken,
                    @Param("leaseUntil") LocalDateTime leaseUntil);

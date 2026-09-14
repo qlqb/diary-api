@@ -87,6 +87,17 @@
                 OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now}))
     </update>
 
+    <!--
+      결과 쓰기의 울타리. 같은 트랜잭션 안에서 이 행을 잡은 채 구간·과제 후보·변경안을 쓴다.
+      취소(cancelOpen*)와 재선점(claim)은 이 행의 잠금을 기다리므로, 늦은 응답의 쓰기와 삭제·교체가
+      섞이지 않는다 — 먼저 온 쪽이 끝난 뒤 다른 쪽이 토큰을 대조한다.
+    -->
+    <select id="lockIfLeased" resultType="java.lang.Long">
+        SELECT job_id FROM material_analysis_jobs
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+         FOR UPDATE
+    </select>
+
     <update id="renewLease">
         UPDATE material_analysis_jobs SET lease_until = #{leaseUntil}
          WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'

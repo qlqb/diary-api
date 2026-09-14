@@ -60,6 +60,7 @@ public class MaterialContentAnalyzer {
     private static final int MAX_QUOTE = 500;
 
     private final MaterialAnalysisJobService jobService;
+    private final MaterialAnalysisResultWriter resultWriter;
     private final MaterialTextUnitService unitService;
     private final CourseMaterialMapper courseMaterialMapper;
     private final MaterialSectionMapper sectionMapper;
@@ -198,7 +199,6 @@ public class MaterialContentAnalyzer {
             }
             ContentAnalysisPayload payload = callModel(job, material, chunk, units.size());
             calledThisRun++;
-            int saved = persistSections(job, material, chunk, payload);
             if (payload.docMeta() != null) {
                 if (documentDate == null && isIsoDate(payload.docMeta().documentDate())) {
                     documentDate = payload.docMeta().documentDate();
@@ -209,20 +209,33 @@ public class MaterialContentAnalyzer {
             }
             completed.add(chunk.chunkIndex());
             lastUnitNo = Math.max(lastUnitNo, chunk.lastUnitNo());
-            if (!jobService.progress(job, chunks.size(), completed.size(),
-                    writeCheckpoint(completed, units.size(), lastUnitNo, documentDate, weekLabel))) {
-                // 임대를 잃었다. 저장된 구간은 INSERT IGNORE라 새 임대가 다시 읽어도 중복되지 않는다.
+            String checkpointJson = writeCheckpoint(completed, units.size(), lastUnitNo, documentDate, weekLabel);
+            // 응답을 기다리는 동안 자료가 지워졌거나 임대가 넘어갔을 수 있다. 구간 저장과 진행 기록을 한 트랜잭션에서,
+            // 작업 행을 잠근 채 토큰을 대조한 뒤에만 쓴다. 저장된 구간은 INSERT IGNORE라 새 임대가 다시 읽어도 중복되지 않는다.
+            int[] saved = {0};
+            boolean written = resultWriter.writeIfLeased(job, () -> {
+                saved[0] = persistSections(job, material, chunk, payload);
+                jobService.progress(job, chunks.size(), completed.size(), checkpointJson);
+            });
+            if (!written) {
                 return AnalysisOutcome.lost();
             }
             log.info("자료 구간 분석: jobId={}, materialId={}, chunk={}/{}, sections={}",
-                    job.getJobId(), job.getMaterialId(), chunk.chunkIndex() + 1, chunks.size(), saved);
+                    job.getJobId(), job.getMaterialId(), chunk.chunkIndex() + 1, chunks.size(), saved[0]);
         }
 
-        // 전부 읽었다. 옛 해시의 구간을 현재가 아닌 것으로 내리고 과제 후보를 만든다.
-        sectionMapper.supersedeOtherHashes(material.getMaterialId(), job.getFileHash());
-        int candidates = createAssignmentCandidates(job, material, documentDate);
+        // 전부 읽었다. 옛 해시의 구간을 현재가 아닌 것으로 내리고 과제 후보를 만든다 — 이것도 임대 확인 아래에서.
+        int[] candidates = {0};
+        String finalDocumentDate = documentDate;
+        boolean written = resultWriter.writeIfLeased(job, () -> {
+            sectionMapper.supersedeOtherHashes(material.getMaterialId(), job.getFileHash());
+            candidates[0] = createAssignmentCandidates(job, material, finalDocumentDate);
+        });
+        if (!written) {
+            return AnalysisOutcome.lost();
+        }
         List<MaterialSection> all = sectionMapper.findActiveByMaterialIdAndHash(material.getMaterialId(), job.getFileHash());
-        return AnalysisOutcome.done("구간 " + all.size() + "개, 과제 후보 " + candidates + "개"
+        return AnalysisOutcome.done("구간 " + all.size() + "개, 과제 후보 " + candidates[0] + "개"
                 + (weekLabel != null ? ", " + weekLabel : ""), null);
     }
 

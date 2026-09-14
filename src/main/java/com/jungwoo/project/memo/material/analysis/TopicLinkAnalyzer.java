@@ -63,6 +63,7 @@ public class TopicLinkAnalyzer {
     private static final int MAX_SECTION_LINES = 120;
 
     private final MaterialAnalysisJobService jobService;
+    private final MaterialAnalysisResultWriter resultWriter;
     private final CourseMaterialMapper courseMaterialMapper;
     private final CourseMapper courseMapper;
     private final MaterialLinkMapper materialLinkMapper;
@@ -162,10 +163,14 @@ public class TopicLinkAnalyzer {
         List<CourseAssignment> assignments = assignmentMapper.findByCourseId(course.getCourseId(), userId);
 
         if (sections.isEmpty()) {
-            TopicChangeProposal empty = proposalService.create(userId, course.getCourseId(), material.getMaterialId(),
-                    job.getJobId(), job.getFileHash(), treeVersion,
-                    TopicChangeOpsValidator.validate(List.of(), topics, Set.of(), false), modelName);
-            return AnalysisOutcome.done("연결할 구간이 없다", empty.getProposalId());
+            TopicChangeProposal[] empty = new TopicChangeProposal[1];
+            boolean written = resultWriter.writeIfLeased(job, () -> empty[0] = proposalService.create(
+                    userId, course.getCourseId(), material.getMaterialId(), job.getJobId(), job.getFileHash(),
+                    treeVersion, TopicChangeOpsValidator.validate(List.of(), topics, Set.of(), false), modelName));
+            if (!written) {
+                return AnalysisOutcome.lost();
+            }
+            return AnalysisOutcome.done("연결할 구간이 없다", empty[0].getProposalId());
         }
         if (!jobService.renew(job)) {
             return AnalysisOutcome.lost();
@@ -180,17 +185,21 @@ public class TopicLinkAnalyzer {
         if (!validated.rejected().isEmpty()) {
             log.info("변경안 검증에서 버린 작업 {}건: jobId={}", validated.rejected().size(), job.getJobId());
         }
-        // 임대 확인 뒤 저장 — 다른 worker가 이미 같은 범위를 끝냈으면 UNIQUE가 막고 그쪽 결과를 쓴다.
-        if (!jobService.renew(job)) {
+        // 저장은 작업 행을 잠근 채 토큰을 대조한 같은 트랜잭션에서만 — 응답을 기다리는 동안 연결이 끊겼거나
+        // 자료가 지워졌거나 임대가 넘어갔으면 변경안도 과제 맥락도 남기지 않는다.
+        TopicChangeProposal[] proposal = new TopicChangeProposal[1];
+        boolean written = resultWriter.writeIfLeased(job, () -> {
+            proposal[0] = proposalService.create(userId, course.getCourseId(), material.getMaterialId(),
+                    job.getJobId(), job.getFileHash(), treeVersion, validated, modelName);
+            attachAssignments(userId, course.getCourseId(), material, sections, payload.assignments(), assignments, topics);
+        });
+        if (!written) {
             return AnalysisOutcome.lost();
         }
-        TopicChangeProposal proposal = proposalService.create(userId, course.getCourseId(), material.getMaterialId(),
-                job.getJobId(), job.getFileHash(), treeVersion, validated, modelName);
-        attachAssignments(userId, course.getCourseId(), material, sections, payload.assignments(), assignments, topics);
 
         TopicChangeOpsValidator.Summary s = validated.summary();
         return AnalysisOutcome.done("연결 " + s.link() + " · 추가 " + s.add() + " · 이름 " + s.rename()
-                + " · 이동 " + s.move() + " · 병합 " + s.merge() + " · 분할 " + s.split(), proposal.getProposalId());
+                + " · 이동 " + s.move() + " · 병합 " + s.merge() + " · 분할 " + s.split(), proposal[0].getProposalId());
     }
 
     // ===== 프롬프트 =====

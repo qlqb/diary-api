@@ -162,10 +162,9 @@ public class MaterialService {
      * 않고, 그러면 "커밋 후 파일 삭제"라는 이 순서 자체가 성립하지 않는다.
      */
     public void delete(Long userId, Long materialId) {
+        // 열린 분석 작업의 취소는 markDeleted 트랜잭션 안에서 먼저 일어난다(늦은 응답이 결과를 되살리지 못하게).
         CourseMaterial material = materialTxService.markDeleted(userId, materialId);
-        // 늦게 끝난 worker가 지운 자료의 토픽·과제를 되살리지 못하게: 열린 작업 취소(임대 토큰이 바뀌어
-        // 진행 중인 결과 저장도 0행이 된다), 열린 변경안은 STALE.
-        analysisJobService.cancelForMaterial(userId, materialId);
+        // 열린 변경안은 STALE. 취소 뒤에 오므로 그 사이 새 변경안이 생길 수 없다.
         topicChangeProposalService.staleFor(userId, materialId, null);
         fileStorageService.deleteQuietly(materialId, material.getStoragePath());
     }

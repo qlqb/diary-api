@@ -29,6 +29,7 @@ public class MaterialTxService {
     private final MaterialLinkMapper materialLinkMapper;
     private final MaterialTextUnitMapper materialTextUnitMapper;
     private final MaterialSectionMapper materialSectionMapper;
+    private final MaterialAnalysisJobMapper analysisJobMapper;
 
     /**
      * 자료 원본과 (courseId가 주어졌으면) 그 프로젝트 연결을 한 트랜잭션에 만든다.
@@ -86,14 +87,18 @@ public class MaterialTxService {
         if (material == null) {
             throw new NotFoundException(ErrorCode.COURSE_MATERIAL_NOT_FOUND);
         }
+        // 열린 분석 작업을 먼저, 같은 트랜잭션에서 취소한다. 결과를 쓰는 worker는 작업 행을 잠근 채 쓰므로
+        // 이 UPDATE는 그 쓰기가 끝날 때까지 기다리고, 그 뒤엔 토큰이 바뀌어 늦은 응답이 아무것도 되살리지 못한다.
+        // 트랜잭션 밖에서 나중에 취소하면 "삭제 표시 커밋 → worker 쓰기 → 취소" 순서가 가능해 지운 자료에 구간이 다시 생긴다.
+        int cancelled = analysisJobMapper.cancelOpenByMaterialId(materialId, userId);
         materialLinkMapper.deleteAllByMaterialId(materialId, userId);
         courseMaterialMapper.markDeleted(materialId, userId);
         // 원문 텍스트 사본도 지운다 — 삭제가 삭제여야 한다. 구간 행은 제목만 남기고 발췌를 비운다
         // (확정 과제·근거가 그 구간 id를 가리키므로 행 자체는 남는다).
         materialTextUnitMapper.deleteByMaterialId(materialId, userId);
         materialSectionMapper.clearTextByMaterialId(materialId, userId);
-        log.info("자료 삭제 표시: userId={}, materialId={}, storagePath={}",
-                userId, materialId, material.getStoragePath());
+        log.info("자료 삭제 표시: userId={}, materialId={}, storagePath={}, 취소한 분석 작업={}",
+                userId, materialId, material.getStoragePath(), cancelled);
         return material;
     }
 }
