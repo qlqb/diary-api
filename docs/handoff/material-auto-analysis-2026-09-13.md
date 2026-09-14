@@ -100,3 +100,8 @@ material_analysis_controls 사용자별 자동 분석 일시중지 (user_id PK, 
   worker가 두 인스턴스에서 돌았고 선점이 겹치지 않았다.
 - 남긴 합성 계정: auto-analysis-1789231862@example.com(user 999000275, course 672), auto-analysis-1789232290@example.com
   (user 999000276, course 673). 정리는 사용자 판단.
+- 2026-09-15 후속(브랜치 `fix/analysis-race-plan-selection`): ① 결과 저장 경합 — `MaterialAnalysisResultWriter`(작업 행 FOR UPDATE +
+  토큰 대조 + 같은 트랜잭션), 삭제 시 작업 취소를 `markDeleted` 안으로. `MaterialAnalysisResultRaceDbTest`(4)는 수정 전 코드에서 4건
+  모두 실패(삭제 뒤 구간·변경안이 다시 생김, 교체 뒤 A·B 결과가 둘 다 남음)하고 수정 뒤 통과. ② UI 「이번만 빼기」·「이미 알아요」
+  되돌리기가 초안을 실제로 다시 요청. ③ 2단계 선택(반드시 포함 + 글자 예산 12,000, 실측 5,098자↔2,844토큰). ④ 「자세히」 갱신 버튼·메모
+  편집. 문서: 15번 A12 개정·A16·A17·§7·§8·§10, 13번 컨텍스트 수집 규칙, api-spec, 99.

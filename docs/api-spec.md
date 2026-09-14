@@ -339,7 +339,7 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/api/plans/drafts/items/{proposalItemId}/detail` | 있으면 그대로. 없으면 `available=false, canGenerate` |
-| POST | `/api/plans/drafts/items/{proposalItemId}/detail` | 없을 때만 만든다(모델 1회). 항목·시간·마감은 그대로 |
+| POST | `/api/plans/drafts/items/{proposalItemId}/detail` | 지금 근거판이 없을 때만 만든다(모델 1회). 이전 판이 오래됐으면(stale) 새 판을 만들고 `userText`를 옮긴다. 같은 판이 있으면 그대로 돌려준다. 항목·시간·마감은 그대로 |
 | GET / POST | `/api/plans/items/{executionItemId}/detail` | 확정된 조각(만든 제안 항목 기준) |
 | PATCH | `/api/plans/item-details/{detailId}` | `{userText}` |
 
