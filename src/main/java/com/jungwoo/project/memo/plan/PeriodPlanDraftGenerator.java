@@ -113,15 +113,6 @@ public class PeriodPlanDraftGenerator {
     /** 이 일수까지는 학습 예산이 상한 안에 들어온다. 넘으면 예산을 상한으로 깎는다. */
     public static final int SHORT_PLAN_DAYS = 7;
 
-    /**
-     * 프로젝트당 학습 항목 줄 수 상한.
-     *
-     * 계획은 프로젝트를 고르지 않으면 ACTIVE 전체를 대상으로 한다. 상한이 없으면 과목이
-     * 늘수록 프롬프트가 그대로 커진다. 30줄이면 한 과목의 주차별 진도를 담기에 넉넉하고,
-     * 넘치면 뒤쪽은 접고 개수만 알린다 — 뒤쪽 주차는 어차피 지금 계획할 범위가 아니다.
-     */
-    private static final int MAX_TOPIC_LINES_PER_COURSE = 30;
-
     /** 일정·평가 줄 수 상한. 개강일·시험·평가 비율이면 충분하다. */
     private static final int MAX_SCHEDULE_LINES_PER_COURSE = 8;
 
@@ -510,6 +501,8 @@ public class PeriodPlanDraftGenerator {
               "이 문제를 확인했다"처럼 원문을 본 듯이 쓰지 마라.
             - 항목 옆 표시: "진행 중"은 이어서 하고, "학습 완료"는 사용자 지시나 시험 근거가 있을 때만 "복습"임을
               제목이나 설명에 밝혀 넣는다. "← 첫 미학습"은 기록이 없는 사용자가 출발할 자리다.
+              "과제 연결(마감 …)"과 "사용자가 자료 연결"은 서버가 반드시 보여주는 사실이지 "이 항목을 꼭 넣어라"는
+              지시가 아니다 — 마감과 진행 상태를 보고 네가 판단하고, 넣지 않기로 했으면 그냥 빼면 된다.
             - [과제] 줄은 확정 여부·마감·완료를 서버가 붙인 사실이다. "(확인 전)" 후보는 과제로 단정하지 말고,
               마감이 "추정"인 것은 확정 마감처럼 다루지 마라. 완료된 과제는 다시 제안하지 않는다. 과제 자체의
               수행 시간을 잡는 것은 사용자가 요청했을 때만 하고, 대신 과제에 필요한 개념·연습은 제안해도 된다.
@@ -522,6 +515,8 @@ public class PeriodPlanDraftGenerator {
         Long userId = spec.userId();
         String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence,
                 maxItems, cappedByItemLimit, collector);
+        // 예산(plan.draft.context-budget-chars-per-course)을 실측으로 맞추기 위한 숫자. 원문은 남기지 않는다.
+        log.info("계획 초안 프롬프트: userId={}, 과목={}개, 글자={}자", userId, courses.size(), userPrompt.length());
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> lastFinishReason = new AtomicReference<>();
@@ -901,9 +896,9 @@ public class PeriodPlanDraftGenerator {
                     appendSectionLine(sb, course, section, collector, "  ".repeat(topic.depth() + 2) + "· ");
                 }
             }
-            int hidden = bundle.totalTopics() - bundle.topics().size() - bundle.excludedByMark() - bundle.excludedThisTime();
-            if (hidden > 0) {
-                sb.append("    … 외 ").append(hidden).append("개(줄 수 제한으로 생략)\n");
+            if (bundle.budgetHidden() > 0) {
+                sb.append("    … 외 ").append(bundle.budgetHidden())
+                        .append("개(입력 분량 제한으로 생략 — 진행 중·첫 미학습·과제 연결·사용자 연결 항목은 전부 실었다)\n");
             }
             if (bundle.excludedByMark() > 0) {
                 sb.append("    (사용자가 「이미 알아요」/「나중에」로 표시한 ").append(bundle.excludedByMark())
@@ -978,6 +973,15 @@ public class PeriodPlanDraftGenerator {
         }
         if (topic.firstUnlearned()) {
             line.append(" · ← 첫 미학습");
+        }
+        if (topic.assignmentLinked()) {
+            line.append(" · 과제 연결");
+            if (topic.assignmentDue() != null) {
+                line.append("(마감 ").append(topic.assignmentDue()).append(")");
+            }
+        }
+        if (topic.userLinked()) {
+            line.append(" · 사용자가 자료 연결");
         }
         return line.toString();
     }

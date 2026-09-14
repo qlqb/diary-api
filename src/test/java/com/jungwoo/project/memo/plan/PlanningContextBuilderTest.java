@@ -72,6 +72,10 @@ class PlanningContextBuilderTest {
     private UserContextMapper userContextMapper;
     @Mock
     private PlanReviewService planReviewService;
+    @Mock
+    private com.jungwoo.project.memo.assignment.CourseAssignmentService assignmentService;
+    @Mock
+    private com.jungwoo.project.memo.learning.TopicMaterialLinkMapper topicLinkMapper;
 
     private PlanningContextBuilder builder;
 
@@ -79,6 +83,7 @@ class PlanningContextBuilderTest {
     void setUp() {
         builder = new PlanningContextBuilder(courseMapper, topicService, routineReader,
                 routineOccurrenceService, availabilityEstimateService, userContextMapper, planReviewService,
+                assignmentService, topicLinkMapper,
                 Clock.fixed(NOW.atZone(ZoneId.of("Asia/Seoul")).toInstant(), ZoneId.of("Asia/Seoul")));
         ReflectionTestUtils.setField(builder, "defaultTimeZoneId", "Asia/Seoul");
 
@@ -86,6 +91,8 @@ class PlanningContextBuilderTest {
                 .thenReturn(new AvailabilityEstimateResult(List.of(), List.of()));
         when(userContextMapper.findActiveAndStaleByUserId(anyLong(), any())).thenReturn(List.of());
         when(planReviewService.summarizeLatestForPrompt(anyLong())).thenReturn(null);
+        when(assignmentService.findByCourses(anyLong(), any())).thenReturn(List.of());
+        when(topicLinkMapper.findActiveByCourseId(anyLong(), anyLong())).thenReturn(List.of());
     }
 
     @Test
@@ -147,6 +154,50 @@ class PlanningContextBuilderTest {
                 .containsExactly(216L, 217L, 218L, 300L, 301L, 302L);
         assertThat(topics).extracting(TopicContext::week)
                 .containsExactly(1, 2, 3, null, null, null);
+    }
+
+    @Test
+    @DisplayName("창 밖이어도 진행 중·첫 미학습·미완료 과제 연결·사용자 연결 항목은 판단 입력에 남는다")
+    void mustIncludeTopicsSurviveTheWindow() {
+        givenCourses(course(36L, "자료구조"));
+        givenRoutines(classRoutine(85L, 36L));
+        givenOccurrences();
+        // 1~3주차는 이미 배웠고(LEARNED), 첫 미학습은 창 밖 6주차. 13주차는 진행 중, 12주차엔 미완료 과제, 11주차는 사용자 연결.
+        givenTopics(36L,
+                topic(216L, "자료구조 개요", "1주차", TopicProgressStatus.LEARNED),
+                topic(217L, "ADT", "2주차", TopicProgressStatus.LEARNED),
+                topic(218L, "재귀", "3주차", TopicProgressStatus.LEARNED),
+                topic(221L, "연결 리스트", "6주차"),
+                topic(222L, "스택", "7주차"),
+                topic(227L, "그래프", "11주차"),
+                topic(228L, "해싱", "12주차"),
+                topic(229L, "정렬 알고리즘", "13주차", TopicProgressStatus.IN_PROGRESS));
+        when(assignmentService.findByCourses(anyLong(), any())).thenReturn(List.of(
+                com.jungwoo.project.memo.assignment.domain.CourseAssignment.builder().assignmentId(5L).title("해싱 과제")
+                        .confirmStatus(com.jungwoo.project.memo.assignment.domain.AssignmentConfirmStatus.CONFIRMED)
+                        .dueKind(com.jungwoo.project.memo.assignment.domain.DueKind.DATE).dueDate(LocalDate.of(2026, 9, 18))
+                        .topicId(228L).build(),
+                com.jungwoo.project.memo.assignment.domain.CourseAssignment.builder().assignmentId(6L).title("끝낸 과제")
+                        .confirmStatus(com.jungwoo.project.memo.assignment.domain.AssignmentConfirmStatus.CONFIRMED)
+                        .dueKind(com.jungwoo.project.memo.assignment.domain.DueKind.NONE)
+                        .completedAt(LocalDateTime.of(2026, 9, 1, 10, 0)).topicId(222L).build()));
+        when(topicLinkMapper.findActiveByCourseId(anyLong(), anyLong())).thenReturn(List.of(
+                com.jungwoo.project.memo.learning.domain.TopicMaterialLink.builder().topicId(227L)
+                        .origin(com.jungwoo.project.memo.learning.domain.TopicLinkOrigin.USER).build()));
+
+        CourseContext course = builder.build(spec()).courses().get(0);
+        List<TopicContext> topics = course.topics();
+
+        assertThat(topics).extracting(TopicContext::topicId)
+                .as("창(0~3주차) 뒤에 반드시 포함 항목이 트리 순서로 붙는다. 7주차(완료된 과제만)는 빠진다")
+                .containsExactly(216L, 217L, 218L, 221L, 227L, 228L, 229L);
+        assertThat(topics).filteredOn(t -> t.topicId() == 221L).extracting(TopicContext::firstUnlearned).containsExactly(true);
+        assertThat(topics).filteredOn(t -> t.topicId() == 228L).extracting(TopicContext::assignmentDue)
+                .containsExactly(LocalDate.of(2026, 9, 18));
+        assertThat(topics).filteredOn(t -> t.topicId() == 227L).extracting(TopicContext::userLinked).containsExactly(true);
+        // 과제는 완료 상태와 함께 판단 입력에 남는다 — 실행 항목이 아니라 마감 근거로.
+        assertThat(course.assignments()).extracting(a -> a.title() + (a.completed() ? "/완료" : ""))
+                .containsExactly("해싱 과제", "끝낸 과제/완료");
     }
 
     @Test
@@ -233,11 +284,15 @@ class PlanningContextBuilderTest {
     }
 
     private static TopicResponse topic(Long topicId, String title, String locator) {
+        return topic(topicId, title, locator, TopicProgressStatus.NOT_STARTED);
+    }
+
+    private static TopicResponse topic(Long topicId, String title, String locator, TopicProgressStatus progress) {
         return TopicResponse.builder()
                 .topicId(topicId)
                 .title(title)
                 .sourceLocator(locator)
-                .progressStatus(TopicProgressStatus.NOT_STARTED)
+                .progressStatus(progress)
                 .children(List.of())
                 .build();
     }

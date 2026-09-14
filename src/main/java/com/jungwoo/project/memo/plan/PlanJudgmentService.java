@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.domain.TopicUserMark;
+import com.jungwoo.project.memo.plan.PlanningContext.AssignmentContext;
 import com.jungwoo.project.memo.plan.PlanningContext.ContextLine;
 import com.jungwoo.project.memo.plan.PlanningContext.CourseContext;
 import com.jungwoo.project.memo.plan.PlanningContext.TopicContext;
@@ -678,8 +679,11 @@ public class PlanJudgmentService {
             - CONTEXT: [확인된 맥락]의 한 줄. refId에 그 줄의 번호를 적고, 그 맥락이 이 학습
               항목의 범위를 직접 덮으면 scopeMatch를 DIRECT, 넓거나 간접이면 BROAD로 적는다.
             - NEXT_CLASS: 다음 수업 시각
-            - DEADLINE: 시험·과제 기한
+            - DEADLINE: 시험·과제 기한. [과제] 줄의 마감을 그대로 value에 적는다. 완료한 과제는 근거가 아니다.
             진행 상태와 사용자 표식은 서버가 이미 알고 있으므로 적지 않아도 된다.
+            [첫 미학습]·[과제 연결]·[사용자가 자료 연결] 표시는 서버가 반드시 보여주는 사실이지 "이 항목을 꼭 넣어라"는
+            지시가 아니다. 과제 수행 자체를 목표나 항목으로 잡는 것은 [사용자 지시]가 그것을 요청했을 때만이다 —
+            대신 과제에 필요한 항목의 취급과 순서를 정할 때 그 마감을 본다.
 
             rank는 **과목마다 다음 수업 전에 반드시 해야 하는 항목을 최대 3개만** 골라
             1, 2, 3으로 매긴다. 나머지 항목은 rank를 비워 둔다(생략한다).
@@ -802,7 +806,34 @@ public class PlanJudgmentService {
                             .append(topic.userMark() == TopicUserMark.KNOWN ? "이미 알아요" : "이번엔 빼기")
                             .append(']');
                 }
+                if (topic.firstUnlearned()) {
+                    sb.append(" [첫 미학습]");
+                }
+                if (topic.assignmentLinked()) {
+                    sb.append(" [과제 연결");
+                    if (topic.assignmentDue() != null) {
+                        sb.append(" · 마감 ").append(topic.assignmentDue());
+                    }
+                    sb.append(']');
+                }
+                if (topic.userLinked()) {
+                    sb.append(" [사용자가 자료 연결]");
+                }
                 sb.append('\n');
+            }
+            if (!course.assignments().isEmpty()) {
+                sb.append("    [과제 — 확정된 것만. 수행 자체를 항목으로 만들라는 뜻이 아니라 마감 근거다]\n");
+                for (AssignmentContext a : course.assignments()) {
+                    sb.append("    assignmentId=").append(a.assignmentId()).append(' ').append(a.title());
+                    sb.append(a.dueDate() != null ? " · 마감 " + a.dueDate() : " · 마감 없음/미확인");
+                    if (a.completed()) {
+                        sb.append(" · 완료함");
+                    }
+                    if (a.topicId() != null) {
+                        sb.append(" · topicId=").append(a.topicId());
+                    }
+                    sb.append('\n');
+                }
             }
         }
         sb.append('\n');

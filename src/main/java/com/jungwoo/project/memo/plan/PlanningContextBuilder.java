@@ -2,11 +2,20 @@ package com.jungwoo.project.memo.plan;
 
 import com.jungwoo.project.memo.ai.UserContextMapper;
 import com.jungwoo.project.memo.ai.domain.UserContext;
+import com.jungwoo.project.memo.assignment.CourseAssignmentService;
+import com.jungwoo.project.memo.assignment.domain.AssignmentConfirmStatus;
+import com.jungwoo.project.memo.assignment.domain.CourseAssignment;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.learning.TopicMaterialLinkMapper;
 import com.jungwoo.project.memo.learning.TopicService;
+import com.jungwoo.project.memo.learning.domain.TopicLinkOrigin;
+import com.jungwoo.project.memo.learning.domain.TopicMaterialLink;
+import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
+import com.jungwoo.project.memo.learning.domain.TopicUserMark;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Spec;
+import com.jungwoo.project.memo.plan.PlanningContext.AssignmentContext;
 import com.jungwoo.project.memo.plan.PlanningContext.ContextLine;
 import com.jungwoo.project.memo.plan.PlanningContext.CourseContext;
 import com.jungwoo.project.memo.plan.PlanningContext.TopicContext;
@@ -31,8 +40,11 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 계획을 세우기 전에 DB의 현실을 한 곳에서 모은다.
@@ -86,6 +98,8 @@ public class PlanningContextBuilder {
     private final AvailabilityEstimateService availabilityEstimateService;
     private final UserContextMapper userContextMapper;
     private final PlanReviewService planReviewService;
+    private final CourseAssignmentService assignmentService;
+    private final TopicMaterialLinkMapper topicLinkMapper;
     private final Clock clock;
 
     @Value("${ai.context.default-time-zone:Asia/Seoul}")
@@ -148,6 +162,8 @@ public class PlanningContextBuilder {
         for (TopicResponse root : topicService.getTopicTree(userId, course.getCourseId())) {
             flatten(all, root, 0);
         }
+        List<AssignmentContext> assignments = assignmentsOf(userId, course.getCourseId());
+        markMustInclude(all, assignments, userLinkedTopicIds(userId, course.getCourseId()));
 
         return new CourseContext(
                 course.getCourseId(),
@@ -156,7 +172,63 @@ public class PlanningContextBuilder {
                 nextClass != null ? nextClass.startAt() : null,
                 nextClass != null ? nextClass.routineId() : null,
                 currentWeek,
-                withinWindow(all, currentWeek));
+                withinWindow(all, currentWeek),
+                assignments);
+    }
+
+    /** 확정 과제만. 후보(확인 전)·아님·중복은 판단 입력이 아니다. 완료된 것은 완료 표시와 함께 남는다. */
+    private List<AssignmentContext> assignmentsOf(Long userId, Long courseId) {
+        List<AssignmentContext> out = new ArrayList<>();
+        for (CourseAssignment a : assignmentService.findByCourses(userId, List.of(courseId))) {
+            if (a.getConfirmStatus() != AssignmentConfirmStatus.CONFIRMED) {
+                continue;
+            }
+            out.add(new AssignmentContext(a.getAssignmentId(), a.getTitle(), a.dueDay(), a.isCompleted(), a.getTopicId()));
+        }
+        return out;
+    }
+
+    private Set<Long> userLinkedTopicIds(Long userId, Long courseId) {
+        Set<Long> out = new HashSet<>();
+        for (TopicMaterialLink link : topicLinkMapper.findActiveByCourseId(courseId, userId)) {
+            if (link.getOrigin() == TopicLinkOrigin.USER) {
+                out.add(link.getTopicId());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * 반드시 포함 표시를 붙인다: 미완료 과제가 연결된 항목(가장 이른 마감), 사용자가 자료를 연결한 항목,
+     * 표식(KNOWN/DEFER)이 없는 첫 NOT_STARTED 항목. 진행 중은 progressStatus 자체가 표시다.
+     */
+    private static void markMustInclude(List<TopicContext> all, List<AssignmentContext> assignments,
+                                        Set<Long> userLinked) {
+        Map<Long, LocalDate> dueByTopic = new HashMap<>();
+        Set<Long> assignmentTopics = new HashSet<>();
+        for (AssignmentContext a : assignments) {
+            if (a.completed() || a.topicId() == null) {
+                continue;
+            }
+            assignmentTopics.add(a.topicId());
+            if (a.dueDate() != null) {
+                dueByTopic.merge(a.topicId(), a.dueDate(), (x, y) -> x.isBefore(y) ? x : y);
+            }
+        }
+        boolean firstMarked = false;
+        for (int i = 0; i < all.size(); i++) {
+            TopicContext t = all.get(i);
+            boolean eligibleForFirst = t.userMark() != TopicUserMark.KNOWN && t.userMark() != TopicUserMark.DEFER;
+            boolean first = !firstMarked && eligibleForFirst && t.progressStatus() == TopicProgressStatus.NOT_STARTED;
+            if (first) {
+                firstMarked = true;
+            }
+            boolean assignment = assignmentTopics.contains(t.topicId());
+            boolean user = userLinked.contains(t.topicId());
+            if (first || assignment || user) {
+                all.set(i, t.withFlags(dueByTopic.get(t.topicId()), assignment, user, first));
+            }
+        }
     }
 
     private void flatten(List<TopicContext> out, TopicResponse node, int depth) {
@@ -205,6 +277,21 @@ public class PlanningContextBuilder {
 
         List<TopicContext> result = new ArrayList<>(dated);
         result.addAll(undated.subList(0, Math.min(undated.size(), MAX_UNDATED_TOPICS_PER_COURSE)));
+        /*
+         * 창 밖이어도 반드시 실어야 하는 것: 진행 중, 첫 미학습, 미완료 과제 연결, 사용자 연결. 창은 "지금 볼 범위"의
+         * 기본값일 뿐이고, 이 넷은 창과 무관하게 판단이 알아야 하는 사실이다(밀린 과제, 아직 시작도 안 한 자리).
+         * 창 뒤에 트리 순서로 붙인다 — 창 안 항목의 순서는 건드리지 않는다.
+         */
+        Set<Long> present = new LinkedHashSet<>();
+        for (TopicContext t : result) {
+            present.add(t.topicId());
+        }
+        for (TopicContext t : all) {
+            if (t.mustInclude() && !present.contains(t.topicId())) {
+                result.add(t);
+                present.add(t.topicId());
+            }
+        }
         return result;
     }
 

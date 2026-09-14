@@ -190,6 +190,8 @@ class PlanProvenanceCaptureTest {
         }
         when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(many);
         givenOneItem();
+        // 예산을 줄여 잘리게 만든다. 항목 줄 하나가 대략 20자다.
+        materialContextService.setBudgetChars(200);
 
         Generated generated = generator.generate(spec(null));
 
@@ -198,8 +200,8 @@ class PlanProvenanceCaptureTest {
                 .filter(s -> s.sourceType() == ProvenanceSourceType.TOPIC)
                 .map(ProvidedSource::sourceId).toList();
 
-        assertThat(recordedTopicIds).as("프롬프트 상한(45줄)까지만 실린다").hasSize(45);
-        assertThat(prompt).contains("외 5개");
+        assertThat(recordedTopicIds).as("예산 안의 줄만 실린다").hasSizeLessThan(50).isNotEmpty();
+        assertThat(prompt).contains("입력 분량 제한으로 생략");
         assertThat(prompt).as("잘린 주제는 모델에게 가지 않는다").doesNotContain("주제49");
         assertThat(recordedTopicIds).as("잘린 주제는 스냅샷에도 없다").doesNotContain(249L);
     }

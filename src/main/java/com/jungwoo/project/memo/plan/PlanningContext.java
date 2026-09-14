@@ -60,7 +60,33 @@ public record PlanningContext(
             LocalDateTime nextClassAt,
             Long nextClassRoutineId,
             Integer currentWeek,
-            List<TopicContext> topics
+            List<TopicContext> topics,
+            /**
+             * 이 과목의 확정 과제(완료 포함). 마감과 완료 상태는 판단 입력이자 마감 근거(DEADLINE)다.
+             * 과제 수행 자체를 조각으로 만들라는 뜻이 아니다 — 그건 사용자가 요청했을 때만이다.
+             */
+            List<AssignmentContext> assignments
+    ) {
+        /** 과제 없이 만드는 예전 모양. 단위 테스트가 쓴다. */
+        public CourseContext(Long courseId, String title, String textbookTitle, LocalDateTime nextClassAt,
+                             Long nextClassRoutineId, Integer currentWeek, List<TopicContext> topics) {
+            this(courseId, title, textbookTitle, nextClassAt, nextClassRoutineId, currentWeek, topics, List.of());
+        }
+    }
+
+    /**
+     * 확정 과제 한 건의 현재 사실.
+     *
+     * @param dueDate   마감일. 마감 없음·미확인이면 null
+     * @param completed 사용자가 완료 체크했다
+     * @param topicId   연결된 학습 항목. 없으면 null
+     */
+    public record AssignmentContext(
+            Long assignmentId,
+            String title,
+            LocalDate dueDate,
+            boolean completed,
+            Long topicId
     ) {
     }
 
@@ -90,8 +116,33 @@ public record PlanningContext(
              * 있고, 그것을 막으려면 다시 대조 코드를 써야 한다.
              */
             Long sourceMaterialId,
-            String sourceMaterialFilename
+            String sourceMaterialFilename,
+            /**
+             * 반드시 판단 입력에 있어야 하는 이유. 진행 중·첫 미학습·과제 연결·사용자 연결 중 하나라도 있으면
+             * 주차 창 밖이어도 실린다. 창을 걸지 않는 과목에서는 의미가 없다.
+             */
+            LocalDate assignmentDue,
+            boolean assignmentLinked,
+            boolean userLinked,
+            boolean firstUnlearned
     ) {
+        /** 과제·사용자 연결 없는 예전 모양. 단위 테스트가 쓴다. */
+        public TopicContext(Long topicId, String title, String sourceLocator, Integer week,
+                            TopicProgressStatus progressStatus, LocalDateTime lastStudiedAt, TopicUserMark userMark,
+                            int depth, Long sourceMaterialId, String sourceMaterialFilename) {
+            this(topicId, title, sourceLocator, week, progressStatus, lastStudiedAt, userMark, depth, sourceMaterialId,
+                    sourceMaterialFilename, null, false, false, false);
+        }
+
+        /** 주차 창과 무관하게 판단 입력에 들어가야 하는가. */
+        public boolean mustInclude() {
+            return progressStatus == TopicProgressStatus.IN_PROGRESS || firstUnlearned || assignmentLinked || userLinked;
+        }
+
+        TopicContext withFlags(LocalDate due, boolean assignment, boolean user, boolean first) {
+            return new TopicContext(topicId, title, sourceLocator, week, progressStatus, lastStudiedAt, userMark, depth,
+                    sourceMaterialId, sourceMaterialFilename, due, assignment, user, first);
+        }
     }
 
     /**

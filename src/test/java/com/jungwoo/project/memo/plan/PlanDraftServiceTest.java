@@ -29,6 +29,7 @@ import com.jungwoo.project.memo.plan.dto.PlanDraftResponse;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.material.domain.CourseMaterialAnalysis;
 import org.mockito.ArgumentCaptor;
@@ -410,11 +411,40 @@ class PlanDraftServiceTest {
     }
 
     @Test
-    void topicLinesAreCappedPerCourse_soManyProjectsDoNotBlowUpThePrompt() {
+    void topicLinesAreBudgetedPerCourse_butInProgressAndFirstUnlearnedAlwaysSurvive() {
         givenAiResponse(BASELINE, null);
         List<TopicResponse> many = new java.util.ArrayList<>();
         for (int i = 1; i <= 55; i++) {
-            many.add(TopicResponse.builder().topicId((long) i).title("항목 " + i).children(List.of()).build());
+            many.add(TopicResponse.builder().topicId((long) i).title("항목 " + i)
+                    .progressStatus(i <= 30 ? TopicProgressStatus.LEARNED
+                            : i == 55 ? TopicProgressStatus.IN_PROGRESS : TopicProgressStatus.NOT_STARTED)
+                    .children(List.of()).build());
+        }
+        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
+        // 예산을 줄여 "넘치면 어떻게 되나"를 본다. 기본값(12,000자)에서는 55개가 다 들어간다.
+        materialContextService.setBudgetChars(220);
+
+        service.createDraft(USER_ID, request(null));
+
+        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        // 고정 개수 컷이 없다: 첫 미학습(31)부터 순서대로 예산만큼, 진행 중(55)은 맨 뒤여도 반드시. 학습 완료(1~30)는 예산 밖.
+        assertThat(userPrompt.getValue())
+                .contains("- 항목 31 · ← 첫 미학습")
+                .contains("- 항목 32")
+                .contains("- 항목 55 · 진행 중")
+                .doesNotContain("- 항목 1 ")
+                .doesNotContain("- 항목 50")
+                .contains("개(입력 분량 제한으로 생략");
+    }
+
+    @Test
+    void withTheDefaultBudget_evenTheLargestRealCourseIsNotCut() {
+        givenAiResponse(BASELINE, null);
+        List<TopicResponse> many = new java.util.ArrayList<>();
+        for (int i = 1; i <= 77; i++) {
+            many.add(TopicResponse.builder().topicId((long) i).title("웹서버프로그래밍 " + i + "주차 실습과 과제 안내")
+                    .sourceLocator(i + "주차").children(List.of()).build());
         }
         when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
 
@@ -422,11 +452,7 @@ class PlanDraftServiceTest {
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
-        // 상한(45줄)을 넘는 뒤쪽은 접고 개수만 알린다. 상한 안에서는 첫 미학습부터 순서대로다.
-        assertThat(userPrompt.getValue())
-                .contains("- 항목 45")
-                .doesNotContain("- 항목 46")
-                .contains("… 외 10개");
+        assertThat(userPrompt.getValue()).contains("- 웹서버프로그래밍 77주차").doesNotContain("입력 분량 제한으로 생략");
     }
 
     @Test
