@@ -81,6 +81,12 @@ public class AiProposal {
      */
     private String planProvenanceJson;
 
+    /**
+     * 이 초안을 만든 요청(기간·강도·범위·지시·이번만 제외·지정 자료). 같은 조건으로 다시 만들 때 쓴다.
+     * 2026-09-15 전에 만든 초안은 NULL이고, 그 초안은 다시 만들기 대신 새로 만들기를 안내한다.
+     */
+    private String planRequestJson;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

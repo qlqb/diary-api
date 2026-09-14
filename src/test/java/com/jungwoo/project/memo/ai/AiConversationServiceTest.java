@@ -792,7 +792,7 @@ class AiConversationServiceTest {
                 .sourceMessageId(150L)
                 .idempotencyKey("k-cpp")
                 .periodPlan(new PeriodPlanRequest(LocalDate.of(2026, 8, 5), LocalDate.of(2026, 8, 9),
-                        com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED, List.of(31L, 999L)))
+                        com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED, List.of(31L, 999L), List.of(44L)))
                 .build();
         RecordingSink sink = new RecordingSink();
         Disposable d = service.streamAndComplete(preparedTurn(), request, sink);
@@ -805,6 +805,8 @@ class AiConversationServiceTest {
         // 화면이 되돌려 보낸 값 그대로가 아니라 서버가 다시 검증한 값으로 만든다.
         assertThat(captor.getValue().getIntensity()).isEqualTo(com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED);
         assertThat(captor.getValue().getCourseIds()).containsExactly(31L);
+        // 상담에서 지목한 자료는 계획 화면과 같은 요청 필드로 넘어가 같은 자료 선택 흐름을 탄다(검증은 생성기가 한다).
+        assertThat(captor.getValue().getRequestedMaterialIds()).containsExactly(44L);
         // 대화에서 정한 것이 [사용자 지시]로 넘어간다 — 사용자 발언만, 오래된 것부터.
         assertThat(captor.getValue().getInstruction())
                 .contains("이번 주 계획 짜줘").contains("집중으로, 자료구조 위주로").doesNotContain("강도는요?");

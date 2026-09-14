@@ -40,6 +40,12 @@ import com.jungwoo.project.memo.plan.provenance.ProvidedMaterial;
 import com.jungwoo.project.memo.plan.provenance.ServerCalculation;
 import com.jungwoo.project.memo.plan.dto.PlanDraftAiResult;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
+import com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary;
+import com.jungwoo.project.memo.plan.selection.PlanCatalogText;
+import com.jungwoo.project.memo.plan.selection.PlanMaterialRetriever;
+import com.jungwoo.project.memo.plan.selection.PlanMaterialSelector;
+import com.jungwoo.project.memo.plan.selection.PlanRequestedMaterialResolver;
+import com.jungwoo.project.memo.plan.selection.PromptTokenEstimator;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
 import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
@@ -135,6 +141,10 @@ public class PeriodPlanDraftGenerator {
     private final Clock clock;
     private final PlanMaterialContextService materialContextService;
     private final UserContextMapper userContextMapper;
+    private final PlanMaterialSelector materialSelector;
+    private final PlanMaterialRetriever materialRetriever;
+    private final PlanRequestedMaterialResolver requestedMaterialResolver;
+    private final PromptTokenEstimator tokenEstimator;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     /**
@@ -144,6 +154,16 @@ public class PeriodPlanDraftGenerator {
      * goalSummary와 gpt-5 계열의 reasoning 토큰까지 같은 상한을 나눠 쓴다.
      * (2026-09-05: 상한이 2,000이던 동안 9일짜리 계획이 items[5]에서 잘려 실패했다.)
      */
+    /**
+     * 계획 호출 한 번의 입력 토큰 예산(시스템 + 사용자, 추정·여유 포함). 넘으면 고른 구간의 원문 글자 상한을 줄이고,
+     * 그래도 넘으면 뒤에서부터 원문을 싣지 않는다(결과에 NOT_RETRIEVED_BUDGET으로 남긴다).
+     */
+    @Value("${plan.draft.input-token-budget:24000}")
+    private int planInputTokenBudget = 24000;
+
+    /** 구간 하나에 싣는 원문 글자 상한의 단계. 예산에 맞을 때까지 앞에서부터 시도한다. */
+    static final int[] RETRIEVAL_CAPS = {2400, 1600, 1000, 600, 300};
+
     @Value("${ai.planning.max-completion-tokens:8000}")
     private int maxCompletionTokens = 8000;
 
@@ -171,11 +191,20 @@ public class PeriodPlanDraftGenerator {
             String title,
             List<Long> courseIds,
             /** 이번 계획에서만 제외할 학습 항목. 저장되지 않는다 — 영구 표식(user_mark)과 다르다. */
-            List<Long> excludeTopicIds
+            List<Long> excludeTopicIds,
+            /** 이번 요청에서 사용자가 지정한 자료. 연결 출처(origin=USER)나 업로드 여부와 다른 것이다. */
+            List<Long> requestedMaterialIds,
+            /** 이번 요청에서 사용자가 지정한 구간. */
+            List<Long> requestedSectionIds
     ) {
         public Spec(Long userId, LocalDate start, LocalDate end, PlanIntensity intensity, String instruction,
                     String title, List<Long> courseIds) {
-            this(userId, start, end, intensity, instruction, title, courseIds, List.of());
+            this(userId, start, end, intensity, instruction, title, courseIds, List.of(), List.of(), List.of());
+        }
+
+        public Spec(Long userId, LocalDate start, LocalDate end, PlanIntensity intensity, String instruction,
+                    String title, List<Long> courseIds, List<Long> excludeTopicIds) {
+            this(userId, start, end, intensity, instruction, title, courseIds, excludeTopicIds, List.of(), List.of());
         }
 
         public Set<Long> excludedTopicIdSet() {
@@ -237,8 +266,34 @@ public class PeriodPlanDraftGenerator {
              * items와 <b>같은 순서·같은 길이</b>인 항목별 근거. 저장이 인덱스로 짝지으므로
              * 둘의 길이가 어긋나면 근거를 붙이지 않는다(잘못 붙이는 것보다 없는 편이 낫다).
              */
-            List<PlanItemEvidence> itemEvidence
+            List<PlanItemEvidence> itemEvidence,
+
+            /**
+             * 이번 생성에서 모델이 고른 자료와 서버가 읽어 넣은 원문. 자료 선택을 거치지 않은 경로(v0·판단)는 null.
+             */
+            MaterialSelectionSummary materialSelection
     ) {
+        /** 자료 선택 결과가 없는 호출부용(기존 17개 인자 경로). */
+        public Generated(Spec spec, int baselineMinutes, int targetMinutes, String targetMinutesReason,
+                         boolean targetAdjusted, String suggestedTitle, String goalSummary,
+                         List<ProposalItem> items, int estimatedAvailableMinutes,
+                         String availabilityConfidenceSummary, int reservedBufferMinutes,
+                         boolean noAvailableTime, boolean targetCappedByItemLimit,
+                         PlanStrategy strategy, PlanJudgmentResult.Ask ask,
+                         PlanProvenance provenance, List<PlanItemEvidence> itemEvidence) {
+            this(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted, suggestedTitle,
+                    goalSummary, items, estimatedAvailableMinutes, availabilityConfidenceSummary,
+                    reservedBufferMinutes, noAvailableTime, targetCappedByItemLimit, strategy, ask,
+                    provenance, itemEvidence, null);
+        }
+
+        public Generated withMaterialSelection(MaterialSelectionSummary summary) {
+            return new Generated(spec, baselineMinutes, targetMinutes, targetMinutesReason, targetAdjusted,
+                    suggestedTitle, goalSummary, items, estimatedAvailableMinutes,
+                    availabilityConfidenceSummary, reservedBufferMinutes, noAvailableTime,
+                    targetCappedByItemLimit, strategy, ask, provenance, itemEvidence, summary);
+        }
+
         /** 되물어야 해서 초안을 만들지 않은 경우. */
         public static Generated asking(Spec spec, PlanJudgmentResult.Ask ask) {
             return new Generated(spec, 0, 0, null, false, null, null, List.of(),
@@ -251,7 +306,7 @@ public class PeriodPlanDraftGenerator {
                     suggestedTitle, goalSummary, items, estimatedAvailableMinutes,
                     availabilityConfidenceSummary, reservedBufferMinutes, noAvailableTime,
                     targetCappedByItemLimit, strategy, ask, newProvenance,
-                    newEvidence == null ? List.of() : newEvidence);
+                    newEvidence == null ? List.of() : newEvidence, materialSelection);
         }
 
         /** 출처를 아직 붙이지 않은 호출부용(기존 15개 인자 경로). */
@@ -383,27 +438,183 @@ public class PeriodPlanDraftGenerator {
             target = cap;
         }
 
-        /*
-         * ★ 스냅샷은 프롬프트를 만들면서 같은 자리에서 모은다. 모델을 부른 뒤 DB를 다시
-         *   조회해 만들면 그 사이 바뀐 값이 "그때 준 값"으로 저장된다(handoff §4).
-         */
-        ProvenanceCollector collector = new ProvenanceCollector(
-                ZonedDateTime.now(clock).withZoneSameInstant(ZoneId.of(defaultTimeZoneId)).toLocalDateTime(),
-                defaultTimeZoneId, spec.start(), spec.end(), "AI", modelName);
+        String generationId = "gen-" + UUID.randomUUID();
+        LocalDateTime capturedAt = ZonedDateTime.now(clock).withZoneSameInstant(ZoneId.of(defaultTimeZoneId))
+                .toLocalDateTime();
 
-        PlanDraftAiResult ai = callAi(spec, courses, availability, days, available, target, confidence,
-                maxItems, cappedByItemLimit, collector);
+        /*
+         * 자료 선택(모델) → 조회(서버) → 계획(모델). 서버는 후보를 보여 주고 id를 검증할 뿐 고르지 않는다.
+         * 판단에 반드시 필요한 사실(진행 중·첫 미학습·과제·사용자 수정)은 선택 결과와 무관하게 계획 호출에 들어간다.
+         */
+        PlanRequestedMaterialResolver.Resolution requested = requestedMaterialResolver.resolve(spec.userId(), courses,
+                spec.courseIds() != null && !spec.courseIds().isEmpty(), spec.requestedMaterialIds(),
+                spec.requestedSectionIds(), spec.instruction());
+        Set<Long> excluded = spec.excludedTopicIdSet();
+        List<PlanMaterialContextService.CourseCatalog> catalogs = new ArrayList<>();
+        for (Course course : courses) {
+            catalogs.add(materialContextService.build(spec.userId(), course.getCourseId(), course.getTitle(),
+                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds()));
+        }
+        if (!requested.unscoped().isEmpty()) {
+            catalogs.add(materialContextService.buildUnscoped(spec.userId(), requested.unscoped(),
+                    requested.materialIds(), requested.sectionIds()));
+        }
+        List<UserContext> contexts = loadUserContexts(spec.userId());
+
+        PlanMaterialSelector.Result selection = materialSelector.select(new PlanMaterialSelector.Request(
+                spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), spec.instruction(),
+                catalogs, contexts.stream().map(UserContext::getContent).toList(), requested.materials(),
+                requested.ambiguities()));
+
+        Set<Long> scope = courses.stream().map(Course::getCourseId).collect(Collectors.toSet());
+        List<PlanMaterialRetriever.Target> targets = selection.sections().stream()
+                .map(s -> new PlanMaterialRetriever.Target(s.handle(), s.line().section().getSectionId(),
+                        s.line().section().getFileHash(), s.catalog().courseId(),
+                        s.line().topicIds().isEmpty() ? null : s.line().topicIds().get(0), s.reason()))
+                .toList();
+        List<PlanMaterialRetriever.Retrieved> retrieved = materialRetriever.retrieve(spec.userId(), targets, scope,
+                requested.materialIds());
+
+        PlanInputs inputs = new PlanInputs(catalogs, selection, retrieved, new java.util.LinkedHashSet<>(),
+                RETRIEVAL_CAPS[0], contexts, requested);
+        PlanPrompt prompt = null;
+        for (int retrievalCap : RETRIEVAL_CAPS) {
+            inputs = inputs.withCap(retrievalCap);
+            prompt = planPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
+                    cappedByItemLimit, generationId, capturedAt, inputs);
+            if (prompt.estimatedTokens() <= planInputTokenBudget) {
+                break;
+            }
+        }
+        Set<Long> budgetDropped = inputs.budgetDropped();
+        while (prompt.estimatedTokens() > planInputTokenBudget) {
+            List<Long> still = retrieved.stream().filter(r -> r.outcome().retrieved())
+                    .map(r -> r.target().sectionId()).filter(id -> !budgetDropped.contains(id)).toList();
+            if (still.isEmpty()) {
+                log.warn("계획 초안: 원문을 모두 빼도 입력 예산을 넘는다(판단 사실·일정이 크다). 추정={}/{}",
+                        prompt.estimatedTokens(), planInputTokenBudget);
+                break;
+            }
+            int drop = Math.max(1, (int) Math.ceil(still.size() * 0.2));
+            inputs.budgetDropped().addAll(still.subList(still.size() - drop, still.size()));
+            prompt = planPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
+                    cappedByItemLimit, generationId, capturedAt, inputs);
+        }
+
+        PlanDraftAiResult ai = callAi(spec, prompt.text(), days, maxItems, generationId);
+        ProvenanceCollector collector = prompt.collector();
 
         Normalized normalized = toProposalItems(ai, spec.start(), spec.end(), courses, collector);
         if (normalized.items().isEmpty()) {
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
 
+        MaterialSelectionSummary summary = summarize(inputs, prompt);
+        collector.calculation(ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION, true,
+                new ArrayList<>(prompt.refBySection().values()), ServerCalculation.InputLineage.PARTIAL,
+                "선택 호출의 입력 전문은 남기지 않는다 — 고른 id·이유·검토 범위·읽은 원문 범위만 남긴다",
+                objectMapper.convertValue(summary, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+                }));
+
         return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
                 blankToNull(ai.goalSummary()), normalized.items(), available, confidence,
                 available - target, false, cappedByItemLimit)
-                .withProvenance(collector.build(), normalized.evidence());
+                .withProvenance(collector.build(), normalized.evidence())
+                .withMaterialSelection(summary);
+    }
+
+    /**
+     * 계획 호출 입력. 원문 상한(cap)과 예산 때문에 뺀 구간(budgetDropped)만 바뀌고 나머지는 한 생성 안에서 같다.
+     */
+    record PlanInputs(List<PlanMaterialContextService.CourseCatalog> catalogs, PlanMaterialSelector.Result selection,
+                      List<PlanMaterialRetriever.Retrieved> retrieved, Set<Long> budgetDropped, int cap,
+                      List<UserContext> contexts, PlanRequestedMaterialResolver.Resolution requested) {
+        PlanInputs withCap(int newCap) {
+            return new PlanInputs(catalogs, selection, retrieved, budgetDropped, newCap, contexts, requested);
+        }
+    }
+
+    /**
+     * @param refBySection 원문을 실제로 실은 구간 → 그 줄의 인용 번호
+     * @param rendered     구간 → 실은 형태(범위·글자 수)
+     */
+    record PlanPrompt(String text, ProvenanceCollector collector, int estimatedTokens, Map<Long, String> refBySection,
+                      Map<Long, PlanMaterialRetriever.Rendered> rendered) {
+    }
+
+    private PlanPrompt planPrompt(Spec spec, List<Course> courses, AvailabilityEstimateResult availability, int days,
+                                  int available, int target, String confidence, int maxItems,
+                                  boolean cappedByItemLimit, String generationId, LocalDateTime capturedAt,
+                                  PlanInputs inputs) {
+        /*
+         * ★ 스냅샷은 프롬프트를 만들면서 같은 자리에서 모은다. 모델을 부른 뒤 DB를 다시
+         *   조회해 만들면 그 사이 바뀐 값이 "그때 준 값"으로 저장된다(handoff §4).
+         *   예산에 맞추느라 여러 번 만들면 매번 새 수집기로 만든다 — 실제로 보낸 마지막 판만 남는다.
+         */
+        ProvenanceCollector collector = new ProvenanceCollector(generationId, capturedAt, defaultTimeZoneId,
+                spec.start(), spec.end(), "AI", modelName);
+        Map<Long, String> refBySection = new LinkedHashMap<>();
+        Map<Long, PlanMaterialRetriever.Rendered> rendered = new LinkedHashMap<>();
+        String text = buildUserPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
+                cappedByItemLimit, collector, inputs, refBySection, rendered);
+        return new PlanPrompt(text, collector, tokenEstimator.estimateCall(SYSTEM_PROMPT, text), refBySection, rendered);
+    }
+
+    private MaterialSelectionSummary summarize(PlanInputs inputs, PlanPrompt prompt) {
+        PlanMaterialSelector.Result selection = inputs.selection();
+        Map<Long, PlanMaterialSelector.SelectedSection> byId = new LinkedHashMap<>();
+        selection.sections().forEach(s -> byId.put(s.line().section().getSectionId(), s));
+        List<MaterialSelectionSummary.SectionPick> sections = new ArrayList<>();
+        for (PlanMaterialRetriever.Retrieved r : inputs.retrieved()) {
+            PlanMaterialSelector.SelectedSection picked = byId.get(r.target().sectionId());
+            if (picked == null) {
+                continue;
+            }
+            var line = picked.line();
+            String outcome;
+            PlanMaterialRetriever.Rendered shown = prompt.rendered().get(r.target().sectionId());
+            if (!r.outcome().retrieved()) {
+                outcome = r.outcome().name();
+            } else if (shown == null) {
+                outcome = PlanMaterialRetriever.Outcome.NOT_RETRIEVED_BUDGET.name();
+            } else {
+                outcome = shown.outcome().name();
+            }
+            sections.add(new MaterialSelectionSummary.SectionPick(line.section().getSectionId(),
+                    line.section().getMaterialId(), picked.catalog().courseId(), line.section().getDisplayTitle(),
+                    line.section().locator(), line.material() == null ? null : line.material().getOriginalFilename(),
+                    picked.reason(), outcome, shown == null ? null : shown.rangeLabel(),
+                    shown == null ? null : shown.chars(), r.target().topicId(),
+                    prompt.refBySection().get(r.target().sectionId())));
+        }
+        List<MaterialSelectionSummary.TopicPick> topics = selection.topics().stream()
+                .map(t -> new MaterialSelectionSummary.TopicPick(t.line().topicId(), t.catalog().courseId(),
+                        t.line().title(), t.reason()))
+                .toList();
+        List<MaterialSelectionSummary.Unreviewed> unreviewed = selection.unreviewed().stream()
+                .map(u -> new MaterialSelectionSummary.Unreviewed(u.courseTitle(), u.title(), u.topics(), u.sections(),
+                        u.summarized()))
+                .toList();
+        List<MaterialSelectionSummary.RequestedMaterialView> requested = inputs.requested().materials().stream()
+                .map(m -> new MaterialSelectionSummary.RequestedMaterialView(m.materialId(), m.filename(), m.courseId(),
+                        m.source().name()))
+                .toList();
+        List<MaterialSelectionSummary.AmbiguityView> ambiguities = inputs.requested().ambiguities().stream()
+                .map(a -> new MaterialSelectionSummary.AmbiguityView(a.mention(), a.candidates().stream()
+                        .map(c -> new MaterialSelectionSummary.RequestedMaterialView(c.materialId(), c.filename(),
+                                c.courseId(), "CANDIDATE"))
+                        .toList()))
+                .toList();
+        List<MaterialSelectionSummary.ExcludedTopicView> excludedTopics = inputs.catalogs().stream()
+                .flatMap(c -> c.excluded().stream())
+                .map(e -> new MaterialSelectionSummary.ExcludedTopicView(e.topicId(), e.title(), e.reason()))
+                .toList();
+        return new MaterialSelectionSummary(selection.status().name(), selection.mode().name(), selection.calls(),
+                selection.expanded(), selection.candidateTotal(), selection.candidateShown(), sections, topics,
+                unreviewed, selection.insufficientEvidence(), selection.note(), selection.unknownIds(),
+                selection.overLimit(), requested, ambiguities, excludedTopics, selection.estimatedInputTokens(),
+                prompt.estimatedTokens(), inputs.cap());
     }
 
     /** 가용 구간의 분 합계. 구간은 이미 겹치지 않게 계산돼 있다. */
@@ -488,35 +699,35 @@ public class PeriodPlanDraftGenerator {
               4개 이상 설명 가능"
             - 출처는 [대상 프로젝트]에 실린 학습 항목 제목과 그 옆 괄호의 위치만 쓴다.
               자료 파일명·교재 장·쪽수·"같은 출처"처럼 거기 없는 출처 표현을 만들지 않는다.
-              근거가 없으면 출처를 적지 않는다.
+              근거가 없으면 출처를 적지 않는다. [고른 자료 구간]에 실린 구간 제목·위치·자료 이름은 거기 있는 출처다.
             - "전체 학습 구조 설계", "기본 학습목록 만들기", "커리큘럼 정리", "공부 계획 다시
               세우기" 같은 관리 작업은 사용자가 [사용자 지시]에서 그것을 요청했을 때만 만든다.
               계획 요청은 학습 실행 항목을 달라는 뜻이다.
             - 사용자를 탓하거나 뒤처졌다는 식으로 쓰지 마라. 못 한 것은 "아직 시작하지
               않았어요" 정도로만 다룬다.
-            - 학습 항목 아래 "·"로 들여쓴 줄은 그 항목에 실제로 연결된 자료 구간이다(역할·위치·수행 내용·발췌).
-              무엇을 먼저 할지는 네가 정한다 — 자료의 역할(문제/예제/설명), 진행 상태, 확인된 맥락, 사용자 지시,
-              과제 마감을 함께 보고 판단하고 reason에 그 이유를 한 문장으로 적는다. 서버는 순서를 정해 주지 않는다.
-              구간의 인용 번호를 refIds에 넣으면 "이 구간을 실제로 봤다"는 뜻이다. 구간 줄이 없는 항목에 대해
-              "이 문제를 확인했다"처럼 원문을 본 듯이 쓰지 마라.
-            - 항목 옆 표시: "진행 중"은 이어서 하고, "학습 완료"는 사용자 지시나 시험 근거가 있을 때만 "복습"임을
-              제목이나 설명에 밝혀 넣는다. "← 첫 미학습"은 기록이 없는 사용자가 출발할 자리다.
-              "과제 연결(마감 …)"과 "사용자가 자료 연결"은 서버가 반드시 보여주는 사실이지 "이 항목을 꼭 넣어라"는
-              지시가 아니다 — 마감과 진행 상태를 보고 네가 판단하고, 넣지 않기로 했으면 그냥 빼면 된다.
-            - [과제] 줄은 확정 여부·마감·완료를 서버가 붙인 사실이다. "(확인 전)" 후보는 과제로 단정하지 말고,
-              마감이 "추정"인 것은 확정 마감처럼 다루지 마라. 완료된 과제는 다시 제안하지 않는다. 과제 자체의
-              수행 시간을 잡는 것은 사용자가 요청했을 때만 하고, 대신 과제에 필요한 개념·연습은 제안해도 된다.
+            - [고른 자료 구간]의 따옴표 블록은 이번 계획을 위해 저장된 자료에서 읽은 원문이다("읽은 범위"에 어디까지
+              읽었는지 있다). 구체적인 문제·예제·쪽수는 이 블록에 있는 것만 쓴다. 이 구간의 인용 번호를 refIds에 넣으면
+              "이 원문을 봤다"는 뜻이다. 원문 블록이 없는 학습 항목에 대해 "이 문제를 확인했다"처럼 원문을 본 듯 쓰지 마라.
+              [자료 선택 결과]에 보지 못한 범위가 있으면 그 범위를 검토했다고 쓰지 않는다.
+            - 무엇을 먼저 할지는 네가 정한다 — 사용자 지시·확인된 맥락(선호), 진행 상태, 마감, 자료의 내용을 함께 보고
+              판단하고 reason에 한 문장으로 적는다. 서버는 역할(문제/예제/설명)의 순서를 정하지 않는다.
+            - [판단에 필요한 사실]은 서버가 반드시 보여 주는 사실이지 "이 항목을 꼭 넣어라"는 지시가 아니다.
+              "진행 중"은 이어서 하고, "← 첫 미학습"은 기록이 없는 사용자가 출발할 기본 자리다 — 사용자가 다른 목표를
+              말했으면 그 목표가 먼저다. "학습 완료"는 사용자 지시나 시험 근거가 있을 때만 "복습"임을 밝혀 넣는다.
+            - 과제: "(확인 전)" 후보는 과제로 단정하지 않고, 마감이 "추정"인 것은 확정 마감처럼 다루지 않는다.
+              과제 제출·과제 수행 자체를 항목으로 만들거나 시간을 잡는 것은 [사용자 지시]가 요청했을 때만 한다 —
+              마감이 있다는 사실만으로 과제 작업 시간을 넣지 않는다. 대신 과제에 필요한 개념 학습·연습은 제안해도 된다.
+              완료한 과제는 원문에 과제 문구가 남아 있어도 다시 수행하게 하지 않는다.
+            - description에는 "어느 자료의 어느 부분을 어떤 순서로 보고, 어디에 집중할지"가 드러나게 쓴다.
+              제목을 길게 만들지 말고, 원문에 없는 문제 번호·페이지는 만들지 않는다.
             - 제목은 짧고 구체적으로. 보는 순서·집중할 부분·참고할 자료는 description에 적는다.
             """.formatted(AiStreamParser.DELIMITER, MIN_ITEM_MINUTES, MAX_ITEM_MINUTES);
 
-    private PlanDraftAiResult callAi(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
-                                     int days, int available, int target, String confidence, int maxItems,
-                                     boolean cappedByItemLimit, ProvenanceCollector collector) {
+    private PlanDraftAiResult callAi(Spec spec, String userPrompt, int days, int maxItems, String workflowId) {
         Long userId = spec.userId();
-        String userPrompt = buildUserPrompt(spec, courses, availability, days, available, target, confidence,
-                maxItems, cappedByItemLimit, collector);
-        // 예산(plan.draft.context-budget-chars-per-course)을 실측으로 맞추기 위한 숫자. 원문은 남기지 않는다.
-        log.info("계획 초안 프롬프트: userId={}, 과목={}개, 글자={}자", userId, courses.size(), userPrompt.length());
+        // 예산(plan.draft.input-token-budget)을 실측과 대조하기 위한 숫자. 원문은 남기지 않는다.
+        log.info("계획 초안 프롬프트: userId={}, 글자={}자, 추정토큰(여유 없음)={}, workflowId={}", userId,
+                userPrompt.length(), tokenEstimator.rawCall(SYSTEM_PROMPT, userPrompt), workflowId);
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> lastFinishReason = new AtomicReference<>();
@@ -536,11 +747,12 @@ public class PeriodPlanDraftGenerator {
                     })
                     .blockLast();
         } catch (Exception e) {
-            recordUsage(userId, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
+            recordUsage(userId, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode(),
+                    workflowId);
             log.warn("계획 초안 생성 AI 호출 실패: userId={}", userId, e);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
         }
-        recordUsage(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null);
+        recordUsage(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null, workflowId);
 
         AiStreamParser.Result result = parser.finish();
         /*
@@ -571,7 +783,9 @@ public class PeriodPlanDraftGenerator {
 
     private String buildUserPrompt(Spec spec, List<Course> courses, AvailabilityEstimateResult availability,
                                    int days, int available, int target, String confidence, int maxItems,
-                                   boolean cappedByItemLimit, ProvenanceCollector collector) {
+                                   boolean cappedByItemLimit, ProvenanceCollector collector, PlanInputs inputs,
+                                   Map<Long, String> refBySection,
+                                   Map<Long, PlanMaterialRetriever.Rendered> rendered) {
         Long userId = spec.userId();
         LocalDate start = spec.start();
         LocalDate end = spec.end();
@@ -617,22 +831,29 @@ public class PeriodPlanDraftGenerator {
           실험에서 이 지시가 없으면 한참 뒤 주차 내용까지 당겨왔다.
         */
         sb.append("[진도 기준]\n")
-                .append("프로젝트에 학습 항목이 실려 있으면 그 안에서 고른다. 항목 옆 괄호는 ")
-                .append("자료에서 확인한 위치다. 일정에 개강일이 있으면 오늘 날짜와 대조해 지금이 ")
+                .append("학습 항목과 자료는 [판단에 필요한 사실]과 [고른 학습 항목]·[고른 자료 구간] 안에서 고른다. ")
+                .append("항목 옆 괄호는 자료에서 확인한 위치다. 일정에 개강일이 있으면 오늘 날짜와 대조해 지금이 ")
                 .append("몇 주차인지 계산하고, 이번 주와 다음 주 진도에 집중하라. 한참 뒤 주차 ")
                 .append("내용을 당겨오지 마라. 학습 항목에 없는 것을 지어내지 마라 — 교재의 장 ")
                 .append("번호나 쪽수처럼 자료에 없는 값은 쓰지 않는다.\n")
                 .append("줄 끝 대괄호(예: [s7])는 그 줄의 인용 번호다. 항목의 refIds에 이 값만 쓴다.\n\n");
 
-        appendUserContexts(sb, userId, collector);
+        appendUserContexts(sb, inputs.contexts(), collector);
+
+        appendSelectionNote(sb, inputs);
 
         sb.append("[대상 프로젝트]\n");
-        if (courses.isEmpty()) {
+        if (courses.isEmpty() && inputs.catalogs().isEmpty()) {
             sb.append("(없음 — 프로젝트에 묶이지 않는 할 일만 제안해도 된다)\n");
         }
-        Set<Long> excluded = spec.excludedTopicIdSet();
+        Map<Long, PlanMaterialContextService.CourseCatalog> catalogByCourse = new LinkedHashMap<>();
+        inputs.catalogs().forEach(c -> catalogByCourse.put(c.courseId(), c));
         for (Course course : courses) {
-            appendCourseContext(sb, userId, course, collector, excluded);
+            appendCourseContext(sb, userId, course, catalogByCourse.get(course.getCourseId()), inputs, collector,
+                    refBySection, rendered);
+        }
+        if (catalogByCourse.containsKey(null)) {
+            appendCourseContext(sb, userId, null, catalogByCourse.get(null), inputs, collector, refBySection, rendered);
         }
 
         List<ExecutionItem> existing =
@@ -838,116 +1059,277 @@ public class PeriodPlanDraftGenerator {
     private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm");
 
     /**
-     * 프로젝트 한 줄 + 그 프로젝트에 대해 자료에서 뽑아 둔 것.
+     * 프로젝트 한 줄 + 판단에 필요한 사실 + 이번 생성에서 모델이 고른 학습 항목과 원문.
      *
-     * 이게 없으면 모델이 아는 것은 과목명과 교재명뿐이다. 실측해 보니 그 상태에서는 교재
-     * 장 번호를 지어내고("교재 1장(전처리 기본)") 실제 수업 진도와 무관한 계획이 나왔다.
-     * 사용자가 자료를 올리고 분석까지 적용했는데 그 결과가 계획에 한 글자도 반영되지 않고
-     * 있었다.
+     * <p>예전에는 서버가 고른 학습 항목 줄(과목당 30줄 → 45줄 → 글자 예산)을 실었다. 지금은 선택 호출이 고른 것만
+     * 싣고, 진행 중·첫 미학습·과제(마감·완료)·사용자 수정은 선택과 무관하게 싣는다. "반드시 입력에 포함"은 "반드시 실행
+     * 항목으로 삽입"이 아니다 — 그 구분은 프롬프트 규칙이 말한다.
      *
-     * course_topics를 쓰는 이유는 교재 목차가 아니라 강의 진도라서다. 교재 목차는 저자가
-     * 정한 순서이고 수업이 그 순서대로 나가지 않는다 — 이 과목만 해도 전처리가 교재
-     * 앞쪽인데 수업은 9주차다. source_locator에 "2주차"처럼 위치가 붙어 있어 그대로 전달된다.
+     * @param course 프로젝트. 프로젝트에 연결되지 않은 지정 자료 묶음이면 null
      */
     private void appendCourseContext(StringBuilder sb, Long userId, Course course,
-                                     ProvenanceCollector collector, Set<Long> excludedTopicIds) {
-        StringBuilder head = new StringBuilder("id=").append(course.getCourseId())
-                .append(" ").append(course.getTitle());
-        if (course.getTextbookTitle() != null) {
-            head.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+                                     PlanMaterialContextService.CourseCatalog catalog, PlanInputs inputs,
+                                     ProvenanceCollector collector, Map<Long, String> refBySection,
+                                     Map<Long, PlanMaterialRetriever.Rendered> rendered) {
+        Long courseId = course == null ? null : course.getCourseId();
+        if (course != null) {
+            StringBuilder head = new StringBuilder("id=").append(course.getCourseId())
+                    .append(" ").append(course.getTitle());
+            if (course.getTextbookTitle() != null) {
+                head.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+            }
+            sb.append("- ").append(collector.mark(
+                    ProvenanceSourceType.COURSE, course.getCourseId(), null, course.getUpdatedAt(),
+                    ProvenanceRepresentation.SELECTED_FIELDS,
+                    ProvenanceCollector.value(
+                            "title", course.getTitle(),
+                            "textbookTitle", course.getTextbookTitle()),
+                    head.toString()).text()).append("\n");
+        } else {
+            sb.append("- (프로젝트 없음) 이번 요청에서 지정했지만 대상 프로젝트에 연결되지 않은 자료 — courseId는 null\n");
         }
-        sb.append("- ").append(collector.mark(
-                ProvenanceSourceType.COURSE, course.getCourseId(), null, course.getUpdatedAt(),
-                ProvenanceRepresentation.SELECTED_FIELDS,
-                ProvenanceCollector.value(
-                        "title", course.getTitle(),
-                        "textbookTitle", course.getTextbookTitle()),
-                head.toString()).text()).append("\n");
+        if (catalog == null) {
+            sb.append("\n");
+            return;
+        }
 
-        PlanMaterialContextService.CourseBundle bundle =
-                materialContextService.build(userId, course.getCourseId(), excludedTopicIds);
-        if (!bundle.topics().isEmpty() || bundle.excludedByMark() > 0 || bundle.excludedThisTime() > 0) {
-            sb.append("  [학습 항목]").append("\n");
-            /*
-             * 실리는 줄의 자료만 찾는다. 파일명·MIME·해시는 모델에 주지 않는다 — 스냅샷이
-             * "그때 이 파일이었다"를 말하려고 서버가 옆에 붙이는 값이다(ProvidedMaterial).
-             */
-            Map<Long, CourseMaterial> materials = findMaterials(userId, bundle.topics().stream()
-                    .map(PlanMaterialContextService.TopicLine::sourceMaterialId)
-                    .filter(java.util.Objects::nonNull).distinct().toList());
-            for (PlanMaterialContextService.TopicLine topic : bundle.topics()) {
-                String text = topicLineText(topic);
-                sb.append("  ").append(collector.mark(
-                        ProvenanceSourceType.TOPIC, topic.topicId(), null, null,
-                        ProvenanceRepresentation.SELECTED_FIELDS,
-                        ProvenanceCollector.value(
-                                "courseId", course.getCourseId(),
-                                "title", topic.title(),
-                                "sourceLocator", topic.locator(),
-                                "progressStatus", topic.progress() == null ? null : topic.progress().name()),
-                        text,
-                        topic.parentTopicId(),
-                        providedMaterial(
-                                topic.sourceMaterialId() == null ? null : materials.get(topic.sourceMaterialId()),
-                                topic.sourceMaterialId(), topic.sourceMaterialFilename(), topic.locator()))
-                        .text()).append("\n");
-                for (PlanMaterialContextService.SectionLine section
-                        : bundle.sectionsByTopic().getOrDefault(topic.topicId(), List.of())) {
-                    appendSectionLine(sb, course, section, collector, "  ".repeat(topic.depth() + 2) + "· ", topic.topicId());
+        PlanMaterialSelector.Result selection = inputs.selection();
+        Map<Long, String> topicReasons = new LinkedHashMap<>();
+        selection.topics().stream().filter(t -> java.util.Objects.equals(t.catalog().courseId(), courseId))
+                .forEach(t -> topicReasons.put(t.line().topicId(), t.reason()));
+        Map<Long, CourseMaterial> sourceMaterials = findMaterials(userId, catalog.topics().stream()
+                .map(PlanMaterialContextService.TopicLine::sourceMaterialId)
+                .filter(java.util.Objects::nonNull).distinct().toList());
+
+        sb.append("  [판단에 필요한 사실]\n");
+        boolean anyFact = false;
+        Set<Long> printedTopics = new HashSet<>();
+        for (PlanMaterialContextService.TopicLine topic : catalog.requiredTopics()) {
+            String reason = topicReasons.get(topic.topicId());
+            appendTopicLine(sb, courseId, topic, reason, collector, sourceMaterials, "  - ");
+            printedTopics.add(topic.topicId());
+            anyFact = true;
+        }
+        for (PlanMaterialContextService.AssignmentLine line : catalog.open()) {
+            appendAssignmentLine(sb, courseId, line, collector);
+            anyFact = true;
+        }
+        for (PlanMaterialContextService.AssignmentLine line : catalog.completed()) {
+            appendAssignmentLine(sb, courseId, line, collector);
+            anyFact = true;
+        }
+        for (PlanMaterialContextService.AssignmentLine line : catalog.unconfirmed()) {
+            appendAssignmentLine(sb, courseId, line, collector);
+            anyFact = true;
+        }
+        String excludedText = PlanCatalogText.excludedText(catalog.excluded());
+        if (excludedText != null) {
+            sb.append("  - ").append(excludedText).append(" — 이 항목들로 계획을 만들지 않는다\n");
+            anyFact = true;
+        }
+        List<PlanRequestedMaterialResolver.RequestedMaterial> requestedHere = inputs.requested().materials().stream()
+                .filter(m -> java.util.Objects.equals(m.courseId(), courseId)).toList();
+        if (!requestedHere.isEmpty()) {
+            long picked = selection.sections().stream()
+                    .filter(s -> java.util.Objects.equals(s.catalog().courseId(), courseId) && s.line().requested()).count();
+            sb.append("  - 이번 요청에서 지정한 자료: ")
+                    .append(requestedHere.stream().map(PlanRequestedMaterialResolver.RequestedMaterial::filename)
+                            .collect(Collectors.joining(", ")))
+                    .append(" (선택 단계에서 이 자료의 구간 ").append(picked).append("개를 골랐다)\n");
+            anyFact = true;
+        }
+        if (!catalog.pending().isEmpty()) {
+            sb.append("  - 아직 분석이 끝나지 않은 자료 ").append(catalog.pending().size())
+                    .append("개 — 그 내용은 이번 계획에 반영되지 않았다\n");
+            anyFact = true;
+        }
+        if (!anyFact) {
+            sb.append("  - (없음)\n");
+        }
+
+        List<PlanMaterialContextService.TopicLine> chosen = catalog.topics().stream()
+                .filter(t -> topicReasons.containsKey(t.topicId()) && !printedTopics.contains(t.topicId()))
+                .toList();
+        if (!chosen.isEmpty()) {
+            sb.append("  [이번 계획을 위해 고른 학습 항목]\n");
+            for (PlanMaterialContextService.TopicLine topic : chosen) {
+                appendTopicLine(sb, courseId, topic, topicReasons.get(topic.topicId()), collector, sourceMaterials, "  - ");
+            }
+        }
+
+        List<PlanMaterialRetriever.Retrieved> mine = inputs.retrieved().stream()
+                .filter(r -> java.util.Objects.equals(r.target().courseId(), courseId)).toList();
+        int droppedChanged = 0;
+        int droppedBudget = 0;
+        boolean headerPrinted = false;
+        for (PlanMaterialRetriever.Retrieved r : mine) {
+            if (!r.outcome().retrieved()) {
+                droppedChanged++;
+                continue;
+            }
+            if (inputs.budgetDropped().contains(r.target().sectionId())) {
+                droppedBudget++;
+                continue;
+            }
+            if (!headerPrinted) {
+                sb.append("  [고른 자료 구간 — 저장된 원문에서 읽음]\n");
+                headerPrinted = true;
+            }
+            boolean completedAssignment = selection.sections().stream()
+                    .anyMatch(sel -> sel.line().section().getSectionId().equals(r.target().sectionId())
+                            && sel.line().completedAssignment());
+            appendRetrievedSection(sb, courseId, r, inputs.cap(), completedAssignment, collector, refBySection, rendered);
+        }
+        if (droppedChanged > 0) {
+            sb.append("  (고른 구간 중 ").append(droppedChanged)
+                    .append("개는 그 사이 삭제·변경됐거나 범위를 벗어나 싣지 않았다)\n");
+        }
+        if (droppedBudget > 0) {
+            sb.append("  (고른 구간 중 ").append(droppedBudget)
+                    .append("개는 입력 한도 때문에 원문을 싣지 못했다 — 그 구간을 읽은 듯 쓰지 않는다)\n");
+        }
+
+        if (course != null) {
+            List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId());
+            if (!scheduleLines.isEmpty()) {
+                sb.append("  [일정·평가]").append("\n");
+                Map<Long, CourseMaterial> materials = materialsOfSchedule(userId, scheduleLines);
+                for (ScheduleLine line : scheduleLines) {
+                    CourseMaterial material = line.materialId() != null ? materials.get(line.materialId()) : null;
+                    sb.append("  - ").append(collector.mark(
+                            line.type(), line.sourceId(), null, null,
+                            ProvenanceRepresentation.SELECTED_FIELDS,
+                            ProvenanceCollector.value("courseId", course.getCourseId(), "text", line.text()),
+                            line.text(),
+                            null,
+                            material == null ? null
+                                    : providedMaterial(material, line.materialId(), material.getOriginalFilename(), null))
+                            .text()).append("\n");
                 }
-            }
-            if (bundle.budgetHidden() > 0) {
-                sb.append("    … 외 ").append(bundle.budgetHidden())
-                        .append("개(입력 분량 제한으로 생략 — 진행 중·첫 미학습·과제 연결·사용자 연결 항목은 전부 실었다)\n");
-            }
-            if (bundle.excludedByMark() > 0) {
-                sb.append("    (사용자가 「이미 알아요」/「나중에」로 표시한 ").append(bundle.excludedByMark())
-                        .append("개는 뺐다)\n");
-            }
-            if (bundle.excludedThisTime() > 0) {
-                sb.append("    (이번 계획에서 제외한 ").append(bundle.excludedThisTime()).append("개는 뺐다)\n");
-            }
-        }
-        if (!bundle.unlinkedSections().isEmpty()) {
-            sb.append("  [아직 학습 항목에 연결되지 않은 자료 구간]").append("\n");
-            for (PlanMaterialContextService.SectionLine section : bundle.unlinkedSections()) {
-                appendSectionLine(sb, course, section, collector, "  - ", null);
-            }
-        }
-        if (!bundle.assignments().isEmpty() || bundle.completedAssignments() > 0) {
-            sb.append("  [과제]").append("\n");
-            for (PlanMaterialContextService.AssignmentLine line : bundle.assignments()) {
-                appendAssignmentLine(sb, course, line, collector);
-            }
-            if (bundle.completedAssignments() > 0) {
-                sb.append("  - 완료한 과제 ").append(bundle.completedAssignments()).append("개(제외)\n");
-            }
-        }
-        if (!bundle.pendingMaterials().isEmpty()) {
-            sb.append("  [아직 분석이 끝나지 않은 자료 ").append(bundle.pendingMaterials().size())
-                    .append("개 — 그 내용은 이번 계획에 반영되지 않았다]\n");
-        }
-
-        List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId());
-        if (!scheduleLines.isEmpty()) {
-            sb.append("  [일정·평가]").append("\n");
-            Map<Long, CourseMaterial> materials = materialsOfSchedule(userId, scheduleLines);
-            for (ScheduleLine line : scheduleLines) {
-                CourseMaterial material = line.materialId() != null ? materials.get(line.materialId()) : null;
-                sb.append("  - ").append(collector.mark(
-                        line.type(), line.sourceId(), null, null,
-                        ProvenanceRepresentation.SELECTED_FIELDS,
-                        ProvenanceCollector.value("courseId", course.getCourseId(), "text", line.text()),
-                        line.text(),
-                        null,
-                        material == null ? null
-                                : providedMaterial(material, line.materialId(), material.getOriginalFilename(), null))
-                        .text()).append("\n");
             }
         }
         sb.append("\n");
     }
 
+    /** 이번 생성의 자료 선택이 무엇을 봤고 무엇을 보지 못했는지. 계획 모델이 전체를 검토한 척하지 않게 한다. */
+    private void appendSelectionNote(StringBuilder sb, PlanInputs inputs) {
+        PlanMaterialSelector.Result selection = inputs.selection();
+        if (selection.status() == PlanMaterialSelector.Status.NO_CANDIDATES) {
+            return;
+        }
+        sb.append("[자료 선택 결과]\n")
+                .append("선택 단계에서 후보 ").append(selection.candidateTotal()).append("개 중 ")
+                .append(selection.candidateShown()).append("개를 목록으로 보고 구간 ")
+                .append(selection.sections().size()).append("개·학습 항목 ").append(selection.topics().size())
+                .append("개를 골랐다. ");
+        long readable = inputs.retrieved().stream().filter(r -> r.outcome().retrieved())
+                .filter(r -> !inputs.budgetDropped().contains(r.target().sectionId())).count();
+        sb.append(readable == 0
+                ? "이번에 읽은 원문은 없다 — 자료의 문제·쪽수·내용을 본 듯 쓰지 않는다.\n"
+                : "원문은 [고른 자료 구간]에 실린 " + readable + "개만 읽을 수 있다.\n");
+        if (!selection.unreviewed().isEmpty()) {
+            sb.append("이번에 후보 목록으로 보지 못한 범위: ")
+                    .append(selection.unreviewed().stream().limit(8)
+                            .map(u -> u.courseTitle() + " · " + u.title() + "(구간 " + u.sections() + ")")
+                            .collect(Collectors.joining(", ")));
+            if (selection.unreviewed().size() > 8) {
+                sb.append(" 외 ").append(selection.unreviewed().size() - 8).append("묶음");
+            }
+            sb.append(" — 이 범위를 검토했다고 쓰지 않는다\n");
+        }
+        if (selection.insufficientEvidence()) {
+            sb.append("선택 단계가 근거가 부족하다고 표시했다");
+            if (selection.note() != null) {
+                sb.append(": ").append(selection.note());
+            }
+            sb.append(" — 없는 문제·쪽수·내용을 지어내지 않는다\n");
+        } else if (selection.note() != null) {
+            sb.append("선택 메모: ").append(selection.note()).append("\n");
+        }
+        sb.append("\n");
+    }
+
+    private void appendTopicLine(StringBuilder sb, Long courseId, PlanMaterialContextService.TopicLine topic,
+                                 String reason, ProvenanceCollector collector, Map<Long, CourseMaterial> materials,
+                                 String prefix) {
+        String text = PlanCatalogText.topicTitle(topic) + PlanCatalogText.topicFlags(topic)
+                + (reason == null ? "" : " · 고른 이유: " + reason);
+        sb.append(prefix).append(collector.mark(
+                ProvenanceSourceType.TOPIC, topic.topicId(), null, null,
+                ProvenanceRepresentation.SELECTED_FIELDS,
+                ProvenanceCollector.value(
+                        "courseId", courseId,
+                        "title", topic.title(),
+                        "sourceLocator", topic.locator(),
+                        "progressStatus", topic.progress() == null ? null : topic.progress().name(),
+                        "selectionReason", reason),
+                text,
+                topic.parentTopicId(),
+                providedMaterial(
+                        topic.sourceMaterialId() == null ? null : materials.get(topic.sourceMaterialId()),
+                        topic.sourceMaterialId(), topic.sourceMaterialFilename(), topic.locator()))
+                .text()).append("\n");
+    }
+
+    /**
+     * 고른 구간 한 줄 + 저장된 원문. 줄에는 역할·위치·고른 이유·<b>읽은 범위</b>가 붙고, 원문은 그 아래 따옴표 블록이다.
+     * 인용 번호는 줄에 붙는다 — 이 번호를 인용하면 "이 원문을 읽었다"는 뜻이다.
+     */
+    private void appendRetrievedSection(StringBuilder sb, Long courseId, PlanMaterialRetriever.Retrieved r, int cap,
+                                        boolean completedAssignment,
+                                        ProvenanceCollector collector, Map<Long, String> refBySection,
+                                        Map<Long, PlanMaterialRetriever.Rendered> rendered) {
+        MaterialSection section = r.section();
+        PlanMaterialRetriever.Rendered body = PlanMaterialRetriever.render(r, cap);
+        List<String> roles = materialContextService.rolesOf(section);
+        String roleLabels = roles.stream().map(com.jungwoo.project.memo.material.domain.SectionRole::parseOne)
+                .filter(java.util.Objects::nonNull).map(com.jungwoo.project.memo.material.domain.SectionRole::label)
+                .distinct().collect(Collectors.joining("/"));
+        StringBuilder text = new StringBuilder("· [").append(roleLabels.isBlank() ? "기타" : roleLabels).append("] ")
+                .append(section.getDisplayTitle());
+        String locator = section.locator();
+        if (!locator.isBlank()) {
+            text.append(" (").append(locator).append(")");
+        }
+        text.append(" · 자료 ").append(r.material().getOriginalFilename());
+        if (section.getTaskText() != null) {
+            text.append(" · 수행: ").append(PlanMaterialContextService.shortExcerpt(section.getTaskText()));
+        }
+        if (r.target().reason() != null) {
+            text.append(" · 고른 이유: ").append(r.target().reason());
+        }
+        text.append(" · 읽은 범위: ").append(body.rangeLabel());
+        if (completedAssignment) {
+            text.append(" · 사용자가 완료한 과제의 구간 — 과제를 다시 수행하게 하지 않는다");
+        }
+        ProvenanceCollector.Marked marked = collector.mark(
+                ProvenanceSourceType.MATERIAL_SECTION, section.getSectionId(), null, section.getCreatedAt(),
+                ProvenanceRepresentation.EXCERPT,
+                ProvenanceCollector.value(
+                        "courseId", courseId,
+                        "materialId", section.getMaterialId(),
+                        "title", section.getDisplayTitle(),
+                        "roles", roles,
+                        "locator", locator,
+                        "task", section.getTaskText(),
+                        "selectionReason", r.target().reason(),
+                        "retrievedRange", body.rangeLabel(),
+                        "retrievedChars", body.chars(),
+                        "retrievedTextSha256", body.textHash(),
+                        "retrieval", body.outcome().name(),
+                        "completedAssignment", completedAssignment ? Boolean.TRUE : null),
+                text.toString(),
+                r.target().topicId(),
+                providedMaterial(r.material(), section.getMaterialId(), r.material().getOriginalFilename(), locator));
+        sb.append("  ").append(marked.text()).append("\n");
+        sb.append("    \"\"\"\n");
+        for (String line : body.text().split("\n")) {
+            sb.append("    ").append(line).append("\n");
+        }
+        sb.append("    \"\"\"\n");
+        refBySection.put(section.getSectionId(), marked.refId());
+        rendered.put(section.getSectionId(), body);
+    }
 
     /**
      * 프롬프트에 실을 일정·평가 한 줄과 그 원본의 종류.
@@ -957,113 +1339,24 @@ public class PeriodPlanDraftGenerator {
     private record ScheduleLine(ProvenanceSourceType type, Long sourceId, String text, Long materialId) {
     }
 
-
-    private static String topicLineText(PlanMaterialContextService.TopicLine topic) {
-        StringBuilder line = new StringBuilder("  ".repeat(topic.depth())).append("- ").append(topic.title());
-        if (topic.locator() != null && !topic.locator().isBlank()) {
-            line.append(" (").append(topic.locator()).append(")");
-        }
-        if (topic.progress() == TopicProgressStatus.IN_PROGRESS) {
-            line.append(" · 진행 중");
-            if (topic.lastStudiedAt() != null) {
-                line.append("(마지막 ").append(topic.lastStudiedAt().toLocalDate()).append(")");
-            }
-        } else if (topic.progress() == TopicProgressStatus.LEARNED) {
-            line.append(" · 학습 완료");
-        }
-        if (topic.firstUnlearned()) {
-            line.append(" · ← 첫 미학습");
-        }
-        if (topic.assignmentLinked()) {
-            line.append(" · 과제 연결");
-            if (topic.assignmentDue() != null) {
-                line.append("(마감 ").append(topic.assignmentDue()).append(")");
-            }
-        }
-        if (topic.userLinked()) {
-            line.append(" · 사용자가 자료 연결");
-        }
-        return line.toString();
-    }
-
-    /** 자료 구간 한 줄. 역할·위치·수행 내용·짧은 발췌를 주고 원문 전체는 주지 않는다. */
-    private void appendSectionLine(StringBuilder sb, Course course, PlanMaterialContextService.SectionLine line,
-                                   ProvenanceCollector collector, String prefix,
-                                   /* 이 구간이 어느 학습 항목 아래 실렸는가 → 스냅샷 parentSourceId. 구간만 인용한 항목에서도
-                                      화면이 「이미 알아요」·「이번만 빼기」가 가리킬 학습 항목을 찾는 데 쓴다. 미연결 구간은 null */
-                                   Long underTopicId) {
-        MaterialSection section = line.section();
-        StringBuilder text = new StringBuilder("[").append(line.roleLabels()).append("] ")
-                .append(section.getDisplayTitle());
-        String locator = section.locator();
-        if (!locator.isBlank()) {
-            text.append(" (").append(locator).append(")");
-        }
-        if (section.getTaskText() != null) {
-            text.append(" — 수행: ").append(PlanMaterialContextService.shortExcerpt(section.getTaskText()));
-        }
-        String excerpt = PlanMaterialContextService.shortExcerpt(section.getExcerpt());
-        if (excerpt != null) {
-            text.append(" — \"").append(excerpt).append("\"");
-        }
-        sb.append(prefix).append(collector.mark(
-                ProvenanceSourceType.MATERIAL_SECTION, section.getSectionId(), null, section.getCreatedAt(),
-                ProvenanceRepresentation.EXCERPT,
-                ProvenanceCollector.value(
-                        "courseId", course.getCourseId(),
-                        "materialId", section.getMaterialId(),
-                        "title", section.getDisplayTitle(),
-                        "roles", line.roles(),
-                        "locator", locator,
-                        "task", section.getTaskText(),
-                        "excerpt", excerpt),
-                text.toString(),
-                underTopicId,
-                providedMaterial(line.material(), section.getMaterialId(),
-                        line.material() == null ? null : line.material().getOriginalFilename(), locator))
-                .text()).append("\n");
-    }
-
-    /** 과제 한 줄. 확정/확인 전, 마감의 출처(원문·추정·사용자), 완료 여부는 서버가 붙인 사실이다. */
-    private void appendAssignmentLine(StringBuilder sb, Course course, PlanMaterialContextService.AssignmentLine line,
+    /** 과제 한 줄. 확정/확인 전, 마감의 출처, 완료 여부, 원문 위치는 서버가 붙인 사실이다. */
+    private void appendAssignmentLine(StringBuilder sb, Long courseId, PlanMaterialContextService.AssignmentLine line,
                                       ProvenanceCollector collector) {
         CourseAssignment a = line.assignment();
-        StringBuilder text = new StringBuilder();
-        boolean confirmed = a.getConfirmStatus() == AssignmentConfirmStatus.CONFIRMED;
-        text.append(confirmed ? "과제: " : "(확인 전 — 과제인지 사용자가 아직 답하지 않음) ").append(a.getTitle());
-        if (a.hasDue()) {
-            text.append(" · 마감 ").append(a.getDueKind() == com.jungwoo.project.memo.assignment.domain.DueKind.DATETIME
-                    ? a.getDueAt().toString().replace('T', ' ') : a.getDueDate().toString());
-            if (a.getDueSource() != null) {
-                text.append(switch (a.getDueSource()) {
-                    case SOURCE -> "(원문에 명시)";
-                    case USER -> "(사용자 확인)";
-                    case ESTIMATED -> "(추정)";
-                });
-            }
-        } else if (a.getDueKind() == com.jungwoo.project.memo.assignment.domain.DueKind.NONE) {
-            text.append(" · 마감 없음");
-        } else {
-            text.append(" · 마감 미확인");
-            if (a.getDueQuote() != null) {
-                text.append("(원문: \"").append(a.getDueQuote()).append("\")");
-            }
-        }
-        if (line.section() != null && !line.section().locator().isBlank()) {
-            text.append(" · ").append(line.section().locator());
-        }
         sb.append("  - ").append(collector.mark(
                 ProvenanceSourceType.ASSIGNMENT, a.getAssignmentId(), a.getVersion(), a.getUpdatedAt(),
                 ProvenanceRepresentation.SELECTED_FIELDS,
                 ProvenanceCollector.value(
-                        "courseId", course.getCourseId(),
+                        "courseId", courseId,
                         "title", a.getTitle(),
                         "confirmStatus", a.getConfirmStatus().name(),
-                        "dueKind", a.getDueKind().name(),
+                        "dueKind", a.getDueKind() == null ? null : a.getDueKind().name(),
                         "dueDate", a.getDueDate(),
                         "dueAt", a.getDueAt(),
-                        "dueSource", a.getDueSource() == null ? null : a.getDueSource().name()),
-                text.toString(),
+                        "dueSource", a.getDueSource() == null ? null : a.getDueSource().name(),
+                        "completed", a.isCompleted() ? Boolean.TRUE : null,
+                        "sectionId", a.getSectionId()),
+                PlanCatalogText.assignmentText(line),
                 null,
                 line.material() == null ? null
                         : providedMaterial(line.material(), line.material().getMaterialId(),
@@ -1072,13 +1365,16 @@ public class PeriodPlanDraftGenerator {
     }
 
     /** 사용자가 확인한 장기 맥락. 기본 AI 경로도 이제 본다 — 서버 if문 대신 모델이 선호를 판단할 근거다. */
-    private void appendUserContexts(StringBuilder sb, Long userId, ProvenanceCollector collector) {
-        List<UserContext> contexts;
+    private List<UserContext> loadUserContexts(Long userId) {
         try {
-            contexts = userContextMapper.findActiveAndStaleByUserId(userId, 20);
+            List<UserContext> contexts = userContextMapper.findActiveAndStaleByUserId(userId, 20);
+            return contexts == null ? List.of() : contexts;
         } catch (Exception e) {
-            contexts = List.of();
+            return List.of();
         }
+    }
+
+    private void appendUserContexts(StringBuilder sb, List<UserContext> contexts, ProvenanceCollector collector) {
         if (contexts == null || contexts.isEmpty()) {
             return;
         }
@@ -1345,10 +1641,10 @@ public class PeriodPlanDraftGenerator {
         return s == null || s.isBlank() ? null : s;
     }
 
-    private void recordUsage(Long userId, Usage usage, UsageResultStatus status, String errorCode) {
+    private void recordUsage(Long userId, Usage usage, UsageResultStatus status, String errorCode, String workflowId) {
         aiUsageLimitService.record(userId, null, null, modelName,
                 AiChatResponseUtils.safeTokenCount(usage, true), null,
                 AiChatResponseUtils.safeTokenCount(usage, false), status, errorCode,
-                FEATURE, null, UUID.randomUUID().toString(), null);
+                FEATURE, workflowId, UUID.randomUUID().toString(), null);
     }
 }

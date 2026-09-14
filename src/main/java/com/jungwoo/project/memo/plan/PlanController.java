@@ -86,6 +86,18 @@ public class PlanController {
         return ResponseEntity.ok(planDraftService.regenerateItems(principal.getUserId(), proposalId));
     }
 
+    /**
+     * 같은 조건으로 초안 다시 만들기(「이번만 빼기」·되돌리기·「이미 알아요」 뒤). 계획 화면·상담 초안 공통.
+     * 기간·강도·범위·지시·지정 자료는 서버에 남은 요청을 쓰고, 본문에는 바뀐 제외 목록·지정 자료만 온다.
+     */
+    @PostMapping("/proposals/{proposalId}/redraft")
+    public ResponseEntity<PlanDraftResponse> redraft(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId,
+            @RequestBody(required = false) com.jungwoo.project.memo.plan.dto.PlanRedraftRequest request) {
+        return ResponseEntity.ok(planDraftService.redraft(principal.getUserId(), proposalId, request));
+    }
+
     @PostMapping("/proposals/{proposalId}/confirm")
     public ResponseEntity<PlanResponse> confirm(
             @AuthenticationPrincipal UserPrincipal principal,

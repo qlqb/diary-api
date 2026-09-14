@@ -554,6 +554,7 @@ public class AiConversationService {
                             .endDate(periodPlan.getPeriodEndDate())
                             .intensity(periodPlan.getIntensity())
                             .courseIds(ownedCourseIds(userId, periodPlan.getCourseIds()))
+                            .requestedMaterialIds(periodPlan.getRequestedMaterialIds())
                             .instruction(conversationInstruction(conversationId, userId, requestMessageId,
                                     request.getMessage()))
                             .build();

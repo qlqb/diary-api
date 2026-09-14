@@ -25,6 +25,11 @@ import com.jungwoo.project.memo.plan.dto.PlanStrategyResponse;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import com.jungwoo.project.memo.plan.provenance.PlanItemEvidence;
 import com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec;
+import com.jungwoo.project.memo.plan.dto.PlanRedraftRequest;
+import com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary;
+import com.jungwoo.project.memo.plan.selection.PlanRequestContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -65,6 +70,9 @@ public class PlanDraftService {
     private final PlanProvenanceCodec provenanceCodec;
     private final PlanMaterialContextService materialContextService;
 
+    private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.
      *
@@ -100,7 +108,9 @@ public class PlanDraftService {
         PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
                 request.getInstruction(), request.getTitle(), request.getCourseIds(),
-                request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds());
+                request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds(),
+                request.getRequestedMaterialIds() == null ? List.of() : request.getRequestedMaterialIds(),
+                request.getRequestedSectionIds() == null ? List.of() : request.getRequestedSectionIds());
 
         if ("V0".equalsIgnoreCase(generatorMode)) {
             log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}",
@@ -195,6 +205,104 @@ public class PlanDraftService {
      * 바뀌었는지 알 수 없게 된다.
      */
     public PlanDraftResponse regenerateItems(Long userId, Long proposalId) {
+        return regenerateItemsInternal(userId, proposalId);
+    }
+
+    /**
+     * 같은 조건으로 다시 만들기. 「이번만 빼기」·되돌리기·「이미 알아요」 뒤 재생성이 쓴다(계획 화면·상담 초안 공통).
+     *
+     * <p>기간·강도·범위·지시·지정 자료는 이 초안을 만든 요청(plan_request_json)을 그대로 쓴다 — 화면이 기본 날짜와 빈 지시로
+     * 요청을 새로 조립하지 않는다. 바뀌는 것은 요청 본문의 제외 목록·지정 자료뿐이다.
+     *
+     * <p>모델 호출이 실패하면 아무것도 바뀌지 않는다(기존 초안은 그대로 PROPOSED). 성공하면 새 초안을 저장하고 기존 초안을
+     * 같은 트랜잭션에서 폐기한다. 그 사이 기존 초안이 확정·폐기됐으면(동시 요청) 409다.
+     */
+    @Transactional
+    public PlanDraftResponse redraft(Long userId, Long proposalId, PlanRedraftRequest body) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        }
+        PlanRequestContext context = readRequestContext(proposal.getPlanRequestJson());
+        if (context == null) {
+            throw new ConflictException(ErrorCode.PLAN_REDRAFT_CONTEXT_MISSING);
+        }
+        PlanDraftRequest request = PlanDraftRequest.builder()
+                .startDate(context.startDate())
+                .endDate(context.endDate())
+                .intensity(context.intensity())
+                .title(context.title())
+                .instruction(context.instruction())
+                .courseIds(context.courseIds())
+                .familiarityAnswer(context.familiarityAnswer())
+                .familiarityTopicIds(context.familiarityTopicIds())
+                .excludeTopicIds(body != null && body.getExcludeTopicIds() != null
+                        ? body.getExcludeTopicIds() : context.excludeTopicIds())
+                .requestedMaterialIds(body != null && body.getRequestedMaterialIds() != null
+                        ? body.getRequestedMaterialIds() : context.requestedMaterialIds())
+                .requestedSectionIds(context.requestedSectionIds())
+                .build();
+        Generated generated = generate(userId, request);
+
+        AiProposal locked = aiProposalMapper.findByIdAndUserIdForUpdate(proposalId, userId);
+        if (locked == null || locked.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        }
+        log.info("같은 조건으로 초안 다시 만들기: userId={}, 원본 proposalId={}, 제외={}개, 지정자료={}개",
+                userId, proposalId, request.getExcludeTopicIds() == null ? 0 : request.getExcludeTopicIds().size(),
+                request.getRequestedMaterialIds() == null ? 0 : request.getRequestedMaterialIds().size());
+        return persist(userId, generated, context.conversationId(), null, proposalId);
+    }
+
+    PlanRequestContext readRequestContext(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(json, PlanRequestContext.class);
+        } catch (Exception e) {
+            log.warn("계획 요청 맥락을 읽지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private String requestContextJson(Spec spec, Long conversationId) {
+        try {
+            return requestJson.writeValueAsString(new PlanRequestContext(PlanRequestContext.VERSION,
+                    conversationId != null ? "CONVERSATION" : "PLAN_SCREEN", spec.start(), spec.end(),
+                    spec.intensity(), spec.title(), spec.instruction(), spec.courseIds(), spec.excludeTopicIds(),
+                    spec.requestedMaterialIds(), spec.requestedSectionIds(), null, null, conversationId));
+        } catch (Exception e) {
+            log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private PlanDraftResponse.RequestContextView requestContextView(Spec spec, Generated generated, Long conversationId,
+                                                                    boolean redraftable) {
+        MaterialSelectionSummary selection = generated.materialSelection();
+        java.util.Map<Long, String> titles = new java.util.HashMap<>();
+        if (selection != null) {
+            selection.excludedTopics().stream().filter(e -> "THIS_TIME".equals(e.reason()))
+                    .forEach(e -> titles.put(e.topicId(), e.title()));
+        }
+        List<PlanDraftResponse.ExcludedTopic> excluded = (spec.excludeTopicIds() == null ? List.<Long>of() : spec.excludeTopicIds())
+                .stream().distinct()
+                .map(id -> new PlanDraftResponse.ExcludedTopic(id, titles.get(id)))
+                .toList();
+        return PlanDraftResponse.RequestContextView.builder()
+                .source(conversationId != null ? "CONVERSATION" : "PLAN_SCREEN")
+                .courseIds(spec.courseIds())
+                .excludedTopics(excluded)
+                .requestedMaterials(selection == null ? List.of() : selection.requestedMaterials())
+                .redraftable(redraftable)
+                .build();
+    }
+
+    private PlanDraftResponse regenerateItemsInternal(Long userId, Long proposalId) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
@@ -279,6 +387,10 @@ public class PlanDraftService {
                 proposal.getProposalId(), userId, spec.start(), spec.end(), spec.intensity(),
                 generated.targetMinutes(), strategyCodec.toJson(generated.strategy()),
                 provenanceCodec.toJson(generated.provenance()));
+        String requestContext = requestContextJson(spec, conversationId);
+        if (requestContext != null) {
+            aiProposalMapper.updatePlanRequest(proposal.getProposalId(), userId, requestContext);
+        }
 
         if (supersededProposalId != null) {
             aiProposalMapper.updateStatusAndRespondedAt(
@@ -311,6 +423,8 @@ public class PlanDraftService {
                 .proposal(proposal)
                 .strategy(PlanStrategyResponse.from(generated.strategy()))
                 .pendingMaterials(pendingMaterials(userId, spec))
+                .materialSelection(generated.materialSelection())
+                .requestContext(requestContextView(spec, generated, conversationId, requestContext != null))
                 .build();
     }
 
