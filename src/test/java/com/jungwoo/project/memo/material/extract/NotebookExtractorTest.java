@@ -157,4 +157,28 @@ class NotebookExtractorTest {
         assertThat(asArray.units().get(0).text()).isEqualTo(asString.units().get(0).text());
         assertThat(asArray.units().get(0).text()).isEqualTo("첫 줄\n둘째 줄\n");
     }
+
+    /**
+     * 수업 노트북에 흔한 모양: 화면 캡처를 붙여 넣으면 Jupyter가 마크다운 원문에 base64로 통째로 넣는다.
+     * 한 장이 수십만 자라, 글자로 읽으면 본문이 base64로 덮이고 자료 저장(DB 패킷 한도)까지 실패했다.
+     */
+    @Test
+    void 마크다운에_붙여_넣은_그림은_자리만_남기고_base64는_읽지_않는다() {
+        String image = "iVBORw0KGgo" + "A".repeat(200_000);
+        ExtractedDocument document = extract(notebook("""
+                {"cell_type": "markdown",
+                 "source": ["## 리스트 슬라이싱\\n", "![image.png](data:image/png;base64,%s)\\n", "끝 인덱스는 포함하지 않는다."]},
+                {"cell_type": "markdown",
+                 "source": "<img src=\\"data:image/jpeg;base64,%s\\" width=300> 설명 그림"}
+                """.formatted(image, image)));
+
+        String first = document.units().get(0).text();
+        assertThat(first).contains("## 리스트 슬라이싱").contains("[그림: image.png]")
+                .contains("끝 인덱스는 포함하지 않는다.");
+        assertThat(document.units().get(1).text()).contains("[그림 데이터 생략]").contains("설명 그림");
+        assertThat(document.fullText()).doesNotContain("iVBORw0KGgo");
+        // 셀 하나가 셀 하나로 남는다 — base64 때문에 여러 단위로 쪼개지지 않는다.
+        assertThat(document.units()).extracting(ExtractedDocument.ExtractedUnit::unitNo).containsExactly(1, 2);
+        assertThat(document.fullText().length()).isLessThan(500);
+    }
 }

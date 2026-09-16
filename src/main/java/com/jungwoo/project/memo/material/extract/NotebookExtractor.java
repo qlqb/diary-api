@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.material.domain.TextUnitType;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
+import java.util.regex.Pattern;
 
 /**
  * Jupyter 노트북(.ipynb)에서 셀 원문을 읽는다. 정식 지원 범위는 nbformat 4 계열이다.
@@ -26,6 +27,16 @@ import java.io.IOException;
 public class NotebookExtractor {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    /**
+     * 마크다운에 붙여 넣은 그림. Jupyter는 화면 캡처를 붙여 넣으면 {@code ![image.png](data:image/png;base64,...)}로
+     * 셀 원문에 통째로 넣는다. 수업 노트북에 흔하고 한 장이 수십만 자다 — 글자로 읽으면 본문이 base64로 덮이고
+     * 저장 한도(DB 패킷)도 넘긴다. 그림 자리만 남긴다.
+     */
+    private static final Pattern MARKDOWN_DATA_IMAGE =
+            Pattern.compile("!\\[([^\\]]*)]\\(\\s*data:[\\w.+/-]+;base64,[A-Za-z0-9+/=\\s]*\\)");
+    /** HTML 태그나 다른 자리에 들어간 data URI. */
+    private static final Pattern DATA_URI = Pattern.compile("data:[\\w.+/-]+;base64,[A-Za-z0-9+/=]{64,}");
 
     public ExtractedDocument extract(byte[] bytes) {
         JsonNode root = read(bytes);
@@ -59,7 +70,8 @@ public class NotebookExtractor {
                 break;
             }
             String type = cell.path("cell_type").asText("");
-            String source = joinSource(cell.has("source") ? cell.get("source") : cell.path("input"));
+            String source = stripEmbeddedData(
+                    joinSource(cell.has("source") ? cell.get("source") : cell.path("input")));
             String body = body(type, source, language) + outputs(cell, builder);
             if (body.isBlank()) {
                 continue; // 빈 셀. 번호는 이미 올렸으므로 뒤 셀의 번호가 밀리지 않는다.
@@ -98,6 +110,18 @@ public class NotebookExtractor {
             case "markdown" -> "설명";
             default -> "원본";
         };
+    }
+
+    /** 셀 원문에 박힌 base64 그림을 "[그림: 이름]"으로 바꾼다. 그림이 있었다는 사실은 남긴다. */
+    static String stripEmbeddedData(String source) {
+        if (source.indexOf("base64,") < 0) {
+            return source;
+        }
+        String withoutMarkdownImages = MARKDOWN_DATA_IMAGE.matcher(source).replaceAll(match -> {
+            String alt = match.group(1).isBlank() ? "그림" : "그림: " + match.group(1).strip();
+            return java.util.regex.Matcher.quoteReplacement("[" + alt + "]");
+        });
+        return DATA_URI.matcher(withoutMarkdownImages).replaceAll("[그림 데이터 생략]");
     }
 
     private static String body(String type, String source, String language) {

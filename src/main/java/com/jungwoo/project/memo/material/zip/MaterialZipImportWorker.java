@@ -61,12 +61,16 @@ public class MaterialZipImportWorker {
             fail(entry, "E400_014", e.getMessage());
         } catch (BusinessException e) {
             fail(entry, e.getErrorCode().getCode(), e.getMessage());
+        } catch (org.springframework.dao.DataAccessException e) {
+            // 화면에 예외 이름을 그대로 내보내지 않는다 — 사용자가 할 수 있는 말로 바꾸고, 원인은 로그에 남긴다.
+            log.warn("가져오기 저장 실패: entryId={}, path={}", entry.getEntryId(), entry.getEntryPath(), e);
+            fail(entry, "E500_001", "자료를 저장하지 못했어요. 잠시 뒤 다시 시도해 주세요");
         } catch (IllegalStateException e) {
             // 이미 다른 실행이 이 항목의 자료를 만들었다. 실패로 적지 않는다 — 항목은 이미 DONE이다.
             log.info("가져오기 항목이 이미 완료됨: entryId={}", entry.getEntryId());
         } catch (Exception e) {
             log.warn("가져오기 실패: entryId={}, path={}", entry.getEntryId(), entry.getEntryPath(), e);
-            fail(entry, "E500_001", "파일을 가져오지 못했어요: " + e.getClass().getSimpleName());
+            fail(entry, "E500_001", "파일을 가져오지 못했어요. 잠시 뒤 다시 시도해 주세요");
         } finally {
             deleteQuietly(temp);
         }

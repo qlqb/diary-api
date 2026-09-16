@@ -151,9 +151,13 @@ public class MaterialZipImportService {
      */
     public ZipImportResponse confirm(Long userId, Long importId, List<Long> entryIds) {
         ZipImport zipImport = owned(userId, importId);
-        if (zipImport.getStatus() != ZipImportStatus.READY && zipImport.getStatus() != ZipImportStatus.IMPORTING
-                && zipImport.getStatus() != ZipImportStatus.PARTIAL) {
+        // 한 번 확정한 뒤에도, 고르지 않고 남겨 둔 파일을 나중에 더 가져올 수 있어야 한다. 기준은 상태가 아니라
+        // "원본 압축이 아직 있는가"다 — 원본이 없으면 무엇을 고르든 만들 수 없다.
+        if (zipImport.getStatus() == ZipImportStatus.CANCELLED || zipImport.getStatus() == ZipImportStatus.EXPIRED) {
             throw new ConflictException(ErrorCode.ZIP_IMPORT_NOT_READY);
+        }
+        if (zipImport.getStoragePath() == null) {
+            throw new ConflictException(ErrorCode.ZIP_IMPORT_ARCHIVE_EXPIRED);
         }
         if (entryIds == null || entryIds.isEmpty()) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE, "가져올 파일을 하나 이상 골라주세요");

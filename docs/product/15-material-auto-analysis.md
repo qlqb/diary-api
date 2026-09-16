@@ -131,6 +131,9 @@ courses.topic_tree_version / course_topics.merged_into_topic_id, review_note / c
 - 상한(설정값, 기본): 원본 20MiB(`max-archive-bytes`), 내부 파일 20MiB(`max-entry-bytes`), 전체 해제 200MiB
   (`max-total-uncompressed-bytes`), 전체 항목 1,000개(`max-entries`, 미지원 파일·디렉터리 포함), 한 번에 고를 수 있는 자료
   100개(`max-selectable`). 원본 압축은 24시간(`retention-hours`) 보관 뒤 지운다(이미 만든 자료는 그대로 남는다).
+- 한 번 확정한 뒤에도 그때 고르지 않은 파일을 더 가져올 수 있다 — 기준은 상태가 아니라 "원본 압축이 아직 있는가"다.
+  끝났다고 원본을 바로 지우지 않는 이유가 이것이고(실패 항목 재시도도 같다), 취소하면 그 자리에서 지운다.
+  원본이 없으면 409 `E409_022`로 "다시 올려주세요"라고 말한다.
 - 이름 인코딩: UTF-8 플래그가 있으면 UTF-8, 없으면 CP949(한글 Windows 압축)로 읽는다. 판단할 수 없으면 그 항목을 고를 수 없게 둔다.
 - 프로젝트 화면에서 시작하면 `courseId`가 실려 만들어지는 자료가 그 프로젝트에 연결된다(확정 시점에 소유·ACTIVE를 다시 확인한다).
   폴더명으로 프로젝트나 학습 항목을 자동으로 만들지 않는다.

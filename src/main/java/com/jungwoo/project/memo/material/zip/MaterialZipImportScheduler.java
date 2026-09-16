@@ -82,15 +82,15 @@ public class MaterialZipImportScheduler {
         }
     }
 
-    /** 작업자가 마지막 항목을 끝낸 직후를 놓쳤거나, 재시작으로 마무리가 밀린 가져오기. */
+    /**
+     * 작업자가 마지막 항목을 끝낸 직후를 놓쳤거나, 재시작으로 마무리가 밀린 가져오기.
+     *
+     * <p>끝났다고 원본 압축을 바로 지우지 않는다 — 실패한 항목을 다시 시도하거나, 그때 고르지 않고
+     * 남겨 둔 파일을 나중에 더 가져오려면 원본이 있어야 한다. 정리는 보관 기한이 한다.
+     */
     private void finishDone() {
         for (ZipImport zipImport : importMapper.findImportingWithNoPendingEntries(batch)) {
-            ZipImportStatus status = txService.finishIfDone(zipImport.getImportId());
-            if (status != null && status.terminal() && zipImport.getStoragePath() != null) {
-                // 끝났으면 원본 압축은 더 이상 필요 없다. 만들어진 자료는 각자 파일을 갖고 있다.
-                fileStorageService.deleteQuietly(null, zipImport.getStoragePath());
-                txService.clearStoragePath(zipImport.getImportId());
-            }
+            txService.finishIfDone(zipImport.getImportId());
         }
     }
 

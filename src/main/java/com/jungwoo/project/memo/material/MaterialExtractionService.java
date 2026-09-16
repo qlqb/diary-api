@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -44,7 +45,19 @@ public class MaterialExtractionService {
         }
     }
 
+    /**
+     * extracted_text로 저장할 수 있는 최대 크기(UTF-8 바이트). 자료 행 INSERT는 한 쿼리라 DB의
+     * max_allowed_packet(로컬 MariaDB 기본 1MiB)을 넘으면 자료 자체가 만들어지지 않는다. 다른 열과
+     * 인코딩 여유를 두고 그 아래로 자른다. 분석은 단위(material_text_units, 행마다 따로 저장)를 읽으므로
+     * 여기서 잘라도 분석 범위는 줄지 않는다 — 전체 텍스트는 링크 제안·상담이 앞부분만 쓰는 사본이다.
+     */
+    static final int MAX_STORED_TEXT_BYTES = 800_000;
+
     public Outcome extract(Path file, String extension, Long userId, String fileHash) {
+        return fitForStorage(extractUnbounded(file, extension, userId, fileHash));
+    }
+
+    private Outcome extractUnbounded(Path file, String extension, Long userId, String fileHash) {
         if (DocumentExtractionService.handles(extension)) {
             return extractDocument(file, extension, userId, fileHash);
         }
@@ -85,6 +98,30 @@ public class MaterialExtractionService {
         }
         return new Outcome(ExtractionStatus.SUCCESS, document.fullText(), null, warning(document), units,
                 document.pageCount());
+    }
+
+    /** 저장 한도를 넘는 전체 텍스트는 잘라 저장하고, 잘랐다는 사실을 경고로 남긴다. */
+    static Outcome fitForStorage(Outcome outcome) {
+        String text = outcome.text();
+        if (text == null || text.getBytes(StandardCharsets.UTF_8).length <= MAX_STORED_TEXT_BYTES) {
+            return outcome;
+        }
+        // 앞에서부터 UTF-8 바이트를 세어 한도 직전에서 자른다. 서로게이트 쌍(4바이트)은 가르지 않는다.
+        int bytes = 0;
+        int end = 0;
+        while (end < text.length()) {
+            int codePoint = text.codePointAt(end);
+            int size = codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+            if (bytes + size > MAX_STORED_TEXT_BYTES) {
+                break;
+            }
+            bytes += size;
+            end += Character.charCount(codePoint);
+        }
+        String notice = "본문 사본이 저장 한도를 넘어 앞부분만 보관했어요(자동 분석은 전체를 읽어요)";
+        String warning = outcome.warning() == null ? notice : outcome.warning() + " · " + notice;
+        return new Outcome(outcome.status(), text.substring(0, end), outcome.error(),
+                warning.length() > 500 ? warning.substring(0, 500) : warning, outcome.units(), outcome.pageCount());
     }
 
     private static String warning(ExtractedDocument document) {

@@ -76,12 +76,39 @@ class MaterialZipImportServiceTest {
     }
 
     @Test
-    void 이미_끝난_가져오기에는_다시_확정할_수_없다() {
-        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.COMPLETED, null));
+    void 취소한_가져오기에는_확정할_수_없다() {
+        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.CANCELLED, null));
 
         assertThatThrownBy(() -> service.confirm(USER, IMPORT, List.of(9L)))
                 .isInstanceOf(ConflictException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.ZIP_IMPORT_NOT_READY);
+        verify(entryMapper, never()).queueSelected(anyLong(), anyLong(), any());
+    }
+
+    /**
+     * 한 번 확정한 뒤 남겨 둔 파일을 나중에 더 가져오는 경우. 상태가 COMPLETED여도 원본 압축이 남아
+     * 있으면 고를 수 있어야 한다 — 그러지 않으면 같은 압축을 처음부터 다시 올려야 한다.
+     */
+    @Test
+    void 완료된_가져오기라도_원본이_남아_있으면_남은_파일을_더_가져올_수_있다() {
+        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.COMPLETED, null));
+        when(entryMapper.queueSelected(IMPORT, USER, List.of(9L))).thenReturn(1);
+        when(entryMapper.findByImportId(IMPORT, USER)).thenReturn(List.of(entry(ZipEntryStatus.QUEUED, null)));
+
+        service.confirm(USER, IMPORT, List.of(9L));
+
+        verify(entryMapper).queueSelected(IMPORT, USER, List.of(9L));
+    }
+
+    @Test
+    void 원본_압축이_없으면_더_가져올_수_없다() {
+        ZipImport expired = zipImport(ZipImportStatus.COMPLETED, null);
+        expired.setStoragePath(null);
+        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(expired);
+
+        assertThatThrownBy(() -> service.confirm(USER, IMPORT, List.of(9L)))
+                .isInstanceOf(ConflictException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ZIP_IMPORT_ARCHIVE_EXPIRED);
         verify(entryMapper, never()).queueSelected(anyLong(), anyLong(), any());
     }
 
