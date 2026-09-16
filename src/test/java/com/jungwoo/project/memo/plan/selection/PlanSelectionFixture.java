@@ -109,6 +109,7 @@ public class PlanSelectionFixture {
             mock(com.jungwoo.project.memo.ai.brief.PlanBriefService.class);
     public final com.jungwoo.project.memo.ai.AiMessageMapper messageMapper =
             mock(com.jungwoo.project.memo.ai.AiMessageMapper.class);
+    public final ExecutionItemMapper executionItemMapper = mock(ExecutionItemMapper.class);
 
     public final Map<Long, Course> courses = new LinkedHashMap<>();
     public final Map<Long, List<TopicResponse>> trees = new LinkedHashMap<>();
@@ -122,6 +123,8 @@ public class PlanSelectionFixture {
     /** 선택 호출의 답. 사용자 프롬프트를 받아 구조화 JSON을 돌려준다. null이면 빈 선택. */
     public Function<String, String> selectionAnswer = prompt -> emptySelection();
     public String planJson = planWithOneItem("s1");
+    /** 계획 호출의 답을 프롬프트로 정하고 싶을 때. null이면 planJson. 호출마다 불린다(추가 읽기 2회차 포함). */
+    public Function<String, String> planAnswer = null;
     /** 선택 호출을 실패시키려면 여기에 예외를 둔다. */
     public RuntimeException selectionError;
 
@@ -141,7 +144,6 @@ public class PlanSelectionFixture {
         catalogService = new PlanMaterialContextService(topicService, topicLinkMapper, sectionMapper, courseMaterialMapper,
                 assignmentService, jobService, new ObjectMapper());
 
-        ExecutionItemMapper executionItemMapper = mock(ExecutionItemMapper.class);
         PlanReviewService planReviewService = mock(PlanReviewService.class);
         CourseNoteMapper courseNoteMapper = mock(CourseNoteMapper.class);
         CourseMaterialAnalysisMapper analysisMapper = mock(CourseMaterialAnalysisMapper.class);
@@ -173,7 +175,7 @@ public class PlanSelectionFixture {
                 }
                 return structured(selectionAnswer.apply(user));
             }
-            return structured(planJson);
+            return structured(planAnswer != null ? planAnswer.apply(user) : planJson);
         });
         when(executionItemMapper.findByUserIdAndPlanningRange(anyLong(), any(), any())).thenReturn(List.of());
         when(planReviewService.summarizeLatestForPrompt(anyLong())).thenReturn(null);
@@ -360,6 +362,21 @@ public class PlanSelectionFixture {
                 null, courseIds, excludeTopicIds, requestedMaterialIds, List.of()));
     }
 
+    public PeriodPlanDraftGenerator.Generated generate(PeriodPlanDraftGenerator.Spec spec,
+                                                        PeriodPlanDraftGenerator.Options options) {
+        return generator.generate(spec, options);
+    }
+
+    public PeriodPlanDraftGenerator.Spec spec(String instruction, PeriodPlanDraftGenerator.Origin origin) {
+        return new PeriodPlanDraftGenerator.Spec(USER, START, END, PlanIntensity.NORMAL, instruction, null, List.of(),
+                List.of(), List.of(), List.of(), origin);
+    }
+
+    /** 계획 호출 프롬프트 전부(추가 읽기 회차 포함). */
+    public List<String[]> planCalls() {
+        return calls.stream().filter(c -> !isSelection(c[0])).toList();
+    }
+
     public List<String> selectionPrompts() {
         return calls.stream().filter(c -> isSelection(c[0])).map(c -> c[1]).toList();
     }
@@ -405,6 +422,28 @@ public class PlanSelectionFixture {
 
     private static String jsonList(List<String> values) {
         return "[" + String.join(",", values.stream().map(v -> "\"" + v + "\"").toList()) + "]";
+    }
+
+    /** 전략·마감 참조·기존 항목 결정·추가 읽기 요청까지 담은 계획 응답. null인 부분은 비운다. */
+    public static String planFull(String itemRefId, String deadlineRefId, String existingRefId, String existingAction,
+                                  String moreSectionHandle) {
+        StringBuilder sb = new StringBuilder("{\"title\":\"이번 주\",\"goalSummary\":\"목표 요약\",");
+        sb.append("\"strategy\":{\"goal\":\"다음 수업 따라잡기\",\"reach\":\"3주차까지\",\"summary\":\"수업 전 핵심만\",")
+                .append("\"keptDecisions\":[\"자료구조 복구 우선\"],\"courses\":[{\"courseId\":1,\"rank\":1,\"focus\":\"복구\",\"reason\":\"수업이 먼저\"}],")
+                .append("\"deferred\":[{\"title\":\"영어 단어\",\"reason\":\"시간이 적다\",\"refIds\":[]}],")
+                .append("\"assumptions\":[\"저녁 식사 1시간\"],\"questions\":[\"반복문에서 막힌 이유가 개념인가요, 문제 유형인가요?\"],")
+                .append("\"unread\":[],\"changes\":[{\"what\":\"영어를 뺐다\",\"why\":\"시간\"}]},");
+        sb.append("\"items\":[{\"title\":\"자료구조 · 한 조각\",\"description\":\"한다 · 완료: 끝\",\"doneCriteria\":\"끝\",")
+                .append("\"actionType\":\"PRACTICE\",\"expectedMinutes\":30,\"priority\":\"SHOULD\",\"courseId\":1,\"scheduledDate\":null,")
+                .append("\"reason\":\"이유\",\"refIds\":[\"").append(itemRefId).append("\"]")
+                .append(deadlineRefId == null ? "" : ",\"deadlineRefId\":\"" + deadlineRefId + "\"")
+                .append("}],");
+        sb.append("\"existingItems\":").append(existingRefId == null ? "[]"
+                : "[{\"refId\":\"" + existingRefId + "\",\"action\":\"" + existingAction + "\",\"expectedMinutes\":20,\"toDate\":\"2026-09-18\",\"reason\":\"겹침\"}]").append(",");
+        sb.append("\"moreEvidence\":").append(moreSectionHandle == null ? "null"
+                : "{\"sectionIds\":[\"" + moreSectionHandle + "\"],\"adjacentOfRefIds\":[],\"reason\":\"문제 원문이 필요\"}");
+        sb.append("}");
+        return sb.toString();
     }
 
     public static String planWithOneItem(String refId) {

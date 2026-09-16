@@ -548,7 +548,8 @@ public class PeriodPlanDraftGenerator {
         PlanRequestContext previous = opts.previous();
         List<String> changesFromPrevious = previous == null ? List.of()
                 : fingerprint.changesFrom(previous.evidence(), previous, spec.start(), spec.end(),
-                courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded);
+                // 저장된 요청 문맥의 courseIds는 요청 값(비어 있으면 전체)이라 같은 기준으로 비교한다
+                spec.courseIds() == null ? List.of() : spec.courseIds(), spec.instruction(), excluded);
 
         // ===== 2. 자료 선택(또는 재사용) =====
         Set<Long> scope = courses.stream().map(Course::getCourseId).collect(Collectors.toSet());

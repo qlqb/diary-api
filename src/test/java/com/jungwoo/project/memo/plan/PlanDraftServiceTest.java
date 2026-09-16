@@ -638,6 +638,35 @@ class PlanDraftServiceTest {
         assertThat(captor.getValue()).extracting(ProposalItem::expectedMinutes).containsExactly(40, 15);
     }
 
+    /**
+     * 같은 요청 키로 다시 누르면 생성이 두 번 돌지 않는다 — 이미 만든 열린 초안을 저장된 모양으로 돌려준다.
+     */
+    @Test
+    void sameRequestKey_returnsTheExistingOpenDraft_withoutCallingTheModelAgain() {
+        givenAiResponse(BASELINE, null);
+        when(aiProposalMapper.findProposedByRequestKey(USER_ID, "key-1")).thenReturn(null);
+        PlanDraftRequest first = request(null);
+        first.setRequestKey("key-1");
+        service.createDraft(USER_ID, first);
+
+        com.jungwoo.project.memo.ai.domain.AiProposal stored = com.jungwoo.project.memo.ai.domain.AiProposal.builder()
+                .proposalId(77L).userId(USER_ID).status(com.jungwoo.project.memo.ai.domain.AiProposalStatus.PROPOSED)
+                .planStartDate(START).planEndDate(END).planIntensity(PlanIntensity.NORMAL).planTargetMinutes(600)
+                .planRequestJson("{\"version\":2,\"source\":\"PLAN_SCREEN\",\"startDate\":\"2026-08-24\",\"endDate\":\"2026-08-30\","
+                        + "\"intensity\":\"NORMAL\",\"courseIds\":[],\"excludeTopicIds\":[],\"requestKey\":\"key-1\"}")
+                .build();
+        when(aiProposalMapper.findProposedByRequestKey(USER_ID, "key-1")).thenReturn(stored);
+        when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(stored);
+        when(aiProposalService.get(77L, USER_ID)).thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
+
+        PlanDraftResponse again = service.createDraft(USER_ID, first);
+
+        assertThat(again.getProposalId()).isEqualTo(77L);
+        assertThat(again.getRequestContext().isRedraftable()).isTrue();
+        // 모델 호출과 저장은 첫 요청의 한 번뿐이다.
+        verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
+    }
+
     /*
      * 대화 경로는 generate와 persist를 나눠 부른다. persist가 제안을 그 대화와 ASSISTANT 메시지에
      * 연결하고, 상한(15/30)과 계획 메타데이터는 계획 화면과 같은 값이어야 한다 — 어느 탭에서
