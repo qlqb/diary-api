@@ -91,7 +91,8 @@ class PlanRedraftServiceTest {
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0, planningContextBuilder,
                 planJudgmentService, contextChangeSuggestionService, planItemService, new PlanProvenanceCodec(),
                 materialContextService, new PlanGenerationProgress(),
-                org.mockito.Mockito.mock(com.jungwoo.project.memo.ai.brief.PlanBriefService.class));
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.ai.brief.PlanBriefService.class),
+                TestTransactions.template());
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenAnswer(inv -> inv.getArgument(1));
         when(generator.generate(any(), any())).thenAnswer(inv -> new Generated(inv.getArgument(0), 600, 600, null, false,

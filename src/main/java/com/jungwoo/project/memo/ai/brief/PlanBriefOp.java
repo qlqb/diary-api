@@ -3,17 +3,19 @@ package com.jungwoo.project.memo.ai.brief;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 /**
- * 상담 모델이 낸 계획 합의 변경 <b>제안</b>. 서버(PlanBriefService)가 검증해 적용한다 — 모델은 합의를 직접 쓰지 않는다.
+ * 모델이 한 턴에서 내는 합의 변경 제안 하나. 서버가 검증해 {@link PlanBriefItem}에 반영한다 — 모델은 합의를 직접 쓰지 않는다.
  *
- * <ul>
- *   <li>ADD: 새 문장. speaker=USER면 사용자가 말한 것(즉시 유효), ASSISTANT면 AI 제안(후보).</li>
- *   <li>ACCEPT: 사용자가 기존 AI 제안을 받아들였다("좋아", "그대로").</li>
- *   <li>REJECT: 사용자가 기존 AI 제안을 거절했다.</li>
- *   <li>UPDATE: 사용자가 기존 문장을 고쳤다(text 필수). 최신 수정판이 우선한다.</li>
- *   <li>REMOVE: 더 이상 유효하지 않다(사용자가 철회).</li>
- * </ul>
- *
- * @param id 기존 항목 번호(ACCEPT/REJECT/UPDATE/REMOVE). ADD는 null
+ * @param op              ADD / ACCEPT / REJECT / UPDATE / REMOVE
+ * @param id              기존 항목 번호(ADD는 null)
+ * @param kind            항목 종류(ADD)
+ * @param text            한 문장(ADD/UPDATE)
+ * @param speaker         USER / ASSISTANT(ADD). 모르면 서버가 ASSISTANT(후보)로 낮춘다
+ * @param scope           THIS_DRAFT / PERIOD(ADD/UPDATE)
+ * @param topicId         관련 학습 항목
+ * @param courseId        관련 프로젝트
+ * @param executionItemId 관련 실행 항목
+ * @param periodStart     scope=PERIOD일 때 실제 시작 날짜(YYYY-MM-DD). "이번 주"는 발언 시점의 주(사용자 시간대)로 적는다
+ * @param periodEnd       scope=PERIOD일 때 실제 종료 날짜(YYYY-MM-DD)
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record PlanBriefOp(
@@ -25,6 +27,13 @@ public record PlanBriefOp(
         String scope,
         Long topicId,
         Long courseId,
-        Long executionItemId
+        Long executionItemId,
+        String periodStart,
+        String periodEnd
 ) {
+    /** 날짜 없이 만드는 경로(기존 호출부·테스트). */
+    public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
+                       Long courseId, Long executionItemId) {
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, null, null);
+    }
 }

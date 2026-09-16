@@ -68,6 +68,9 @@ public interface AiProposalMapper {
 
     AiProposal findProposedByRequestKey(@Param("userId") Long userId, @Param("requestKey") String requestKey);
 
+    /** 이 초안을 같은 조건으로 다시 만들어 대체한 열린 초안(plan_request_json.previousProposalId가 이 id). 없으면 null. */
+    AiProposal findProposedReplacing(@Param("userId") Long userId, @Param("previousProposalId") Long previousProposalId);
+
     AiProposal findBySourceMessageIdAndUserId(
             @Param("sourceMessageId") Long sourceMessageId,
             @Param("userId") Long userId

@@ -76,6 +76,12 @@ public class PlanDraftService {
     private final PlanMaterialContextService materialContextService;
     private final PlanGenerationProgress progress;
     private final com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    /**
+     * 저장 구간의 실제 트랜잭션 경계. createDraft·redraft가 같은 클래스의 persist를 직접 부르므로 @Transactional은
+     * 프록시를 거치지 않아 적용되지 않았다(제안 저장만 따로 커밋되고 계획 메타·요청 맥락·옛 초안 폐기는 각각 autocommit).
+     * 이 템플릿이 그 구간을 하나로 묶는다. 모델 호출·자료 선택은 여전히 이 밖이다.
+     */
+    private final org.springframework.transaction.support.TransactionTemplate transactions;
 
     private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
@@ -94,7 +100,7 @@ public class PlanDraftService {
     /** 계획 화면의 요청. 생성(트랜잭션 밖)과 저장(트랜잭션)을 나눠 부른다. 같은 요청 키면 다시 만들지 않는다. */
     public PlanDraftResponse createDraft(Long userId, PlanDraftRequest request) {
         String requestKey = request.getRequestKey();
-        PlanDraftResponse existing = existingForKey(userId, requestKey);
+        PlanDraftResponse existing = existingForKey(userId, requestKey, null);
         if (existing != null) {
             return existing;
         }
@@ -113,14 +119,29 @@ public class PlanDraftService {
         }
     }
 
-    /** 같은 요청 키로 이미 만든 열린 초안이 있으면 그것을 돌려준다(중복 클릭·재시도·늦은 응답). */
-    private PlanDraftResponse existingForKey(Long userId, String requestKey) {
+    /**
+     * 같은 요청 키로 이미 만든 열린 초안이 있으면 그것을 돌려준다(중복 클릭·재시도·늦은 응답).
+     *
+     * <p>키는 사용자 안에서만 찾고(조회가 user_id로 걸러진다), 요청 대상도 대조한다 — 다시 만들기의 키가 다른 원본 초안의
+     * 결과를 돌려주지 않게. 다시 만들기의 재시도는 원본이 이미 DISMISSED여도 여기서 먼저 답한다: 첫 시도가 성공했다면
+     * 원본을 폐기한 것이 바로 그 첫 시도이기 때문이다.
+     *
+     * @param expectedPrevious 다시 만들기라면 원본 초안 id, 계획 화면의 새 요청이면 null
+     */
+    private PlanDraftResponse existingForKey(Long userId, String requestKey, Long expectedPrevious) {
         if (requestKey == null || requestKey.isBlank()) {
             return null;
         }
         AiProposal proposal = aiProposalMapper.findProposedByRequestKey(userId, requestKey);
         if (proposal == null) {
             return null;
+        }
+        PlanRequestContext stored = readRequestContext(proposal.getPlanRequestJson());
+        Long storedPrevious = stored == null ? null : stored.previousProposalId();
+        if (!java.util.Objects.equals(storedPrevious, expectedPrevious)) {
+            log.warn("계획 초안: 요청 키 {}의 초안(proposalId={})은 다른 대상(previous={})의 결과라 돌려주지 않는다. 기대={}",
+                    requestKey, proposal.getProposalId(), storedPrevious, expectedPrevious);
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_IN_PROGRESS);
         }
         log.info("계획 초안: 같은 요청 키의 초안을 돌려준다. userId={}, requestKey={}, proposalId={}", userId, requestKey,
                 proposal.getProposalId());
@@ -218,6 +239,16 @@ public class PlanDraftService {
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }
+        /*
+         * 요청이 저장된 초안(새 운영 경로)은 옛 조각 재생성으로 가지 않는다 — 그 경로는 지시·과목 범위·상담 출처·합의·실행
+         * 기록·기존 항목 조정을 모르는 Spec으로 옛 생성기를 부른다. 저장된 요청 맥락이 있으면 같은 조건으로 다시 만들기가
+         * 곧 "표식을 반영한 재생성"이다(2026-09-17 지시서 §4). 옛 UI가 이 엔드포인트를 불러도 우회가 되지 않는다.
+         */
+        if (readRequestContext(proposal.getPlanRequestJson()) != null) {
+            log.info("조각만 재생성 요청을 같은 조건으로 다시 만들기로 보낸다: userId={}, proposalId={}", userId, proposalId);
+            return redraft(userId, proposalId, PlanRedraftRequest.builder().requestKey("regen-" + proposalId + "-"
+                    + java.util.UUID.randomUUID()).build());
+        }
         if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
             throw new ConflictException(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED);
         }
@@ -248,17 +279,19 @@ public class PlanDraftService {
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }
+        // 같은 요청 키의 완료 결과가 있으면 원본 상태보다 먼저 본다 — 첫 시도가 성공해 원본이 DISMISSED가 됐다는 이유로
+        // 재시도(늦은 응답·새로고침)를 막지 않는다.
+        String requestKey = body == null ? null : body.getRequestKey();
+        PlanDraftResponse existing = existingForKey(userId, requestKey, proposalId);
+        if (existing != null) {
+            return existing;
+        }
         if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
             throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
         }
         PlanRequestContext context = readRequestContext(proposal.getPlanRequestJson());
         if (context == null) {
             throw new ConflictException(ErrorCode.PLAN_REDRAFT_CONTEXT_MISSING);
-        }
-        String requestKey = body == null ? null : body.getRequestKey();
-        PlanDraftResponse existing = existingForKey(userId, requestKey);
-        if (existing != null) {
-            return existing;
         }
         if (!progress.start(requestKey, userId)) {
             throw new ConflictException(ErrorCode.PLAN_DRAFT_IN_PROGRESS);
@@ -296,14 +329,19 @@ public class PlanDraftService {
         }
     }
 
-    /** 옛 초안이 그 사이 확정·폐기됐으면(동시 요청) 409 — 늦은 결과가 최신 초안을 덮지 않는다. */
-    @Transactional
+    /**
+     * 옛 초안을 잠근 채(FOR UPDATE) 아직 PROPOSED인지 보고 → 새 제안·항목·계획 메타·요청 맥락 저장 → 옛 초안 폐기까지 한
+     * 트랜잭션이다. 그 사이 확정·폐기됐으면(동시 요청) 409 — 늦은 결과는 저장되지 않고 최신 초안을 덮지 않는다. 서로
+     * 다른 요청 키로 같은 원본을 동시에 대체해도 잠금이 직렬화하므로 유효한 대체 결과는 하나뿐이다.
+     */
     public PlanDraftResponse persistSuperseding(Long userId, Generated generated, Long conversationId, Long supersededId) {
-        AiProposal locked = aiProposalMapper.findByIdAndUserIdForUpdate(supersededId, userId);
-        if (locked == null || locked.getStatus() != AiProposalStatus.PROPOSED) {
-            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
-        }
-        return persist(userId, generated, conversationId, null, supersededId);
+        return transactions.execute(status -> {
+            AiProposal locked = aiProposalMapper.findByIdAndUserIdForUpdate(supersededId, userId);
+            if (locked == null || locked.getStatus() != AiProposalStatus.PROPOSED) {
+                throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+            }
+            return persistInTransaction(userId, generated, conversationId, null, supersededId);
+        });
     }
 
     PlanRequestContext readRequestContext(String json) {
@@ -364,15 +402,24 @@ public class PlanDraftService {
      * @param conversationId  대화에서 만들었으면 그 대화. 계획 화면이면 null.
      * @param sourceMessageId 대화에서 만들었으면 그 ASSISTANT 메시지. 계획 화면이면 null.
      */
-    @Transactional
     public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId, Long sourceMessageId) {
         return persist(userId, generated, conversationId, sourceMessageId, null);
     }
 
-    /** @param supersededProposalId 이 초안이 대체하는 기존 제안. 같은 트랜잭션에서 폐기한다 */
-    @Transactional
+    /**
+     * 저장 구간. 상담 경로(AiTurnLifecycleService의 턴 완료 트랜잭션)에서 불리면 그 트랜잭션에 참여하고, 계획 화면 경로에서
+     * 불리면 여기서 하나를 연다. 어느 쪽이든 제안·항목·계획 메타·요청 맥락·옛 초안 폐기가 함께 성공하거나 함께 되돌아간다.
+     *
+     * @param supersededProposalId 이 초안이 대체하는 기존 제안. 같은 트랜잭션에서 폐기한다
+     */
     public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId,
                                      Long sourceMessageId, Long supersededProposalId) {
+        return transactions.execute(status -> persistInTransaction(userId, generated, conversationId, sourceMessageId,
+                supersededProposalId));
+    }
+
+    private PlanDraftResponse persistInTransaction(Long userId, Generated generated, Long conversationId,
+                                                   Long sourceMessageId, Long supersededProposalId) {
         Spec spec = generated.spec();
         int days = spec.days();
         int maxItems = spec.maxItems();
@@ -469,10 +516,23 @@ public class PlanDraftService {
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }
+        /*
+         * 「이미 알아요」·되돌리기·다시 만들기는 새 초안을 만들고 옛 초안을 DISMISSED로 바꾼다. 상담 메시지나 세션이 옛 id를
+         * 들고 있어도 지금 열린 초안(대체 사슬의 끝)을 돌려준다 — 새로고침이 옛 초안이 아니라 최신 초안을 되찾게.
+         */
+        int hops = 0;
+        while (proposal.getStatus() == AiProposalStatus.DISMISSED && hops++ < 10) {
+            AiProposal replacement = aiProposalMapper.findProposedReplacing(userId, proposal.getProposalId());
+            if (replacement == null) {
+                break;
+            }
+            log.info("저장된 초안 다시 읽기: proposalId={}는 {}로 대체됐다", proposal.getProposalId(), replacement.getProposalId());
+            proposal = replacement;
+        }
         if (proposal.getPlanStartDate() == null || proposal.getPlanEndDate() == null) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
-        AiProposalResponse response = aiProposalService.get(proposalId, userId);
+        AiProposalResponse response = aiProposalService.get(proposal.getProposalId(), userId);
         PlanRequestContext context = readRequestContext(proposal.getPlanRequestJson());
         PlanProvenance provenance = provenanceCodec.fromJson(proposal.getPlanProvenanceJson());
         MaterialSelectionSummary selection = null;

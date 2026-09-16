@@ -199,7 +199,8 @@ public class AiWorkspaceContextBuilder {
     String buildPlanStateBlock(Long userId, LocalDate today) {
         try {
             StringBuilder sb = new StringBuilder();
-            List<com.jungwoo.project.memo.plan.domain.PlanVersion> plans = planVersionMapper.findCoveringDate(userId, today);
+            List<com.jungwoo.project.memo.plan.domain.PlanVersion> plans =
+                    com.jungwoo.project.memo.plan.PlanVersionService.latestPerPlanKey(planVersionMapper.findCoveringDate(userId, today));
             for (com.jungwoo.project.memo.plan.domain.PlanVersion plan : plans.stream().limit(3).toList()) {
                 sb.append("- 적용된 계획 \"").append(plan.getTitle()).append("\" ").append(plan.getStartDate()).append("~")
                         .append(plan.getEndDate());

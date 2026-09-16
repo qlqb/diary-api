@@ -121,6 +121,17 @@
         LIMIT 1
     </select>
 
+    <select id="findProposedReplacing" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE user_id = #{userId}
+          AND status  = 'PROPOSED'
+          AND plan_request_json IS NOT NULL
+          AND JSON_VALUE(plan_request_json, '$.previousProposalId') = #{previousProposalId}
+        ORDER BY proposal_id DESC
+        LIMIT 1
+    </select>
+
     <!-- 초안을 만든 요청. 같은 조건으로 다시 만들기(redraft)가 읽는다. -->
     <update id="updatePlanRequest">
         UPDATE ai_proposals

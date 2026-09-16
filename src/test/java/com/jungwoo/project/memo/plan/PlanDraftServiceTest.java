@@ -182,7 +182,7 @@ class PlanDraftServiceTest {
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
                 planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService,
                 new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService,
-                new PlanGenerationProgress(), planBriefService);
+                new PlanGenerationProgress(), planBriefService, TestTransactions.template());
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
