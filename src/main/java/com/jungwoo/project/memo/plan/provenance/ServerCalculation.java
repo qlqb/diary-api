@@ -34,7 +34,10 @@ public record ServerCalculation(
         AVAILABILITY_ESTIMATE,
 
         /** 강도 비율로 정한 학습 예산(분). 가용시간 추정을 입력으로 받는다. */
-        STUDY_BUDGET
+        STUDY_BUDGET,
+
+        /** 자료 선택 결과: 모델이 고른 구간·항목과 이유, 검토 범위, 서버가 읽어 넣은 원문 범위. */
+        MATERIAL_SELECTION
     }
 
     public enum InputLineage {

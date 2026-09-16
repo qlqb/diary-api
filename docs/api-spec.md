@@ -348,3 +348,49 @@ sections[{sectionId, materialId, title, locator}]}`. 인용한 구간이 없으�
 
 `POST /api/plans/draft`에 `excludeTopicIds`(이번 요청에서만 제외)가 추가됐고, 응답에 `pendingMaterials[{materialId, filename,
 state, courseId}]`가 추가됐다.
+
+## Plan Draft — AI 자료 선택과 같은 조건으로 다시 만들기 (2026-09-15)
+
+설계는 `docs/product/15-material-auto-analysis.md` §7. 기본 AI 경로(`plan.draft.generator=AI`)에서 초안 1회는 모델 2~3회다
+(선택 1, 후보가 커 접혔으면 펼친 묶음 선택 1, 계획 1).
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/plans/draft` | 요청에 `requestedMaterialIds?: number[]`, `requestedSectionIds?: number[]`(이번 요청의 지정 자료 — 영구 연결 아님)가 추가됐다 |
+| POST | `/api/plans/proposals/{proposalId}/redraft` | `{excludeTopicIds?: number[], requestedMaterialIds?: number[]}`. 초안을 만든 요청(기간·강도·제목·지시·범위·지정 자료·대화)을 그대로 쓰고, 보낸 필드만 바꾼다(null이면 저장된 값 유지, 빈 배열이면 비움). 새 초안을 저장(상담 초안이면 같은 대화)하고 옛 초안을 DISMISSED로 바꾼다. 응답은 `PlanDraftResponse` |
+
+응답 `PlanDraftResponse`에 추가된 필드:
+
+```text
+materialSelection: {
+  status: SELECTED | EMPTY | NO_CANDIDATES, mode: NONE | FULL | FOLDED_GROUPS | FOLDED_COURSES,
+  selectionCalls: 1..2, expanded, candidateTotal, candidateShown,
+  sections[{sectionId, materialId, courseId, topicId, title, locator, filename, reason,
+            outcome: FULL|PARTIAL|EXCERPT_ONLY|DROPPED_DELETED|DROPPED_CHANGED|DROPPED_SCOPE|NOT_RETRIEVED_BUDGET,
+            retrievedRange, retrievedChars, refId}],
+  topics[{topicId, courseId, title, reason}],
+  unreviewed[{courseTitle, title, topics, sections, summarized}],   // 이번에 하나씩 보지 못한 범위
+  insufficientEvidence, note, unknownIds, overLimit,
+  requestedMaterials[{materialId, filename, courseId, source: EXPLICIT|INSTRUCTION}],
+  ambiguities[{mention, candidates[{materialId, filename, courseId, source}]}],
+  excludedTopics[{topicId, title, reason}],
+  selectionInputTokens: number[], planInputTokens, perSectionChars
+}
+requestContext: { source: PLAN_SCREEN | CONVERSATION, courseIds, excludedTopics[{topicId, title}],
+                  requestedMaterials[…], redraftable }
+```
+
+근거 스냅샷(`GET /api/plans/drafts/{id}/provenance`): 원문을 실은 구간은 `MATERIAL_SECTION`의 providedValue에 `retrievedRange`·
+`retrievedChars`·`retrieval`·`selectionReason`이 붙고 `parentSourceId`는 학습 항목이다. 서버 계산에 `MATERIAL_SELECTION`이 추가됐다.
+
+오류:
+
+| 코드 | 상태 | 뜻 |
+|---|---|---|
+| `E400_033` | 400 | 지정 자료가 없거나 다른 사용자·요청 범위 밖 |
+| `E400_034` | 400 | 판단 사실만으로 입력 상한을 넘음 — 기간·프로젝트 범위를 좁혀 달라 |
+| `E409_019` | 409 | 요청이 저장되지 않은 옛 초안이라 같은 조건으로 다시 만들 수 없음 |
+| `E409_020` | 409 | 이미 확정했거나 다른 초안으로 바뀐 초안 |
+| `E503_003` | 503 | 자료 선택 호출 실패·시간 초과(기존 초안 유지, 서버 순위로 대체하지 않음) |
+| `E503_004` | 503 | 자료 선택 응답을 읽지 못함(구조 없음, 보여 주지 않은 id뿐) |
+| `E503_005` | 503 | 계획 호출은 성공했지만 쓸 항목이 없음(빈 초안 저장 없음) |

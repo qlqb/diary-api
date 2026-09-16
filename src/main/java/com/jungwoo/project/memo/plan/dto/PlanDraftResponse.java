@@ -103,6 +103,40 @@ public class PlanDraftResponse {
      */
     private List<PendingMaterial> pendingMaterials;
 
+    /**
+     * 이번 생성에서 모델이 고른 자료와 서버가 읽어 넣은 원문 범위, 검토하지 못한 범위. 자료 선택을 거치지 않은
+     * 경로(v0·판단)는 null.
+     */
+    private com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary materialSelection;
+
+    /** 이 초안을 만든 요청 중 화면이 알아야 하는 것. 다시 만들기(redraft)는 서버에 남은 요청을 쓴다. */
+    private RequestContextView requestContext;
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RequestContextView {
+        /** CONVERSATION / PLAN_SCREEN */
+        private String source;
+        private List<Long> courseIds;
+        /** 「이번만 빼기」 목록(제목은 알 때만). 다시 만들 때 이 목록을 고쳐 보낸다. */
+        private List<ExcludedTopic> excludedTopics;
+        /** 이번 요청에서 지정한 자료(화면 지정 + 지시 문장에서 찾은 것). */
+        private List<com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary.RequestedMaterialView> requestedMaterials;
+        /** 같은 조건으로 다시 만들 수 있는가(요청이 저장된 초안인가). */
+        private boolean redraftable;
+    }
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ExcludedTopic {
+        private Long topicId;
+        private String title;
+    }
+
     @lombok.Getter
     @lombok.Builder
     @NoArgsConstructor

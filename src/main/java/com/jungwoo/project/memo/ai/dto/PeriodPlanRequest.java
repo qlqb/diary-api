@@ -32,4 +32,11 @@ public class PeriodPlanRequest {
     private PlanIntensity intensity;
 
     private List<Long> courseIds;
+    /** 상담에서 지목·선택한 자료. 비어 있으면 대화 문장 속 파일 이름을 서버가 접근 가능한 목록에서 찾는다. */
+    private List<Long> requestedMaterialIds;
+
+    /** 지정 자료 없이 만드는 기존 모양(OFFER 카드). */
+    public PeriodPlanRequest(LocalDate periodStartDate, LocalDate periodEndDate, PlanIntensity intensity, List<Long> courseIds) {
+        this(periodStartDate, periodEndDate, intensity, courseIds, null);
+    }
 }

@@ -65,6 +65,10 @@ public enum ErrorCode {
     TOPIC_CHANGE_INVALID(HttpStatus.BAD_REQUEST, "E400_030", "적용할 수 없는 학습 구조 변경입니다"),
     ASSIGNMENT_DUE_INVALID(HttpStatus.BAD_REQUEST, "E400_031", "마감 입력이 올바르지 않습니다"),
     PLAN_ITEM_DETAIL_UNAVAILABLE(HttpStatus.BAD_REQUEST, "E400_032", "이 항목에는 자세한 안내를 만들 근거가 없습니다"),
+    PLAN_SCOPE_TOO_LARGE(HttpStatus.BAD_REQUEST, "E400_034",
+            "한 번에 계획할 범위가 너무 커서 꼭 필요한 사실만으로도 입력 한도를 넘어요. 기간이나 프로젝트 범위를 좁혀 주세요"),
+    PLAN_REQUESTED_MATERIAL_INVALID(HttpStatus.BAD_REQUEST, "E400_033",
+            "지정한 자료를 이 계획에 쓸 수 없습니다(삭제됐거나 선택한 프로젝트에 연결돼 있지 않습니다)"),
 
     // ===== 401 Unauthorized =====
     UNAUTHORIZED(HttpStatus.UNAUTHORIZED, "E401_001", "인증이 필요합니다"),
@@ -134,6 +138,9 @@ public enum ErrorCode {
     TOPIC_TREE_CONFLICT(HttpStatus.CONFLICT, "E409_017",
             "이 변경안을 만든 뒤 학습 구조가 바뀌었습니다. 자료를 다시 분석하면 새 변경안이 만들어집니다"),
     TOPIC_CHANGE_PROPOSAL_RESOLVED(HttpStatus.CONFLICT, "E409_018", "이미 처리된 변경안입니다"),
+    PLAN_REDRAFT_CONTEXT_MISSING(HttpStatus.CONFLICT, "E409_019",
+            "이 초안은 예전 방식으로 만들어져 같은 조건으로 다시 만들 수 없습니다. 새로 만들어 주세요"),
+    PLAN_DRAFT_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_020", "이미 확정했거나 다른 초안으로 바뀐 계획입니다"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",
@@ -146,7 +153,13 @@ public enum ErrorCode {
 
     // ===== 503 Service Unavailable =====
     AI_NOT_CONFIGURED(HttpStatus.SERVICE_UNAVAILABLE, "E503_001", "AI가 설정되지 않았습니다"),
-    AI_GENERATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "E503_002", "AI 제안 생성에 실패했습니다");
+    AI_GENERATION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "E503_002", "AI 제안 생성에 실패했습니다"),
+    PLAN_MATERIAL_SELECTION_FAILED(HttpStatus.SERVICE_UNAVAILABLE, "E503_003",
+            "계획에 쓸 자료를 고르지 못했습니다. 잠시 뒤 다시 시도해 주세요"),
+    PLAN_MATERIAL_SELECTION_INVALID(HttpStatus.SERVICE_UNAVAILABLE, "E503_004",
+            "자료 선택 응답을 읽지 못했습니다. 다시 시도해 주세요"),
+    PLAN_DRAFT_NO_ITEMS(HttpStatus.SERVICE_UNAVAILABLE, "E503_005",
+            "이번 조건으로 제안할 학습 항목을 만들지 못했습니다. 지시를 바꾸거나 과제 작업도 넣어 달라고 요청해 보세요");
 
     /** HTTP 상태 코드 */
     private final HttpStatus status;
