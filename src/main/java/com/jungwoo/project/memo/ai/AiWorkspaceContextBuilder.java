@@ -98,6 +98,14 @@ public class AiWorkspaceContextBuilder {
     private final RoutineOccurrenceService routineOccurrenceService;
     private final CommitmentService commitmentService;
     private final AvailabilityEstimateService availabilityEstimateService;
+    private final com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService executionEvidenceService;
+    private final com.jungwoo.project.memo.plan.PlanVersionMapper planVersionMapper;
+    private final com.jungwoo.project.memo.plan.PlanStrategyCodec planStrategyCodec;
+    private final com.jungwoo.project.memo.ai.AiProposalMapper aiProposalMapper;
+
+    /** [실행 기록] 블록의 글자 상한. 화면 상태 상한과 따로 둔다 — 상태가 길다고 기록이 통째로 잘리지 않게. */
+    @Value("${ai.workspace.max-history-chars:1800}")
+    private int maxHistoryChars = 1800;
 
     /**
      * @param now 이 턴의 "지금"(사용자 시간대 기준). 스트리밍 도중 다시 계산하지 않도록
@@ -162,6 +170,19 @@ public class AiWorkspaceContextBuilder {
 
         String state = truncate(sb.toString(), maxStateChars);
 
+        /*
+         * 계획 상태와 실행 기록은 상태 상한과 따로 싣는다. "지난주 자료구조 많이 못 했어"에 답하려면 상담도 계획 생성과
+         * 같은 근거(실행 기록)를 봐야 한다 — 총계 한 줄이 아니라 항목별 경과다.
+         */
+        String plans = buildPlanStateBlock(userId, today);
+        if (!plans.isEmpty()) {
+            state = state + "\n" + plans;
+        }
+        String history = buildHistoryBlock(userId, courseId, today);
+        if (!history.isEmpty()) {
+            state = state + "\n" + history;
+        }
+
         if (courseId != null) {
             String materials = buildMaterialExcerpt(userId, courseId);
             if (!materials.isEmpty()) {
@@ -169,6 +190,83 @@ public class AiWorkspaceContextBuilder {
             }
         }
         return state;
+    }
+
+    /**
+     * [계획 상태] — 오늘을 덮는 확정 계획(목표·전략 요약)과 아직 적용하지 않은 계획 초안. 새 대화에서도 적용된 계획과
+     * 열린 초안을 이어 볼 수 있어야 한다.
+     */
+    String buildPlanStateBlock(Long userId, LocalDate today) {
+        try {
+            StringBuilder sb = new StringBuilder();
+            List<com.jungwoo.project.memo.plan.domain.PlanVersion> plans = planVersionMapper.findCoveringDate(userId, today);
+            for (com.jungwoo.project.memo.plan.domain.PlanVersion plan : plans.stream().limit(3).toList()) {
+                sb.append("- 적용된 계획 \"").append(plan.getTitle()).append("\" ").append(plan.getStartDate()).append("~")
+                        .append(plan.getEndDate());
+                com.jungwoo.project.memo.plan.domain.PlanStrategy strategy = planStrategyCodec.fromJson(plan.getStrategyJson());
+                if (strategy != null) {
+                    if (strategy.goal() != null) {
+                        sb.append(" · 목표: ").append(strategy.goal());
+                    }
+                    if (strategy.keptDecisions() != null && !strategy.keptDecisions().isEmpty()) {
+                        sb.append(" · 유지한 결정: ").append(String.join("; ", strategy.keptDecisions().stream().limit(4).toList()));
+                    }
+                }
+                sb.append('\n');
+            }
+            com.jungwoo.project.memo.ai.domain.AiProposal open = aiProposalMapper.findLatestOpenPlanProposal(userId);
+            if (open != null) {
+                sb.append("- 아직 적용하지 않은 계획 초안이 있다(").append(open.getPlanStartDate()).append("~")
+                        .append(open.getPlanEndDate()).append(", 계획 화면에서 검토·확정 가능). 같은 기간을 또 만들자고 하기 전에 그것을 언급한다\n");
+            }
+            if (sb.length() == 0) {
+                return "";
+            }
+            return "[계획 상태]\n" + sb + "\n";
+        } catch (Exception e) {
+            log.warn("계획 상태 블록 생략: userId={}, {}", userId, e.getClass().getSimpleName());
+            return "";
+        }
+    }
+
+    /**
+     * [실행 기록] — 최근 2주의 항목별 경과. 관찰 사실만 싣고 원인을 붙이지 않는다. 프로젝트 대화면 그 프로젝트만,
+     * 아니면 전체(상한 안에서 기록·이동·메모가 있는 항목 우선).
+     */
+    String buildHistoryBlock(Long userId, Long courseId, LocalDate today) {
+        try {
+            com.jungwoo.project.memo.plan.evidence.ExecutionEvidence evidence = executionEvidenceService.collect(userId,
+                    today.minusDays(14), today, courseId == null ? List.of() : List.of(courseId));
+            if (evidence.isEmpty()) {
+                return "";
+            }
+            StringBuilder sb = new StringBuilder("[실행 기록] ").append(evidence.from()).append(" ~ ").append(evidence.to())
+                    .append(" (관찰 사실이다. 원인은 사용자에게 확인한다. \"실제 시간 미기록\"은 0분이 아니다)\n");
+            Map<Long, String> titles = courseService.list(userId, CourseStatus.ACTIVE).stream()
+                    .collect(Collectors.toMap(c -> c.getCourseId(), c -> c.getTitle(), (a, b) -> a));
+            for (com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.CourseSummary summary : evidence.byCourse().values()) {
+                String title = summary.courseId() == null ? "프로젝트 없음"
+                        : titles.getOrDefault(summary.courseId(), "프로젝트 #" + summary.courseId());
+                sb.append("- ").append(title).append(": ")
+                        .append(com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService.summaryLine(summary)).append('\n');
+            }
+            List<com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.ItemHistory> items = new java.util.ArrayList<>(evidence.items());
+            items.sort(java.util.Comparator.comparingInt((com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.ItemHistory h) ->
+                    (h.userNote() != null ? 4 : 0) + (h.recordCount() > 0 ? 3 : 0) + Math.min(3, h.movedCount())
+                            + Math.min(2, h.reducedCount())).reversed());
+            for (com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.ItemHistory h : items) {
+                String line = "- " + com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService.describe(h) + "\n";
+                if (sb.length() + line.length() > maxHistoryChars) {
+                    sb.append("- … (나머지는 상한 때문에 생략)\n");
+                    break;
+                }
+                sb.append(line);
+            }
+            return sb.append('\n').toString();
+        } catch (Exception e) {
+            log.warn("실행 기록 블록 생략: userId={}, {}", userId, e.getClass().getSimpleName());
+            return "";
+        }
     }
 
     // ===== 프로젝트 =====

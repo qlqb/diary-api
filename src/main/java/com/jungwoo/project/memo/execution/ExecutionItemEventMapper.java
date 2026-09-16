@@ -17,4 +17,8 @@ public interface ExecutionItemEventMapper {
      */
     List<ExecutionItemEvent> findByExecutionItemIdAndUserId(@Param("executionItemId") Long executionItemId,
                                                            @Param("userId") Long userId);
+
+    /** 여러 조각의 사건을 한 번에. 실행 기록 근거(ExecutionEvidenceService)가 항목마다 조회하지 않게 한다. */
+    List<ExecutionItemEvent> findByExecutionItemIds(@Param("userId") Long userId,
+                                                    @Param("executionItemIds") List<Long> executionItemIds);
 }

@@ -87,6 +87,11 @@ public record AiTurnStructured(
         /** ASK | PROPOSE | CHAT. 힌트일 뿐 최종 action은 서버가 정한다. */
         String actionHint,
         /** "그냥 만들어줘", "바로 해줘"처럼 즉시 생성을 요구했으면 true. */
-        Boolean userTriggered
+        Boolean userTriggered,
+        /**
+         * 계획 합의(ai_plan_briefs) 변경 <b>제안</b>. 사용자가 말한 목표·우선순위·제외·시간 제약·어려움과, AI가 제안한
+         * 방향에 대한 수락·거절·수정을 서버가 검증해 적용한다(PlanBriefService). 없으면 null(예전 출력 호환).
+         */
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> planBrief
 ) {
 }

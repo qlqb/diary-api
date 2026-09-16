@@ -74,6 +74,9 @@ public class PlanReviewService {
         List<PlanReviewResponse.PlanReviewItem> items = new ArrayList<>();
         int plannedMinutes = 0;
         int completedMinutes = 0;
+        int measuredMinutes = 0;
+        int estimatedMinutes = 0;
+        int unmeasuredDone = 0;
 
         for (PlanSnapshotItem planned : snapshot) {
             plannedMinutes += planned.expectedMinutes() != null ? planned.expectedMinutes() : 0;
@@ -82,8 +85,23 @@ public class PlanReviewService {
             ExecutionRecord latest = latestRecord(records);
 
             PlanReviewCategory category = classify(current, latest);
+            String actualSource = "NONE";
             if (category == PlanReviewCategory.DONE || category == PlanReviewCategory.PARTIAL_DONE) {
-                completedMinutes += actualMinutes(latest, planned);
+                /*
+                 * 실측과 추정을 가른다. 시간을 적지 않은 완료 항목은 예정 시간으로 세되(예전 화면의 "다 했는데 0시간"을
+                 * 막는다) 그것을 실측으로 부르지 않는다 — 학습 속도·원인 분석은 measuredMinutes만 본다.
+                 */
+                if (latest != null && latest.getActualMinutes() != null) {
+                    measuredMinutes += latest.getActualMinutes();
+                    completedMinutes += latest.getActualMinutes();
+                    actualSource = "MEASURED";
+                } else {
+                    int estimate = planned.expectedMinutes() != null ? planned.expectedMinutes() : 0;
+                    estimatedMinutes += estimate;
+                    completedMinutes += estimate;
+                    unmeasuredDone++;
+                    actualSource = "ESTIMATED";
+                }
             }
 
             items.add(PlanReviewResponse.PlanReviewItem.builder()
@@ -97,6 +115,7 @@ public class PlanReviewService {
                     .currentDate(current != null ? current.getScheduledDate() : null)
                     .expectedMinutes(planned.expectedMinutes())
                     .actualMinutes(latest != null ? latest.getActualMinutes() : null)
+                    .actualMinutesSource(actualSource)
                     .recordCount(records.size())
                     .build());
         }
@@ -118,6 +137,8 @@ public class PlanReviewService {
                     .currentDate(item.getScheduledDate())
                     .expectedMinutes(item.getExpectedMinutes())
                     .actualMinutes(latestRecord(records) != null ? latestRecord(records).getActualMinutes() : null)
+                    .actualMinutesSource(latestRecord(records) != null && latestRecord(records).getActualMinutes() != null
+                            ? "MEASURED" : "NONE")
                     .recordCount(records.size())
                     .build());
         }
@@ -132,6 +153,9 @@ public class PlanReviewService {
                 .targetMinutes(plan.getTargetMinutes())
                 .plannedMinutes(plannedMinutes)
                 .completedMinutes(completedMinutes)
+                .measuredMinutes(measuredMinutes)
+                .estimatedMinutes(estimatedMinutes)
+                .unmeasuredDoneCount(unmeasuredDone)
                 .items(items)
                 .build();
     }
@@ -160,8 +184,17 @@ public class PlanReviewService {
         if (latest.getTargetMinutes() != null) {
             sb.append(" · 목표 ").append(latest.getTargetMinutes()).append("분");
         }
-        sb.append(" · 실제 ").append(review.getCompletedMinutes()).append("분 수행")
-                .append(" (완료 ").append(done)
+        /*
+         * 실측과 추정을 한 숫자로 뭉치지 않는다. "실제 N분 수행"이라고 적으면 시간을 적지 않은 완료 항목의 예정 시간이
+         * 관측된 실제 시간으로 읽히고, 그 위에서 학습 속도·실패 원인이 추정된다.
+         */
+        sb.append(" · 실제 측정 ").append(review.getMeasuredMinutes() == null ? 0 : review.getMeasuredMinutes()).append("분");
+        int unmeasured = review.getUnmeasuredDoneCount() == null ? 0 : review.getUnmeasuredDoneCount();
+        if (unmeasured > 0) {
+            sb.append(" · 완료했지만 시간 미기록 ").append(unmeasured).append("건(예정 합 ")
+                    .append(review.getEstimatedMinutes() == null ? 0 : review.getEstimatedMinutes()).append("분, 추정)");
+        }
+        sb.append(" (완료 ").append(done)
                 .append(", 아직 남음 ").append(remaining)
                 .append(", 날짜 미정 ").append(unplaced).append(")");
         return sb.toString();
@@ -215,15 +248,6 @@ public class PlanReviewService {
             return PlanReviewMoveFlag.SCHEDULED;
         }
         return after == null ? PlanReviewMoveFlag.UNPLACED_AGAIN : PlanReviewMoveFlag.MOVED;
-    }
-
-    private int actualMinutes(ExecutionRecord latest, PlanSnapshotItem planned) {
-        if (latest != null && latest.getActualMinutes() != null) {
-            return latest.getActualMinutes();
-        }
-        // 기록에 실제 시간이 없으면 계획했던 시간으로 센다 — 완료로 판정된 항목을 0분으로
-        // 두면 "다 했는데 0시간 했어요"가 된다.
-        return planned.expectedMinutes() != null ? planned.expectedMinutes() : 0;
     }
 
     private Map<Long, List<ExecutionRecord>> loadRecords(Long userId, Set<Long> itemIds) {

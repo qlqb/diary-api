@@ -39,8 +39,20 @@ public class PlanReviewResponse {
     /** 스냅샷 항목들의 예상 시간 합. */
     private Integer plannedMinutes;
 
-    /** 완료·일부 진행 항목의 실제 시간 합. 기록이 없으면 예상 시간으로 대신하지 않는다. */
+    /**
+     * 완료·일부 진행 항목의 수행 시간 합. 실제로 적힌 시간(measuredMinutes)과, 시간을 적지 않은 항목의 예정 시간
+     * (estimatedMinutes)을 더한 값이다 — 예전 화면 호환용이고, 학습 속도나 원인 분석에는 measuredMinutes만 쓴다.
+     */
     private Integer completedMinutes;
+
+    /** 완료·일부 진행 항목 중 기록에 실제로 적힌 수행 시간의 합(측정). */
+    private Integer measuredMinutes;
+
+    /** 완료 표시는 했지만 시간을 적지 않은 항목의 예정 시간 합(추정). 실측이 아니다. */
+    private Integer estimatedMinutes;
+
+    /** 완료·일부 진행 항목 중 시간 미기록 항목 수. */
+    private Integer unmeasuredDoneCount;
 
     private List<PlanReviewItem> items;
 
@@ -78,6 +90,9 @@ public class PlanReviewResponse {
         private Integer expectedMinutes;
 
         private Integer actualMinutes;
+
+        /** actualMinutes의 출처. MEASURED(기록에 적힌 값) / ESTIMATED(미기록이라 예정 시간으로 셈) / NONE(수행 기록 없음). */
+        private String actualMinutesSource;
 
         /** 이 항목에 달린 기록 건수. 최신 1건만 판정에 썼다는 사실을 추적할 수 있게 한다. */
         private int recordCount;
