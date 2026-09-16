@@ -16,6 +16,8 @@ import java.time.YearMonth;
 
 /**
  * 사용자별 일/월 AI 호출 한도. Redis 등 외부 시스템 없이 기존 ai_usage_logs 집계만으로 계산한다.
+ * 한도에는 상담(AI_CONSULTATION) 호출만 센다 — 자료 자동 분석·계획 초안처럼 사용자가 상담을 하지 않아도
+ * 쌓이는 기록이 상담을 막지 않게 한다(자료 29개 업로드 직후 분석 기록만으로 상담 한도가 찬 적이 있다).
  * 전체 프롬프트나 API 키는 절대 로그에 남기지 않는다 — 메타데이터만 기록한다.
  */
 @Slf4j
@@ -36,14 +38,14 @@ public class AiUsageLimitService {
     @Transactional(readOnly = true)
     public void checkLimit(Long userId) {
         LocalDateTime startOfDay = LocalDate.now().atStartOfDay();
-        int todayCount = aiUsageLogMapper.countByUserIdSince(userId, startOfDay);
+        int todayCount = aiUsageLogMapper.countByUserIdAndFeatureSince(userId, FEATURE, startOfDay);
         if (todayCount >= dailyLimit) {
             log.warn("AI 일일 호출 한도 초과: userId={}, count={}, limit={}", userId, todayCount, dailyLimit);
             throw new TooManyRequestsException(ErrorCode.AI_USAGE_LIMIT_EXCEEDED);
         }
 
         LocalDateTime startOfMonth = YearMonth.now().atDay(1).atStartOfDay();
-        int monthCount = aiUsageLogMapper.countByUserIdSince(userId, startOfMonth);
+        int monthCount = aiUsageLogMapper.countByUserIdAndFeatureSince(userId, FEATURE, startOfMonth);
         if (monthCount >= monthlyLimit) {
             log.warn("AI 월간 호출 한도 초과: userId={}, count={}, limit={}", userId, monthCount, monthlyLimit);
             throw new TooManyRequestsException(ErrorCode.AI_USAGE_LIMIT_EXCEEDED);

@@ -40,10 +40,11 @@
         )
     </insert>
 
-    <select id="countByUserIdSince" resultType="int">
+    <select id="countByUserIdAndFeatureSince" resultType="int">
         SELECT COUNT(*)
         FROM ai_usage_logs
         WHERE user_id    = #{userId}
+          AND feature    = #{feature}
           AND created_at &gt;= #{sinceInclusive}
     </select>
 
