@@ -453,7 +453,10 @@ note = 기존 완료 데이터 이전: 실제 수행 시간 미확인
 
 | 테이블 / 컬럼 | 뜻 | 유일성·상태 |
 |---|---|---|
-| `material_text_units` | 추출 단위(PDF 페이지·PPTX 슬라이드·텍스트 블록 — 원본 없는 옛 자료와 HWP·IPYNB·ZIP). `unit_no`는 사람이 보는 번호 | UNIQUE (material_id, file_hash, unit_index) |
+| `material_text_units` | 추출 단위. `unit_type` PDF_PAGE·PPTX_SLIDE·NOTEBOOK_CELL(노트북 셀, 1-based 원본 순서)·TEXT_BLOCK(쪽 구조가 없는 HWP·HWPX와 원본 없는 옛 자료). `unit_no`는 사람이 보는 번호 | UNIQUE (material_id, file_hash, unit_index) |
+| `material_zip_imports` | 압축 가져오기 한 건. `status` PREPARING·READY·IMPORTING·COMPLETED·PARTIAL·FAILED·CANCELLED·EXPIRED. `storage_path`는 임시 보관한 원본(끝나거나 기한이 지나면 NULL) | 2026-09-16 |
+| `material_zip_import_entries` | 압축 안 파일 하나. `entry_path`(표시용 원래 경로), `supported`/`skip_reason`, `status` PENDING·QUEUED·IMPORTING·DONE·FAILED·UNSUPPORTED, `material_id` | UNIQUE (import_id, entry_index), UNIQUE (material_id) — 한 항목이 자료를 둘 만들 수 없다 |
+| `course_materials` 추가 열 | `extraction_warning`(읽었지만 일부를 못 읽음), `source_archive_name`·`source_entry_path`(압축에서 가져온 자료의 출처) | 2026-09-16 |
 | `material_analysis_jobs` | 백그라운드 작업. kind CONTENT(course_id=0) / LINK. `lease_owner/until/token`, `checkpoint_json`, `attempt/max_attempts/next_run_at` | UNIQUE (material_id, course_id, job_kind, file_hash, analysis_version). status QUEUED·RUNNING·DONE·PARTIAL·FAILED·UNAVAILABLE·PAUSED·CANCELLED |
 | `material_sections` | 구간. `unit_start/end`(물리), `printed_page_*`(확인된 인쇄 쪽수만), `roles_json`, `task_text`, `excerpt`, `assignment_cue/quote`, `date_candidates_json` | UNIQUE (material_id, file_hash, analysis_version, dedupe_key). status ACTIVE·SUPERSEDED |
 | `topic_material_links` | 토픽↔구간 N:M. `section_id`=0은 자료 전체. `origin` BACKFILL_SOURCE·PROPOSAL_APPLIED·USER | UNIQUE (topic_id, material_id, section_id). status ACTIVE·REMOVED |

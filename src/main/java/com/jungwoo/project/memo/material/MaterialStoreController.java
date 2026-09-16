@@ -37,6 +37,7 @@ import java.util.List;
  * GET    /api/materials/{id}                   단건 + 연결 목록 + 분석 이력
  * GET    /api/materials/{id}/file              원본 파일 (inline)
  * DELETE /api/materials/{id}                   자료 삭제 (원본 파일까지)
+ * POST   /api/materials/{id}/extraction/retry  저장된 원본으로 본문만 다시 읽는다 (분석 재시도와 다른 일)
  * POST   /api/materials/link-proposal          미연결 자료를 어디에 넣을지 제안 (저장하지 않는다)
  * POST   /api/materials/link-proposal/apply    승인한 제안을 적용 (단일 트랜잭션)
  * POST   /api/materials/{id}/links             프로젝트에 연결. 이때 materialType이 정해진다
@@ -117,6 +118,22 @@ public class MaterialStoreController {
             response.contentLength(file.sizeBytes());
         }
         return response.body(file.resource());
+    }
+
+    /**
+     * 본문 추출만 다시 한다. 파서가 고쳐졌거나 일시적인 실패였을 때, 사용자가 같은 파일을 다시
+     * 올리지 않아도 되게 하는 경로다.
+     *
+     * 분석 재시도(/api/materials/{id}/analysis/retry)와 다른 일이다 — 저쪽은 이미 읽은 원문을
+     * 모델에게 다시 보내고, 이쪽은 아직 읽지 못한 원문을 다시 읽는다. 이미 읽은 자료에 부르면 409다.
+     */
+    @PostMapping("/{materialId}/extraction/retry")
+    public ResponseEntity<MaterialStoreItemResponse> retryExtraction(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long materialId
+    ) {
+        log.info("POST /api/materials/{}/extraction/retry - userId={}", materialId, principal.getUserId());
+        return ResponseEntity.ok(materialService.retryExtraction(principal.getUserId(), materialId));
     }
 
     /** 원본 파일까지 지운다. 연결 해제와는 다른 액션이다. */

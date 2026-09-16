@@ -46,6 +46,14 @@ public interface CourseMaterialMapper {
     /** soft delete. 파일 원문은 이 호출 이후 서비스가 별도로 디스크에서 지운다. */
     void markDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
+    /** 재추출 결과(상태·본문·오류·경고·쪽수)를 덮어쓴다. 다른 열은 건드리지 않는다. */
+    int updateExtraction(@Param("materialId") Long materialId, @Param("userId") Long userId,
+                         @Param("extractionStatus") com.jungwoo.project.memo.material.domain.ExtractionStatus extractionStatus,
+                         @Param("extractedText") String extractedText,
+                         @Param("extractionError") String extractionError,
+                         @Param("extractionWarning") String extractionWarning,
+                         @Param("pageCount") Integer pageCount);
+
     int updatePageCount(@Param("materialId") Long materialId, @Param("userId") Long userId,
                         @Param("pageCount") Integer pageCount);
 

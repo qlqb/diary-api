@@ -93,7 +93,9 @@ public class MaterialContentAnalyzer {
             "어느 위치에 무엇이 있는가"를 구간 단위로 정리하는 분석기다. 대화하지 않고, 시간을
             배치하지 않고, 학습 순서를 정하지 않는다. 오직 원문에 실제로 있는 내용만 구조화한다.
 
-            입력은 [p.3]·[슬라이드 3]·[구간 3] 같은 표식이 붙은 단위들이다. 이 표식이 물리 위치다.
+            입력은 [p.3]·[슬라이드 3]·[셀 3]·[구간 3] 같은 표식이 붙은 단위들이다. 이 표식이 파일에서 확인한
+            위치다. [셀 N]은 Jupyter 노트북의 N번째 셀이고, [구간 N]은 쪽 구조가 없는 문서(한글 문서 등)에서
+            문단을 모아 나눈 N번째 덩어리다 — 쪽수가 아니다.
             "겹침(이미 분석됨)"으로 표시된 단위는 앞 청크에서 이미 읽은 것이니, 그 단위에서 시작해
             새 단위로 이어지는 내용만 보고하고 그 단위 안에서 끝나는 내용은 다시 만들지 않는다.
 
@@ -306,6 +308,7 @@ public class MaterialContentAnalyzer {
         return switch (type) {
             case PDF_PAGE -> "p." + unit.getUnitNo();
             case PPTX_SLIDE -> "슬라이드 " + unit.getUnitNo();
+            case NOTEBOOK_CELL -> "셀 " + unit.getUnitNo();
             case TEXT_BLOCK -> "구간 " + unit.getUnitNo();
         };
     }

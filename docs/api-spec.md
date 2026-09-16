@@ -292,6 +292,37 @@ Response examples:
 ```
 
 
+## Materials (자료 형식·본문 재추출) — 2026-09-16
+
+자료로 저장할 수 있는 형식은 PDF·PPTX·HWP(5.0)·HWPX·IPYNB(nbformat 4)다. 검증은 확장자 + 파일 앞머리 시그니처이고,
+브라우저가 보낸 content type은 쓰지 않는다(형식마다 제각각이라 정상 파일이 막힌다). 저장되는 content type은 형식별 대표 값이다.
+ZIP은 자료가 아니라 아래의 가져오기 경로로 간다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/materials/{id}/extraction/retry` | 저장된 원본으로 본문만 다시 읽는다. 응답은 자료 단건. 이미 읽은 자료면 409 `E409_019`. 분석 재시도(`/analysis-status/retry`)와 다른 일이다 |
+
+자료 응답에 `extractionWarning`이 추가됐다 — 읽긴 했지만 상한에 걸려 일부를 못 읽은 경우의 안내이고, `extractionStatus`는
+SUCCESS다. 실패(`FAILED`/`FAILED_NO_TEXT`)는 `extractionError`에 이유가 들어간다(암호·손상·미지원 판·시간 초과).
+
+## Material ZIP Imports (압축 파일 가져오기) — 2026-09-16
+
+압축 자체는 자료가 되지 않는다. 올리면 내부 목록이 오고, 사용자가 고른 파일만 각각 자료가 된다. 실제 생성은 서버가 뒤에서 하므로
+화면을 닫아도 계속된다. 모든 경로가 소유권을 확인한다(남의 importId·entryId는 404).
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/materials/zip-imports` | multipart `file`(+ `courseId`, `materialType`). 201 + 가져오기 한 건. 자료는 아직 만들어지지 않는다 |
+| GET | `/api/materials/zip-imports` | 최근 가져오기 10건(새로고침·재접속 복구용) |
+| GET | `/api/materials/zip-imports/{id}` | 한 건의 상태와 항목별 결과 |
+| POST | `/api/materials/zip-imports/{id}/confirm` | `{entryIds:[...]}`. 고른 항목을 대기열에 넣는다. 여러 번 눌러도 결과가 같다. 409 `E409_020`(상태), 400(선택 없음·상한 초과) |
+| POST | `/api/materials/zip-imports/{id}/entries/{entryId}/retry` | 실패한 항목 하나만 다시. 409 `E409_021`(재시도 대상 아님), `E409_022`(보관 기한 지나 원본 없음) |
+| DELETE | `/api/materials/zip-imports/{id}` | 아직 시작 안 한 것만 취소. 이미 만들어진 자료는 남는다 |
+
+응답: `{importId, originalFilename, sizeBytes, courseId, materialType, status(PREPARING|READY|IMPORTING|COMPLETED|PARTIAL|FAILED|CANCELLED|EXPIRED),
+entryCount, selectableCount, doneCount, failedCount, remainingCount, archiveAvailable, expiresAt, errorCode, message, createdAt,
+entries[{entryId, entryPath, displayName, extension, sizeBytes, supported, skipReason, status(PENDING|QUEUED|IMPORTING|DONE|FAILED|UNSUPPORTED), materialId, errorMessage}]}`
+
 ## Material Analysis (자동 분석 상태) — 2026-09-13
 
 업로드된 자료는 서버가 뒤에서 자동으로 읽는다. 여기는 그 상태 조회와 제어다. 설계는 `docs/product/15-material-auto-analysis.md`.
@@ -302,7 +333,7 @@ Response examples:
 | POST | `/api/materials/analysis/pause` · `/resume` | 내 자동 분석 일시중지/재개(QUEUED↔PAUSED). 응답은 overview |
 | GET | `/api/materials/{id}/analysis-status` | `{materialId, state(NONE|QUEUED|RUNNING|PARTIAL|DONE|FAILED|UNAVAILABLE|PAUSED|NO_TEXT), totalChunks, completedChunks, errorCode, message, sectionCount, assignmentCandidateCount, pageCount, linkStates[{courseId,state,proposalId}]}` |
 | POST | `/api/materials/{id}/analysis-status/retry` | 다시 시도(작업을 앞으로 당긴다) |
-| GET | `/api/materials/{id}/sections` | 분석된 구간 `[{sectionId, locator, unitStart, unitEnd, unitType, printedPageStart, printedPageEnd, label, title, roles[], roleLabels[], taskText, excerpt, assignmentCue, assignmentQuote, dates[]}]` |
+| GET | `/api/materials/{id}/sections` | 분석된 구간(`unitType`에 `NOTEBOOK_CELL` 추가 — 위치는 "셀 8~12") `[{sectionId, locator, unitStart, unitEnd, unitType, printedPageStart, printedPageEnd, label, title, roles[], roleLabels[], taskText, excerpt, assignmentCue, assignmentQuote, dates[]}]` |
 | GET | `/api/material-sections/{sectionId}` | 구간 단건 |
 
 ## Topic Change Proposals (자료 정리 변경안)

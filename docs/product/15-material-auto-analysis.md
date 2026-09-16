@@ -80,21 +80,60 @@ courses.topic_tree_version / course_topics.merged_into_topic_id, review_note / c
 
 - PDF는 PDFBox로 페이지마다, PPTX는 슬라이드마다 단위를 만든다(그림만 있는 페이지는 단위를 만들지 않는다 — 읽은 척하지 않는다).
   원본 파일이 없는 옛 자료는 `extracted_text`를 6,000자 블록으로 나누고 위치는 "구간 N"이다.
-- HWP·IPYNB·ZIP(2026-09-16)은 물리 페이지가 없어 업로드 때 바로 "구간 N" 블록이 된다. `page_count`는 null이다.
-  - HWP: HWP 5.0만(hwplib). 표·글상자 글자를 제자리에 넣는다. HWP 3.0·HWPX·암호 문서는 받지 않거나 추출 실패다.
-  - IPYNB: 마크다운·코드 셀 원문만 `--- 셀 N · 코드 ---` 머리글로 잇는다. 실행 출력(base64 이미지 포함)은 읽지 않는다.
-  - ZIP: 자료 하나로 저장한다(안의 파일을 자료 여러 개로 풀지 않는다). 안의 PDF·PPTX·HWP·IPYNB와 텍스트·소스 파일을 이름순으로
-    `===== 파일: 경로 =====` 머리글과 함께 잇고, 끝에 읽지 않은 파일 목록을 붙인다. 중첩 압축은 풀지 않는다. 상한: 문서 100개,
-    항목당 30MB·전체 150MB 해제(실제로 읽으며 센다), 글자 100만. 이름은 UTF-8, 깨지면 CP949로 읽는다.
-  - 표식에 대괄호를 쓰지 않는다(zip 안 슬라이드는 `(슬라이드 N)`). 분석 입력의 단위 표식 `[구간 N]`과 섞이지 않게 하려는 것이다.
-  - 업로드 검증: 브라우저가 보내는 content type이 제각각이라 이 셋은 앞머리 시그니처(OLE·`PK`·JSON `{`)로 확인하고,
-    DB에는 형식별 대표 content type(`application/x-hwp`, `application/x-ipynb+json`, `application/zip`)을 저장한다.
+- IPYNB(2026-09-16)는 셀이 단위다(`NOTEBOOK_CELL`). 번호는 원본 순서의 1-based 셀 번호이고 execution_count가 아니다 —
+  빈 셀을 건너뛰어도 번호는 밀리지 않고, 긴 셀을 나눠도 셀 번호는 그대로다. 위치는 "셀 8~12"로 말한다.
+  정식 지원은 nbformat 4 계열이고 다른 major version은 명시적 미지원(추출 실패)이다. 마크다운·코드·raw 셀 원문을 읽고,
+  코드는 ``` 울타리 안에 개행·들여쓰기 그대로 둔다. 실행 결과는 텍스트만 셀당 5개·2,000자까지 보조로 싣고
+  이미지·HTML·JavaScript는 종류만 적는다(코드를 실행하지도, HTML을 렌더링하지도 않는다).
+- HWP·HWPX(2026-09-16)는 파일 안에 물리 페이지가 없어(쪽은 편집기가 배치로 계산한다) 문단을 모은 6,000자 블록이 단위이고
+  위치는 "구간 N"이다. `page_count`는 null이고 HWPX의 section 번호를 쪽수로 쓰지 않는다.
+  - HWP는 hwplib 1.1.11, HWPX는 hwpxlib 1.0.9(둘 다 Apache-2.0, kr.dogfoot). 파서의 텍스트 추출기를 그대로 쓰지 않고
+    객체 모델을 직접 걷는다 — 표 안 글자를 문단 사이에 끼워 넣기만 하면 행·셀 관계가 사라지기 때문이다.
+  - 표는 `[표 시작] / | 셀 | 셀 | / [표 끝]` 모양으로 옮긴다. 강의계획서의 주차표가 한 줄로 뭉개지면 "9/25"가 어느 주차의
+    제출일인지 알 수 없다. 블록 경계는 표를 가르지 않는다.
+  - HWP 5.0만 읽는다(HWP 3.0 이하는 실패로 이유를 남긴다). 암호·배포용 잠금 문서는 ENCRYPTED로 구분해 안내한다.
+  - HWPX는 XML 묶음을 담은 zip이다. 파서에 넘기기 전에 모든 XML 항목의 앞머리를 보고 DOCTYPE·ENTITY 선언이 있으면 거부한다
+    (외부 엔티티·외부 리소스 차단). 컨테이너에도 항목 수·해제 크기 상한을 적용한다.
+- 실패는 이유를 나눠 남긴다: ENCRYPTED(암호) · CORRUPTED(손상·형식 불일치) · UNSUPPORTED_VERSION(nbformat 3, HWP 3.0) ·
+  TOO_LARGE · TIMEOUT(`material.extract.timeout-seconds`, 기본 60초). 저장은 성공하고 추출만 실패한 자료는 원본이 남아 있으므로
+  `POST /api/materials/{id}/extraction/retry`로 다시 읽는다 — 사용자가 같은 파일을 다시 올리지 않는다.
+  상한에 걸려 일부만 읽었으면 성공으로 두되 `extraction_warning`에 그 사실을 남긴다(빈 텍스트를 성공으로 넣지 않는다).
+- 새 형식은 전체 텍스트와 단위를 **한 번의 파싱**에서 함께 만든다(`material.extract` 패키지의 `ExtractedDocument`).
+  둘을 따로 읽으면 같은 파일에서 서로 다른 내용을 읽을 여지가 생긴다. PDF·PPTX는 기존 경로를 그대로 둔다.
+- 업로드 검증은 확장자 + 파일 앞머리 시그니처다(`MaterialFileFormat`). 브라우저의 content type은 형식마다 제각각이라
+  그 값으로 막으면 정상 파일이 거부된다. DB에는 대표 content type을 저장한다:
+  `application/pdf`, PPTX의 OOXML 타입, `application/x-hwp`, `application/hwp+zip`, `application/x-ipynb+json`.
 - `page_count`는 파일에서 센 물리 페이지/슬라이드 수다. 인쇄 쪽수는 모델이 원문에서 실제로 봤을 때만 `printed_page_*`에 들어가고
   일괄 오프셋으로 만들지 않는다. 위치 문자열은 "p.3~4 (인쇄 21~22쪽)" 모양이다.
 - 스캔 PDF는 기존대로 추출 실패(NO_TEXT)로 표시되고 분석 작업을 만들지 않는다. OCR은 이번 범위 밖이다.
 - 구간 한 개 = 역할 복수 가능(`CONCEPT/EXAMPLE/EXERCISE/ASSIGNMENT/SCHEDULE/ADMIN/SUMMARY/REFERENCE/OTHER`) + 표시 제목 +
   수행 내용 + 발췌(≤600자) + 제출 단서(`assignment_cue`, 원문 인용) + 날짜 후보(`text/isoDate/monthDay/kind/relative/basis`).
 - 자료 안의 지시문은 데이터다(프롬프트가 명시). 삭제된 자료의 구간은 발췌가 비워지고 계획 입력에서 빠진다.
+
+## 4-2. 압축 파일(ZIP) 가져오기 — 2026-09-16
+
+압축은 자료가 아니다. 안에 든 파일을 사용자가 골라 각각 독립된 자료로 만드는 통로다. ZIP 하나를 거대한 자료로 만들거나
+내부 파일 텍스트를 합치지 않는다 — 그러면 구간 위치가 어느 파일의 것인지 말할 수 없고, 하나를 지우려면 전부를 지워야 한다.
+
+- 흐름: 올리기(목록 준비) → 선택 대기 → 확정 → 파일별 등록 → 완료/일부 실패. 상태는 `material_zip_imports.status`
+  (PREPARING·READY·IMPORTING·COMPLETED·PARTIAL·FAILED·CANCELLED·EXPIRED), 항목은 `material_zip_import_entries.status`
+  (PENDING·QUEUED·IMPORTING·DONE·FAILED·UNSUPPORTED). 여기서 COMPLETED는 "자료가 만들어졌다"이지 "분석이 끝났다"가 아니다.
+- 목록 준비만 요청 안에서 끝난다(중앙 디렉터리만 읽는다). 해제·추출·등록은 폴러 `MaterialZipImportScheduler`가 하므로
+  사용자가 화면을 닫아도 계속되고, 다시 들어오면 `GET /api/materials/zip-imports`로 되찾는다. AI를 부르지 않으므로
+  자동 분석 일시중지와 무관하게 돈다 — 자료를 만드는 일과 분석하는 일은 다른 축이다.
+- **중복 생성 방지**: 확정은 `status IN ('PENDING','FAILED') AND material_id IS NULL`인 행만 QUEUED로 바꾸고(두 번 눌러도 1행),
+  선점은 `status='QUEUED'`일 때만 1행이며, 자료 INSERT와 항목 완료(material_id 기록)가 **같은 트랜잭션**이다.
+  `UNIQUE(material_id)`가 한 항목이 자료 둘을 만드는 것을 막는다. 재시작 복구는 material_id가 없는 IMPORTING 행만 되돌린다.
+  사용자가 가져온 자료를 지워도 그 항목은 DONE이라 다시 만들어지지 않는다.
+- **압축 안전성**: 절대 경로·`..` 이탈·역슬래시·심볼릭 링크·중첩 zip 항목은 고를 수 없고 이유를 보여준다. 같은 경로가 두 번
+  들어 있으면 둘 다 고를 수 없다(어느 쪽이 맞는지 알 수 없으므로 추측하지 않는다). 저장 이름은 언제나 UUID이고 압축 안 경로는
+  표시와 출처(`course_materials.source_archive_name/source_entry_path`)에만 쓴다. 해제는 헤더 크기를 믿지 않고 읽으며 센다.
+- 상한(설정값, 기본): 원본 20MiB(`max-archive-bytes`), 내부 파일 20MiB(`max-entry-bytes`), 전체 해제 200MiB
+  (`max-total-uncompressed-bytes`), 전체 항목 1,000개(`max-entries`, 미지원 파일·디렉터리 포함), 한 번에 고를 수 있는 자료
+  100개(`max-selectable`). 원본 압축은 24시간(`retention-hours`) 보관 뒤 지운다(이미 만든 자료는 그대로 남는다).
+- 이름 인코딩: UTF-8 플래그가 있으면 UTF-8, 없으면 CP949(한글 Windows 압축)로 읽는다. 판단할 수 없으면 그 항목을 고를 수 없게 둔다.
+- 프로젝트 화면에서 시작하면 `courseId`가 실려 만들어지는 자료가 그 프로젝트에 연결된다(확정 시점에 소유·ACTIVE를 다시 확인한다).
+  폴더명으로 프로젝트나 학습 항목을 자동으로 만들지 않는다.
 
 ## 5. 토픽 연결과 구조 변경안
 

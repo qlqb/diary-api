@@ -33,7 +33,11 @@ class MaterialTextUnitServiceTest {
 
     private final MaterialTextUnitService service = new MaterialTextUnitService(
             Mockito.mock(MaterialTextUnitMapper.class), Mockito.mock(CourseMaterialMapper.class),
-            Mockito.mock(FileStorageService.class));
+            Mockito.mock(FileStorageService.class),
+            new com.jungwoo.project.memo.material.extract.DocumentExtractionService(
+                    new com.jungwoo.project.memo.material.extract.NotebookExtractor(),
+                    new com.jungwoo.project.memo.material.extract.HwpExtractor(),
+                    new com.jungwoo.project.memo.material.extract.HwpxExtractor()));
 
     /** 페이지마다 영문 채움 텍스트(PDFBox 표준 폰트는 한글을 못 그린다). 마지막 페이지에만 제출 단서. */
     static Path syntheticLongPdf(Path dir, int pages, int linesPerPage) throws Exception {

@@ -35,6 +35,9 @@ import java.util.UUID;
 @Component
 public class FileStorageService {
 
+    /** 임시 보관하는 압축 원본이 들어가는 하위 폴더. 자료 파일과 섞이지 않는다. */
+    static final String ARCHIVE_DIR = "zip-imports";
+
     @Value("${storage.materials.upload-dir}")
     private String uploadDir;
 
@@ -61,7 +64,7 @@ public class FileStorageService {
         String extension = extensionOf(file.getOriginalFilename());
         MaterialFileFormat format = MaterialFileFormat.fromExtension(extension)
                 .orElseThrow(() -> new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE));
-        if (!format.accepts(file.getContentType(), header(file))) {
+        if (!format.accepts(header(file))) {
             throw new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE);
         }
 
@@ -91,6 +94,93 @@ public class FileStorageService {
 
         log.info("파일 저장 완료: userId={}, storagePath={}, size={}", userId, storagePath, file.getSize());
         return new StoredFile(storedFilename, storagePath, extension, fileHash, format.contentType());
+    }
+
+    /**
+     * 이미 디스크에 있는 파일을 자료로 저장한다. ZIP 가져오기가 압축에서 꺼낸 임시 파일을 넘긴다.
+     * 검증 규칙은 업로드와 같다 — 확장자·앞머리 시그니처·크기.
+     *
+     * @param originalFilename 사용자에게 보일 이름. 저장 경로에는 쓰지 않는다(UUID로 대체).
+     */
+    public StoredFile storeFile(Long userId, String originalFilename, Path source) {
+        long size;
+        try {
+            size = Files.size(source);
+        } catch (IOException e) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        if (size == 0) {
+            throw new BadRequestException(ErrorCode.EMPTY_FILE);
+        }
+        if (size > maxFileSizeBytes) {
+            throw new BadRequestException(ErrorCode.FILE_TOO_LARGE);
+        }
+        String extension = extensionOf(originalFilename);
+        MaterialFileFormat format = MaterialFileFormat.fromExtension(extension)
+                .orElseThrow(() -> new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE));
+        byte[] header;
+        try (InputStream in = Files.newInputStream(source)) {
+            header = in.readNBytes(MaterialFileFormat.HEADER_BYTES);
+        } catch (IOException e) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        if (!format.accepts(header)) {
+            throw new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE);
+        }
+        return copyInto(userId, source, format, size);
+    }
+
+    private StoredFile copyInto(Long userId, Path source, MaterialFileFormat format, long size) {
+        String storedFilename = UUID.randomUUID() + "." + format.extension();
+        String storagePath = userId + "/" + storedFilename;
+        Path userDir = Path.of(uploadDir, String.valueOf(userId)).normalize();
+        Path target = userDir.resolve(storedFilename).normalize();
+        MessageDigest digest = sha256();
+        try {
+            Files.createDirectories(userDir);
+            try (InputStream in = Files.newInputStream(source);
+                 DigestInputStream hashing = new DigestInputStream(in, digest)) {
+                Files.copy(hashing, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            log.error("파일 저장 실패: userId={}, storagePath={}", userId, storagePath, e);
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        log.info("파일 저장 완료(가져오기): userId={}, storagePath={}, size={}", userId, storagePath, size);
+        return new StoredFile(storedFilename, storagePath, format.extension(),
+                HexFormat.of().formatHex(digest.digest()), format.contentType());
+    }
+
+    /**
+     * ZIP 원본을 임시 보관한다. 자료가 아니므로 사용자 자료 폴더와 섞지 않고 zip-imports 아래에 둔다 —
+     * 만료·취소 정리가 이 접두어만 보면 되게 하려는 것이다.
+     *
+     * @return uploadDir 기준 상대 경로와 해시
+     */
+    public StoredFile storeArchive(Long userId, MultipartFile file, long maxBytes) {
+        if (file == null || file.isEmpty()) {
+            throw new BadRequestException(ErrorCode.EMPTY_FILE);
+        }
+        if (file.getSize() > maxBytes) {
+            throw new BadRequestException(ErrorCode.FILE_TOO_LARGE);
+        }
+        String storedFilename = UUID.randomUUID() + ".zip";
+        String storagePath = ARCHIVE_DIR + "/" + userId + "/" + storedFilename;
+        Path dir = Path.of(uploadDir, ARCHIVE_DIR, String.valueOf(userId)).normalize();
+        Path target = dir.resolve(storedFilename).normalize();
+        MessageDigest digest = sha256();
+        try {
+            Files.createDirectories(dir);
+            try (InputStream in = file.getInputStream();
+                 DigestInputStream hashing = new DigestInputStream(in, digest)) {
+                Files.copy(hashing, target, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } catch (IOException e) {
+            log.error("압축 파일 임시 저장 실패: userId={}, storagePath={}", userId, storagePath, e);
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        return new StoredFile(storedFilename, storagePath, "zip",
+                HexFormat.of().formatHex(digest.digest()), "application/zip");
     }
 
     private static byte[] header(MultipartFile file) {

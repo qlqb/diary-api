@@ -7,51 +7,59 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 자료로 올릴 수 있는 파일 형식. 확장자·저장할 content type·업로드 검증 규칙을 한곳에 둔다.
+ * 자료로 저장할 수 있는 파일 형식. 확장자·저장할 content type·업로드 검증 규칙을 한곳에 둔다.
  *
- * <p>PDF·PPTX는 브라우저가 content type을 안정적으로 보내므로 그 값을 검사한다. HWP·IPYNB·ZIP은
- * 그렇지 않다 — 같은 zip이 Windows Chrome에서는 application/x-zip-compressed, 다른 곳에서는
- * application/zip으로 오고, hwp·ipynb는 한컴오피스·주피터 설치 여부에 따라 빈 값(→ octet-stream)이
- * 오기도 한다. 그래서 이 셋은 보낸 content type을 믿지 않고 파일 앞머리 시그니처를 확인하며,
- * DB에는 아래의 대표 content type을 저장한다.
+ * <p>ZIP은 여기 없다 — 압축 파일은 자료가 아니라 "여러 자료를 가져오는 통로"라 별도 경로
+ * ({@code /api/materials/zip-imports})가 받고, 안에서 꺼낸 파일이 각각 이 형식들로 저장된다.
+ *
+ * <p>검증은 확장자 + 콘텐츠 구조다. 브라우저가 보내는 content type은 형식마다 제각각이라
+ * (같은 zip이 application/zip·x-zip-compressed로 오고, hwp·ipynb·hwpx는 빈 값이나
+ * application/octet-stream으로 온다) 그 값만으로 정상 파일을 막지 않는다. 대신 파일 앞머리
+ * 시그니처를 확인하고, DB에는 아래의 대표 content type을 저장한다.
  */
-enum MaterialFileFormat {
+public enum MaterialFileFormat {
 
-    PDF("pdf", "application/pdf", true),
-    PPTX("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", true),
-    /** HWP 5.0(OLE 복합 문서). HWP 3.0 이하·HWPX는 받지 않는다. */
-    HWP("hwp", "application/x-hwp", false),
-    IPYNB("ipynb", "application/x-ipynb+json", false),
-    ZIP("zip", "application/zip", false);
+    PDF("pdf", "application/pdf", Signature.PDF),
+    PPTX("pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", Signature.ZIP),
+    /** HWP 5.0(OLE 복합 문서). HWP 3.0 이하는 읽지 못하고, 그건 추출 단계에서 이유와 함께 실패한다. */
+    HWP("hwp", "application/x-hwp", Signature.OLE),
+    /** HWPX(OWPML). 속은 XML 묶음을 담은 zip이다. */
+    HWPX("hwpx", "application/hwp+zip", Signature.ZIP),
+    IPYNB("ipynb", "application/x-ipynb+json", Signature.JSON);
 
     /** 시그니처 확인에 읽는 앞머리 길이. ipynb는 BOM·공백 뒤의 '{'를 봐야 해서 넉넉히 읽는다. */
-    static final int HEADER_BYTES = 64;
+    public static final int HEADER_BYTES = 64;
 
+    enum Signature {
+        PDF, OLE, ZIP, JSON
+    }
+
+    private static final byte[] PDF_SIGNATURE = {'%', 'P', 'D', 'F', '-'};
     private static final byte[] OLE_SIGNATURE = {
             (byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
     private static final byte[] ZIP_LOCAL_HEADER = {'P', 'K', 3, 4};
-    /** 항목이 하나도 없는 zip. 받기는 하되 추출 단계에서 "읽을 문서 없음"이 된다. */
+    /** 항목이 하나도 없는 zip. 형식으로는 맞지만 내용이 없어 추출 단계에서 실패한다. */
     private static final byte[] ZIP_EMPTY = {'P', 'K', 5, 6};
 
     private final String extension;
     private final String contentType;
-    private final boolean trustsClientContentType;
+    private final Signature signature;
 
-    MaterialFileFormat(String extension, String contentType, boolean trustsClientContentType) {
+    MaterialFileFormat(String extension, String contentType, Signature signature) {
         this.extension = extension;
         this.contentType = contentType;
-        this.trustsClientContentType = trustsClientContentType;
+        this.signature = signature;
     }
 
-    String extension() {
+    public String extension() {
         return extension;
     }
 
-    String contentType() {
+    public String contentType() {
         return contentType;
     }
 
-    static Optional<MaterialFileFormat> fromExtension(String extension) {
+    public static Optional<MaterialFileFormat> fromExtension(String extension) {
         if (extension == null) {
             return Optional.empty();
         }
@@ -59,24 +67,31 @@ enum MaterialFileFormat {
         return Arrays.stream(values()).filter(f -> f.extension.equals(ext)).findFirst();
     }
 
-    static Set<String> extensions() {
+    public static Optional<MaterialFileFormat> fromFilename(String filename) {
+        if (filename == null) {
+            return Optional.empty();
+        }
+        String base = filename.substring(Math.max(filename.lastIndexOf('/'), filename.lastIndexOf('\\')) + 1);
+        int dot = base.lastIndexOf('.');
+        return dot < 0 ? Optional.empty() : fromExtension(base.substring(dot + 1));
+    }
+
+    public static Set<String> extensions() {
         return Set.copyOf(Arrays.stream(values()).map(MaterialFileFormat::extension).toList());
     }
 
     /**
-     * 업로드를 받아도 되는지. content type을 믿는 형식은 그 값만, 믿지 않는 형식은 앞머리만 본다.
+     * 파일 앞머리가 이 형식의 것인가. 확장자만 바꾼 파일을 걸러내는 1차 검증이고, 실제로 읽을 수
+     * 있는지는 추출 단계가 판단한다(예: HWP 5.0이 아닌 OLE 문서).
      *
      * @param header 파일의 처음 최대 {@link #HEADER_BYTES}바이트
      */
-    boolean accepts(String clientContentType, byte[] header) {
-        if (trustsClientContentType) {
-            return contentType.equals(clientContentType);
-        }
-        return switch (this) {
-            case HWP -> startsWith(header, OLE_SIGNATURE);
+    public boolean accepts(byte[] header) {
+        return switch (signature) {
+            case PDF -> startsWith(header, PDF_SIGNATURE);
+            case OLE -> startsWith(header, OLE_SIGNATURE);
             case ZIP -> startsWith(header, ZIP_LOCAL_HEADER) || startsWith(header, ZIP_EMPTY);
-            case IPYNB -> looksLikeJsonObject(header);
-            default -> false;
+            case JSON -> looksLikeJsonObject(header);
         };
     }
 

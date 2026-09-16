@@ -4,6 +4,9 @@ import com.jungwoo.project.memo.material.domain.CourseMaterial;
 import com.jungwoo.project.memo.material.domain.ExtractionStatus;
 import com.jungwoo.project.memo.material.domain.MaterialTextUnit;
 import com.jungwoo.project.memo.material.domain.TextUnitType;
+import com.jungwoo.project.memo.material.extract.DocumentExtractionException;
+import com.jungwoo.project.memo.material.extract.DocumentExtractionService;
+import com.jungwoo.project.memo.material.extract.ExtractedDocument;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
@@ -47,6 +50,7 @@ public class MaterialTextUnitService {
     private final MaterialTextUnitMapper unitMapper;
     private final CourseMaterialMapper courseMaterialMapper;
     private final FileStorageService fileStorageService;
+    private final DocumentExtractionService documentExtractionService;
 
     public record Extracted(List<MaterialTextUnit> units, Integer pageCount) {
     }
@@ -57,7 +61,12 @@ public class MaterialTextUnitService {
      */
     public Extracted extractUnits(Path filePath, String extension, Long userId, Long materialId, String fileHash) {
         try {
-            return switch (extension == null ? "" : extension.toLowerCase(Locale.ROOT)) {
+            String ext = extension == null ? "" : extension.toLowerCase(Locale.ROOT);
+            if (DocumentExtractionService.handles(ext)) {
+                // 노트북 셀·한글 문서 블록. 전체 텍스트와 같은 파싱 결과에서 나온다.
+                return documentUnits(filePath, ext, userId, materialId, fileHash);
+            }
+            return switch (ext) {
                 case "pdf" -> pdfUnits(filePath, userId, materialId, fileHash);
                 case "pptx" -> pptxUnits(filePath, userId, materialId, fileHash);
                 default -> new Extracted(List.of(), null);
@@ -152,6 +161,23 @@ public class MaterialTextUnitService {
 
     public boolean isExtractable(CourseMaterial material) {
         return material.getExtractionStatus() == ExtractionStatus.SUCCESS;
+    }
+
+    /** IPYNB·HWP·HWPX. 추출기가 만든 단위를 그대로 옮긴다(셀 번호·구간 번호를 다시 계산하지 않는다). */
+    private Extracted documentUnits(Path filePath, String extension, Long userId, Long materialId, String fileHash) {
+        ExtractedDocument document;
+        try {
+            document = documentExtractionService.extract(filePath, extension);
+        } catch (DocumentExtractionException e) {
+            log.info("단위 추출 실패: materialId={}, reason={}", materialId, e.reason());
+            return new Extracted(List.of(), null);
+        }
+        List<MaterialTextUnit> units = new ArrayList<>();
+        int index = 0;
+        for (ExtractedDocument.ExtractedUnit unit : document.units()) {
+            units.add(unit(userId, materialId, fileHash, index++, unit.type(), unit.unitNo(), unit.text()));
+        }
+        return new Extracted(units, document.pageCount());
     }
 
     // ===== PDF / PPTX =====

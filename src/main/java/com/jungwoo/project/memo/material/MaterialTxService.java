@@ -67,6 +67,32 @@ public class MaterialTxService {
     }
 
     /**
+     * 재추출 결과를 한 트랜잭션에 반영한다: 추출 열 갱신 + 이 해시의 옛 단위 삭제 + 새 단위 저장.
+     *
+     * 자료 행·연결·이미 확정된 학습 내용은 건드리지 않는다. 단위를 지우고 다시 넣는 이유는
+     * (material_id, file_hash, unit_index) UNIQUE 때문이다 — 부분 성공으로 남은 옛 단위가 있으면
+     * 새 단위와 충돌한다.
+     */
+    @Transactional
+    public void replaceExtraction(Long userId, CourseMaterial material, String fileHash,
+                                  MaterialExtractionService.Outcome result) {
+        courseMaterialMapper.updateExtraction(material.getMaterialId(), userId, result.status(), result.text(),
+                result.error(), result.warning(), result.pageCount());
+        materialTextUnitMapper.deleteByMaterialId(material.getMaterialId(), userId);
+        for (MaterialTextUnit unit : result.units()) {
+            unit.setMaterialId(material.getMaterialId());
+            unit.setUserId(userId);
+            unit.setFileHash(fileHash);
+            materialTextUnitMapper.insert(unit);
+        }
+        material.setExtractionStatus(result.status());
+        material.setExtractedText(result.text());
+        material.setExtractionError(result.error());
+        material.setExtractionWarning(result.warning());
+        material.setFileHash(fileHash);
+    }
+
+    /**
      * 자료를 DELETED로 내리고 모든 연결을 끊는다. 디스크 파일은 여기서 지우지 않는다 —
      * 호출자가 이 메서드가 커밋된 뒤에 지운다.
      *

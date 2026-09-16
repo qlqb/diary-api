@@ -17,6 +17,9 @@
         <result property="extractionStatus" column="extraction_status"/>
         <result property="extractedText"    column="extracted_text"/>
         <result property="extractionError"  column="extraction_error"/>
+        <result property="extractionWarning" column="extraction_warning"/>
+        <result property="sourceArchiveName" column="source_archive_name"/>
+        <result property="sourceEntryPath"  column="source_entry_path"/>
         <result property="status"           column="status"/>
         <result property="createdAt"        column="created_at"/>
         <result property="updatedAt"        column="updated_at"/>
@@ -25,10 +28,12 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
         INSERT INTO course_materials (
             user_id, original_filename, stored_filename, storage_path,
-            content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error
+            content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error,
+            extraction_warning, source_archive_name, source_entry_path
         ) VALUES (
             #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
-            #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError}
+            #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError},
+            #{extractionWarning}, #{sourceArchiveName}, #{sourceEntryPath}
         )
     </insert>
 
@@ -83,6 +88,20 @@
         UPDATE course_materials
         SET status = 'DELETED', extracted_text = NULL
         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      재추출 결과 반영. 원본은 그대로 두고 추출 관련 열만 바꾼다 — 같은 materialId·같은 파일이라
+      이미 달린 연결·확정 내용은 건드리지 않는다.
+    -->
+    <update id="updateExtraction">
+        UPDATE course_materials
+           SET extraction_status = #{extractionStatus},
+               extracted_text = #{extractedText},
+               extraction_error = #{extractionError},
+               extraction_warning = #{extractionWarning},
+               page_count = #{pageCount}
+         WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
     </update>
 
     <update id="updatePageCount">

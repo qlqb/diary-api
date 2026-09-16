@@ -53,6 +53,10 @@ dependencies {
     implementation 'org.apache.poi:poi-ooxml:5.3.0'
     // HWP 5.0 본문 추출. 의존성 없는 순수 자바 라이브러리(Apache-2.0).
     implementation 'kr.dogfoot:hwplib:1.1.11'
+    implementation 'kr.dogfoot:hwpxlib:1.0.9'
+    // ZIP 가져오기: 항목의 UTF-8 플래그·CP949 이름·심볼릭 링크 판별이 필요해 java.util.zip 대신 쓴다.
+    // POI가 이미 끌어오는 버전이지만 직접 쓰므로 명시한다.
+    implementation 'org.apache.commons:commons-compress:1.26.2'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'
@@ -95,7 +99,7 @@ tasks.named('test') {
     /*
       -PexcludeDbTests: 앱 스키마가 있는 DB가 없는 환경(CI)에서 뺄 테스트.
 
-      아래 스물네 개는 로컬 memo DB의 실제 테이블에 직접 INSERT/DELETE해서 SQL 자체를 검증한다 —
+      아래 스물다섯 개는 로컬 memo DB의 실제 테이블에 직접 INSERT/DELETE해서 SQL 자체를 검증한다 —
       Mockito로는 증명할 수 없는 것을 증명하는 테스트라 껍데기로 바꾸면 의미가 없다.
       레포에는 전체 스키마 파일이 없고 docs/sql은 증분 마이그레이션뿐이라 CI가 빈 DB에
       테이블을 만들 방법이 없다. 스키마를 레포에 넣게 되면 이 플래그를 지우고 전부 돌린다.
@@ -129,6 +133,7 @@ tasks.named('test') {
             excludeTestsMatching 'com.jungwoo.project.memo.learning.structure.TopicChangeProposalApplyDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.material.analysis.MaterialAnalysisResultRaceDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.ai.AiUsageLimitServiceDbTest'
+            excludeTestsMatching 'com.jungwoo.project.memo.material.zip.MaterialZipImportDbTest'
         }
     }
 }

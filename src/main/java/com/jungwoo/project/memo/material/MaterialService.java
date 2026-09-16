@@ -51,8 +51,7 @@ public class MaterialService {
     private final MaterialLinkMapper materialLinkMapper;
     private final MaterialTxService materialTxService;
     private final FileStorageService fileStorageService;
-    private final TextExtractionService textExtractionService;
-    private final MaterialTextUnitService materialTextUnitService;
+    private final MaterialExtractionService materialExtractionService;
     private final MaterialAnalysisJobService analysisJobService;
     private final TopicChangeProposalService topicChangeProposalService;
 
@@ -75,35 +74,16 @@ public class MaterialService {
         FileStorageService.StoredFile stored = fileStorageService.store(userId, file);
 
         Path savedPath = fileStorageService.resolve(stored.storagePath());
-        TextExtractionService.ExtractionResult result = textExtractionService.extract(savedPath, stored.extension());
-        // 페이지·슬라이드 단위. 전체 텍스트와 별개로, 구간 분석이 "몇 페이지"를 말하기 위한 원본이다.
-        MaterialTextUnitService.Extracted units = result.status() == ExtractionStatus.SUCCESS
-                ? materialTextUnitService.extractUnits(savedPath, stored.extension(), userId, null, stored.fileHash())
-                : new MaterialTextUnitService.Extracted(List.of(), null);
-        if (units.units().isEmpty() && result.text() != null) {
-            // 페이지 구조가 없는 형식(hwp·ipynb·zip)은 추출한 전체 텍스트를 "구간 N" 블록으로 나눈다.
-            units = new MaterialTextUnitService.Extracted(
-                    materialTextUnitService.blocksFromText(result.text(), userId, null, stored.fileHash()), null);
-        }
+        // 형식에 맞는 추출기가 전체 텍스트와 단위(페이지·슬라이드·셀·구간)를 함께 만든다.
+        MaterialExtractionService.Outcome result =
+                materialExtractionService.extract(savedPath, stored.extension(), userId, stored.fileHash());
 
-        CourseMaterial material = CourseMaterial.builder()
-                .userId(userId)
-                .originalFilename(sanitizeDisplayName(file.getOriginalFilename()))
-                .storedFilename(stored.storedFilename())
-                .storagePath(stored.storagePath())
-                .contentType(stored.contentType())
-                .sizeBytes(file.getSize())
-                .pageCount(units.pageCount())
-                .fileHash(stored.fileHash())
-                .extractionStatus(result.status())
-                .extractedText(result.text())
-                .extractionError(result.error())
-                .status(MaterialStatus.ACTIVE)
-                .build();
-        materialTxService.createWithLink(material, courseId, materialType, units.units());
+        CourseMaterial material = newMaterial(userId, sanitizeDisplayName(file.getOriginalFilename()),
+                stored, file.getSize(), result);
+        materialTxService.createWithLink(material, courseId, materialType, result.units());
 
         log.info("자료 업로드 완료: userId={}, courseId={}, materialId={}, extractionStatus={}, units={}",
-                userId, courseId, material.getMaterialId(), result.status(), units.units().size());
+                userId, courseId, material.getMaterialId(), result.status(), result.units().size());
 
         // 자동 분석 등록. 커밋 뒤라 worker가 바로 집어도 자료 행이 보인다. 등록 실패는 업로드 실패가
         // 아니다 — 폴러의 backlog 등록이 같은 자료를 다시 잡는다.
@@ -114,6 +94,72 @@ public class MaterialService {
         }
 
         return MaterialResponse.of(material, courseId, materialType);
+    }
+
+    /**
+     * 자료 행을 만든다. 업로드와 ZIP 가져오기가 같은 모양을 쓴다 — 어느 경로로 들어왔든 자료의
+     * 생김새는 같아야 한다(출처 두 열만 다르다).
+     */
+    public CourseMaterial newMaterial(Long userId, String displayName, FileStorageService.StoredFile stored,
+                               Long sizeBytes, MaterialExtractionService.Outcome result) {
+        return CourseMaterial.builder()
+                .userId(userId)
+                .originalFilename(displayName)
+                .storedFilename(stored.storedFilename())
+                .storagePath(stored.storagePath())
+                .contentType(stored.contentType())
+                .sizeBytes(sizeBytes)
+                .pageCount(result.pageCount())
+                .fileHash(stored.fileHash())
+                .extractionStatus(result.status())
+                .extractedText(result.text())
+                .extractionError(result.error())
+                .extractionWarning(result.warning())
+                .status(MaterialStatus.ACTIVE)
+                .build();
+    }
+
+    /**
+     * 저장된 원본으로 본문 추출만 다시 한다. 분석 재시도와는 다른 일이다 — 저쪽은 이미 읽은 원문을
+     * 모델에게 다시 보내는 것이고, 이쪽은 아직 못 읽은 원문을 다시 읽는 것이다.
+     *
+     * 사용자가 같은 파일을 다시 올리게 만들지 않기 위해 있다. 자료 id·연결·출처는 그대로 두고
+     * 추출 관련 열과 단위만 바꾼 뒤, 성공했으면 기존 자동 분석에 등록한다.
+     */
+    public MaterialStoreItemResponse retryExtraction(Long userId, Long materialId) {
+        CourseMaterial material = getActiveOwned(userId, materialId);
+        if (material.getExtractionStatus() == ExtractionStatus.SUCCESS) {
+            throw new ConflictException(ErrorCode.MATERIAL_ALREADY_EXTRACTED);
+        }
+        Path path = fileStorageService.resolve(material.getStoragePath());
+        if (!Files.isReadable(path)) {
+            throw new NotFoundException(ErrorCode.MATERIAL_FILE_NOT_FOUND);
+        }
+        String extension = extensionOf(material);
+        String hash = material.getFileHash() != null ? material.getFileHash() : MaterialTextUnitService.sha256(path);
+        MaterialExtractionService.Outcome result =
+                materialExtractionService.extract(path, extension, userId, hash);
+        materialTxService.replaceExtraction(userId, material, hash, result);
+        log.info("본문 재추출: userId={}, materialId={}, status={}, units={}",
+                userId, materialId, result.status(), result.units().size());
+        if (result.success()) {
+            try {
+                analysisJobService.enqueueContent(material, MaterialAnalysisJobService.PRIORITY_NEW_UPLOAD);
+            } catch (Exception e) {
+                log.warn("재추출 후 분석 등록 실패(backlog가 다시 시도): materialId={}", materialId, e);
+            }
+        }
+        return getStoreItem(userId, materialId);
+    }
+
+    private static String extensionOf(CourseMaterial material) {
+        String name = material.getStoredFilename() != null
+                ? material.getStoredFilename() : material.getOriginalFilename();
+        if (name == null) {
+            return "";
+        }
+        int dot = name.lastIndexOf('.');
+        return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(java.util.Locale.ROOT);
     }
 
     @Transactional(readOnly = true)

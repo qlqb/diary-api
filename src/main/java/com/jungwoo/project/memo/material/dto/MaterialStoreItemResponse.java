@@ -25,6 +25,8 @@ public class MaterialStoreItemResponse {
     private Long sizeBytes;
     private ExtractionStatus extractionStatus;
     private String extractionError;
+    /** 읽었지만 일부를 못 읽은 경우의 안내. 성공이어도 채워질 수 있다. */
+    private String extractionWarning;
     private LocalDateTime createdAt;
     private List<MaterialLinkResponse> links;
 
@@ -36,6 +38,7 @@ public class MaterialStoreItemResponse {
                 .sizeBytes(material.getSizeBytes())
                 .extractionStatus(material.getExtractionStatus())
                 .extractionError(material.getExtractionError())
+                .extractionWarning(material.getExtractionWarning())
                 .createdAt(material.getCreatedAt())
                 .links(links)
                 .build();

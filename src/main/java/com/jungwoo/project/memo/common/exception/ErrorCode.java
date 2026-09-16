@@ -106,6 +106,8 @@ public enum ErrorCode {
     ASSIGNMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_025", "과제를 찾을 수 없습니다"),
     MATERIAL_ANALYSIS_JOB_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_026", "분석 작업을 찾을 수 없습니다"),
     MATERIAL_SECTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_027", "자료 구간을 찾을 수 없습니다"),
+    ZIP_IMPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_028", "압축 파일 가져오기를 찾을 수 없습니다"),
+    ZIP_IMPORT_ENTRY_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_029", "가져오기 항목을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -134,6 +136,11 @@ public enum ErrorCode {
     TOPIC_TREE_CONFLICT(HttpStatus.CONFLICT, "E409_017",
             "이 변경안을 만든 뒤 학습 구조가 바뀌었습니다. 자료를 다시 분석하면 새 변경안이 만들어집니다"),
     TOPIC_CHANGE_PROPOSAL_RESOLVED(HttpStatus.CONFLICT, "E409_018", "이미 처리된 변경안입니다"),
+    MATERIAL_ALREADY_EXTRACTED(HttpStatus.CONFLICT, "E409_019", "이미 본문을 읽은 자료입니다"),
+    ZIP_IMPORT_NOT_READY(HttpStatus.CONFLICT, "E409_020", "지금은 가져올 수 있는 상태가 아닙니다"),
+    ZIP_IMPORT_ENTRY_NOT_RETRYABLE(HttpStatus.CONFLICT, "E409_021", "다시 시도할 수 있는 항목이 아닙니다"),
+    ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_022",
+            "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",

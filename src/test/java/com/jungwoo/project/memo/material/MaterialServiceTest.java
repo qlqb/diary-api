@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
@@ -56,19 +57,15 @@ class MaterialServiceTest {
     @Mock private MaterialLinkMapper materialLinkMapper;
     @Mock private MaterialTxService materialTxService;
     @Mock private FileStorageService fileStorageService;
-    @Mock private TextExtractionService textExtractionService;
-    @Mock private MaterialTextUnitService materialTextUnitService;
+    @Mock private MaterialExtractionService materialExtractionService;
     @Mock private com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService analysisJobService;
     @Mock private com.jungwoo.project.memo.learning.structure.TopicChangeProposalService topicChangeProposalService;
 
     @InjectMocks
     private MaterialService service;
 
-    @org.junit.jupiter.api.BeforeEach
-    void stubUnits() {
-        // 단위 추출은 이 테스트의 관심사가 아니다 — 비어 있는 결과로 두고 순서·저장만 본다.
-        org.mockito.Mockito.lenient().when(materialTextUnitService.extractUnits(any(), any(), any(), any(), any()))
-                .thenReturn(new MaterialTextUnitService.Extracted(List.of(), null));
+    private static MaterialExtractionService.Outcome extracted(String text) {
+        return new MaterialExtractionService.Outcome(ExtractionStatus.SUCCESS, text, null, null, List.of(), null);
     }
 
     private MockMultipartFile pdf() {
@@ -80,16 +77,16 @@ class MaterialServiceTest {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(fileStorageService.store(eq(USER_ID), any()))
                 .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
-        when(textExtractionService.extract(any(), eq("pdf")))
-                .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
+        when(materialExtractionService.extract(any(), eq("pdf"), eq(USER_ID), eq("abc123")))
+                .thenReturn(extracted("본문"));
 
         service.upload(USER_ID, COURSE_ID, MaterialType.SYLLABUS, pdf());
 
         // DB 쓰기가 마지막이어야 한다. 이 순서가 뒤집히면 커밋 실패 시
         // "status=ACTIVE인데 원본 파일이 없는 자료"가 남는다.
-        InOrder order = inOrder(fileStorageService, textExtractionService, materialTxService);
+        InOrder order = inOrder(fileStorageService, materialExtractionService, materialTxService);
         order.verify(fileStorageService).store(eq(USER_ID), any());
-        order.verify(textExtractionService).extract(any(), eq("pdf"));
+        order.verify(materialExtractionService).extract(any(), eq("pdf"), eq(USER_ID), eq("abc123"));
         order.verify(materialTxService).createWithLink(any(), eq(COURSE_ID), eq(MaterialType.SYLLABUS), any());
     }
 
@@ -98,8 +95,8 @@ class MaterialServiceTest {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(fileStorageService.store(eq(USER_ID), any()))
                 .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
-        when(textExtractionService.extract(any(), eq("pdf")))
-                .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
+        when(materialExtractionService.extract(any(), eq("pdf"), eq(USER_ID), eq("abc123")))
+                .thenReturn(extracted("본문"));
 
         service.upload(USER_ID, COURSE_ID, MaterialType.SYLLABUS, pdf());
 
@@ -114,32 +111,36 @@ class MaterialServiceTest {
     }
 
     @Test
-    void upload_withoutPageStructure_splitsExtractedTextIntoBlocks_andStoresFormatContentType() {
-        // hwp·ipynb·zip은 페이지 단위가 없다. 단위가 비면 추출한 전체 텍스트를 "구간 N" 블록으로 나눠 함께 저장한다.
+    void upload_storesUnitsAndWarningFromTheExtractor_andTheFormatContentType() {
+        // 노트북은 셀이 단위다. 쪽수는 없고(null), 일부만 읽었으면 경고가 함께 저장된다.
         when(fileStorageService.store(eq(USER_ID), any()))
-                .thenReturn(new FileStorageService.StoredFile("u.hwp", "1/u.hwp", "hwp", "abc123", "application/x-hwp"));
-        when(textExtractionService.extract(any(), eq("hwp")))
-                .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "강의계획서", null));
-        com.jungwoo.project.memo.material.domain.MaterialTextUnit block =
-                com.jungwoo.project.memo.material.domain.MaterialTextUnit.builder().text("강의계획서").build();
-        when(materialTextUnitService.blocksFromText("강의계획서", USER_ID, null, "abc123")).thenReturn(List.of(block));
+                .thenReturn(new FileStorageService.StoredFile("u.ipynb", "1/u.ipynb", "ipynb", "abc123",
+                        "application/x-ipynb+json"));
+        com.jungwoo.project.memo.material.domain.MaterialTextUnit cell =
+                com.jungwoo.project.memo.material.domain.MaterialTextUnit.builder()
+                        .unitType(com.jungwoo.project.memo.material.domain.TextUnitType.NOTEBOOK_CELL)
+                        .unitNo(3).text("print(1)").build();
+        when(materialExtractionService.extract(any(), eq("ipynb"), eq(USER_ID), eq("abc123")))
+                .thenReturn(new MaterialExtractionService.Outcome(ExtractionStatus.SUCCESS, "본문", null,
+                        "실행 결과가 길어 일부만 읽었어요", List.of(cell), null));
 
-        // 브라우저는 hwp를 octet-stream으로 보내기도 한다. 저장하는 값은 형식의 대표 content type이다.
+        // 브라우저는 ipynb의 type을 비워 보내기도 한다. 저장하는 값은 형식의 대표 content type이다.
         service.upload(USER_ID, null, null,
-                new MockMultipartFile("file", "계획서.hwp", "application/octet-stream", new byte[]{1}));
+                new MockMultipartFile("file", "lab.ipynb", "", "{}".getBytes()));
 
         ArgumentCaptor<CourseMaterial> captor = ArgumentCaptor.forClass(CourseMaterial.class);
-        verify(materialTxService).createWithLink(captor.capture(), eq(null), eq(null), eq(List.of(block)));
-        assertThat(captor.getValue().getContentType()).isEqualTo("application/x-hwp");
+        verify(materialTxService).createWithLink(captor.capture(), eq(null), eq(null), eq(List.of(cell)));
+        assertThat(captor.getValue().getContentType()).isEqualTo("application/x-ipynb+json");
         assertThat(captor.getValue().getPageCount()).isNull();
+        assertThat(captor.getValue().getExtractionWarning()).isEqualTo("실행 결과가 길어 일부만 읽었어요");
     }
 
     @Test
     void uploadWithoutCourse_skipsCourseOwnershipCheckAndCreatesNoLink() {
         when(fileStorageService.store(eq(USER_ID), any()))
                 .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
-        when(textExtractionService.extract(any(), eq("pdf")))
-                .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
+        when(materialExtractionService.extract(any(), eq("pdf"), eq(USER_ID), eq("abc123")))
+                .thenReturn(extracted("본문"));
 
         // 전역 자료함 업로드: 프로젝트도 materialType도 없다. 그게 정상 상태다.
         service.upload(USER_ID, null, null, pdf());
@@ -298,6 +299,45 @@ class MaterialServiceTest {
         assertThatThrownBy(() -> service.getActiveOwned(USER_ID, MATERIAL_ID))
                 .isInstanceOfSatisfying(NotFoundException.class, ex ->
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.COURSE_MATERIAL_NOT_FOUND));
+    }
+
+    /**
+     * 본문 재추출. 사용자가 같은 파일을 다시 올리지 않아도 되게 하는 경로다. 자료 id·연결은 그대로 두고
+     * 추출 열과 단위만 바꾼 뒤, 성공했으면 기존 자동 분석에 등록한다.
+     */
+    @Test
+    void retryExtraction_reReadsTheStoredOriginal_andEnqueuesAnalysisOnSuccess(@TempDir Path dir) throws Exception {
+        Path stored = dir.resolve("u.ipynb");
+        Files.writeString(stored, "{}");
+        CourseMaterial material = CourseMaterial.builder()
+                .materialId(MATERIAL_ID).userId(USER_ID).originalFilename("lab.ipynb")
+                .storedFilename("u.ipynb").storagePath("1/u.ipynb").fileHash("abc123")
+                .extractionStatus(ExtractionStatus.FAILED).extractionError("옛 파서로 못 읽음")
+                .build();
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(material);
+        when(fileStorageService.resolve("1/u.ipynb")).thenReturn(stored);
+        MaterialExtractionService.Outcome outcome = extracted("셀 본문");
+        when(materialExtractionService.extract(eq(stored), eq("ipynb"), eq(USER_ID), eq("abc123")))
+                .thenReturn(outcome);
+
+        service.retryExtraction(USER_ID, MATERIAL_ID);
+
+        verify(materialTxService).replaceExtraction(USER_ID, material, "abc123", outcome);
+        verify(analysisJobService).enqueueContent(eq(material), anyInt());
+        // 자료를 새로 만들지 않는다 — 같은 materialId 그대로다.
+        verify(materialTxService, never()).createWithLink(any(), any(), any(), any());
+    }
+
+    @Test
+    void retryExtraction_refusesWhenTheMaterialWasAlreadyRead() {
+        when(courseMaterialMapper.findByIdAndUserId(MATERIAL_ID, USER_ID)).thenReturn(CourseMaterial.builder()
+                .materialId(MATERIAL_ID).userId(USER_ID).storagePath("1/u.pdf")
+                .extractionStatus(ExtractionStatus.SUCCESS)
+                .build());
+
+        assertThatThrownBy(() -> service.retryExtraction(USER_ID, MATERIAL_ID))
+                .isInstanceOf(ConflictException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.MATERIAL_ALREADY_EXTRACTED);
     }
 
     @Test
