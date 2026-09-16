@@ -378,6 +378,28 @@ evidence              근거 스냅샷: fingerprint · availabilityHash · mater
 달라졌는지를 사람이 읽는 문장으로 초안에 남긴다(11번 §5-1-3). 조정 항목(기존 계획 항목의 REDUCE/MOVE/DROP)은 같은 제안의
 `ai_proposal_items`에 `operation`·`target_item_id`로 들어간다 — 기존 조정 제안 적용 경로 그대로다.
 
+### 10.8.1 합의 항목의 범위 필드 · 검토 상태 (2026-09-18 후속)
+
+`ai_plan_briefs.items` 원소에 더한 것(같은 컬럼, DDL 없음. 옛 항목은 null):
+
+```text
+periodStart, periodEnd   PERIOD 합의의 실제 날짜. null이면 범위 미확인(과거 참고)
+saidOn                   발언 날짜(사용자 시간대) — "이번 주"의 해석 기준
+flowProposalId           THIS_DRAFT 합의가 묶인 초안 흐름(처음 초안 id). null이면 아직 초안을 만들지 않음
+```
+
+`ai_proposals.review_state_json`(DDL `docs/sql/2026-09-18-plan-review-state.sql`, 로컬 DB 적용):
+
+```text
+{version, title, excludedProposalItemIds[], editedItems[], answers{}, savedAt}
+```
+
+검토 상태다. 실행 데이터가 아니고 확정 요청이 같은 값을 싣는다. version은 저장마다 +1이고 늦은 저장은 0행(409). PROPOSED인
+초안에만 쓴다. `plan_request_json`에는 `flowRootProposalId`(초안 흐름의 처음 초안 id)가 더해졌다.
+
+재계획 확정은 `plan_versions`에 같은 `plan_key`의 다음 `version`을 넣는다(`uq_plan_versions_key_version`이 동시 확정을 막는다).
+`execution_items.plan_version_id`는 여전히 "누가 만들었나"이고, 새 항목에만 새 판이 찍힌다. 계획 소속은 `plan_key` + 기간이다.
+
 ## 10.6 ai_conversation_drafts (진행 중 요청 상태)
 
 2026-09-08부터 상담 대화는 "아직 만들지 않은 일정 요청"의 확정된 조각을 서버가 들고 있는다.

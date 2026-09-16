@@ -437,3 +437,25 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 |---|---|---|
 | `E409_021` | 409 | 같은 요청 키의 초안 생성이 진행 중 — 진행 상태를 조회해 기다린다 |
 | `E503_003` | 503 | 계획 호출이 실패했거나, 읽을 수 없는 응답이 복구 호출(1회) 뒤에도 이어짐. 이전 초안 유지 |
+
+## Plan Draft — 후속 수정 (2026-09-18)
+
+설계는 `docs/product/11-period-plan.md` §5-1-4, `13-plan-judgment.md` §11.1, DB는 `05-database.md` §10.8.1.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/plans/proposals/{proposalId}/confirm` | 초안에 기존 항목 결정(REDUCE/MOVE/DROP, 전략의 KEEP)이 있으면 같은 `planKey`의 다음 `version`을 만든다. 기존 항목의 생성 출처는 그대로, 새 항목만 새 판. 조정 전용 초안도 확정된다. 응답 `PlanResponse.planKey`/`version` |
+| PUT | `/api/plans/proposals/{proposalId}/review-state` | 검토 상태 저장 `{version, title?, excludedProposalItemIds[], editedItems[], answers{}}`. 응답은 저장된 상태(version+1). 열린 초안만, version이 낡았으면 409 `E409_022`. 실행 데이터는 바뀌지 않는다 |
+| GET | `/api/plans/proposals/{proposalId}/draft` | 옛 id가 대체됐으면(다시 만들기·「이미 알아요」) 지금 열린 최신 초안을 돌려준다. `reviewState`를 함께 준다 |
+| POST | `/api/plans/drafts/{proposalId}/items:regenerate` | 요청이 저장된 초안(`requestContext.redraftable`)이면 같은 조건으로 다시 만들기로 간다(응답에 `previousDraft`) |
+| POST | `/api/plans/{planVersionId}/place` | 날짜가 정해진(DATE_ONLY) 항목도 그 날 안에서 시각을 정한다. `unplaced[]`에 `scheduledDate`·`reason`("9/18에 남는 시간이 없어요") |
+| GET | `/api/plans?date=` | 같은 `planKey`의 판이 여럿이면 최신 판만 |
+
+`PlanDraftResponse.reviewState`: 위 저장 상태. `previousDraft.changes`의 일정 변경 문구는 "일정(수업·약속·시각이 정해진 항목)이
+달라져 남는 시간이 바뀌었다" / "날짜가 …에서 …로 바뀌어 오늘 이후의 일정·마감을 다시 확인했다"다.
+
+상담 SSE의 `planBrief` ops에 `periodStart`/`periodEnd`(PERIOD 합의의 실제 날짜)와 kind `FREQUENCY`가 더해졌다.
+
+| 코드 | 상태 | 뜻 |
+|---|---|---|
+| `E409_022` | 409 | 검토 상태가 다른 곳에서 먼저 저장됨 — 최신 상태를 다시 읽는다 |
