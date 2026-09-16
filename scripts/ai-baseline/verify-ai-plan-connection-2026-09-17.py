@@ -617,9 +617,6 @@ def scenario_flow(seeded):
                          "unplaced": [{"title": u.get("title"), "date": u.get("scheduledDate"), "reason": u.get("reason")} for u in unplaced]}
     log(f"[flow-confirm] v1={v1['planVersionId']} key={v1.get('planKey')} title={v1.get('title')!r} items={len(v1_items)} "
         f"placed={len(placed_items)} unplaced={result['confirm']['unplaced']}")
-    origin_before = {int(r[0]): (None if r[1] == 'NULL' else int(r[1])) for r in mysql(
-        f"SELECT execution_item_id, plan_version_id FROM execution_items WHERE user_id = {seeded['userId']} AND is_deleted = 0;")}
-
     # 부분 수행 + 메모(첫 번째 자료구조 항목).
     s_, live_items, _ = call("GET", f"/api/execution-items/range?startDate={today.isoformat()}"
                                     f"&endDate={(today + timedelta(days=13)).isoformat()}&includeUnscheduled=true", token)
@@ -670,6 +667,9 @@ def scenario_flow(seeded):
         return result
 
     # 재계획 확정 → 같은 계획의 다음 판. 기존 항목의 출처는 그대로, 새 항목만 새 판.
+    # (출처 비교의 기준은 확정 직전이다 — 부분 수행이 만든 잔여 항목은 확정이 만든 것이 아니다.)
+    origin_before = {int(r[0]): (None if r[1] == 'NULL' else int(r[1])) for r in mysql(
+        f"SELECT execution_item_id, plan_version_id FROM execution_items WHERE user_id = {seeded['userId']} AND is_deleted = 0;")}
     s_, v2, _ = call("POST", f"/api/plans/proposals/{pid2}/confirm", token, {})
     checks["replan_confirm_ok"] = s_ == 200
     if s_ != 200:

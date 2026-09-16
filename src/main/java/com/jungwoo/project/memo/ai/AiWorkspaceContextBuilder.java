@@ -152,10 +152,17 @@ public class AiWorkspaceContextBuilder {
              * "스택/큐/트리"가 나온 재현 대화가 TODAY였다. 계획 품질이 진입 탭에 따라
              * 달라지면 안 된다.
              */
+            /*
+             * 계획 탭(PLAN)의 전역 상담도 상세다(2026-09-18). "자료구조 3주차 따라잡는 계획 짜 줘"에 학습 항목이 없으면 모델이
+             * "3주차에 무엇을 다루나요?"라고 되물어 사용자가 저장된 정보를 다시 설명하게 됐다(실호출 재현). 계획 상담이 학습 항목을
+             * 모른 채 진행될 이유가 없다.
+             */
             appendProjectsOverviewBlock(sb, userId,
                     creatingProposal
                             || scope == AiProposalTargetScope.EXECUTION
-                            || scope == AiProposalTargetScope.MIXED,
+                            || scope == AiProposalTargetScope.MIXED
+                            || scope == AiProposalTargetScope.PLAN
+                            || scope == AiProposalTargetScope.PLANNING,
                     today);
         }
 
