@@ -10,6 +10,7 @@ import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HexFormat;
@@ -26,12 +27,19 @@ import java.util.TreeSet;
 public record EvidenceFingerprint(String fingerprint, String availabilityHash, String materialsHash,
                                   String assignmentsHash, String progressHash) {
 
-    public static EvidenceFingerprint of(List<CourseCatalog> catalogs, List<AvailabilityWindow> windows,
+    /**
+     * @param now 지문을 찍는 시각. 오늘의 가용 구간은 "지금부터"로 시작하므로 시작 시각을 지문에 넣으면 1분만 지나도 다른
+     *            근거가 된다(실호출에서 같은 조건의 다시 만들기가 매번 선택을 다시 했다). 오늘 구간은 끝 시각만 본다 —
+     *            새 일정이 오늘 구간을 자르거나 줄이면 끝 시각이나 구간 수가 달라져 여전히 잡힌다.
+     */
+    public static EvidenceFingerprint of(List<CourseCatalog> catalogs, List<AvailabilityWindow> windows, LocalDateTime now,
                                          LocalDate start, LocalDate end, Collection<Long> courseIds, String instruction,
                                          Collection<Long> excluded, Collection<Long> requestedMaterials) {
         TreeSet<String> availability = new TreeSet<>();
+        LocalDate today = now == null ? null : now.toLocalDate();
         for (AvailabilityWindow w : windows == null ? List.<AvailabilityWindow>of() : windows) {
-            availability.add(w.startAt() + "~" + w.endAt());
+            boolean startsToday = today != null && w.startAt() != null && w.startAt().toLocalDate().equals(today);
+            availability.add((startsToday ? "today" : String.valueOf(w.startAt())) + "~" + w.endAt());
         }
         TreeSet<String> materials = new TreeSet<>();
         TreeSet<String> assignments = new TreeSet<>();

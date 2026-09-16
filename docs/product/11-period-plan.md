@@ -609,6 +609,53 @@ reservedBufferMinutes     = estimatedAvailableMinutes − targetMinutes   (휴�
 
 `scheduling.horizon.max-days`를 늘리지 않는다.
 
+### 5-1-3. 계획 생성 경로 — 상담·자료·실행 기록을 한 회차로 읽는다 (2026-09-17)
+
+기본 AI 경로(`PeriodPlanDraftGenerator`)는 계획 화면의 [초안 만들기]와 상담의 CREATE_PERIOD_PLAN이 **같은 코드**다.
+회차 하나는 아래 순서이고, 모델은 DB를 쓰지 않는다 — 생성기가 돌려준 것을 `PlanDraftService.persist`가 저장한다.
+
+```text
+1 사실·합의 수집   카탈로그(15번 §7) · 남는 시간 · 다음 수업(루틴, 종료+14일까지) · 실행 기록(시작-14일~종료: 기록·이동·메모,
+                    실측/추정/미기록 구분) · 이 기간에 이미 있는 일정(#표시 = 계획 항목) · 상담이면 [상담 기록]과 [상담에서 합의한 것]
+2 근거 지문        EvidenceFingerprint(기간·범위·지시·제외·지정 자료·가용 구간·구간 해시·과제 상태·진행 표식). 이전 초안의
+                    지문과 같으면 자료 선택 호출을 생략하고 같은 구간을 다시 읽는다(mode REUSED). 다르면 달라진 항목을
+                    [이전 초안과 달라진 것]으로 싣고 strategy.changes에 남긴다. "새 메시지가 없다"는 재사용 조건이 아니다
+3 자료 선택        선택 호출(최대 2) → 서버 원문 조회(1라운드)
+4 최종 판단        계획 호출 1: 전략(strategy)과 항목(items)과 기존 항목 결정(existingItems)을 한 응답으로
+5 추가 읽기        최종 판단이 moreEvidence(후보 목록의 핸들, 또는 이미 읽은 구간의 앞뒤)를 내면 상한 안에서 한 번만 더 읽고
+                    계획 호출 2. 두 번째 응답의 추가 요청은 읽지 않고 unreadNotes에 남긴다
+6 검증·정규화      인용 번호(그 회차에 준 것만) · 마감(수업·과제 사실을 가리킬 때만 그 시각, 제안 목표는 AI_PROPOSED) ·
+                    기존 항목 결정(PLANNED만, REDUCE는 더 작을 때만, MOVE는 기간 안 날짜) · 질문은 1개 · 서버가 아는 미읽음
+```
+
+**상한은 실행 제한이다**(`GenerationBudget`, `plan.draft.max-normal-calls=3`, `max-recovery-calls=1`, `max-total-calls=4`,
+`max-retrieval-rounds=2`). 읽을 수 없는 응답(구조 없음·잘림·JSON 오류)은 같은 프롬프트 + "[다시 답하기]"로 복구 호출 1회이고,
+그래도 안 되면 503 `E503_003`이다. 상한에 닿아 더 읽지 못하면 초안은 나오되 "읽지 못한 범위"가 전략에 적힌다. 호출 수·토큰·
+지연은 서버 계산 `GENERATION_CALLS`로 남고 응답 `generation`으로 화면에 보인다.
+
+**전략은 항목과 같은 응답에서 나온다.** 새 초안의 `strategy`는 비지 않는다: 목표(goal) · 이 기간에 현실적으로 갈 수 있는 곳(reach) ·
+지킨 합의(keptDecisions) · 프로젝트 우선순위와 이유 · 미룬 범위와 이유(deferred, 학습 항목을 가리키면 SKIP 취급으로도 남는다) ·
+가정(assumptions) · 확인이 필요한 질문 1개(openQuestions) · 읽지 못한 범위(unreadNotes) · 이전 초안과 달라진 것(changes) · 기존
+항목에 대한 결정(existingDecisions). 항목은 행동·완료 기준(`doneCriteria`, 저장용 description에는 "완료: …"로 합쳐 둔다)·시간·
+우선순위·인용(학습 항목/구간/합의/기록/수업)·마감(`deadlineAt`/`deadlineDate` + `deadlineSource` CLASS|ASSIGNMENT|AI_PROPOSED)·
+"이전 실행 결과에서 반영"(reflects)을 갖는다. 마감은 확정 → 실행 항목 → 롤링 배치까지 그대로 간다(§5-2, 13번 §9).
+
+**다시 짜기는 기존 항목을 중복 생성하지 않는다.** 이 기간에 이미 있는 계획 항목은 `#id`로 프롬프트에 실리고, 모델은 유지·줄임·
+이동·제외를 `existingItems`로 답한다. 서버가 그것을 조정 항목(`operation` REDUCE|MOVE|DROP, `targetExecutionItemId`)으로 같은 제안에
+넣고, 화면은 "이미 있던 항목의 변경"으로 따로 보여 준다. 유지한 항목과 같은 내용을 새 항목으로 만들지 않는 것은 프롬프트 규칙이고,
+확정은 기존 제안 적용 경로(조정 적용)를 그대로 쓴다.
+
+**요청 키·진행 상태·복구.** 화면은 요청마다 `requestKey`를 만들어 보낸다. 같은 키의 열린 초안이 있으면 모델을 부르지 않고 그
+초안을 돌려주고, 같은 키가 진행 중이면 409 `E409_021`이다. 진행 단계(`COLLECTING → SELECTING → RETRIEVING → PLANNING →
+READING_MORE → PLANNING → SAVING → DONE|FAILED`)는 `GET /api/plans/draft/progress?requestKey=`(계획 화면)와 SSE
+`period_plan.progress`(상담)로 흘러 버튼 문구가 된다("자료 확인 중", "계획 정리 중"). 새로고침 뒤에는 저장된 초안을
+`GET /api/plans/proposals/{id}/draft`로 다시 읽는다(모델 호출 없음). 생성 중에는 DB 트랜잭션을 열지 않는다 — 저장만 짧은
+트랜잭션이고, 실패·취소·시간 초과에서 이전 초안은 그대로다.
+
+**직전 계획 회고의 시간은 실측만 실측이다.** `PlanReviewService`는 완료했지만 시간을 적지 않은 항목을 예정 시간으로 세되
+`actualMinutesSource=ESTIMATED`로 표시하고, 프롬프트 요약은 "실제 측정 N분 · 시간 미기록 M건(예정 합 X분, 추정)"이다. 학습 속도나
+원인 분석은 측정값만 쓴다.
+
 ### 5-2. 확정 — 한 트랜잭션
 
 ```text

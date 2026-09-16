@@ -584,6 +584,40 @@ eval 전에 `user_contexts`에 직접 넣고 끝나면 지운다.
 바꾸는 상태(수정 전 근거, 적용 후 바뀜, 지워진 원본)는 상세 안이 아니라 기본 화면 맨 위에 글로
 쓴다 — 색이나 아이콘만으로 전하지 않는다.
 
+### 10.6 회차에 실리는 출처가 늘었다 (2026-09-17)
+
+| sourceType | 무엇 | providedValue |
+|---|---|---|
+| `CONVERSATION_MESSAGE` | [상담 기록]의 발화 한 줄(요청 메시지는 제외, 예산 안에서 최근 것부터) | role · text |
+| `PLAN_BRIEF` | [상담에서 합의한 것]의 합의 항목 하나(sourceId=brief_id, sourceVersion=version) | itemId · kind · speaker · accepted · scope · text · topicId · executionItemId · sourceMessageId |
+| `EXECUTION_HISTORY` | [관련 실행 기록]의 항목 한 줄(sourceId=execution_item_id, parentSourceId=topic) | status · plannedDate · currentDate · movedCount · measuredMinutes · unmeasured · note 유무 |
+| `NEXT_CLASS` | 프로젝트의 다음 수업(sourceId=routine_id) — deadlineRefId로 가리키면 CLASS 마감 | courseId · startAt · endAt · title |
+
+서버 계산에 `GENERATION_CALLS`(호출 수·토큰·지연·상한, 원문 없음)가 추가됐다. 규칙은 그대로다: 그 회차에 준 인용 번호만
+유효하고, 합의·기록도 "모델이 봤다"와 "사실이다"를 나눠 읽는다 — 합의는 사용자가 말했거나 수락한 것이지 등록된 일정이 아니다.
+
+## 11. 상담 메모리 — 합의는 발화자와 동의 상태를 잃지 않는다 (2026-09-17)
+
+"자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기"를 AI가 제안하고 사용자가 "좋아, 그대로"라고 했을 때, 생성기가 받는
+것이 최근 사용자 발언 8개뿐이면 그 결정은 어디에도 없다. `ai_plan_briefs`(대화당 1행, 05번 §10.8)가 합의 항목을 든다.
+
+- **항목**: kind(GOAL·PRIORITY·EXCLUDE·TIME_CONSTRAINT·SCOPE·DIFFICULTY·CAUSE·OTHER) · text · speaker(USER|ASSISTANT) · accepted ·
+  rejected · scope(THIS_DRAFT|PERIOD) · sourceMessageId · acceptedByMessageId · topicId/courseId/executionItemId · revision · history.
+- **규칙**: 사용자가 말한 것은 즉시 유효(accepted). AI가 제안한 것은 후보이고 사용자가 "좋아/그대로"라고 하면 그 번호에 ACCEPT가
+  붙는다 — 무엇을 받아들였는지가 번호로 남는다. 발화자를 모르는 ADD는 AI 제안(후보)으로 낮춰 적는다. 고쳐 말하면 UPDATE(최신
+  수정판이 우선, 이전 문장은 history). 같은 문장을 매 턴 다시 ADD하지 않는다.
+- **수명**: THIS_DRAFT는 이번 초안, PERIOD는 이번 기간. 다음 기간에도 유효한 선호는 여기가 아니라 `user_contexts`(사용자 확인 흐름)다.
+  다른 대화에서는 확인된 어려움(DIFFICULTY·CAUSE)과 PERIOD 합의만 [다른 대화에서 확인된 것]으로 이어 온다.
+- **쓰는 곳**: 상담 프롬프트 [계획 합의 현황](번호와 상태 — 모델이 ACCEPT/UPDATE에서 그 번호를 쓴다) · 계획 호출 [상담에서 합의한
+  것](유효한 합의 + "아직 답 없는 AI 제안"을 나눠 싣는다) · 초안 응답 `briefId`/`briefVersion`(그때 읽은 합의) · 초안 상단의 "유지한
+  결정". 생성 버튼은 저장된 합의·제안 id를 가리키지, 브라우저가 들고 있던 전략 문자열을 보내지 않는다.
+- **쓰기 권한**: 모델은 planBrief ops를 낼 뿐이고 서버가 턴 완료 시(assistant 메시지 저장 뒤) 적용한다. 화면 어디도 이 표를
+  사실(일정)로 읽지 않는다.
+
+**실행 결과로 조정하기(프롬프트 규칙 24).** 옮긴 횟수·일부 수행·실측 시간·메모는 관찰이고 원인이 아니다. 원인을 모르는데 그
+원인에 따라 계획이 달라지면 질문 하나만 한다. 답은 DIFFICULTY/CAUSE로 남아 다음 상담·계획에서 다시 묻지 않는다. 기록만으로
+자동 재계획하거나 사용자 성향을 단정하지 않는다.
+
 ## 9. 완료 기준
 
 JSON 필드가 늘어난 것은 완료가 아니다. "1~2주차를 제대로 못 했어. 다음 주 수업을 알아들을

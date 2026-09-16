@@ -394,3 +394,46 @@ requestContext: { source: PLAN_SCREEN | CONVERSATION, courseIds, excludedTopics[
 | `E503_003` | 503 | 자료 선택 호출 실패·시간 초과(기존 초안 유지, 서버 순위로 대체하지 않음) |
 | `E503_004` | 503 | 자료 선택 응답을 읽지 못함(구조 없음, 보여 주지 않은 id뿐) |
 | `E503_005` | 503 | 계획 호출은 성공했지만 쓸 항목이 없음(빈 초안 저장 없음) |
+
+## Plan Draft — 상담·계획·실행 연결 (2026-09-17)
+
+설계는 `docs/product/11-period-plan.md` §5-1-3, `13-plan-judgment.md` §10.6·§11, DB는 `05-database.md` §10.8. 초안 1회는 모델 최대
+4회(선택 ≤2 · 판단 1 · 추가 읽기 뒤 판단 1, 복구 1회 포함 전체 4)이고 상한은 설정(`plan.draft.max-*`)이다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/plans/draft` | 요청에 `requestKey?: string`. 같은 키의 PROPOSED 초안이 있으면 모델 호출 없이 그것을 돌려준다. 같은 키가 진행 중이면 409 `E409_021` |
+| POST | `/api/plans/proposals/{proposalId}/redraft` | 요청에 `requestKey?`. 이전 초안의 근거 스냅샷과 지금 값을 비교해 같으면 자료 선택을 생략(`generation.selectionReused`)하고, 다르면 `previousDraft.changes`에 달라진 점을 적는다 |
+| GET | `/api/plans/draft/progress?requestKey=` | `{known, stage, label, proposalId?, errorCode?}`. stage: COLLECTING / SELECTING / RETRIEVING / PLANNING / READING_MORE / SAVING / DONE / FAILED. 모르는 키는 `{known:false}` |
+| GET | `/api/plans/proposals/{proposalId}/draft` | 저장된 초안을 `PlanDraftResponse`로 다시 읽는다(새로고침·탭 이동 복구, 모델 호출 없음) |
+| POST | `/api/ai/conversations/{id}/messages` | SSE에 `period_plan.progress {stage, label}`가 추가됐다(CREATE_PERIOD_PLAN 턴). `message.completed`의 `periodPlanDraft`는 아래 응답과 같다 |
+
+`PlanDraftResponse`에 추가된 필드:
+
+```text
+strategy: {                      // 새 초안에서 null이 아니다
+  goal, reach, strategySummary, keptDecisions[], courses[{courseId, rank, focus, reason}],
+  topics[{topicId, topicTitle, treatment, reason}], deferred[{title, reason, topicId}], assumptions[],
+  openQuestions[] (최대 1), unreadNotes[], changes[{what, why}],
+  existingDecisions[{executionItemId, title, action KEEP|REDUCE|MOVE|DROP, reason, expectedMinutes?, toDate?}]
+}
+proposal.items[]: + deadlineSource: CLASS | ASSIGNMENT | AI_PROPOSED | null, doneCriteria, actionType, topicId,
+                  조정 항목은 operation REDUCE|MOVE|DROP + targetExecutionItemId + beforeTitle/beforeExpectedMinutes/beforeScheduledDate
+generation: { normalCalls, recoveryCalls, maxNormalCalls, maxTotalCalls, retrievalRounds, maxRetrievalRounds,
+              inputTokens, outputTokens, elapsedMs, selectionReused, calls[] }
+previousDraft: { proposalId, changes[] } | null
+briefId, briefVersion            // 그때 읽은 상담 합의
+```
+
+근거 스냅샷(`GET /api/plans/drafts/{id}/provenance`)의 sourceType에 `CONVERSATION_MESSAGE`·`PLAN_BRIEF`·`EXECUTION_HISTORY`·
+`NEXT_CLASS`, 서버 계산에 `GENERATION_CALLS`가 추가됐다.
+
+계획 회고(`GET /api/plans/{planVersionId}/review`): `measuredMinutes`(실측 합) · `estimatedMinutes`(시간 미기록 완료 항목의 예정 합) ·
+`unmeasuredDoneCount`, 항목마다 `actualMinutesSource: MEASURED | ESTIMATED | NONE`. `completedMinutes`는 둘의 합이다.
+
+오류:
+
+| 코드 | 상태 | 뜻 |
+|---|---|---|
+| `E409_021` | 409 | 같은 요청 키의 초안 생성이 진행 중 — 진행 상태를 조회해 기다린다 |
+| `E503_003` | 503 | 계획 호출이 실패했거나, 읽을 수 없는 응답이 복구 호출(1회) 뒤에도 이어짐. 이전 초안 유지 |

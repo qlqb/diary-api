@@ -1,5 +1,33 @@
 # 99. Change Log
 
+## 2026-09-17 — AI 상담·계획·실행 연결: 합의 저장, 한 회차 생성 경로, 실행 기록 반영
+
+사용자가 상황을 다시 설명하지 않아도 AI가 저장된 자료·합의·일정·실행 기록을 읽고 계획을 만든다. 설계는 11번 §5-1-3, 13번 §10.6·§11,
+15번 §7.1, 10번 §5, DB는 05번 §10.8, API는 `api-spec.md`. 마이그레이션 `docs/sql/2026-09-17-plan-briefs.sql`(로컬 DB에 적용).
+브랜치 `feat/ai-plan-connection`(두 저장소, `feat/ai-material-selection` 위).
+
+- **상담 메모리**(`ai_plan_briefs`, `PlanBriefService`): 합의 항목이 발화자(USER/ASSISTANT)·동의 상태·출처 메시지·수명(이번 초안/이번 기간)
+  을 갖는다. "좋아, 그대로"는 그 AI 제안 번호에 ACCEPT로 남는다. 상담 프롬프트 [계획 합의 현황]·[다른 대화에서 확인된 것](어려움·원인·
+  기간 합의만), 계획 호출 [상담에서 합의한 것]과 [상담 기록](발화자 포함, 요청 메시지 제외)으로 실린다. 프롬프트 규칙 23~25.
+- **한 회차 생성 경로**(`PeriodPlanDraftGenerator` 재작성): 사실·합의 수집 → 근거 지문 → 선택(또는 이전 초안과 같으면 재사용 REUSED) →
+  원문 조회 → 최종 판단(전략+항목+기존 항목 결정 한 응답) → 추가 읽기 1회 → 검증·정규화(`PlanResultNormalizer`). 상한은
+  `GenerationBudget`(정상 3·복구 1·전체 4·조회 2라운드, 설정 `plan.draft.max-*`)이고 넘으면 읽지 않고 unreadNotes에 남긴다. 생성 중
+  DB 트랜잭션 없음, 모델은 DB를 쓰지 않는다.
+- **읽는 근거**: 실행 기록(`ExecutionEvidenceService` — 기록·이동·줄임·메모, 실측/추정/미기록 구분, 계획 당시 날짜 vs 지금), 다음 수업
+  (루틴 → NEXT_CLASS, deadlineRefId로 가리키면 CLASS 마감), 이 기간에 이미 있는 계획 항목(#id → existingItems REDUCE/MOVE/DROP 조정),
+  과제 마감(ASSIGNMENT). 마감은 사실을 가리킬 때만 그 시각이고 제안 목표는 AI_PROPOSED로 표시된다. `PlanReviewService`가 시간 미기록
+  완료를 실측으로 합산하던 것을 분리(`measuredMinutes`/`estimatedMinutes`/`actualMinutesSource`).
+- **요청 키·진행·복구**: `requestKey`로 중복 클릭·재시도 dedupe(같은 키의 열린 초안 반환, 진행 중이면 409 `E409_021`), 진행 단계
+  `GET /api/plans/draft/progress`와 SSE `period_plan.progress`, 저장된 초안 다시 읽기 `GET /api/plans/proposals/{id}/draft`.
+  `plan_request_json` 2판(requestKey·briefId/briefVersion·previousProposalId·evidence 스냅샷).
+- **화면**(diary-ui): 초안 상단의 전략(목표·도달점·유지한 결정·미룬 범위·달라진 점·가정/질문 — "확인된 사실이 아니라 가정·질문이에요"),
+  "이미 있던 항목의 변경" 묶음, 생성 계측 줄, 마감 출처 문구, 진행 단계가 버튼 문구, 새로고침 뒤 초안 복구, 회고의 실측/추정 구분.
+- **검증**: 결정적 테스트 1,056개(`PlanConnectionFlowTest` T24~T29, `PlanBriefServiceTest`, `ExecutionEvidenceServiceTest`,
+  `PlanResultNormalizerTest`, `GenerationBudgetTest` 등). 실제 모델 평가 `scripts/ai-baseline/verify-ai-plan-connection-2026-09-17.py`
+  (합성 계정 6 시나리오) 결과는 diary-ui `docs/reviews/ai-plan-connection-completion.md`.
+- **알려진 한계**: 판단 경로(JUDGMENT/V1) 미연결. 상담의 기간 되묻기(화요일에 "이번 주")는 기존 규칙 그대로라 사용자가 날짜로 답해야
+  OFFER가 나온다. 자료 선택 재사용 지문에 상담 내용은 들어가지 않는다(합의는 계획 호출 입력). 실행 기록은 프로젝트당 12줄까지만 싣는다.
+
 ## 2026-09-16 — 자료 형식 추가: HWP·IPYNB·ZIP
 
 - 자료로 `.hwp`(HWP 5.0), `.ipynb`, `.zip`을 올릴 수 있다. 추출·단위 규칙은 15번 §4. DB 마이그레이션 없음

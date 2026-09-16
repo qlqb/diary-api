@@ -339,6 +339,45 @@ serverCalculations[] calculationId · kind · providedToModel · inputRefIds · 
 - 과거 데이터는 셋 다 NULL이고 그대로 둔다. 지금 DB로 역추정해 채우지 않는다 — 그건 스냅샷이
   아니라 추측이고, 추측을 근거로 보여주는 것이 이 기능이 막으려는 바로 그것이다.
 
+## 10.8 ai_plan_briefs (상담의 계획 합의) · plan_request_json 2판 (2026-09-17)
+
+DDL은 `docs/sql/2026-09-17-plan-briefs.sql`(추가 전용·재실행 가능, FK 없음). 로컬 memo DB에 적용했고 배포 DB에는 없다.
+
+```text
+ai_plan_briefs
+- brief_id, user_id
+- conversation_id UNIQUE     대화당 한 행
+- version                    항목이 바뀔 때마다 +1. 초안·요청은 (brief_id, version)으로 "그때 읽은 합의"를 가리킨다
+- status                     OPEN / CLOSED
+- items LONGTEXT JSON        [{id, kind, text, speaker USER|ASSISTANT, accepted, rejected, removed, scope THIS_DRAFT|PERIOD,
+                               sourceMessageId, acceptedByMessageId, supersedes, topicId, courseId, executionItemId,
+                               revision, history[], updatedAt}]
+- last_proposal_id           이 합의로 가장 최근에 만든 초안
+- created_at, updated_at
+```
+
+- 일정·계획 저장소가 아니다. 오늘/일정/계획 화면 어디도 이 표를 사실로 읽지 않는다. 사용자 승인으로 만들어지는 것은 여전히
+  `ai_proposals → plan_versions / execution_items`뿐이다.
+- 모델은 이 표를 쓰지 않는다. 턴의 구조화 응답(`planBrief` ops: ADD/ACCEPT/REJECT/UPDATE/REMOVE)을 서버가 assistant 메시지를
+  저장한 뒤 `version` 대조(낙관적 잠금, 경합이면 다시 읽어 한 번 더)로 적용한다. 변경이 하나도 적용되지 않으면 쓰지 않는다.
+- 지속 선호(다음 기간에도 유효)는 여기가 아니라 `user_contexts`다. 다른 대화로 이어지는 것은 DIFFICULTY·CAUSE와 PERIOD 항목뿐이다.
+
+`ai_proposals.plan_request_json` 2판(같은 컬럼, 추가 DDL 없음. 1판은 그대로 읽힌다):
+
+```text
+version: 2, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds, requestedMaterialIds,
+requestedSectionIds, conversationId,
+requestKey            화면이 만든 요청 키. 같은 키의 PROPOSED 초안이 있으면 모델을 부르지 않고 그것을 돌려준다(JSON_VALUE 조회)
+briefId, briefVersion 그때 읽은 합의
+previousProposalId    같은 조건으로 다시 만들었을 때의 옛 초안
+evidence              근거 스냅샷: fingerprint · availabilityHash · materialsHash · assignmentsHash · progressHash · capturedAt ·
+                      sections[{sectionId, materialId, fileHash, courseId, topicId, reason}] · topics[{topicId, courseId, reason}]
+```
+
+`evidence.fingerprint`가 다음 요청과 같으면 자료 선택 호출을 생략하고 `sections`를 다시 읽는다. 다르면 해시별로 무엇이
+달라졌는지를 사람이 읽는 문장으로 초안에 남긴다(11번 §5-1-3). 조정 항목(기존 계획 항목의 REDUCE/MOVE/DROP)은 같은 제안의
+`ai_proposal_items`에 `operation`·`target_item_id`로 들어간다 — 기존 조정 제안 적용 경로 그대로다.
+
 ## 10.6 ai_conversation_drafts (진행 중 요청 상태)
 
 2026-09-08부터 상담 대화는 "아직 만들지 않은 일정 요청"의 확정된 조각을 서버가 들고 있는다.

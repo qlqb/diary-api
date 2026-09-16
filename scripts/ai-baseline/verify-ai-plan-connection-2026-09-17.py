@@ -401,9 +401,25 @@ def asks_for_files(reply):
 
 # ===== 시나리오 =====
 
+def answer_pending_question(previous, message):
+    """앞 턴이 기간·강도를 되물었으면 사용자가 답하듯 문장 앞에 붙인다. 되묻지 않았으면 그대로."""
+    if not previous:
+        return message
+    reply = previous.get("reply") or ""
+    prefix = ""
+    if previous.get("quickReplies"):
+        prefix += "보통 강도로. "
+    elif any(w in reply for w in ("잡을까요", "기준으로 볼까요", "기간을", "까지로 할까요")):
+        today = date.today()
+        sunday = today + timedelta(days=(6 - today.weekday()) % 7 or 7)
+        prefix += f"{today.month}/{today.day}부터 {sunday.month}/{sunday.day}까지로. "
+    return prefix + message
+
+
 def run_consultation(token, conv, messages, seeded, name):
     turns = []
     for i, m in enumerate(messages):
+        m = answer_pending_question(turns[-1] if turns else None, m)
         t = turn(token, conv, m)
         log_turn(f"{name}#{i + 1}", t)
         turns.append(t)
@@ -483,7 +499,8 @@ def scenario_agree(seeded):
     token = seeded["token"]
     conv = must("POST", "/api/ai/conversations", token, {"scope": "PLAN"})["conversationId"]
     turns = run_consultation(token, conv, [
-        "이번 주 자료구조랑 영어회화 둘 다 해야 하는데 시간이 별로 없어. 어떻게 나눌지 제안해 줘",
+        "오늘부터 이번 주 일요일까지 자료구조랑 영어회화 둘 다 해야 하는데 시간이 별로 없어. 보통 강도로. "
+        "두 과목을 어떻게 나눌지 네가 먼저 제안해 줘",
         "좋아, 그대로 하자",
     ], seeded, "agree")
     brief_before_plan = brief_of(conv)
@@ -511,9 +528,9 @@ def scenario_stuck(seeded):
     log_turn("stuck#1", first)
     reply = first["reply"] or ""
     question_marks = reply.count("?") + reply.count("？")
-    second = turn(token, conv, "종료 조건을 어디에 둬야 하는지 개념이 헷갈렸어. 문제 유형은 알겠어")
+    second = turn(token, conv, answer_pending_question(first, "종료 조건을 어디에 둬야 하는지 개념이 헷갈렸어. 문제 유형은 알겠어"))
     log_turn("stuck#2", second)
-    third = turn(token, conv, "그럼 그걸 반영해서 이번 주 계획 만들어 줘")
+    third = turn(token, conv, answer_pending_question(second, "그럼 그걸 반영해서 이번 주 계획 만들어 줘"))
     log_turn("stuck#3", third)
     turns = [first, second, third]
     plan = create_plan(token, conv, third, seeded, "stuck-plan")
@@ -540,7 +557,7 @@ def scenario_change(seeded):
         "이번 주 자료구조 3주차 따라잡는 계획 짜 줘. 평일 저녁에 할 수 있어",
     ], seeded, "change")
     offer_turn = turns[-1]
-    changed = turn(token, conv, "아 근데 금요일 저녁은 약속이 있어서 비워 줘. 그리고 영어회화는 하루 15분만")
+    changed = turn(token, conv, answer_pending_question(offer_turn, "아 근데 금요일 저녁은 약속이 있어서 비워 줘. 그리고 영어회화는 하루 15분만"))
     log_turn("change#2", changed)
     turns.append(changed)
     plan = create_plan(token, conv, changed, seeded, "change-plan")
@@ -591,7 +608,7 @@ def scenario_change(seeded):
         if live:
             must("POST", f"/api/execution-items/{live['executionItemId']}/partial", token,
                  {"version": live["version"], "completionPercent": 30, "actualMinutes": 15, "note": "생각보다 오래 걸림"})
-    replan_turn = turn(token, conv, "첫 항목 하다가 시간이 부족했어. 남은 기간 다시 짜 줘")
+    replan_turn = turn(token, conv, "첫 항목 하다가 시간이 부족했어. 오늘부터 이번 계획 기간 끝까지 남은 기간을 다시 짜 줘")
     log_turn("change#replan", replan_turn)
     turns.append(replan_turn)
     replan = create_plan(token, conv, replan_turn, seeded, "change-replan")

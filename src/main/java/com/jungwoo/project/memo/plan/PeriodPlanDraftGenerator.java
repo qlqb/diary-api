@@ -543,7 +543,7 @@ public class PeriodPlanDraftGenerator {
         List<UserContext> contexts = loadUserContexts(spec.userId());
         Facts facts = collectFacts(spec, courses, capturedAt, opts);
 
-        EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.windows(), spec.start(), spec.end(),
+        EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.windows(), capturedAt, spec.start(), spec.end(),
                 courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds());
         PlanRequestContext previous = opts.previous();
         List<String> changesFromPrevious = previous == null ? List.of()
