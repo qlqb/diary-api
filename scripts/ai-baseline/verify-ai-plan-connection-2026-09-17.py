@@ -12,8 +12,12 @@
   exam        — 시험 전. 범위 합의(SCOPE)가 저장되고 계획 전략에 kept/deferred로 남는가.
   agree       — AI 제안에 "좋아, 그대로". 합의 저장소에서 ASSISTANT 제안이 수락 상태로 바뀌고 초안이 그 결정을 지키는가.
   stuck       — 이전 항목에서 막힘(부분 수행 기록 + 메모). 관찰과 원인을 나누고 핵심 질문 하나만 하는가. 답이 합의로 남는가.
-  change      — OFFER 이후 변경. 바뀐 조건이 새 초안에 반영되고, 같은 조건 재요청은 선택 호출을 생략(REUSED)하는가.
-                확정·배치 뒤 기록을 남기고 다시 짜면 기존 항목이 조정(existingItems)으로 오는가.
+  flow        — §9 필수 흐름 전부: 합의(금요일 비움·영어 매일 15분) → 초안 → 검토 수정·저장 → 새로고침 복구 → 첫 확정·배치
+                → 부분 수행·메모 → 원인 확인 → 조정+신규 재계획 → 재계획 확정(같은 계획의 다음 판, 출처 보존) → 시간표·실행 상태
+                → 새 상담. 일일 반복은 날짜별로 검사한다.
+  known       — 「이미 알아요」·되돌리기가 공통 경로(같은 조건으로 다시 만들기)로 가고, 옛 초안 id로 최신 초안을 되찾는가.
+  adjust_only — 조정 전용 재계획 확정(모델이 새 항목 없이 조정만 냈을 때).
+필수 검증이 실패하면 종료 코드 1(GATE FAILED).
 
 사용 예(로컬 DB 계정 정보는 application-local.properties에서 읽는다):
   VERIFY_PASSWORD=... python scripts/ai-baseline/verify-ai-plan-connection-2026-09-17.py all --repeat 1
@@ -550,80 +554,235 @@ def scenario_stuck(seeded):
             "firstReplyQuestionMarks": question_marks}
 
 
-def scenario_change(seeded):
+def scenario_flow(seeded):
+    """§9의 필수 흐름 전부: 합의 → 초안 → 검토 수정·저장 → 새로고침 복구 → 첫 확정·배치 → 부분 수행·메모 → 원인 확인 →
+    기존 항목 조정 + 새 항목의 재계획 → 재계획 확정 → 수정된 시간표·실행 상태 → 새 상담. 일일 반복(영어 매일 15분)은 날짜별로 본다."""
     token = seeded["token"]
+    today = date.today()
     conv = must("POST", "/api/ai/conversations", token, {"scope": "PLAN"})["conversationId"]
     turns = run_consultation(token, conv, [
-        "이번 주 자료구조 3주차 따라잡는 계획 짜 줘. 평일 저녁에 할 수 있어",
-    ], seeded, "change")
-    offer_turn = turns[-1]
-    changed = turn(token, conv, answer_pending_question(offer_turn, "아 근데 금요일 저녁은 약속이 있어서 비워 줘. 그리고 영어회화는 하루 15분만"))
-    log_turn("change#2", changed)
-    turns.append(changed)
-    plan = create_plan(token, conv, changed, seeded, "change-plan")
+        "오늘부터 이번 주 일요일까지 자료구조 3주차 따라잡는 계획 짜 줘. 평일 저녁에 할 수 있고 보통 강도로",
+        "아 근데 금요일 저녁은 약속이 있어서 비워 줘. 그리고 영어회화는 7일 동안 매일 15분씩 하고 싶어",
+    ], seeded, "flow")
+    plan = create_plan(token, conv, turns[-1], seeded, "flow-plan")
     brief = brief_of(conv)
-    first_summary = plan["draftSummary"]
+    d1 = plan["draftSummary"]
     checks = {
-        "offer_before_change": (offer_turn.get("offer") or {}).get("type") == "CREATE_PERIOD_PLAN",
         "change_recorded_in_brief": any("금요일" in (i.get("text") or "") or "15분" in (i.get("text") or "")
                                         for i in (brief or {}).get("items", [])),
-        "change_in_strategy": any("금요일" in json.dumps(first_summary.get("strategy"), ensure_ascii=False)
-                                  or "15분" in json.dumps(first_summary.get("strategy"), ensure_ascii=False) for _ in [0]),
+        "frequency_recorded_as_frequency": any(i.get("kind") == "FREQUENCY" for i in (brief or {}).get("items", [])),
     }
-    result = {"conversationId": conv, "turns": turns, "plan": plan, "brief": brief, "checks": checks}
-    pid = first_summary.get("proposalId")
+    result = {"conversationId": conv, "turns": turns, "plan": plan, "brief": brief, "checks": checks, "required": [
+        "review_state_saved", "refresh_restores_review", "first_confirm_ok", "first_confirm_respects_review",
+        "daily_one_item_per_date", "replan_confirm_ok", "replan_same_plan_key_next_version", "kept_items_keep_origin",
+        "new_items_origin_new_version", "daily_not_dropped_without_duplicate", "next_conversation_no_file_question"]}
+    pid = d1.get("proposalId")
     if not pid:
         return result
+    items1 = d1.get("items") or []
+    creates = [i for i in (plan["draft"].get("proposal") or {}).get("items", []) if not i.get("operation") or i["operation"] == "CREATE"]
+    english = [i for i in creates if "영어" in (i.get("title") or "")]
+    dates = [i.get("targetDate") for i in english]
+    checks["daily_one_item_per_date"] = len(english) >= 5 and len(set(dates)) == len(dates)
+    log(f"   daily(영어) items={len(english)} dates={sorted(set(d for d in dates if d))}")
 
-    # 같은 조건으로 다시 만들기 → 근거가 같으니 선택 호출을 생략해야 한다(REUSED).
-    s, d, el = call("POST", f"/api/plans/proposals/{pid}/redraft", token, {"requestKey": str(uuid.uuid4())})
-    if s == 200:
-        redraft = summarize_draft("change-redraft-same", d, token)
-        redraft["seconds"] = round(el, 1)
-        result["redraftSame"] = redraft
-        checks["redraft_reused_selection"] = bool((redraft.get("generation") or {}).get("selectionReused"))
-        checks["redraft_no_changes"] = not ((redraft.get("previousDraft") or {}).get("changes"))
-        checks["redraft_calls_le_2"] = (redraft.get("generation") or {}).get("normalCalls", 99) <= 2
-        stored = mysql_rows(f"SELECT status FROM ai_proposals WHERE proposal_id = {pid};")[0][0]
-        checks["old_superseded"] = stored != "PROPOSED"
-        pid = redraft.get("proposalId") or pid
-    else:
-        result["redraftSame"] = {"status": s, "error": d}
+    # 검토 수정: 제목과 새 항목 하나 제외 → 저장 → 저장된 초안을 다시 읽어 복구.
+    to_exclude = creates[-1]["proposalItemId"] if len(creates) > 1 else None
+    review = {"version": None, "title": "내가 고친 계획 이름", "excludedProposalItemIds": [to_exclude] if to_exclude else []}
+    s_, saved, _ = call("PUT", f"/api/plans/proposals/{pid}/review-state", token, review)
+    checks["review_state_saved"] = s_ == 200 and (saved or {}).get("version") == 1
+    s_, reloaded, _ = call("GET", f"/api/plans/proposals/{pid}/draft", token)
+    rs = (reloaded or {}).get("reviewState") or {}
+    checks["refresh_restores_review"] = s_ == 200 and rs.get("title") == review["title"] \
+        and sorted(rs.get("excludedProposalItemIds") or []) == sorted(review["excludedProposalItemIds"])
+    log(f"   review state saved={saved} restored={rs}")
 
-    # 확정 → 배치 → 기록 → 다시 짜기: 기존 항목이 existingItems 조정으로 오고 같은 내용이 중복되지 않아야 한다.
-    s, plan_resp, _ = call("POST", f"/api/plans/proposals/{pid}/confirm", token, {})
-    if s != 200:
-        result["confirm"] = {"status": s, "error": plan_resp}
+    # 첫 확정(저장된 검토 상태 그대로) → 배치.
+    s_, plan_resp, _ = call("POST", f"/api/plans/proposals/{pid}/confirm", token,
+                            {"excludedItemIds": review["excludedProposalItemIds"], "title": review["title"]})
+    checks["first_confirm_ok"] = s_ == 200
+    if s_ != 200:
+        result["confirm"] = {"status": s_, "error": plan_resp}
         return result
-    plan_version = plan_resp["planVersionId"]
-    s, placed, _ = call("POST", f"/api/plans/{plan_version}/place", token, {})
-    placed_items = (placed or {}).get("placed") or [] if s == 200 else []
-    result["confirm"] = {"planVersionId": plan_version, "placed": len(placed_items), "unplaced": len((placed or {}).get("unplaced") or [])}
-    log(f"[change-confirm] planVersion={plan_version} placed={len(placed_items)} unplaced={result['confirm']['unplaced']}")
-    if placed_items:
-        first_item = placed_items[0]
-        s, item, _ = call("GET", f"/api/execution-items/range?startDate={date.today().isoformat()}"
-                                 f"&endDate={(date.today() + timedelta(days=13)).isoformat()}&includeUnscheduled=true", token)
-        live = next((i for i in (item or []) if i.get("executionItemId") == first_item["executionItemId"]), None)
-        if live:
-            must("POST", f"/api/execution-items/{live['executionItemId']}/partial", token,
-                 {"version": live["version"], "completionPercent": 30, "actualMinutes": 15, "note": "생각보다 오래 걸림"})
-    replan_turn = turn(token, conv, "첫 항목 하다가 시간이 부족했어. 오늘부터 이번 계획 기간 끝까지 남은 기간을 다시 짜 줘")
-    log_turn("change#replan", replan_turn)
+    v1 = plan_resp
+    s_, v1_items, _ = call("GET", f"/api/plans/{v1['planVersionId']}/items", token)
+    v1_items = v1_items or []
+    checks["first_confirm_respects_review"] = v1.get("title") == review["title"] \
+        and len(v1_items) == len(creates) - len(review["excludedProposalItemIds"])
+    s_, placed, _ = call("POST", f"/api/plans/{v1['planVersionId']}/place", token, {})
+    placed_items = (placed or {}).get("placed") or [] if s_ == 200 else []
+    unplaced = (placed or {}).get("unplaced") or [] if s_ == 200 else []
+    result["confirm"] = {"planVersionId": v1["planVersionId"], "planKey": v1.get("planKey"), "version": v1.get("version"),
+                         "title": v1.get("title"), "items": len(v1_items), "placed": len(placed_items),
+                         "unplaced": [{"title": u.get("title"), "date": u.get("scheduledDate"), "reason": u.get("reason")} for u in unplaced]}
+    log(f"[flow-confirm] v1={v1['planVersionId']} key={v1.get('planKey')} title={v1.get('title')!r} items={len(v1_items)} "
+        f"placed={len(placed_items)} unplaced={result['confirm']['unplaced']}")
+    origin_before = {int(r[0]): (None if r[1] == 'NULL' else int(r[1])) for r in mysql(
+        f"SELECT execution_item_id, plan_version_id FROM execution_items WHERE user_id = {seeded['userId']} AND is_deleted = 0;")}
+
+    # 부분 수행 + 메모(첫 번째 자료구조 항목).
+    s_, live_items, _ = call("GET", f"/api/execution-items/range?startDate={today.isoformat()}"
+                                    f"&endDate={(today + timedelta(days=13)).isoformat()}&includeUnscheduled=true", token)
+    live = [i for i in (live_items or []) if i.get("executionItemId") in {x["executionItemId"] for x in v1_items}]
+    target = next((i for i in live if "영어" not in (i.get("title") or "")), live[0] if live else None)
+    if target:
+        must("POST", f"/api/execution-items/{target['executionItemId']}/partial", token,
+             {"version": target["version"], "completionPercent": 30, "actualMinutes": 15,
+              "note": "3-3에서 종료 조건을 못 잡아서 멈춤"})
+        log(f"   partial on #{target['executionItemId']} {target.get('title')}")
+
+    # 원인 확인(또는 기존 답 재사용) → 재계획.
+    cause = turn(token, conv, answer_pending_question(turns[-1],
+                 "첫 항목 하다가 3-3 종료 조건에서 막혀서 15분만 하고 멈췄어. 개념이 헷갈린 게 아니라 코드로 옮길 때 막힌 거야"))
+    log_turn("flow-cause", cause)
+    turns.append(cause)
+    replan_turn = turn(token, conv, answer_pending_question(cause,
+                       f"그걸 반영해서 {today.month}/{today.day}부터 이번 계획 기간 끝까지 다시 짜 줘. 이미 있는 항목은 유지하거나 줄이고, 필요한 것만 새로 넣어 줘"))
+    log_turn("flow-replan-turn", replan_turn)
     turns.append(replan_turn)
-    replan = create_plan(token, conv, replan_turn, seeded, "change-replan")
+    brief2 = brief_of(conv)
+    checks["cause_saved"] = any(i.get("kind") in ("CAUSE", "DIFFICULTY") and "종료 조건" in (i.get("text") or "")
+                                for i in (brief2 or {}).get("items", []))
+    replan = create_plan(token, conv, replan_turn, seeded, "flow-replan")
     result["replan"] = replan
-    items = replan["draftSummary"].get("items") or []
-    existing_titles = {p["title"] for p in placed_items}
-    checks["replan_has_adjustments"] = any(i.get("operation") and i["operation"] != "CREATE" for i in items) \
-        or bool((replan["draftSummary"].get("strategy") or {}).get("existingDecisions"))
-    checks["replan_no_duplicate_titles"] = not any(i.get("title") in existing_titles for i in items if not i.get("operation") or i["operation"] == "CREATE")
-    checks["replan_existing_provided"] = bool((replan["draftSummary"].get("providedByType") or {}).get("EXECUTION_ITEM_PLANNED"))
+    d2 = replan["draftSummary"]
+    pid2 = d2.get("proposalId")
+    items2 = (replan["draft"].get("proposal") or {}).get("items", []) if replan.get("draft") else []
+    adjustments = [i for i in items2 if i.get("operation") and i["operation"] != "CREATE"]
+    creates2 = [i for i in items2 if not i.get("operation") or i["operation"] == "CREATE"]
+    checks["replan_has_adjustments_or_kept"] = bool(adjustments) or bool((d2.get("strategy") or {}).get("existingDecisions"))
+    # 일일 반복: 날짜가 다른 영어 항목을 DROP했다면 같은 날짜의 여분일 때만 정당하다.
+    by_id = {i["executionItemId"]: i for i in live}
+    english_dates = {}
+    for i in live:
+        if "영어" in (i.get("title") or "") and i.get("scheduledDate"):
+            english_dates.setdefault(i["scheduledDate"], []).append(i["executionItemId"])
+    bad_drops = []
+    for a in adjustments:
+        if a.get("operation") != "DROP":
+            continue
+        t = by_id.get(a.get("targetExecutionItemId"))
+        if t and "영어" in (t.get("title") or "") and len(english_dates.get(t.get("scheduledDate"), [])) < 2:
+            bad_drops.append(t.get("scheduledDate"))
+    checks["daily_not_dropped_without_duplicate"] = not bad_drops
+    log(f"   replan adjustments={[(a.get('operation'), a.get('targetExecutionItemId')) for a in adjustments]} creates={len(creates2)} bad_drops={bad_drops}")
+    if not pid2:
+        return result
+
+    # 재계획 확정 → 같은 계획의 다음 판. 기존 항목의 출처는 그대로, 새 항목만 새 판.
+    s_, v2, _ = call("POST", f"/api/plans/proposals/{pid2}/confirm", token, {})
+    checks["replan_confirm_ok"] = s_ == 200
+    if s_ != 200:
+        result["replanConfirm"] = {"status": s_, "error": v2}
+        return result
+    checks["replan_same_plan_key_next_version"] = v2.get("planKey") == v1.get("planKey") and (v2.get("version") or 0) == (v1.get("version") or 0) + 1
+    origin_after = {int(r[0]): (None if r[1] == 'NULL' else int(r[1])) for r in mysql(
+        f"SELECT execution_item_id, plan_version_id FROM execution_items WHERE user_id = {seeded['userId']} AND is_deleted = 0;")}
+    kept_ids = [i["executionItemId"] for i in v1_items]
+    checks["kept_items_keep_origin"] = all(origin_after.get(i) == origin_before.get(i) for i in kept_ids)
+    new_ids = [i for i in origin_after if i not in origin_before]
+    checks["new_items_origin_new_version"] = (not creates2) or (bool(new_ids) and all(origin_after[i] == v2["planVersionId"] for i in new_ids))
+    s_, v2_items, _ = call("GET", f"/api/plans/{v2['planVersionId']}/items", token)
+    v2_items = v2_items or []
+    s_, review2, _ = call("GET", f"/api/plans/{v2['planVersionId']}/review", token)
+    status_after = {int(r[0]): r[1] for r in mysql(
+        f"SELECT execution_item_id, status FROM execution_items WHERE user_id = {seeded['userId']} AND is_deleted = 0;")}
+    result["replanConfirm"] = {
+        "planVersionId": v2["planVersionId"], "planKey": v2.get("planKey"), "version": v2.get("version"),
+        "itemsBefore": [{"id": i["executionItemId"], "title": i.get("title"), "date": i.get("scheduledDate"),
+                         "originBefore": origin_before.get(i["executionItemId"]), "originAfter": origin_after.get(i["executionItemId"]),
+                         "statusAfter": status_after.get(i["executionItemId"])} for i in v1_items],
+        "newItems": [{"id": i, "origin": origin_after[i], "status": status_after.get(i)} for i in new_ids],
+        "v2Items": [{"id": i["executionItemId"], "title": i.get("title"), "date": i.get("scheduledDate"), "status": i.get("status"),
+                     "placement": i.get("placementType")} for i in v2_items],
+        "reviewCategories": {i.get("title"): i.get("category") for i in (review2 or {}).get("items", [])} if s_ == 200 else None,
+    }
+    eng_v2 = [i for i in v2_items if "영어" in (i.get("title") or "")]
+    eng_dates = [i.get("scheduledDate") for i in eng_v2]
+    checks["daily_preserved_after_replan"] = len(set(d for d in eng_dates if d)) == len([d for d in eng_dates if d])
+    log(f"[flow-replan-confirm] v2={v2['planVersionId']} key_same={checks['replan_same_plan_key_next_version']} "
+        f"v2_items={len(v2_items)} new={new_ids} english_dates={sorted(d for d in eng_dates if d)}")
+
+    # 새 상담: 합의·실행 결과가 이어지는가(파일·상황을 다시 묻지 않는가).
+    conv2 = must("POST", "/api/ai/conversations", token, {"scope": "PLAN"})["conversationId"]
+    follow = turn(token, conv2, "지난 계획 진행이 어땠는지 보고, 남은 기간에 뭘 먼저 하면 좋을지 말해 줘")
+    log_turn("flow-next-conversation", follow)
+    result["nextConversation"] = {"conversationId": conv2, "reply": follow.get("reply"), "type": follow.get("responseType")}
+    checks["next_conversation_no_file_question"] = not asks_for_files(follow.get("reply")) and not follow.get("error")
+    checks["next_conversation_mentions_plan"] = any(w in (follow.get("reply") or "") for w in ("계획", "재귀", "영어", "15분", "종료 조건"))
+    return result
+
+
+def scenario_known(seeded):
+    """「이미 알아요」→ 재생성이 공통 경로(같은 조건으로 다시 만들기)로 가고, 옛 초안 id로 다시 읽으면 최신 초안이 온다. 되돌리기도 같다."""
+    token = seeded["token"]
+    today = date.today()
+    s_, d, el = call("POST", "/api/plans/draft", token, {"startDate": today.isoformat(),
+                                                          "endDate": (today + timedelta(days=6)).isoformat(),
+                                                          "instruction": "3주차 재귀 따라잡기", "requestKey": str(uuid.uuid4())})
+    first = summarize_draft("known-draft", d, token) if s_ == 200 else {"status": s_, "error": d}
+    result = {"draft": first, "checks": {}, "required": ["regenerate_uses_common_path", "old_id_resolves_to_latest",
+                                                          "undo_uses_common_path"]}
+    if s_ != 200:
+        return result
+    pid = d["proposalId"]
+    must("PATCH", f"/api/topics/{seeded['topic3']}/user-mark", token, {"mark": "KNOWN"})
+    s_, regen, el = call("POST", f"/api/plans/drafts/{pid}/items:regenerate", token)
+    r = summarize_draft("known-regenerate", regen, token) if s_ == 200 else {"status": s_, "error": regen}
+    result["regenerate"] = r
+    result["checks"]["regenerate_uses_common_path"] = s_ == 200 and ((regen.get("previousDraft") or {}).get("proposalId") == pid) \
+        and bool((regen.get("requestContext") or {}).get("redraftable"))
+    s_, old, _ = call("GET", f"/api/plans/proposals/{pid}/draft", token)
+    result["checks"]["old_id_resolves_to_latest"] = s_ == 200 and old.get("proposalId") == (regen or {}).get("proposalId")
+    # 되돌리기: 표시를 지우고 같은 조건으로 다시 만들기.
+    must("PATCH", f"/api/topics/{seeded['topic3']}/user-mark", token, {"mark": None})
+    s_, undo, _ = call("POST", f"/api/plans/proposals/{regen['proposalId']}/redraft", token, {"requestKey": str(uuid.uuid4())})
+    u = summarize_draft("known-undo", undo, token) if s_ == 200 else {"status": s_, "error": undo}
+    result["undo"] = u
+    result["checks"]["undo_uses_common_path"] = s_ == 200 and (undo.get("previousDraft") or {}).get("proposalId") == regen["proposalId"]
+    stored = mysql_rows(f"SELECT status FROM ai_proposals WHERE proposal_id = {pid};")[0][0]
+    result["checks"]["first_draft_dismissed"] = stored == "DISMISSED"
+    return result
+
+
+def scenario_adjust_only(seeded):
+    """조정 전용 재계획 확정. 모델이 새 항목 없이 조정만 냈을 때만 확정까지 간다(결정적 보장은 PlanReplanConfirmIntegrationTest)."""
+    token = seeded["token"]
+    today = date.today()
+    s_, d, _ = call("POST", "/api/plans/draft", token, {"startDate": today.isoformat(),
+                                                         "endDate": (today + timedelta(days=6)).isoformat(),
+                                                         "instruction": "3주차 재귀 따라잡기", "requestKey": str(uuid.uuid4())})
+    result = {"checks": {}, "required": ["first_confirm_ok"]}
+    if s_ != 200:
+        result["draft"] = {"status": s_, "error": d}
+        return result
+    s_, v1, _ = call("POST", f"/api/plans/proposals/{d['proposalId']}/confirm", token, {})
+    result["checks"]["first_confirm_ok"] = s_ == 200
+    if s_ != 200:
+        return result
+    s_, d2, _ = call("POST", "/api/plans/draft", token, {"startDate": today.isoformat(),
+                                                          "endDate": (today + timedelta(days=6)).isoformat(),
+                                                          "instruction": "새 항목은 만들지 말고, 이미 있는 항목만 줄이거나 빼서 부담을 낮춰 줘",
+                                                          "requestKey": str(uuid.uuid4())})
+    summary = summarize_draft("adjust-only-draft", d2, token) if s_ == 200 else {"status": s_, "error": d2}
+    result["draft2"] = summary
+    if s_ != 200:
+        return result
+    items = (d2.get("proposal") or {}).get("items", [])
+    creates = [i for i in items if not i.get("operation") or i["operation"] == "CREATE"]
+    adjustments = [i for i in items if i.get("operation") and i["operation"] != "CREATE"]
+    result["checks"]["adjust_only_observed"] = not creates and bool(adjustments)
+    if adjustments:
+        excluded = [i["proposalItemId"] for i in creates]
+        s_, v2, _ = call("POST", f"/api/plans/proposals/{d2['proposalId']}/confirm", token, {"excludedItemIds": excluded} if excluded else {})
+        result["checks"]["adjust_only_confirm_ok"] = s_ == 200 and v2.get("planKey") == v1.get("planKey") and v2.get("version") == 2
+        result["required"].append("adjust_only_confirm_ok")
+        result["confirm2"] = v2 if s_ == 200 else {"status": s_, "error": v2}
     return result
 
 
 SCENARIOS = {"absent": scenario_absent, "deadline": scenario_deadline, "exam": scenario_exam, "agree": scenario_agree,
-             "stuck": scenario_stuck, "change": scenario_change}
+             "stuck": scenario_stuck, "flow": scenario_flow, "known": scenario_known, "adjust_only": scenario_adjust_only}
 
 
 def main():
@@ -631,6 +790,7 @@ def main():
     parser.add_argument("scenarios", nargs="+", help="all 또는 " + " ".join(SCENARIOS))
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--out", default=None)
+    parser.add_argument("--no-gate", action="store_true", help="필수 검증 실패에도 종료 코드를 0으로 둔다(디버그용)")
     args = parser.parse_args()
     names = list(SCENARIOS) if args.scenarios == ["all"] else args.scenarios
     records = []
@@ -654,6 +814,19 @@ def main():
     out.write_text(json.dumps(records, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     log(f"\nsaved {out} ({round(time.time() - started)}s)")
     log("합성 계정은 남겨 둔다(정리는 사용자 판단): " + ", ".join(sorted({r['account'] for r in records})))
+    # 게이트: 필수 검증이 하나라도 실패했거나 시나리오가 죽었으면 실패로 끝낸다 — JSON에 기록만 하고 성공 종료하지 않는다.
+    failed = []
+    for r in records:
+        if r.get("fatal"):
+            failed.append(f"{r['scenario']}: fatal {r['fatal']}")
+        required = r.get("required") or list((r.get("checks") or {}).keys())
+        for name in required:
+            if not (r.get("checks") or {}).get(name):
+                failed.append(f"{r['scenario']}: {name}")
+    if failed and not args.no_gate:
+        log("GATE FAILED:\n  - " + "\n  - ".join(failed))
+        sys.exit(1)
+    log("GATE PASSED" if not failed else "GATE SKIPPED (--no-gate): " + "; ".join(failed))
 
 
 if __name__ == "__main__":

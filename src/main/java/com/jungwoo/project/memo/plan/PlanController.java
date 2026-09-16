@@ -20,6 +20,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -96,6 +97,17 @@ public class PlanController {
             @PathVariable Long proposalId,
             @RequestBody(required = false) com.jungwoo.project.memo.plan.dto.PlanRedraftRequest request) {
         return ResponseEntity.ok(planDraftService.redraft(principal.getUserId(), proposalId, request));
+    }
+
+    /**
+     * 검토 상태 저장(제목·항목 포함/제외·편집값·답). 실행 데이터를 바꾸지 않는다. 열린 초안에만, version이 낡았으면 409.
+     */
+    @PutMapping("/proposals/{proposalId}/review-state")
+    public ResponseEntity<com.jungwoo.project.memo.plan.dto.PlanReviewState> saveReviewState(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId,
+            @RequestBody com.jungwoo.project.memo.plan.dto.PlanReviewState body) {
+        return ResponseEntity.ok(planDraftService.saveReviewState(principal.getUserId(), proposalId, body));
     }
 
     /**

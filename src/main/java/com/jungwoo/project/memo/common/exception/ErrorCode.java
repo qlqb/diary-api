@@ -141,6 +141,7 @@ public enum ErrorCode {
     PLAN_REDRAFT_CONTEXT_MISSING(HttpStatus.CONFLICT, "E409_019",
             "이 초안은 예전 방식으로 만들어져 같은 조건으로 다시 만들 수 없습니다. 새로 만들어 주세요"),
     PLAN_DRAFT_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_020", "이미 확정했거나 다른 초안으로 바뀐 계획입니다"),
+    PLAN_REVIEW_STATE_STALE(HttpStatus.CONFLICT, "E409_022", "검토 상태가 다른 곳에서 먼저 저장됐어요. 최신 상태를 다시 불러옵니다."),
     PLAN_DRAFT_IN_PROGRESS(HttpStatus.CONFLICT, "E409_021", "같은 요청으로 초안을 만드는 중입니다"),
 
     // ===== 429 Too Many Requests =====

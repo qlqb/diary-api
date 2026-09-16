@@ -77,29 +77,32 @@ public final class PlanPromptBlocks {
         sb.append('\n');
     }
 
-    /** [상담에서 합의한 것] — 유효한 합의와, 아직 답 없는 AI 제안을 나눈다. */
-    public static void appendBrief(StringBuilder sb, PlanBriefService.View brief, ProvenanceCollector collector) {
+    /**
+     * [상담에서 합의한 것] — 이 초안에 적용되는 합의(범위 안)와, 아직 답 없는 AI 제안을 나눈다. 다른 초안 흐름·지난 기간의
+     * 합의는 싣지 않는다({@link PlanBriefService.View#effectiveFor}).
+     */
+    public static void appendBrief(StringBuilder sb, PlanBriefService.View brief, List<PlanBriefService.Applicable> applicable,
+                                   ProvenanceCollector collector) {
         if (brief == null || brief.isEmpty()) {
             return;
         }
-        List<PlanBriefItem> effective = brief.effective();
         List<PlanBriefItem> pending = brief.pendingProposals();
-        if (effective.isEmpty() && pending.isEmpty()) {
+        if ((applicable == null || applicable.isEmpty()) && pending.isEmpty()) {
             return;
         }
         sb.append("[상담에서 합의한 것] (사용자가 말했거나 AI 제안을 받아들인 것. 원인 없이 새로 정하지 않는다 — ")
-                .append("본문·최신 일정 때문에 바꿔야 하면 changes에 무엇을 왜 바꿨는지 적는다)\n");
-        for (PlanBriefItem item : effective) {
-            String text = PlanBriefService.kindLabel(item.kind()) + ": " + item.text()
-                    + (PlanBriefItem.SPEAKER_USER.equals(item.speaker()) ? " (사용자가 말함" : " (AI 제안을 사용자가 수락함")
-                    + (item.revision() > 1 ? ", 최신 수정판" : "")
-                    + (PlanBriefItem.SCOPE_PERIOD.equals(item.scope()) ? ", 이번 기간)" : ", 이번 초안)");
+                .append("본문·최신 일정 때문에 바꿔야 하면 changes에 무엇을 왜 바꿨는지 적는다. 기간이 일부만 겹치는 합의는 원래 범위 안에서만 적용한다)\n");
+        for (PlanBriefService.Applicable a : applicable == null ? List.<PlanBriefService.Applicable>of() : applicable) {
+            PlanBriefItem item = a.item();
+            String text = PlanBriefService.agreedLine(item, a.note());
             sb.append("- ").append(collector.mark(ProvenanceSourceType.PLAN_BRIEF, brief.briefId(), (long) brief.version(),
                     item.updatedAt(), ProvenanceRepresentation.EXCERPT,
                     ProvenanceCollector.value("itemId", item.id(), "kind", item.kind(), "speaker", item.speaker(),
                             "accepted", item.accepted(), "scope", item.scope(), "text", item.text(),
                             "topicId", item.topicId(), "courseId", item.courseId(),
-                            "executionItemId", item.executionItemId(), "sourceMessageId", item.sourceMessageId()),
+                            "executionItemId", item.executionItemId(), "sourceMessageId", item.sourceMessageId(),
+                            "periodStart", item.periodStart(), "periodEnd", item.periodEnd(),
+                            "flowProposalId", item.flowProposalId()),
                     text).text()).append('\n');
         }
         if (!pending.isEmpty()) {

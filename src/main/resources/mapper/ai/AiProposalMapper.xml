@@ -19,6 +19,7 @@
         <result property="planStrategyJson"   column="plan_strategy_json"/>
         <result property="planProvenanceJson" column="plan_provenance_json"/>
         <result property="planRequestJson"    column="plan_request_json"/>
+        <result property="reviewStateJson"    column="review_state_json"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -131,6 +132,22 @@
         ORDER BY proposal_id DESC
         LIMIT 1
     </select>
+
+    <!--
+      검토 상태. 열린(PROPOSED) 초안에만 쓰고, 저장된 version이 기대값과 다르면(늦은 저장·다른 탭) 0행이다.
+      expectedVersion이 null이면 아직 저장된 상태가 없을 때만 쓴다.
+    -->
+    <update id="updateReviewState">
+        UPDATE ai_proposals
+           SET review_state_json = #{reviewStateJson}
+         WHERE proposal_id = #{proposalId}
+           AND user_id     = #{userId}
+           AND status      = 'PROPOSED'
+           AND <choose>
+                 <when test="expectedVersion == null">review_state_json IS NULL</when>
+                 <otherwise>JSON_VALUE(review_state_json, '$.version') = #{expectedVersion}</otherwise>
+               </choose>
+    </update>
 
     <!-- 초안을 만든 요청. 같은 조건으로 다시 만들기(redraft)가 읽는다. -->
     <update id="updatePlanRequest">

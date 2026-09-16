@@ -87,6 +87,12 @@ public class AiProposal {
      */
     private String planRequestJson;
 
+    /**
+     * 사용자가 검토하며 고친 상태(제목·항목 포함/제외·직접 편집값·미해결 질문의 답). 실행 데이터가 아니다 — 확정할 때
+     * 화면이 같은 값으로 적용한다. 2026-09-18 전 초안은 NULL.
+     */
+    private String reviewStateJson;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

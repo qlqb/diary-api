@@ -157,6 +157,26 @@ class PlanResultNormalizerTest {
         assertThat(out.strategy().deferred().get(0).topicId()).isEqualTo(44L);
     }
 
+    @Test
+    void 매일_반복은_날짜마다_따로_남고_같은_제목이라도_합쳐지지_않는다() {
+        List<PlanDraftAiResult.PlanDraftAiItem> daily = new java.util.ArrayList<>();
+        for (int d = 14; d <= 20; d++) {
+            daily.add(new PlanDraftAiResult.PlanDraftAiItem("영어회화 · 15분 말하기", "한다 · 완료: 끝", null, "PRACTICE", 15,
+                    "SHOULD", 1L, "2026-09-" + d, "매일 15분 합의", List.of(), null, null, null));
+        }
+        PlanDraftAiResult ai = new PlanDraftAiResult("t", null, null, null, null, daily, null, null);
+
+        PlanResultNormalizer.Normalized out = PlanResultNormalizer.normalize(ai, START, END, NOW, COURSES, collector.build(),
+                Map.of(), Map.of(), List.of(), List.of());
+
+        assertThat(out.items()).hasSize(7);
+        assertThat(out.items()).allSatisfy(i -> assertThat(i.placementType()).isEqualTo(PlacementType.DATE_ONLY));
+        assertThat(out.items()).extracting(i -> i.earliestStartDate()).doesNotHaveDuplicates();
+        assertThat(out.items()).extracting(i -> i.earliestStartDate())
+                .containsExactly(LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 15), LocalDate.of(2026, 9, 16),
+                        LocalDate.of(2026, 9, 17), LocalDate.of(2026, 9, 18), LocalDate.of(2026, 9, 19), LocalDate.of(2026, 9, 20));
+    }
+
     private static PlanDraftAiResult.PlanDraftAiItem item(String title, List<String> refs, String deadlineRef, String target) {
         return new PlanDraftAiResult.PlanDraftAiItem(title, "한다 · 완료: 끝", null, null, 30, "SHOULD", 1L, null, "이유", refs,
                 deadlineRef, target, null);

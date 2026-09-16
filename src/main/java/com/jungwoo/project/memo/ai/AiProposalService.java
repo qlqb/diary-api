@@ -162,7 +162,8 @@ public class AiProposalService {
      * 들어올 경로는 없다.
      *
      * <p>★ 근거는 새 후보(items)에만 붙는다. 조정 후보(adjustments)는 기존 조각을 바꾸는
-     * 제안이라 "무엇을 보고 만들었나"의 대상이 아니고, 계획 경로에는 조정 후보가 없다.
+     * 제안이라 "무엇을 보고 만들었나"의 대상이 아니다. 계획 경로도 재계획이면 조정 후보를 함께 낸다(2026-09-17) — 그 자리의
+     * 근거는 null로 채운다.
      */
     public AiProposalResponse createFromItems(
             Long userId, Long conversationId, Long sourceMessageId,
@@ -385,6 +386,14 @@ public class AiProposalService {
                 if (item.startTime() != null || item.endTime() != null) {
                     log.warn("AI 제안 구조 검증 실패: DATE_ONLY인데 시각이 채워짐");
                     throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+                }
+                /*
+                 * 날짜가 의미인 항목(기간 계획의 scheduledDate — "매일 15분"의 각 날짜)은 그 날짜를 쓴다. 전에는 기간 계획의
+                 * 모든 DATE_ONLY 항목이 계획 시작일로 저장돼 7일치 일일 실행이 첫날 하루에 몰렸고, 재계획이 그것을 "같은 날
+                 * 중복"으로 보고 6개를 보류했다(2026-09-17 실호출). 시작일 대입은 날짜를 모를 때의 임시값일 뿐이다.
+                 */
+                if (item.earliestStartDate() != null) {
+                    itemTargetDate = item.earliestStartDate();
                 }
             } else if (placementType == PlacementType.UNSCHEDULED) {
                 if (item.startTime() != null || item.endTime() != null) {

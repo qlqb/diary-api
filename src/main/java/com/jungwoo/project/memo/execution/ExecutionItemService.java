@@ -278,7 +278,8 @@ public class ExecutionItemService {
 
         insertEvent(executionItemId, userId, ExecutionEventType.MOVED, ExecutionEventActorType.SYSTEM,
                 "이번 주 배치",
-                toJson(Map.of("placementType", PlacementType.UNSCHEDULED,
+                toJson(Map.of("placementType", String.valueOf(before.getPlacementType()),
+                        "scheduledDate", String.valueOf(before.getScheduledDate()),
                         "planningStartDate", String.valueOf(before.getPlanningStartDate()),
                         "planningEndDate", String.valueOf(before.getPlanningEndDate()))),
                 toJson(Map.of("placementType", PlacementType.TIME_FIXED,

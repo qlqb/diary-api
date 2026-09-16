@@ -98,7 +98,7 @@ class PlanConnectionFlowTest {
         assertThat(plan).contains("[상담에서 합의한 것]")
                 .contains("우선순위: 자료구조 복구 우선 (사용자가 말함, 이번 초안) [s")
                 .contains("아직 사용자가 답하지 않은 AI 제안")
-                .contains("시간 제약: 영어는 하루 15분 (AI 제안, 답 없음) [s");
+                .contains("시간 제약(상한): 영어는 하루 15분 (AI 제안, 답 없음) [s");
         assertThat(plan).contains("[상담 기록]")
                 .contains("- 사용자: 이번 주는 자료구조 복구가 먼저야 [s")
                 .contains("- AI: 영어는 하루 15분만 어때요? [s")
@@ -113,6 +113,42 @@ class PlanConnectionFlowTest {
         assertThat(generated.extras().briefVersion()).isEqualTo(3);
         String system = f.planCalls().get(0)[0];
         assertThat(system).contains("[상담에서 합의한 것]").contains("keptDecisions");
+    }
+
+    @Test
+    void T24b_지난_기간의_합의와_다른_초안_흐름의_합의는_계획_호출에_실리지_않고_일부_겹치면_원래_범위가_붙는다() {
+        PlanBriefItem expired = new PlanBriefItem(1, "EXCLUDE", "지난주는 영어 제외", "USER", true, false, false, "PERIOD", 100L,
+                100L, null, null, null, null, 1, List.of(), LocalDateTime.of(2026, 9, 6, 10, 0),
+                LocalDate.of(2026, 9, 7), LocalDate.of(2026, 9, 13), LocalDate.of(2026, 9, 6), null);
+        PlanBriefItem partial = new PlanBriefItem(2, "TIME_CONSTRAINT", "금요일 밤은 비움", "USER", true, false, false, "PERIOD",
+                100L, 100L, null, null, null, null, 1, List.of(), LocalDateTime.of(2026, 9, 13, 10, 0),
+                LocalDate.of(2026, 9, 17), LocalDate.of(2026, 9, 25), LocalDate.of(2026, 9, 13), null);
+        PlanBriefItem otherFlow = new PlanBriefItem(3, "PRIORITY", "옛 초안만 자료구조 우선", "USER", true, false, false,
+                "THIS_DRAFT", 100L, 100L, null, null, null, null, 1, List.of(), LocalDateTime.of(2026, 9, 13, 10, 0),
+                null, null, LocalDate.of(2026, 9, 13), 55L);
+        when(f.briefService.load(USER, CONV)).thenReturn(new PlanBriefService.View(5L, CONV, 4, List.of(
+                expired, partial, otherFlow, briefItem(4, "PRIORITY", "아직 묶이지 않은 합의", "USER", true, "THIS_DRAFT")), null));
+
+        f.generate(f.spec(null, conversationOrigin()), PeriodPlanDraftGenerator.Options.none());
+
+        String plan = f.planPrompt();
+        assertThat(plan).contains("[상담에서 합의한 것]")
+                .contains("시간 제약(상한): 금요일 밤은 비움 (사용자가 말함, 이번 기간 9/17~9/25 — 원래 9/17~9/25에 적용)")
+                .contains("우선순위: 아직 묶이지 않은 합의 (사용자가 말함, 이번 초안)")
+                .doesNotContain("지난주는 영어 제외")
+                .doesNotContain("옛 초안만 자료구조 우선");
+    }
+
+    @Test
+    void T24c_계획_호출_규칙은_일일_반복과_상한을_구분하고_날짜가_다른_반복을_중복으로_보지_않는다() {
+        f.generate(null);
+
+        String system = f.planCalls().get(0)[0];
+        assertThat(system).contains("일일 반복: 합의가 \"매일 15분\"처럼 실행 빈도(반복 빈도)이면 기간의 날짜마다 항목 하나를 만들고")
+                .contains("\"하루 15분까지\"처럼 상한만")
+                .contains("날짜가 다른 일일 실행은 중복이 아니다");
+        assertThat(PlanBriefService.kindLabel("FREQUENCY")).isEqualTo("반복 빈도(매일 등)");
+        assertThat(PlanBriefService.kindLabel("TIME_CONSTRAINT")).isEqualTo("시간 제약(상한)");
     }
 
     @Test
@@ -163,7 +199,7 @@ class PlanConnectionFlowTest {
         assertThat(f.selectionPrompts()).hasSize(1);
         PlanRequestContext previous = new PlanRequestContext(PlanRequestContext.VERSION, "PLAN_SCREEN", START, END,
                 PlanIntensity.NORMAL, null, "개념 위주", List.of(), List.of(), List.of(), List.of(), null, List.of(), null,
-                "req-0", null, null, 77L, first.extras().evidence());
+                "req-0", null, null, 77L, first.extras().evidence(), null);
         f.calls.clear();
 
         Generated reused = f.generate(f.spec("개념 위주", null),

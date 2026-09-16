@@ -152,6 +152,14 @@ public interface ExecutionItemMapper {
      * 그 계획에 속한 조각 중 아직 날짜를 정하지 않은 것들. 롤링 배치의 대상 집합.
      * 계획 화면과 같은 이유로 planKey 기준이다.
      */
+    /** 롤링 배치 대상 2: 날짜는 있지만 시각이 없는 계획 항목(DATE_ONLY, PLANNED). 그 날짜 안에서만 시각을 정한다. */
+    List<ExecutionItem> findDateOnlyByPlanKey(
+            @Param("userId") Long userId,
+            @Param("planKey") String planKey,
+            @Param("windowStart") LocalDate windowStart,
+            @Param("windowEnd") LocalDate windowEnd
+    );
+
     List<ExecutionItem> findUnscheduledByPlanKey(
             @Param("userId") Long userId,
             @Param("planKey") String planKey,

@@ -53,6 +53,14 @@ public interface AiProposalMapper {
     );
 
     /** 초안을 만든 요청(PlanRequestContext JSON). 같은 조건으로 다시 만들기가 읽는다. */
+    /** 검토 상태 저장. PROPOSED인 초안만, 늦은 저장(옛 version)은 0행. */
+    int updateReviewState(
+            @Param("proposalId") Long proposalId,
+            @Param("userId") Long userId,
+            @Param("reviewStateJson") String reviewStateJson,
+            @Param("expectedVersion") Integer expectedVersion
+    );
+
     int updatePlanRequest(
             @Param("proposalId") Long proposalId,
             @Param("userId") Long userId,

@@ -279,7 +279,11 @@ public class PeriodPlanDraftGenerator {
      * @param requestKey         화면이 붙인 요청 키
      * @param previousProposalId 이 초안이 대체하는 초안(다시 만들기)
      */
-    public record Origin(Long conversationId, Long requestMessageId, String requestKey, Long previousProposalId) {
+    public record Origin(Long conversationId, Long requestMessageId, String requestKey, Long previousProposalId,
+                         Long flowRootProposalId) {
+        public Origin(Long conversationId, Long requestMessageId, String requestKey, Long previousProposalId) {
+            this(conversationId, requestMessageId, requestKey, previousProposalId, null);
+        }
     }
 
     /**
@@ -543,13 +547,14 @@ public class PeriodPlanDraftGenerator {
         List<UserContext> contexts = loadUserContexts(spec.userId());
         Facts facts = collectFacts(spec, courses, capturedAt, opts);
 
-        EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.windows(), capturedAt, spec.start(), spec.end(),
+        EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.busyWindows(), capturedAt, spec.start(), spec.end(),
                 courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds());
         PlanRequestContext previous = opts.previous();
         List<String> changesFromPrevious = previous == null ? List.of()
                 : fingerprint.changesFrom(previous.evidence(), previous, spec.start(), spec.end(),
                 // 저장된 요청 문맥의 courseIds는 요청 값(비어 있으면 전체)이라 같은 기준으로 비교한다
-                spec.courseIds() == null ? List.of() : spec.courseIds(), spec.instruction(), excluded);
+                spec.courseIds() == null ? List.of() : spec.courseIds(), spec.instruction(), excluded,
+                capturedAt.toLocalDate());
 
         // ===== 2. 자료 선택(또는 재사용) =====
         Set<Long> scope = courses.stream().map(Course::getCourseId).collect(Collectors.toSet());
@@ -1123,6 +1128,12 @@ public class PeriodPlanDraftGenerator {
               그런 사실 없이 네가 완료 목표를 제안하려면 targetCompleteAt에 적는다(사용자가 고칠 수 있는 제안으로 표시된다).
               확인된 마감·시험·수업 시각을 바꾸거나 새로 만들지 않는다.
             - scheduledDate는 "반드시 그날 해야 하는" 항목에만 넣는다. 대부분은 null로 두어라 — 날짜는 나중에 배치된다.
+            - 일일 반복: 합의가 "매일 15분"처럼 실행 빈도(반복 빈도)이면 기간의 날짜마다 항목 하나를 만들고 각 항목의
+              scheduledDate에 그 날짜를 적는다(같은 제목이어도 날짜가 다르면 서로 다른 실행이다). "하루 15분까지"처럼 상한만
+              합의됐으면 매일 항목을 만들지 않는다 — 상한은 하루에 넣는 양의 한계다. 날짜가 의미인 항목을 날짜 없이 내지 마라.
+            - [이 기간에 이미 있는 일정]에서 같은 제목·내용이라도 날짜가 다른 일일 실행은 중복이 아니다. 중복은 같은 날짜에 같은
+              내용이 둘 있을 때만이고, 그때도 DROP은 그 날짜의 여분 하나뿐이다. 이미 수행한 날의 항목과 앞으로의 정상 반복은
+              그대로 둔다(KEEP).
             - expectedMinutes는 %d~%d 사이여야 한다. 벗어나면 그 항목은 버려진다.
             - 항목 길이는 실제 행동과 완료 기준에 필요한 시간으로 정한다. 목표 시간은 반드시
               소진할 할당량이 아니라 계획 예산이다 — 목표를 채우려고 개별 항목 시간을 늘리지
@@ -1339,7 +1350,13 @@ public class PeriodPlanDraftGenerator {
         appendUserContexts(sb, inputs.contexts(), collector);
 
         Facts facts = inputs.facts();
-        PlanPromptBlocks.appendBrief(sb, facts.brief(), collector);
+        /*
+         * 합의는 적용 범위 안의 것만 싣는다 — THIS_DRAFT는 이 초안 흐름의 것, PERIOD는 이 기간과 겹치는 것. 다른 흐름·지난
+         * 기간의 합의는 현재 합의가 아니다.
+         */
+        Long flowRoot = spec.origin() == null ? null : spec.origin().flowRootProposalId();
+        PlanPromptBlocks.appendBrief(sb, facts.brief(),
+                facts.brief() == null ? List.of() : facts.brief().effectiveFor(spec.start(), spec.end(), flowRoot), collector);
         PlanPromptBlocks.appendTranscript(sb, facts.transcript(),
                 spec.origin() == null ? null : spec.origin().requestMessageId(), conversationChars, collector);
 

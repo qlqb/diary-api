@@ -125,6 +125,9 @@ public class PlanDraftResponse {
     private Long briefId;
     private Integer briefVersion;
 
+    /** 저장된 검토 상태(제목·제외·편집값·답). 새 초안은 null. 새로고침 복구가 이 값으로 화면을 되돌린다. */
+    private PlanReviewState reviewState;
+
     @lombok.Getter
     @lombok.Builder
     @NoArgsConstructor

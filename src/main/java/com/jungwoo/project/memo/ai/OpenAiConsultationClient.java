@@ -295,8 +295,10 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 오간 결정의 서버 기록이다(#번호는 planBrief 항목 id). 너는 합의를 직접 쓰지 않는다 — 변경 제안만 낸다.
                 - 사용자가 계획에 대한 목표·우선순위·제외·시간 제약·범위를 말하면 planBrief에
                   {"op":"ADD","kind":…,"text":"한 문장","speaker":"USER","scope":"THIS_DRAFT"|"PERIOD"}를 낸다.
-                  "이번 주만"·"이번 계획만"이면 THIS_DRAFT, "이번 학기 내내"처럼 기간 전체면 PERIOD. 앞으로도 계속될
-                  선호(예: "아침엔 공부 안 해")는 planBrief가 아니라 contextChanges 후보로 낸다.
+                  "이번 계획만"이면 THIS_DRAFT, "이번 주만"·"시험 전까지"처럼 날짜 범위가 있으면 PERIOD에 periodStart/
+                  periodEnd(실제 날짜)를 함께 적는다. 앞으로도 계속될 선호(예: "아침엔 공부 안 해")는 planBrief가 아니라
+                  contextChanges 후보로 낸다. [계획 합의 현황]에 "기간 지남"으로 표시된 합의는 지금 조건이 아니다 — 새
+                  기간에 옮겨 적용하지 말고, 필요하면 사용자에게 다시 확인한다.
                 - 네가 계획 방향을 제안했으면(예: "자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기") 그 문장마다
                   speaker="ASSISTANT"로 ADD한다. 그것은 후보다 — 사용자가 "좋아", "그대로 해줘"라고 하면 그 항목들에
                   {"op":"ACCEPT","id":번호}를 낸다. 거절하면 REJECT, 사용자가 고쳐 말하면 {"op":"UPDATE","id":번호,
@@ -440,10 +442,13 @@ public class OpenAiConsultationClient implements AiConsultationClient {
               "planBrief": [
                 {"op": "ADD" | "ACCEPT" | "REJECT" | "UPDATE" | "REMOVE",
                  "id": 기존 항목 번호(정수) 또는 null (ADD는 null),
-                 "kind": "GOAL" | "PRIORITY" | "EXCLUDE" | "TIME_CONSTRAINT" | "SCOPE" | "DIFFICULTY" | "CAUSE" | "OTHER",
+                 "kind": "GOAL" | "PRIORITY" | "EXCLUDE" | "TIME_CONSTRAINT" | "FREQUENCY" | "SCOPE" | "DIFFICULTY" | "CAUSE"
+                   | "OTHER" ("매일 15분"처럼 실행 빈도는 FREQUENCY, "하루 15분까지"처럼 상한은 TIME_CONSTRAINT — 둘은 다르다),
                  "text": "한 문장" 또는 null (ADD/UPDATE만),
                  "speaker": "USER" | "ASSISTANT" (ADD만. 사용자가 말한 것인가 네 제안인가),
                  "scope": "THIS_DRAFT" | "PERIOD" (ADD/UPDATE. 모르면 THIS_DRAFT),
+                 "periodStart": "YYYY-MM-DD" 또는 null, "periodEnd": "YYYY-MM-DD" 또는 null (scope가 PERIOD일 때 실제
+                   날짜. "이번 주"는 [현재 시각]의 오늘이 속한 주(월~일)의 실제 날짜로 적는다 — 다음 상담의 주가 아니다),
                  "topicId": 정수 또는 null, "courseId": 정수 또는 null, "executionItemId": 정수 또는 null}
               ] (원칙 23. 변경이 없으면 빈 배열. [요청 모드]가 CREATE_PROPOSAL이면 빈 배열)
             }

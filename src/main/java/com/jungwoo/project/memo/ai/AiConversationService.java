@@ -670,13 +670,39 @@ public class AiConversationService {
     private String buildBriefBlock(Long conversationId, Long userId) {
         try {
             com.jungwoo.project.memo.ai.brief.PlanBriefService.View view = planBriefService.load(userId, conversationId);
-            StringBuilder sb = new StringBuilder(com.jungwoo.project.memo.ai.brief.PlanBriefService.renderForConsultation(view));
+            java.time.LocalDate today = java.time.ZonedDateTime.now(clock)
+                    .withZoneSameInstant(java.time.ZoneId.of(defaultTimeZoneId)).toLocalDate();
+            StringBuilder sb = new StringBuilder(
+                    com.jungwoo.project.memo.ai.brief.PlanBriefService.renderForConsultation(view, today));
             List<com.jungwoo.project.memo.ai.brief.PlanBriefItem> carried = planBriefService.carriedOver(userId, conversationId, 5);
             if (!carried.isEmpty()) {
-                sb.append("[다른 대화에서 확인된 것] (같은 사실을 다시 묻지 않는다. 다른 과목까지 근거 없이 일반화하지 않는다)\n");
+                sb.append("[다른 대화에서 확인된 것] (같은 사실을 다시 묻지 않는다. 적힌 과목·항목·기간 안에서만 쓰고 다른 과목까지 "
+                        + "근거 없이 일반화하지 않는다)\n");
                 for (com.jungwoo.project.memo.ai.brief.PlanBriefItem item : carried.stream().limit(8).toList()) {
                     sb.append("- ").append(com.jungwoo.project.memo.ai.brief.PlanBriefService.kindLabel(item.kind()))
-                            .append(": ").append(item.text()).append('\n');
+                            .append(": ").append(item.text());
+                    List<String> where = new java.util.ArrayList<>();
+                    if (item.courseId() != null) {
+                        where.add("프로젝트 #" + item.courseId());
+                    }
+                    if (item.topicId() != null) {
+                        where.add("학습 항목 #" + item.topicId());
+                    }
+                    if (item.executionItemId() != null) {
+                        where.add("실행 항목 #" + item.executionItemId());
+                    }
+                    if (item.isPeriod() && item.periodStart() != null) {
+                        where.add("기간 " + item.periodStart() + "~" + item.periodEnd());
+                    }
+                    if (item.saidOn() != null) {
+                        where.add(item.saidOn() + " 확인");
+                    } else if (item.updatedAt() != null) {
+                        where.add(item.updatedAt().toLocalDate() + " 확인");
+                    }
+                    if (!where.isEmpty()) {
+                        sb.append(" (").append(String.join(", ", where)).append(')');
+                    }
+                    sb.append('\n');
                 }
             }
             return sb.length() == 0 ? "" : sb.append('\n').toString();
@@ -799,9 +825,13 @@ public class AiConversationService {
                 requestedAction == RequestedAction.AUTO && structured != null && structured.planBrief() != null
                         ? structured.planBrief() : List.of();
         boolean touchesDrafts = draftOutcome != null && draftOutcome.touchesDrafts();
+        // PERIOD 합의가 날짜를 말하지 않았으면 이번 턴의 기간(OFFER 날짜)이 근거다 — 새 상담의 주로 다시 해석하지 않는다.
+        com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod briefPeriod = structured == null ? null
+                : new com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod(structured.periodStartDate(),
+                structured.periodEndDate());
         AiTurnLifecycleService.DraftTurnCommit draftCommit = touchesDrafts || !briefOps.isEmpty()
                 ? new AiTurnLifecycleService.DraftTurnCommit(touchesDrafts ? draftOutcome : null,
-                        touchesDrafts ? facts : null, briefOps) : null;
+                        touchesDrafts ? facts : null, briefOps, briefPeriod) : null;
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,

@@ -29,6 +29,7 @@ import com.jungwoo.project.memo.plan.provenance.PlanProvenance;
 import com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec;
 import com.jungwoo.project.memo.plan.provenance.ServerCalculation;
 import com.jungwoo.project.memo.plan.dto.PlanRedraftRequest;
+import com.jungwoo.project.memo.plan.dto.PlanReviewState;
 import com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary;
 import com.jungwoo.project.memo.plan.selection.PlanRequestContext;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -313,8 +314,10 @@ public class PlanDraftService {
                     .requestedSectionIds(context.requestedSectionIds())
                     .requestKey(requestKey)
                     .build();
+            // 다시 만들기는 같은 초안 흐름이다 — 처음 초안 id를 흐름의 뿌리로 이어 간다(THIS_DRAFT 합의의 범위).
+            Long flowRoot = context.flowRootProposalId() != null ? context.flowRootProposalId() : proposalId;
             PeriodPlanDraftGenerator.Origin origin = new PeriodPlanDraftGenerator.Origin(context.conversationId(),
-                    null, requestKey, proposalId);
+                    null, requestKey, proposalId, flowRoot);
             Generated generated = generate(userId, request, origin, context, stage -> progress.stage(requestKey, stage));
             log.info("같은 조건으로 초안 다시 만들기: userId={}, 원본 proposalId={}, 제외={}개, 지정자료={}개, 선택 재사용={}",
                     userId, proposalId, request.getExcludeTopicIds() == null ? 0 : request.getExcludeTopicIds().size(),
@@ -367,7 +370,8 @@ public class PlanDraftService {
                     origin == null ? null : origin.requestKey(),
                     extras == null ? null : extras.briefId(), extras == null ? null : extras.briefVersion(),
                     origin == null ? null : origin.previousProposalId(),
-                    extras == null ? null : extras.evidence()));
+                    generated.extras() == null ? null : generated.extras().evidence(),
+                    origin == null ? null : origin.flowRootProposalId()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
             return null;
@@ -462,7 +466,10 @@ public class PlanDraftService {
                     supersededProposalId, userId, AiProposalStatus.DISMISSED, LocalDateTime.now());
         }
         if (generated.extras() != null && generated.extras().briefId() != null) {
-            planBriefService.markProposal(userId, generated.extras().briefId(), proposal.getProposalId());
+            Long flowRoot = spec.origin() != null && spec.origin().flowRootProposalId() != null
+                    ? spec.origin().flowRootProposalId() : proposal.getProposalId();
+            planBriefService.markProposal(userId, generated.extras().briefId(), proposal.getProposalId(), flowRoot,
+                    spec.start(), spec.end());
         }
 
         log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, target={}분, 항목={}개, 조정={}개, "
@@ -502,6 +509,62 @@ public class PlanDraftService {
                 .briefId(extras == null ? null : extras.briefId())
                 .briefVersion(extras == null ? null : extras.briefVersion())
                 .build();
+    }
+
+    // ===== 검토 상태 =====
+
+    /**
+     * 검토 상태 저장. 열린(PROPOSED) 초안에만 쓴다. 클라이언트가 보낸 version이 저장된 것과 다르면 409 — 늦은 자동 저장이
+     * 새 편집을 덮지 않는다. 저장은 실행 데이터를 바꾸지 않는다.
+     */
+    public PlanReviewState saveReviewState(Long userId, Long proposalId, PlanReviewState incoming) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        }
+        PlanReviewState stored = readReviewState(proposal.getReviewStateJson());
+        Integer storedVersion = stored == null ? null : stored.version();
+        Integer sent = incoming == null ? null : incoming.version();
+        if (!java.util.Objects.equals(storedVersion, sent)) {
+            throw new ConflictException(ErrorCode.PLAN_REVIEW_STATE_STALE);
+        }
+        PlanReviewState next = new PlanReviewState(storedVersion == null ? 1 : storedVersion + 1,
+                incoming == null ? null : blank(incoming.title()),
+                incoming == null || incoming.excludedProposalItemIds() == null ? List.of()
+                        : incoming.excludedProposalItemIds().stream().filter(java.util.Objects::nonNull).distinct().toList(),
+                incoming == null || incoming.editedItems() == null ? List.of() : incoming.editedItems(),
+                incoming == null || incoming.answers() == null ? java.util.Map.of() : incoming.answers(),
+                LocalDateTime.now());
+        String json;
+        try {
+            json = requestJson.writeValueAsString(next);
+        } catch (Exception e) {
+            throw new IllegalStateException("검토 상태 직렬화 실패", e);
+        }
+        int updated = aiProposalMapper.updateReviewState(proposalId, userId, json, storedVersion);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.PLAN_REVIEW_STATE_STALE);
+        }
+        return next;
+    }
+
+    PlanReviewState readReviewState(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(json, PlanReviewState.class);
+        } catch (Exception e) {
+            log.warn("검토 상태를 읽지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static String blank(String s) {
+        return s == null || s.isBlank() ? null : s.strip();
     }
 
     // ===== 저장된 초안 다시 읽기 =====
@@ -575,6 +638,7 @@ public class PlanDraftService {
                         .changes(List.of()).build())
                 .briefId(context == null ? null : context.briefId())
                 .briefVersion(context == null ? null : context.briefVersion())
+                .reviewState(readReviewState(proposal.getReviewStateJson()))
                 .build();
     }
 

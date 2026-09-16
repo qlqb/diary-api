@@ -47,7 +47,8 @@ public record PlanRequestContext(
         Long briefId,
         Integer briefVersion,
         Long previousProposalId,
-        EvidenceSnapshot evidence
+        EvidenceSnapshot evidence,
+        Long flowRootProposalId
 ) {
     public static final int VERSION = 2;
 
@@ -58,7 +59,7 @@ public record PlanRequestContext(
                               FamiliarityAnswer familiarityAnswer, List<Long> familiarityTopicIds, Long conversationId) {
         this(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
                 requestedMaterialIds, requestedSectionIds, familiarityAnswer, familiarityTopicIds, conversationId,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     /**

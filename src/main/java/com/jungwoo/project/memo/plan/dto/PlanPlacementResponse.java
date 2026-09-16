@@ -52,5 +52,9 @@ public class PlanPlacementResponse {
         private Long executionItemId;
         private String title;
         private Integer expectedMinutes;
+        /** 날짜가 정해진 항목이면 그 날짜(그 날 안에서만 시각을 찾았다). */
+        private LocalDate scheduledDate;
+        /** 왜 못 넣었는지 — "9/18에 남는 시간이 없어요"처럼 사용자에게 보여 주는 문장. */
+        private String reason;
     }
 }

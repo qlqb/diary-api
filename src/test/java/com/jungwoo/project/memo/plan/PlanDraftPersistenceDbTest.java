@@ -297,6 +297,37 @@ class PlanDraftPersistenceDbTest {
         assertThat(loaded.getProposal().getStatus()).isEqualTo(AiProposalStatus.PROPOSED);
     }
 
+    @Test
+    void reviewStateIsSavedPerVersion_staleSaveIsRejected_andLoadDraftReturnsIt() {
+        PlanDraftResponse draft = planDraftService.createDraft(userId(), request("k-review"));
+        Long id = draft.getProposalId();
+        Long firstItem = draft.getProposal().getItems().get(0).getProposalItemId();
+
+        com.jungwoo.project.memo.plan.dto.PlanReviewState v1 = planDraftService.saveReviewState(userId(), id,
+                new com.jungwoo.project.memo.plan.dto.PlanReviewState(null, "내 제목", List.of(firstItem), List.of(),
+                        java.util.Map.of(), null));
+        assertThat(v1.version()).isEqualTo(1);
+        // 늦은 저장(옛 version)은 거절되고 새 편집을 덮지 않는다.
+        assertThatThrownBy(() -> planDraftService.saveReviewState(userId(), id,
+                new com.jungwoo.project.memo.plan.dto.PlanReviewState(null, "늦은 제목", List.of(), List.of(), java.util.Map.of(), null)))
+                .isInstanceOf(ConflictException.class);
+        com.jungwoo.project.memo.plan.dto.PlanReviewState v2 = planDraftService.saveReviewState(userId(), id,
+                new com.jungwoo.project.memo.plan.dto.PlanReviewState(1, "내 제목 2", List.of(), List.of(), java.util.Map.of(), null));
+        assertThat(v2.version()).isEqualTo(2);
+
+        PlanDraftResponse loaded = planDraftService.loadDraft(userId(), id);
+        assertThat(loaded.getReviewState().version()).isEqualTo(2);
+        assertThat(loaded.getReviewState().title()).isEqualTo("내 제목 2");
+        // 검토 상태 저장은 실행 데이터를 만들지 않는다.
+        assertThat(countRows("execution_items", "title LIKE '" + TITLE_PREFIX + "%'")).isZero();
+
+        // 처리된(확정) 초안에는 더 쓸 수 없다.
+        planConfirmService.confirm(userId(), id, PlanConfirmRequest.builder().title(TITLE_PREFIX + "확정").build());
+        assertThatThrownBy(() -> planDraftService.saveReviewState(userId(), id,
+                new com.jungwoo.project.memo.plan.dto.PlanReviewState(2, "x", List.of(), List.of(), java.util.Map.of(), null)))
+                .isInstanceOf(ConflictException.class);
+    }
+
     // ===== fixture =====
 
     private PlanDraftRequest request(String key) {

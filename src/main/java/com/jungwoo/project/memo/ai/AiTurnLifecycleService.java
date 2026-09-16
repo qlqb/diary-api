@@ -312,7 +312,7 @@ public class AiTurnLifecycleService {
          */
         if (draftCommitOrNull != null && draftCommitOrNull.hasBriefOps()) {
             planBriefService.applyTurn(userId, conversationId, requestMessageId, assistantMessage.getMessageId(),
-                    draftCommitOrNull.briefOps());
+                    draftCommitOrNull.briefOps(), draftCommitOrNull.briefPeriod());
         }
 
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
@@ -394,13 +394,19 @@ public class AiTurnLifecycleService {
      * 둘 다 null일 수 있다 — outcome이 없으면 draft를 건드리지 않고, briefOps가 비어 있으면 합의를 건드리지 않는다.
      */
     public record DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts,
-                                  List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps) {
+                                  List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps,
+                                  com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod briefPeriod) {
         public DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts) {
-            this(outcome, facts, null);
+            this(outcome, facts, null, null);
+        }
+
+        public DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts,
+                               List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps) {
+            this(outcome, facts, briefOps, null);
         }
 
         public static DraftTurnCommit briefOnly(List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps) {
-            return new DraftTurnCommit(null, null, briefOps);
+            return new DraftTurnCommit(null, null, briefOps, null);
         }
 
         public boolean hasBriefOps() {
