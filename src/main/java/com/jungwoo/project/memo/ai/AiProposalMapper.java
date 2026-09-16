@@ -60,6 +60,14 @@ public interface AiProposalMapper {
     );
 
     /** 이 ASSISTANT 메시지가 만든 제안(있으면 하나뿐). 대화 이력 표시·idempotency 재생용. */
+    /**
+     * 같은 요청 키로 이미 만든 열린 초안. 화면이 중복 클릭·재시도로 같은 키를 다시 보내면 생성 대신 이것을 돌려준다.
+     */
+    /** 아직 확정·폐기하지 않은 가장 최근 계획 초안(기간이 있는 제안). 상담의 [계획 상태]가 쓴다. */
+    AiProposal findLatestOpenPlanProposal(@Param("userId") Long userId);
+
+    AiProposal findProposedByRequestKey(@Param("userId") Long userId, @Param("requestKey") String requestKey);
+
     AiProposal findBySourceMessageIdAndUserId(
             @Param("sourceMessageId") Long sourceMessageId,
             @Param("userId") Long userId

@@ -129,6 +129,14 @@ class PlanDraftServiceTest {
 
     @Mock
     private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+    @Mock
+    private com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService evidenceService;
+    @Mock
+    private com.jungwoo.project.memo.routine.RoutineOccurrenceService occurrenceService;
+    @Mock
+    private com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    @Mock
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
     private PlanDraftService service;
 
@@ -158,7 +166,14 @@ class PlanDraftServiceTest {
                 new com.jungwoo.project.memo.plan.selection.PlanRequestedMaterialResolver(courseMaterialMapper,
                         org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class),
                         org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class)),
-                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator());
+                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator(),
+                evidenceService, occurrenceService, planBriefService, aiMessageMapper);
+        when(evidenceService.collect(anyLong(), any(), any(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.empty(inv.getArgument(1), inv.getArgument(2)));
+        when(occurrenceService.expand(anyLong(), any(), any())).thenReturn(List.of());
+        when(planBriefService.load(anyLong(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.ai.brief.PlanBriefService.View.empty(inv.getArgument(1)));
+        when(aiMessageMapper.findByConversationIdAndUserId(any(), anyLong())).thenReturn(List.of());
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -166,7 +181,8 @@ class PlanDraftServiceTest {
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
                 planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService,
-                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService);
+                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService,
+                new PlanGenerationProgress(), planBriefService);
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
@@ -218,7 +234,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getTargetMinutesReason()).isNull();
         assertThat(draft.getAvailabilityConfidenceSummary()).contains("기본 시간대");
         verify(aiProposalMapper).updatePlanMetadata(
-                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), isNull(), any());
+                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), any(), any());
     }
 
     @Test
@@ -329,7 +345,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(7980);
         // 저장되는 목표도 깎인 값이다 — 스냅샷과 화면이 어긋나지 않는다.
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), any(), any(),
-                eq(PlanIntensity.FOCUSED), eq(3600), isNull(), any());
+                eq(PlanIntensity.FOCUSED), eq(3600), any(), any());
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
         verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
@@ -636,7 +652,7 @@ class PlanDraftServiceTest {
 
         verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30), any());
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
-                eq(PlanIntensity.NORMAL), eq(BASELINE), isNull(), any());
+                eq(PlanIntensity.NORMAL), eq(BASELINE), any(), any());
         // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.
         verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }

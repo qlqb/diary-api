@@ -194,6 +194,7 @@ public class AiConversationService {
     private final PlanDraftService planDraftService;
     private final AiConversationDraftMapper aiConversationDraftMapper;
     private final DraftFactsService draftFactsService;
+    private final com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
     private final DraftCodec draftCodec = new DraftCodec(objectMapper);
@@ -438,9 +439,14 @@ public class AiConversationService {
             draftFacts = draftFactsService.collect(userId, requestMoment.toLocalDate());
             draftBlock = DraftPromptBuilder.renderOpenDrafts(openDrafts, draftFacts);
         }
+        /*
+         * 계획 합의(ai_plan_briefs). 최근 대화 창 밖으로 밀린 결정도 여기로 살아남는다. 다른 대화에서 확인된 어려움·
+         * 기간 합의도 짧게 잇는다 — 같은 사실을 다시 묻지 않기 위해서다. 예산은 실제 길이만큼만 뺀다.
+         */
+        String briefBlock = autoTurn ? buildBriefBlock(conversationId, userId) : "";
         int draftReserveChars = draftBlock.isEmpty() ? 0 : DraftPromptBuilder.MAX_CHARS;
         int contextBudgetChars = Math.max(0,
-                maxChars - currentMessageChars - workspaceBlock.length() - draftReserveChars);
+                maxChars - currentMessageChars - workspaceBlock.length() - draftReserveChars - briefBlock.length());
         /*
          * 요청 기간이 기본 조회 기간(오늘~+14일) 밖일 수 있다. 그 기간은 모델 응답의 dateRange를
          * 읽어야 알 수 있으므로, 판정 단계에서 필요하면 다시 조회할 수 있는 조회기를 넘긴다.
@@ -455,7 +461,8 @@ public class AiConversationService {
         // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
         String contextBlock = contextSnapshotService.buildContextBlock(
                 conversationId, userId, conversation.getSummary(), contextBudgetChars, requestMessageId);
-        String userPrompt = buildUserPrompt(request, draftBlock, workspaceBlock, contextBlock, requestMoment.toLocalDate());
+        String userPrompt = buildUserPrompt(request, draftBlock + briefBlock, workspaceBlock, contextBlock,
+                requestMoment.toLocalDate());
         // draft 규칙은 AUTO 턴에 항상 붙는다 — 첫 턴(OPEN draft 없음)에도 모델이 create를 낼 수 있어야 한다.
         String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT
                 + (autoTurn ? DraftPromptBuilder.SYSTEM_RULES : "")
@@ -557,8 +564,18 @@ public class AiConversationService {
                             .requestedMaterialIds(periodPlan.getRequestedMaterialIds())
                             .instruction(conversationInstruction(conversationId, userId, requestMessageId,
                                     request.getMessage()))
+                            .requestKey(request.getIdempotencyKey())
                             .build();
-                    PeriodPlanDraftGenerator.Generated generated = planDraftService.generate(userId, draftRequest);
+                    /*
+                     * 대화 출처를 넘긴다 — 생성기가 [상담 기록](발화자 포함)과 [상담에서 합의한 것]을 서버에서 읽는다. 위
+                     * instruction은 최근 사용자 발언 요약이고, 합의·AI 제안의 동의 상태는 합의 저장소가 든다. 진행 단계는
+                     * 서버가 실제로 밟을 때마다 SSE로 알린다.
+                     */
+                    PeriodPlanDraftGenerator.Origin origin = new PeriodPlanDraftGenerator.Origin(conversationId,
+                            requestMessageId, request.getIdempotencyKey(), null);
+                    PeriodPlanDraftGenerator.Generated generated = planDraftService.generate(userId, draftRequest,
+                            origin, null, stage -> sink.onPeriodPlanProgress(stage.name(),
+                                    com.jungwoo.project.memo.plan.PlanGenerationProgress.label(stage)));
                     return aiTurnLifecycleService.completePeriodPlanTurn(
                             conversationId, userId, requestMessageId, periodPlanReply(generated), generated);
                 })
@@ -636,8 +653,37 @@ public class AiConversationService {
         String period = start.equals(end)
                 ? start.getMonthValue() + "/" + start.getDayOfMonth()
                 : start.getMonthValue() + "/" + start.getDayOfMonth() + "~" + end.getMonthValue() + "/" + end.getDayOfMonth();
-        return period + " 계획 초안을 만들었어요. 항목 " + generated.items().size() + "개, 학습 목표 약 "
-                + generated.targetMinutes() + "분이에요. 검토하고 확정해 주세요.";
+        StringBuilder sb = new StringBuilder(period).append(" 계획 초안을 만들었어요. 항목 ")
+                .append(generated.items().size()).append("개, 학습 목표 약 ").append(generated.targetMinutes()).append("분.");
+        if (generated.strategy() != null && hasText(generated.strategy().goal())) {
+            sb.append(" 목표: ").append(generated.strategy().goal().strip());
+        }
+        if (generated.strategy() != null && generated.strategy().openQuestions() != null
+                && !generated.strategy().openQuestions().isEmpty()) {
+            sb.append(" 확인이 필요한 것: ").append(generated.strategy().openQuestions().get(0));
+        }
+        sb.append(" 검토하고 확정해 주세요.");
+        return sb.toString();
+    }
+
+    /** [계획 합의 현황] + 다른 대화에서 확인된 것. 비어 있으면 빈 문자열. */
+    private String buildBriefBlock(Long conversationId, Long userId) {
+        try {
+            com.jungwoo.project.memo.ai.brief.PlanBriefService.View view = planBriefService.load(userId, conversationId);
+            StringBuilder sb = new StringBuilder(com.jungwoo.project.memo.ai.brief.PlanBriefService.renderForConsultation(view));
+            List<com.jungwoo.project.memo.ai.brief.PlanBriefItem> carried = planBriefService.carriedOver(userId, conversationId, 5);
+            if (!carried.isEmpty()) {
+                sb.append("[다른 대화에서 확인된 것] (같은 사실을 다시 묻지 않는다. 다른 과목까지 근거 없이 일반화하지 않는다)\n");
+                for (com.jungwoo.project.memo.ai.brief.PlanBriefItem item : carried.stream().limit(8).toList()) {
+                    sb.append("- ").append(com.jungwoo.project.memo.ai.brief.PlanBriefService.kindLabel(item.kind()))
+                            .append(": ").append(item.text()).append('\n');
+                }
+            }
+            return sb.length() == 0 ? "" : sb.append('\n').toString();
+        } catch (Exception e) {
+            log.warn("계획 합의 블록을 만들지 못했다: conversationId={}, {}", conversationId, e.getClass().getSimpleName());
+            return "";
+        }
     }
 
     /**
@@ -746,8 +792,16 @@ public class AiConversationService {
         if (draftDecides && structured.scheduleSuggestions() != null && !structured.scheduleSuggestions().isEmpty()) {
             log.info("draft 턴이라 모델 scheduleSuggestions {}건 폐기", structured.scheduleSuggestions().size());
         }
-        AiTurnLifecycleService.DraftTurnCommit draftCommit = draftOutcome != null && draftOutcome.touchesDrafts()
-                ? new AiTurnLifecycleService.DraftTurnCommit(draftOutcome, facts) : null;
+        /*
+         * 계획 합의 변경은 AUTO 턴에서만 받는다. 버튼 턴(CREATE_PROPOSAL)은 이미 확정된 요청이다.
+         */
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps =
+                requestedAction == RequestedAction.AUTO && structured != null && structured.planBrief() != null
+                        ? structured.planBrief() : List.of();
+        boolean touchesDrafts = draftOutcome != null && draftOutcome.touchesDrafts();
+        AiTurnLifecycleService.DraftTurnCommit draftCommit = touchesDrafts || !briefOps.isEmpty()
+                ? new AiTurnLifecycleService.DraftTurnCommit(touchesDrafts ? draftOutcome : null,
+                        touchesDrafts ? facts : null, briefOps) : null;
 
         AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,

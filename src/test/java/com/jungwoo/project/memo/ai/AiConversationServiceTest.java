@@ -779,7 +779,7 @@ class AiConversationServiceTest {
                 com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED, "지시", null, List.of(31L));
         PeriodPlanDraftGenerator.Generated generated = new PeriodPlanDraftGenerator.Generated(
                 spec, 600, 510, null, false, "이번 주 집중", null, List.of());
-        when(planDraftService.generate(eq(USER_ID), any())).thenReturn(generated);
+        when(planDraftService.generate(eq(USER_ID), any(), any(), any(), any())).thenReturn(generated);
         com.jungwoo.project.memo.plan.dto.PlanDraftResponse draft = com.jungwoo.project.memo.plan.dto.PlanDraftResponse.builder()
                 .proposalId(77L).targetMinutes(510)
                 .proposal(AiProposalResponse.builder().proposalId(77L).items(List.of()).build())
@@ -801,7 +801,7 @@ class AiConversationServiceTest {
         verifyNoInteractions(aiConsultationClient);
         ArgumentCaptor<com.jungwoo.project.memo.plan.dto.PlanDraftRequest> captor =
                 ArgumentCaptor.forClass(com.jungwoo.project.memo.plan.dto.PlanDraftRequest.class);
-        verify(planDraftService).generate(eq(USER_ID), captor.capture());
+        verify(planDraftService).generate(eq(USER_ID), captor.capture(), any(), any(), any());
         // 화면이 되돌려 보낸 값 그대로가 아니라 서버가 다시 검증한 값으로 만든다.
         assertThat(captor.getValue().getIntensity()).isEqualTo(com.jungwoo.project.memo.plan.domain.PlanIntensity.FOCUSED);
         assertThat(captor.getValue().getCourseIds()).containsExactly(31L);
@@ -819,7 +819,7 @@ class AiConversationServiceTest {
 
     @Test
     void createPeriodPlan_failureReleasesTheTurn_withTheBusinessErrorCode() {
-        when(planDraftService.generate(eq(USER_ID), any()))
+        when(planDraftService.generate(eq(USER_ID), any(), any(), any(), any()))
                 .thenThrow(new com.jungwoo.project.memo.common.exception.ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED));
 
         AiMessageRequest request = AiMessageRequest.builder()

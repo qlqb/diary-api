@@ -69,4 +69,10 @@ public class PlanDraftRequest {
     private List<Long> requestedMaterialIds;
     /** 이번 요청에서 지정한 구간. */
     private List<Long> requestedSectionIds;
+
+    /**
+     * 화면이 붙이는 요청 키(UUID). 같은 키의 요청이 진행 중이면 다시 만들지 않고, 이미 끝났으면 그 초안을 돌려준다 —
+     * 중복 클릭·재시도·늦은 응답이 초안을 두 개 만들지 않게 한다. 진행 상태 조회(/api/plans/draft/progress)의 열쇠이기도 하다.
+     */
+    private String requestKey;
 }

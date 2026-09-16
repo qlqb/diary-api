@@ -90,10 +90,11 @@ class PlanRedraftServiceTest {
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0, planningContextBuilder,
                 planJudgmentService, contextChangeSuggestionService, planItemService, new PlanProvenanceCodec(),
-                materialContextService);
+                materialContextService, new PlanGenerationProgress(),
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.ai.brief.PlanBriefService.class));
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenAnswer(inv -> inv.getArgument(1));
-        when(generator.generate(any())).thenAnswer(inv -> new Generated(inv.getArgument(0), 600, 600, null, false,
+        when(generator.generate(any(), any())).thenAnswer(inv -> new Generated(inv.getArgument(0), 600, 600, null, false,
                 "다시 만든 계획", null, List.of()));
         when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(78L).items(List.of()).build());
@@ -116,7 +117,7 @@ class PlanRedraftServiceTest {
                 .excludeTopicIds(List.of(5L, 101L)).build());
 
         ArgumentCaptor<Spec> spec = ArgumentCaptor.forClass(Spec.class);
-        verify(generator).generate(spec.capture());
+        verify(generator).generate(spec.capture(), any());
         assertThat(spec.getValue().start()).isEqualTo(LocalDate.of(2026, 9, 14));
         assertThat(spec.getValue().end()).isEqualTo(LocalDate.of(2026, 9, 20));
         assertThat(spec.getValue().intensity()).isEqualTo(PlanIntensity.FOCUSED);
@@ -141,7 +142,7 @@ class PlanRedraftServiceTest {
         service.redraft(USER, OLD, new PlanRedraftRequest());
 
         ArgumentCaptor<Spec> spec = ArgumentCaptor.forClass(Spec.class);
-        verify(generator).generate(spec.capture());
+        verify(generator).generate(spec.capture(), any());
         assertThat(spec.getValue().excludeTopicIds()).containsExactly(5L);
         assertThat(spec.getValue().requestedMaterialIds()).containsExactly(30L);
     }
@@ -153,7 +154,7 @@ class PlanRedraftServiceTest {
         assertThatThrownBy(() -> service.redraft(USER, OLD, new PlanRedraftRequest()))
                 .isInstanceOf(ConflictException.class)
                 .extracting(e -> ((ConflictException) e).getErrorCode()).isEqualTo(ErrorCode.PLAN_REDRAFT_CONTEXT_MISSING);
-        verify(generator, never()).generate(any());
+        verify(generator, never()).generate(any(), any());
     }
 
     @Test
@@ -162,13 +163,13 @@ class PlanRedraftServiceTest {
 
         assertThatThrownBy(() -> service.redraft(USER, OLD, new PlanRedraftRequest()))
                 .extracting(e -> ((ConflictException) e).getErrorCode()).isEqualTo(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
-        verify(generator, never()).generate(any());
+        verify(generator, never()).generate(any(), any());
     }
 
     @Test
     void 생성이_실패하면_기존_초안은_폐기되지_않는다() {
         givenProposal(AiProposalStatus.PROPOSED, STORED);
-        when(generator.generate(any())).thenThrow(new ServiceUnavailableException(ErrorCode.PLAN_MATERIAL_SELECTION_FAILED));
+        when(generator.generate(any(), any())).thenThrow(new ServiceUnavailableException(ErrorCode.PLAN_MATERIAL_SELECTION_FAILED));
 
         assertThatThrownBy(() -> service.redraft(USER, OLD, new PlanRedraftRequest()))
                 .isInstanceOf(ServiceUnavailableException.class);

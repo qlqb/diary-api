@@ -98,6 +98,39 @@ public class PlanController {
         return ResponseEntity.ok(planDraftService.redraft(principal.getUserId(), proposalId, request));
     }
 
+    /**
+     * 진행 중인 초안 생성의 단계. 화면이 "자료 확인 중 / 계획 정리 중"을 서버가 실제로 밟은 단계로 보여 준다.
+     * 모르는 키면 404가 아니라 known=false — 키는 생성이 끝나고 잠시 뒤 사라진다.
+     */
+    @GetMapping("/draft/progress")
+    public ResponseEntity<java.util.Map<String, Object>> draftProgress(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam String requestKey
+    ) {
+        return ResponseEntity.ok(planDraftService.progressOf(principal.getUserId(), requestKey)
+                .<java.util.Map<String, Object>>map(state -> {
+                    java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+                    out.put("known", true);
+                    out.put("stage", state.stage().name());
+                    out.put("label", state.stageLabel());
+                    out.put("proposalId", state.proposalId());
+                    out.put("errorCode", state.errorCode());
+                    return out;
+                })
+                .orElse(java.util.Map.of("known", false)));
+    }
+
+    /**
+     * 저장된 초안을 다시 읽는다(새로고침·탭 이동 뒤 복구). 모델을 부르지 않는다.
+     */
+    @GetMapping("/proposals/{proposalId}/draft")
+    public ResponseEntity<PlanDraftResponse> loadDraft(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId
+    ) {
+        return ResponseEntity.ok(planDraftService.loadDraft(principal.getUserId(), proposalId));
+    }
+
     @PostMapping("/proposals/{proposalId}/confirm")
     public ResponseEntity<PlanResponse> confirm(
             @AuthenticationPrincipal UserPrincipal principal,

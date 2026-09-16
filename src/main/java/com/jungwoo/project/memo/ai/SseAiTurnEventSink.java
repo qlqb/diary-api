@@ -89,6 +89,11 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     }
 
     @Override
+    public void onPeriodPlanProgress(String stage, String label) {
+        send("period_plan.progress", Map.of("stage", stage, "label", label));
+    }
+
+    @Override
     public void onCompleted(AiTurnCompletedPayload payload) {
         if (!markTerminatedOnce()) {
             return;

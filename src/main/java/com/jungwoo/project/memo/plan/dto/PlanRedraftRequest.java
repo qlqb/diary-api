@@ -22,4 +22,7 @@ public class PlanRedraftRequest {
     private List<Long> excludeTopicIds;
     /** 지정 자료 목록 전체(모호한 이름을 사용자가 고른 결과 등). null이면 유지. */
     private List<Long> requestedMaterialIds;
+
+    /** 화면이 붙이는 요청 키. PlanDraftRequest.requestKey와 같은 뜻이다. */
+    private String requestKey;
 }
