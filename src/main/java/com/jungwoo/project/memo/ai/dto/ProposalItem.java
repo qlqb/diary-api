@@ -68,7 +68,14 @@ public record ProposalItem(
         ActionType actionType,
         String doneCriteria,
         DoneCriteriaSource doneCriteriaSource,
-        String sourceLocator
+        String sourceLocator,
+
+        /**
+         * deadlineAt/deadlineDate가 어디서 왔는가. CLASS(다음 수업 시작) / ASSIGNMENT(확정 과제 마감) /
+         * AI_PROPOSED(모델이 제안한 완료 목표 — 사용자가 고칠 수 있다) / USER. 마감이 없으면 null.
+         * 확인된 사실과 제안을 화면이 구분해 말하기 위한 값이다.
+         */
+        String deadlineSource
 ) {
 
     /**
@@ -84,7 +91,7 @@ public record ProposalItem(
     ) {
         this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
                 earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** 마감까지만 아는 경로(v0 블록 생성기). */
@@ -96,6 +103,20 @@ public record ProposalItem(
     ) {
         this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
                 earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, deadlineAt, null,
-                null, null, null, null);
+                null, null, null, null, null);
+    }
+
+    /** 마감 출처 없이 만드는 경로(판단 경로의 조각 생성 등). */
+    public ProposalItem(
+            String title, String description, Integer expectedMinutes, String priority,
+            PlacementType placementType, LocalTime startTime, LocalTime endTime,
+            LocalDate earliestStartDate, LocalDate deadlineDate,
+            LocalDateTime fixedStartAt, LocalDateTime fixedEndAt, Long courseId, LocalDateTime deadlineAt,
+            Long topicId, ActionType actionType, String doneCriteria, DoneCriteriaSource doneCriteriaSource,
+            String sourceLocator
+    ) {
+        this(title, description, expectedMinutes, priority, placementType, startTime, endTime,
+                earliestStartDate, deadlineDate, fixedStartAt, fixedEndAt, courseId, deadlineAt, topicId,
+                actionType, doneCriteria, doneCriteriaSource, sourceLocator, null);
     }
 }

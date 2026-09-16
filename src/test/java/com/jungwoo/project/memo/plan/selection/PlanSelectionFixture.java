@@ -101,6 +101,14 @@ public class PlanSelectionFixture {
     public final MaterialTextUnitMapper unitMapper = mock(MaterialTextUnitMapper.class);
     public final MaterialLinkMapper materialLinkMapper = mock(MaterialLinkMapper.class);
     public final UserContextMapper userContextMapper = mock(UserContextMapper.class);
+    public final com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService evidenceService =
+            mock(com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService.class);
+    public final com.jungwoo.project.memo.routine.RoutineOccurrenceService occurrenceService =
+            mock(com.jungwoo.project.memo.routine.RoutineOccurrenceService.class);
+    public final com.jungwoo.project.memo.ai.brief.PlanBriefService briefService =
+            mock(com.jungwoo.project.memo.ai.brief.PlanBriefService.class);
+    public final com.jungwoo.project.memo.ai.AiMessageMapper messageMapper =
+            mock(com.jungwoo.project.memo.ai.AiMessageMapper.class);
 
     public final Map<Long, Course> courses = new LinkedHashMap<>();
     public final Map<Long, List<TopicResponse>> trees = new LinkedHashMap<>();
@@ -141,7 +149,14 @@ public class PlanSelectionFixture {
         generator = new PeriodPlanDraftGenerator(ai, usage, planReviewService, courseMapper, topicService,
                 courseNoteMapper, analysisMapper, courseMaterialMapper, executionItemMapper, availability,
                 Clock.fixed(Instant.parse("2026-09-13T09:00:00Z"), ZoneId.of("UTC")), catalogService,
-                userContextMapper, selector, retriever, resolver, estimator);
+                userContextMapper, selector, retriever, resolver, estimator, evidenceService, occurrenceService,
+                briefService, messageMapper);
+        when(evidenceService.collect(anyLong(), any(), any(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.empty(inv.getArgument(1), inv.getArgument(2)));
+        when(occurrenceService.expand(anyLong(), any(), any())).thenReturn(List.of());
+        when(briefService.load(anyLong(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.ai.brief.PlanBriefService.View.empty(inv.getArgument(1)));
+        when(messageMapper.findByConversationIdAndUserId(any(), anyLong())).thenReturn(List.of());
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");

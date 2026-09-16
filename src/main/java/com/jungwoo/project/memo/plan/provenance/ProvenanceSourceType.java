@@ -58,5 +58,17 @@ public enum ProvenanceSourceType {
     MATERIAL_SECTION,
 
     /** 과제(course_assignments). 확정 여부·마감·완료를 서버가 붙여 준 줄. */
-    ASSIGNMENT
+    ASSIGNMENT,
+
+    /** 상담 대화의 메시지 한 줄(발화자 포함). 확정 사실이 아니라 대화 원문이다. */
+    CONVERSATION_MESSAGE,
+
+    /** 상담에서 합의한 항목(ai_plan_briefs). providedValue에 발화자·동의 상태가 있다. */
+    PLAN_BRIEF,
+
+    /** 실행 항목의 실제 경과(기록·이동·축소·메모). 관찰 사실이며 원인이 아니다. */
+    EXECUTION_HISTORY,
+
+    /** 프로젝트의 다음 수업 시작 시각. 수업 전 마감의 근거다. */
+    NEXT_CLASS
 }

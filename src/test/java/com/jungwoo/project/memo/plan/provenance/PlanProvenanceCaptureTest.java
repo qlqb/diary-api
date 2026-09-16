@@ -99,6 +99,14 @@ class PlanProvenanceCaptureTest {
     private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
 
     private PeriodPlanDraftGenerator generator;
+    @Mock
+    private com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService evidenceService;
+    @Mock
+    private com.jungwoo.project.memo.routine.RoutineOccurrenceService occurrenceService;
+    @Mock
+    private com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    @Mock
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
     @BeforeEach
     void setUp() {
@@ -124,7 +132,17 @@ class PlanProvenanceCaptureTest {
                 new com.jungwoo.project.memo.plan.selection.PlanRequestedMaterialResolver(courseMaterialMapper,
                         org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class),
                         org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class)),
-                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator());
+                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator(),
+                evidenceService, occurrenceService, planBriefService, aiMessageMapper);
+        org.mockito.Mockito.when(evidenceService.collect(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.empty(inv.getArgument(1), inv.getArgument(2)));
+        org.mockito.Mockito.when(occurrenceService.expand(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(planBriefService.load(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> com.jungwoo.project.memo.ai.brief.PlanBriefService.View.empty(inv.getArgument(1)));
+        org.mockito.Mockito.when(aiMessageMapper.findByConversationIdAndUserId(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong())).thenReturn(java.util.List.of());
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -311,7 +329,9 @@ class PlanProvenanceCaptureTest {
                 .containsExactly(ServerCalculation.ServerCalculationKind.AVAILABILITY_ESTIMATE,
                         ServerCalculation.ServerCalculationKind.STUDY_BUDGET,
                         // 자료 선택 결과(후보가 없으면 NO_CANDIDATES)도 서버 계산으로 남는다.
-                        ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION);
+                        ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION,
+                        // 호출 수·토큰·지연·상한. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
+                        ServerCalculation.ServerCalculationKind.GENERATION_CALLS);
 
         ServerCalculation availability = provenance.serverCalculations().get(0);
         assertThat(availability.providedToModel()).isTrue();

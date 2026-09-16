@@ -175,11 +175,11 @@ public final class PlanCatalogText {
         return roles == null || roles.isBlank() ? "기타" : roles;
     }
 
-    static String flat(String s) {
+    public static String flat(String s) {
         return s == null ? null : s.replaceAll("\\s+", " ").trim();
     }
 
-    static String cut(String s, int max) {
+    public static String cut(String s, int max) {
         if (s == null) {
             return null;
         }

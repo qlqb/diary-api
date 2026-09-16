@@ -447,10 +447,16 @@ public class AiProposalService {
                 expectedMinutes = item.expectedMinutes();
             }
 
+            /*
+             * 계획 경로가 채운 학습 정보(행동 종류·완료 기준·자료 위치)와 마감 출처를 그대로 싣는다. 전에는 13개
+             * 인자 create를 써서 이 값들이 여기서 조용히 null이 됐고, 화면은 "완료 기준"을 받지 못했다.
+             */
             result.add(ProposalItemPayload.create(
                     item.title(), item.description(), expectedMinutes, item.priority(), itemTargetDate,
                     placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
-                    item.courseId(), deadlineAt, item.topicId()));
+                    item.courseId(), deadlineAt, item.topicId(), item.actionType(), item.doneCriteria(),
+                    item.doneCriteriaSource(), item.sourceLocator(),
+                    deadlineAt == null && deadlineDate == null ? null : item.deadlineSource()));
         }
         return result;
     }
@@ -944,6 +950,8 @@ public class AiProposalService {
                 .scheduledStartAt(effective.scheduledStartAt())
                 .scheduledEndAt(effective.scheduledEndAt())
                 .deadlineAt(effective.deadlineAt())
+                .deadlineDate(effective.deadlineDate())
+                .deadlineSource(effective.deadlineSource())
                 .topicId(effective.topicId())
                 .actionType(effective.actionType())
                 .doneCriteria(effective.doneCriteria())

@@ -81,7 +81,10 @@ public record ProposalItemPayload(
         ActionType actionType,
         String doneCriteria,
         DoneCriteriaSource doneCriteriaSource,
-        String sourceLocator
+        String sourceLocator,
+
+        /** 마감의 출처(CLASS / ASSIGNMENT / AI_PROPOSED / USER). 이 필드가 생기기 전 payload는 null로 읽힌다. */
+        String deadlineSource
 ) {
 
     /** 새 실행 조각을 만드는(기존 흐름 그대로인) 후보. */
@@ -135,10 +138,22 @@ public record ProposalItemPayload(
             Long topicId, ActionType actionType, String doneCriteria,
             DoneCriteriaSource doneCriteriaSource, String sourceLocator
     ) {
+        return create(title, description, expectedMinutes, priority, targetDate, placementType,
+                scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate, courseId, deadlineAt,
+                topicId, actionType, doneCriteria, doneCriteriaSource, sourceLocator, null);
+    }
+
+    public static ProposalItemPayload create(
+            String title, String description, Integer expectedMinutes, String priority, LocalDate targetDate,
+            PlacementType placementType, LocalDateTime scheduledStartAt, LocalDateTime scheduledEndAt,
+            LocalDate earliestStartDate, LocalDate deadlineDate, Long courseId, LocalDateTime deadlineAt,
+            Long topicId, ActionType actionType, String doneCriteria,
+            DoneCriteriaSource doneCriteriaSource, String sourceLocator, String deadlineSource
+    ) {
         return new ProposalItemPayload(title, description, expectedMinutes, priority, targetDate,
                 placementType, scheduledStartAt, scheduledEndAt, earliestStartDate, deadlineDate,
                 ProposalOperation.CREATE, null, null, null, null, null, null, courseId, deadlineAt, topicId,
-                actionType, doneCriteria, doneCriteriaSource, sourceLocator);
+                actionType, doneCriteria, doneCriteriaSource, sourceLocator, deadlineSource);
     }
 
     /** 기존 조각을 조정하는 후보. */
@@ -166,7 +181,7 @@ public record ProposalItemPayload(
                 null, scheduledStartAt, scheduledEndAt, null, null,
                 operation, targetExecutionItemId, targetBaseVersion,
                 beforeTitle, beforeExpectedMinutes, beforeScheduledDate, reason, null, null, null,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /**

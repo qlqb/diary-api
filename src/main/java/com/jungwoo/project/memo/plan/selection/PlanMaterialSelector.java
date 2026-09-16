@@ -97,7 +97,8 @@ public class PlanMaterialSelector {
 
     public enum Status { SELECTED, EMPTY, NO_CANDIDATES }
 
-    public enum Mode { NONE, FULL, FOLDED_GROUPS, FOLDED_COURSES }
+    /** REUSED는 이전 초안의 선택을 그대로 다시 읽은 경우다(선택 호출 0회). */
+    public enum Mode { NONE, FULL, FOLDED_GROUPS, FOLDED_COURSES, REUSED }
 
     /**
      * @param workflowId   사용량 로그에서 선택 호출과 계획 호출을 한 생성으로 묶는 id
@@ -129,7 +130,48 @@ public class PlanMaterialSelector {
     public record Result(Status status, Mode mode, List<SelectedSection> sections, List<SelectedTopic> topics,
                          boolean insufficientEvidence, String note, int calls, boolean expanded,
                          int candidateTotal, int candidateShown, List<Unreviewed> unreviewed, int unknownIds,
-                         List<Integer> estimatedInputTokens, int overLimit) {
+                         List<Integer> estimatedInputTokens, int overLimit,
+                         /** 이 요청의 구간 핸들(sectionId → m7). 최종 계획 호출이 "더 읽을 수 있는 구간"을 같은 핸들로 보여 준다. */
+                         Map<Long, String> sectionHandles,
+                         /** 핸들 → 구간 줄. 추가 읽기 요청의 핸들을 다시 찾는 데 쓴다. */
+                         Map<String, SelectedSection> byHandle) {
+
+        public Result(Status status, Mode mode, List<SelectedSection> sections, List<SelectedTopic> topics,
+                      boolean insufficientEvidence, String note, int calls, boolean expanded,
+                      int candidateTotal, int candidateShown, List<Unreviewed> unreviewed, int unknownIds,
+                      List<Integer> estimatedInputTokens, int overLimit) {
+            this(status, mode, sections, topics, insufficientEvidence, note, calls, expanded, candidateTotal,
+                    candidateShown, unreviewed, unknownIds, estimatedInputTokens, overLimit, Map.of(), Map.of());
+        }
+
+        /** 후보 중 고르지 않은 구간(핸들 → 줄). */
+        public Map<String, SelectedSection> notSelected() {
+            Map<String, SelectedSection> out = new LinkedHashMap<>();
+            Set<String> chosen = new java.util.HashSet<>();
+            sections.forEach(s -> chosen.add(s.handle()));
+            byHandle.forEach((h, s) -> {
+                if (!chosen.contains(h)) {
+                    out.put(h, s);
+                }
+            });
+            return out;
+        }
+    }
+
+    /** 카탈로그만으로 만든 구간 핸들 표. 선택 호출 없이(재사용) 결과를 조립할 때 쓴다. */
+    public static Map<String, SelectedSection> handleTable(List<CourseCatalog> catalogs) {
+        Registry registry = Registry.of(catalogs);
+        Map<String, SelectedSection> out = new LinkedHashMap<>();
+        registry.sections.forEach((h, line) -> out.put(h, new SelectedSection(h, line, registry.sectionCatalog.get(h), null)));
+        return out;
+    }
+
+    /** 카탈로그만으로 만든 학습 항목 핸들 표. */
+    public static Map<String, SelectedTopic> topicHandleTable(List<CourseCatalog> catalogs) {
+        Registry registry = Registry.of(catalogs);
+        Map<String, SelectedTopic> out = new LinkedHashMap<>();
+        registry.topics.forEach((h, line) -> out.put(h, new SelectedTopic(h, line, registry.topicCatalog.get(h), null)));
+        return out;
     }
 
     // ===== 프롬프트 =====
@@ -257,8 +299,11 @@ public class PlanMaterialSelector {
         Status status = sections.isEmpty() && topics.isEmpty() ? Status.EMPTY : Status.SELECTED;
         log.info("자료 선택: status={}, mode={}, calls={}, 후보={}, 보여줌={}, 구간={}, 항목={}, 모름id={}, 추정토큰={}",
                 status, mode, calls, total, shownCount, sections.size(), topics.size(), unknown, estimates);
+        Map<String, SelectedSection> byHandle = new LinkedHashMap<>();
+        registry.sections.forEach((h, line) -> byHandle.put(h, new SelectedSection(h, line, registry.sectionCatalog.get(h),
+                reasons.get(h))));
         return new Result(status, mode, sections, topics, insufficient, note, calls, expanded, total, shownCount,
-                unreviewed, unknown, estimates, overLimit);
+                unreviewed, unknown, estimates, overLimit, Map.copyOf(registry.sectionHandle), byHandle);
     }
 
     // ===== 라운드 구성 =====
@@ -732,7 +777,7 @@ public class PlanMaterialSelector {
         return out;
     }
 
-    static String normalizeHandle(String raw) {
+    public static String normalizeHandle(String raw) {
         if (raw == null) {
             return null;
         }
