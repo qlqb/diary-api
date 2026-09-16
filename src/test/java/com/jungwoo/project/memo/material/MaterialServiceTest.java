@@ -79,7 +79,7 @@ class MaterialServiceTest {
     void upload_writesFileAndExtractsBeforeTouchingDb() {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(fileStorageService.store(eq(USER_ID), any()))
-                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123"));
+                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
         when(textExtractionService.extract(any(), eq("pdf")))
                 .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
 
@@ -97,7 +97,7 @@ class MaterialServiceTest {
     void upload_persistsExtractionResultAndHashInSingleInsert() {
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(fileStorageService.store(eq(USER_ID), any()))
-                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123"));
+                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
         when(textExtractionService.extract(any(), eq("pdf")))
                 .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
 
@@ -114,9 +114,30 @@ class MaterialServiceTest {
     }
 
     @Test
+    void upload_withoutPageStructure_splitsExtractedTextIntoBlocks_andStoresFormatContentType() {
+        // hwp·ipynb·zip은 페이지 단위가 없다. 단위가 비면 추출한 전체 텍스트를 "구간 N" 블록으로 나눠 함께 저장한다.
+        when(fileStorageService.store(eq(USER_ID), any()))
+                .thenReturn(new FileStorageService.StoredFile("u.hwp", "1/u.hwp", "hwp", "abc123", "application/x-hwp"));
+        when(textExtractionService.extract(any(), eq("hwp")))
+                .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "강의계획서", null));
+        com.jungwoo.project.memo.material.domain.MaterialTextUnit block =
+                com.jungwoo.project.memo.material.domain.MaterialTextUnit.builder().text("강의계획서").build();
+        when(materialTextUnitService.blocksFromText("강의계획서", USER_ID, null, "abc123")).thenReturn(List.of(block));
+
+        // 브라우저는 hwp를 octet-stream으로 보내기도 한다. 저장하는 값은 형식의 대표 content type이다.
+        service.upload(USER_ID, null, null,
+                new MockMultipartFile("file", "계획서.hwp", "application/octet-stream", new byte[]{1}));
+
+        ArgumentCaptor<CourseMaterial> captor = ArgumentCaptor.forClass(CourseMaterial.class);
+        verify(materialTxService).createWithLink(captor.capture(), eq(null), eq(null), eq(List.of(block)));
+        assertThat(captor.getValue().getContentType()).isEqualTo("application/x-hwp");
+        assertThat(captor.getValue().getPageCount()).isNull();
+    }
+
+    @Test
     void uploadWithoutCourse_skipsCourseOwnershipCheckAndCreatesNoLink() {
         when(fileStorageService.store(eq(USER_ID), any()))
-                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123"));
+                .thenReturn(new FileStorageService.StoredFile("u.pdf", "1/u.pdf", "pdf", "abc123", "application/pdf"));
         when(textExtractionService.extract(any(), eq("pdf")))
                 .thenReturn(new TextExtractionService.ExtractionResult(ExtractionStatus.SUCCESS, "본문", null));
 

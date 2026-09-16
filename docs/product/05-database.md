@@ -453,7 +453,7 @@ note = 기존 완료 데이터 이전: 실제 수행 시간 미확인
 
 | 테이블 / 컬럼 | 뜻 | 유일성·상태 |
 |---|---|---|
-| `material_text_units` | 추출 단위(PDF 페이지·PPTX 슬라이드·텍스트 블록). `unit_no`는 사람이 보는 번호 | UNIQUE (material_id, file_hash, unit_index) |
+| `material_text_units` | 추출 단위(PDF 페이지·PPTX 슬라이드·텍스트 블록 — 원본 없는 옛 자료와 HWP·IPYNB·ZIP). `unit_no`는 사람이 보는 번호 | UNIQUE (material_id, file_hash, unit_index) |
 | `material_analysis_jobs` | 백그라운드 작업. kind CONTENT(course_id=0) / LINK. `lease_owner/until/token`, `checkpoint_json`, `attempt/max_attempts/next_run_at` | UNIQUE (material_id, course_id, job_kind, file_hash, analysis_version). status QUEUED·RUNNING·DONE·PARTIAL·FAILED·UNAVAILABLE·PAUSED·CANCELLED |
 | `material_sections` | 구간. `unit_start/end`(물리), `printed_page_*`(확인된 인쇄 쪽수만), `roles_json`, `task_text`, `excerpt`, `assignment_cue/quote`, `date_candidates_json` | UNIQUE (material_id, file_hash, analysis_version, dedupe_key). status ACTIVE·SUPERSEDED |
 | `topic_material_links` | 토픽↔구간 N:M. `section_id`=0은 자료 전체. `origin` BACKFILL_SOURCE·PROPOSAL_APPLIED·USER | UNIQUE (topic_id, material_id, section_id). status ACTIVE·REMOVED |

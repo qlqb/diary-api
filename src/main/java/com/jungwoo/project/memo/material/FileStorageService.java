@@ -17,7 +17,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -28,18 +27,13 @@ import java.util.UUID;
  * 호출부는 반환된 storagePath(= uploadDir 기준 상대 경로)를 DB에 그대로 저장하고,
  * 이후 조회는 그 문자열로만 한다 — userId/courseId로 경로를 다시 추론하지 않는다.
  *
- * 검증: 크기 제한, 허용 확장자만, 원본 파일명은 저장 경로에 절대 쓰지 않고 UUID로
- * 대체한다(경로 조작 방지). 소유권은 호출부에서 확인한다.
+ * 검증: 크기 제한, 허용 형식만({@link MaterialFileFormat} — 확장자와 content type 또는 앞머리
+ * 시그니처), 원본 파일명은 저장 경로에 절대 쓰지 않고 UUID로 대체한다(경로 조작 방지).
+ * 소유권은 호출부에서 확인한다.
  */
 @Slf4j
 @Component
 public class FileStorageService {
-
-    private static final Set<String> ALLOWED_EXTENSIONS = Set.of("pdf", "pptx");
-    private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-    );
 
     @Value("${storage.materials.upload-dir}")
     private String uploadDir;
@@ -50,8 +44,10 @@ public class FileStorageService {
     /**
      * @param storagePath uploadDir 기준 상대 경로. 구분자는 항상 '/'다(OS에 의존하지 않는다).
      * @param fileHash    SHA-256 hex. 저장 스트림을 흘려보내며 계산한 값이다.
+     * @param contentType DB에 저장할 형식별 대표 값. 브라우저가 보낸 값이 아니다(형식마다 제각각이라).
      */
-    public record StoredFile(String storedFilename, String storagePath, String extension, String fileHash) {
+    public record StoredFile(String storedFilename, String storagePath, String extension, String fileHash,
+                             String contentType) {
     }
 
     public StoredFile store(Long userId, MultipartFile file) {
@@ -63,11 +59,9 @@ public class FileStorageService {
         }
 
         String extension = extensionOf(file.getOriginalFilename());
-        if (!ALLOWED_EXTENSIONS.contains(extension)) {
-            throw new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE);
-        }
-        String contentType = file.getContentType();
-        if (contentType == null || !ALLOWED_CONTENT_TYPES.contains(contentType)) {
+        MaterialFileFormat format = MaterialFileFormat.fromExtension(extension)
+                .orElseThrow(() -> new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE));
+        if (!format.accepts(file.getContentType(), header(file))) {
             throw new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE);
         }
 
@@ -96,7 +90,15 @@ public class FileStorageService {
         String fileHash = HexFormat.of().formatHex(digest.digest());
 
         log.info("파일 저장 완료: userId={}, storagePath={}, size={}", userId, storagePath, file.getSize());
-        return new StoredFile(storedFilename, storagePath, extension, fileHash);
+        return new StoredFile(storedFilename, storagePath, extension, fileHash, format.contentType());
+    }
+
+    private static byte[] header(MultipartFile file) {
+        try (InputStream in = file.getInputStream()) {
+            return in.readNBytes(MaterialFileFormat.HEADER_BYTES);
+        } catch (IOException e) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
     }
 
     /**

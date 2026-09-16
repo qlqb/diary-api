@@ -80,13 +80,18 @@ public class MaterialService {
         MaterialTextUnitService.Extracted units = result.status() == ExtractionStatus.SUCCESS
                 ? materialTextUnitService.extractUnits(savedPath, stored.extension(), userId, null, stored.fileHash())
                 : new MaterialTextUnitService.Extracted(List.of(), null);
+        if (units.units().isEmpty() && result.text() != null) {
+            // 페이지 구조가 없는 형식(hwp·ipynb·zip)은 추출한 전체 텍스트를 "구간 N" 블록으로 나눈다.
+            units = new MaterialTextUnitService.Extracted(
+                    materialTextUnitService.blocksFromText(result.text(), userId, null, stored.fileHash()), null);
+        }
 
         CourseMaterial material = CourseMaterial.builder()
                 .userId(userId)
                 .originalFilename(sanitizeDisplayName(file.getOriginalFilename()))
                 .storedFilename(stored.storedFilename())
                 .storagePath(stored.storagePath())
-                .contentType(file.getContentType())
+                .contentType(stored.contentType())
                 .sizeBytes(file.getSize())
                 .pageCount(units.pageCount())
                 .fileHash(stored.fileHash())

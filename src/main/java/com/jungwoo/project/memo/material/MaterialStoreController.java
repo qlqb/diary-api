@@ -93,7 +93,7 @@ public class MaterialStoreController {
     /**
      * 원본 파일을 그대로 내려준다. 자료 이름이 보이는 자리에서 "파일 열기"가 이 경로를 쓴다.
      *
-     * inline으로 보내는 이유: PDF는 브라우저가 바로 그려 준다. 다른 형식(pptx)은 inline을
+     * inline으로 보내는 이유: PDF는 브라우저가 바로 그려 준다. 다른 형식(pptx·hwp·ipynb·zip)은 inline을
      * 받아도 브라우저가 결국 내려받으므로, 여기서 형식을 갈라 헤더를 다르게 쓰지 않는다.
      * 파일명은 RFC 5987로 인코딩한다 — 한글 파일명이 대부분이라 그냥 넣으면 깨진다.
      *
