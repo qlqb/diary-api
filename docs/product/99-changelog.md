@@ -1,5 +1,85 @@
 # 99. Change Log
 
+## 2026-09-18 — AI 상담·계획·실행 연결 후속: 재계획 확정, 저장 트랜잭션, 공통 재생성, 합의 범위, 검토 상태, 변경 감지, 일일 반복
+
+직전 리뷰(API 9fe19e7 / UI 885dbee)가 지적한 7건의 결함 수정. 설계는 11번 §5-1-4, 13번 §11.1, 05번 §10.8.1, API는 `api-spec.md`.
+마이그레이션 `docs/sql/2026-09-18-plan-review-state.sql`(로컬 DB에 적용). 검증 기록은 diary-ui `docs/reviews/ai-plan-connection-completion.md`.
+
+1. **재계획 확정**: 기존 항목 조정(REDUCE/MOVE/DROP)·유지(KEEP)를 포함한 초안이 `plan_version_id` 행 수 불일치로 롤백되던 것. 이제
+   같은 `plan_key`의 다음 판을 만들고 기존 항목의 출처는 보존, 새 항목만 새 판. 조정 전용 초안도 확정. 오늘을 덮는 계획은 최신 판만.
+2. **저장 트랜잭션**: `PlanDraftService`의 내부 호출로 `@Transactional`이 적용되지 않던 것. `TransactionTemplate`으로 잠금→저장→
+   옛 초안 폐기를 하나로. 동시 대체는 하나만, 같은 키 재시도는 원본 DISMISSED여도 답한다(실 DB 경합 테스트).
+3. **공통 재생성**: 전략이 있으면 옛 `items:regenerate`로 빠져 지시·범위·합의·기존 항목 조정을 잃던 것. 서버 계약(redraftable)으로
+   가르고 서버도 위임. 옛 초안 id로 최신 초안 복구.
+4. **합의 범위**: THIS_DRAFT는 초안 흐름, PERIOD는 실제 날짜(발언 시점·사용자 시간대). 지난 합의는 "기간 지남", 날짜 없는 옛
+   항목은 "범위 미확인". 다른 대화에서는 어려움·원인(과목·항목·시점)과 겹치는 기간 합의만.
+5. **검토 상태**: 제목·항목 포함/제외를 초안 판에 저장(`review_state_json`, version, 409). 새로고침·탭 이동 복구, 다시 만든 초안에는
+   안정된 식별자의 선택만 옮기고 나머지는 사용자에게 알린다.
+6. **변경 감지**: 남는 시간 구간 대신 그것을 만든 일정을 해시. 1분 경과는 같고, 13~23→14~23·종료 시각·분할·삭제·수업 변경·자정·
+   마감 경과는 다르다.
+7. **일일 반복**: 기간 계획의 DATE_ONLY 항목이 시작일로 저장되던 결함(첫날에 7개가 몰린 원인). 날짜 보존, 그 날 안에서만 배치,
+   시간이 없으면 이유와 함께 미배치(횟수를 줄이거나 옮기지 않음). 반복 빈도(FREQUENCY)와 상한을 구분.
+
+- 평가 스크립트: §9 필수 흐름(합의→초안→검토 수정·저장→새로고침→첫 확정·배치→부분 수행·메모→원인→재계획→재계획 확정→시간표·실행
+  상태→새 상담)과 「이미 알아요」·조정 전용 시나리오, 필수 검증 실패 시 종료 코드 1.
+
+## 2026-09-17 — AI 상담·계획·실행 연결: 합의 저장, 한 회차 생성 경로, 실행 기록 반영
+
+사용자가 상황을 다시 설명하지 않아도 AI가 저장된 자료·합의·일정·실행 기록을 읽고 계획을 만든다. 설계는 11번 §5-1-3, 13번 §10.6·§11,
+15번 §7.1, 10번 §5, DB는 05번 §10.8, API는 `api-spec.md`. 마이그레이션 `docs/sql/2026-09-17-plan-briefs.sql`(로컬 DB에 적용).
+브랜치 `feat/ai-plan-connection`(두 저장소, `feat/ai-material-selection` 위).
+
+- **상담 메모리**(`ai_plan_briefs`, `PlanBriefService`): 합의 항목이 발화자(USER/ASSISTANT)·동의 상태·출처 메시지·수명(이번 초안/이번 기간)
+  을 갖는다. "좋아, 그대로"는 그 AI 제안 번호에 ACCEPT로 남는다. 상담 프롬프트 [계획 합의 현황]·[다른 대화에서 확인된 것](어려움·원인·
+  기간 합의만), 계획 호출 [상담에서 합의한 것]과 [상담 기록](발화자 포함, 요청 메시지 제외)으로 실린다. 프롬프트 규칙 23~25.
+- **한 회차 생성 경로**(`PeriodPlanDraftGenerator` 재작성): 사실·합의 수집 → 근거 지문 → 선택(또는 이전 초안과 같으면 재사용 REUSED) →
+  원문 조회 → 최종 판단(전략+항목+기존 항목 결정 한 응답) → 추가 읽기 1회 → 검증·정규화(`PlanResultNormalizer`). 상한은
+  `GenerationBudget`(정상 3·복구 1·전체 4·조회 2라운드, 설정 `plan.draft.max-*`)이고 넘으면 읽지 않고 unreadNotes에 남긴다. 생성 중
+  DB 트랜잭션 없음, 모델은 DB를 쓰지 않는다.
+- **읽는 근거**: 실행 기록(`ExecutionEvidenceService` — 기록·이동·줄임·메모, 실측/추정/미기록 구분, 계획 당시 날짜 vs 지금), 다음 수업
+  (루틴 → NEXT_CLASS, deadlineRefId로 가리키면 CLASS 마감), 이 기간에 이미 있는 계획 항목(#id → existingItems REDUCE/MOVE/DROP 조정),
+  과제 마감(ASSIGNMENT). 마감은 사실을 가리킬 때만 그 시각이고 제안 목표는 AI_PROPOSED로 표시된다. `PlanReviewService`가 시간 미기록
+  완료를 실측으로 합산하던 것을 분리(`measuredMinutes`/`estimatedMinutes`/`actualMinutesSource`).
+- **요청 키·진행·복구**: `requestKey`로 중복 클릭·재시도 dedupe(같은 키의 열린 초안 반환, 진행 중이면 409 `E409_021`), 진행 단계
+  `GET /api/plans/draft/progress`와 SSE `period_plan.progress`, 저장된 초안 다시 읽기 `GET /api/plans/proposals/{id}/draft`.
+  `plan_request_json` 2판(requestKey·briefId/briefVersion·previousProposalId·evidence 스냅샷).
+- **화면**(diary-ui): 초안 상단의 전략(목표·도달점·유지한 결정·미룬 범위·달라진 점·가정/질문 — "확인된 사실이 아니라 가정·질문이에요"),
+  "이미 있던 항목의 변경" 묶음, 생성 계측 줄, 마감 출처 문구, 진행 단계가 버튼 문구, 새로고침 뒤 초안 복구, 회고의 실측/추정 구분.
+- **검증**: 결정적 테스트 1,056개(`PlanConnectionFlowTest` T24~T29, `PlanBriefServiceTest`, `ExecutionEvidenceServiceTest`,
+  `PlanResultNormalizerTest`, `GenerationBudgetTest` 등). 실제 모델 평가 `scripts/ai-baseline/verify-ai-plan-connection-2026-09-17.py`
+  (합성 계정 6 시나리오) 결과는 diary-ui `docs/reviews/ai-plan-connection-completion.md`.
+- **알려진 한계**: 판단 경로(JUDGMENT/V1) 미연결. 상담의 기간 되묻기(화요일에 "이번 주")는 기존 규칙 그대로라 사용자가 날짜로 답해야
+  OFFER가 나온다. 자료 선택 재사용 지문에 상담 내용은 들어가지 않는다(합의는 계획 호출 입력). 실행 기록은 프로젝트당 12줄까지만 싣는다.
+
+## 2026-09-16 — 자료 형식 추가: HWP·IPYNB·ZIP
+
+- 자료로 `.hwp`(HWP 5.0), `.ipynb`, `.zip`을 올릴 수 있다. 추출·단위 규칙은 15번 §4. DB 마이그레이션 없음
+  (단위는 기존 `TEXT_BLOCK`, content type은 기존 컬럼).
+- 형식 목록·검증은 `MaterialFileFormat` 한곳. PDF·PPTX는 기존대로 content type을, 새 셋은 파일 앞머리를 본다.
+- 의존성 `kr.dogfoot:hwplib:1.1.11`(Apache-2.0, 전이 의존성 없음 — POI를 자기 패키지로 옮겨 넣어 기존 poi와 겹치지 않는다).
+## 2026-09-15 (오후) — 계획 생성의 AI 자료 선택, 이번 요청의 자료 지정, 같은 조건으로 다시 만들기
+
+같은 날 오전의 "반드시 포함 + 글자 예산"은 서버가 트리 순서로 후보를 자르는 규칙이라 AI 선택이 아니었다. 이것으로 교체한다.
+설계는 15번 문서 A12(재개정)·A18~A21·§7·§9.2·§10, 13번 문서 컨텍스트 수집 규칙, API는 `api-spec.md`.
+마이그레이션 `docs/sql/2026-09-15-plan-request-context.sql`(추가 전용, 로컬 DB에 적용).
+
+- **선택 호출 → 원문 조회 → 계획 호출**(`PlanMaterialSelector` · `PlanMaterialRetriever` · `PeriodPlanDraftGenerator`): 서버는 후보를
+  고르지 않고 프로젝트별 카탈로그(학습 항목·구간 전체, 연결 여부·역할 무관)를 만든다. 모델이 요청별 핸들로 구간·학습 항목을 고르면
+  서버가 소유·상태·해시·범위를 다시 보고 저장된 추출 단위에서 구간 원문을 읽어 계획 호출에 싣는다. 역할 순위·토픽당 2개·미연결 8개·
+  역할 제외·글자 예산 컷을 지웠다. 판단 사실(진행 중·첫 미학습·확정 과제·지정 자료·맥락·제외)은 항상 입력이지 항목 지시가 아니다.
+- **예산**: 호출별 토큰 추정(jtokkit o200k_base + 여유 10%). 선택 16,000을 넘으면 묶음·과목으로 접고 모델이 펼칠 묶음을 한 번 더
+  고른다(선택 호출 최대 2). 계획 24,000을 넘으면 원문 상한을 줄이고 뒤에서부터 원문을 뺀다. 판단 사실만으로 상한을 넘으면 400
+  `E400_034`. 실측: 여유를 뺀 추정이 실제 입력 토큰과 0.1% 안(작은 과목 47후보 FULL, 합성 6과목 828후보 FOLDED_GROUPS 2회).
+- **실패 구분**: 선택 실패 `E503_003`, 잘못된 응답 `E503_004`, 정상적인 빈 선택은 원문 없이 계획, 항목 없는 계획 `E503_005`.
+  서버 순위 폴백 없음.
+- **이번 요청의 자료 지정**: `requestedMaterialIds`·`requestedSectionIds`(자료함 [이 자료로 계획]), 지시·상담 문장의 파일 이름 해석
+  (대상 프로젝트 자료만, 같은 이름 여럿이면 초안에서 고르게 함). `origin=USER` 연결과 섞지 않는다.
+- **같은 조건으로 다시 만들기**: `ai_proposals.plan_request_json` + `POST /api/plans/proposals/{id}/redraft`. 계획 화면·상담 초안의
+  「이번만 빼기」·되돌리기·「이미 알아요」가 모두 이것으로 간다(UI). 제외 목록은 같은 작성 흐름에서만 이어진다.
+- **과제 정책 보강**: 과제가 구간만 가리켜도 그 구간의 학습 항목에 "미완료 과제의 항목" 표시(실호출에서 첫 미학습이 과제 자체인데 표시가
+  없어 과제 구현 항목이 나왔던 것). 과제 수행·작성·제출 항목은 요청이 있을 때만.
+- **알려진 한계**: 판단 경로(JUDGMENT/V1) 미연결, 상담 패널의 자료 고르기 화면 없음(파일 이름으로만), 실패한 초안 요청의 사용 기록은
+  트랜잭션과 함께 롤백, 계획 초안 경로의 일일 호출 한도 미검사(이전부터).
 ## 2026-09-16 — 자료 형식 확대(HWP·HWPX·IPYNB)와 압축 파일 가져오기
 
 설계는 `15-material-auto-analysis.md` §4·§4-2, DB는 `05-database.md`, 마이그레이션은

@@ -56,7 +56,16 @@ public class ProvenanceCollector {
 
     public ProvenanceCollector(LocalDateTime capturedAt, String timezone, LocalDate startDate,
                                LocalDate endDate, String generator, String modelName) {
-        this.generationId = "gen-" + UUID.randomUUID();
+        this("gen-" + UUID.randomUUID(), capturedAt, timezone, startDate, endDate, generator, modelName);
+    }
+
+    /**
+     * 생성 id를 호출자가 정하는 형태. 자료 선택 호출과 계획 호출을 사용량 로그에서 같은 생성으로 묶고, 예산에 맞추려고
+     * 프롬프트를 여러 번 만들어도 같은 생성 id를 쓰기 위해서다.
+     */
+    public ProvenanceCollector(String generationId, LocalDateTime capturedAt, String timezone, LocalDate startDate,
+                               LocalDate endDate, String generator, String modelName) {
+        this.generationId = generationId;
         this.capturedAt = capturedAt;
         this.timezone = timezone;
         this.startDate = startDate;

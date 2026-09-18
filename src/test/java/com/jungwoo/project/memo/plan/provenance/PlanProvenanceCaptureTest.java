@@ -99,6 +99,14 @@ class PlanProvenanceCaptureTest {
     private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
 
     private PeriodPlanDraftGenerator generator;
+    @Mock
+    private com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService evidenceService;
+    @Mock
+    private com.jungwoo.project.memo.routine.RoutineOccurrenceService occurrenceService;
+    @Mock
+    private com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    @Mock
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
     @BeforeEach
     void setUp() {
@@ -113,7 +121,28 @@ class PlanProvenanceCaptureTest {
                 planReviewService, courseMapper, topicService, courseNoteMapper, analysisMapper,
                 courseMaterialMapper, executionItemMapper, availabilityEstimateService,
                 Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")),
-                materialContextService, userContextMapper);
+                materialContextService, userContextMapper,
+                new com.jungwoo.project.memo.plan.selection.PlanMaterialSelector(aiConsultationClient, aiUsageLimitService,
+                        new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator()),
+                new com.jungwoo.project.memo.plan.selection.PlanMaterialRetriever(
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class),
+                        courseMaterialMapper,
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialTextUnitMapper.class),
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class)),
+                new com.jungwoo.project.memo.plan.selection.PlanRequestedMaterialResolver(courseMaterialMapper,
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class),
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class)),
+                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator(),
+                evidenceService, occurrenceService, planBriefService, aiMessageMapper);
+        org.mockito.Mockito.when(evidenceService.collect(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.empty(inv.getArgument(1), inv.getArgument(2)));
+        org.mockito.Mockito.when(occurrenceService.expand(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(java.util.List.of());
+        org.mockito.Mockito.when(planBriefService.load(org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> com.jungwoo.project.memo.ai.brief.PlanBriefService.View.empty(inv.getArgument(1)));
+        org.mockito.Mockito.when(aiMessageMapper.findByConversationIdAndUserId(org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyLong())).thenReturn(java.util.List.of());
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -128,7 +157,23 @@ class PlanProvenanceCaptureTest {
         when(courseNoteMapper.findByCourseIdAndUserId(anyLong(), anyLong())).thenReturn(List.of());
         when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(List.of());
         givenAvailability(List.of());
+        // 자료 선택 호출은 보인 학습 항목을 모두 고른다 — 이 스위트는 선택이 아니라 스냅샷 대응을 본다.
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt())).thenAnswer(inv -> {
+            String prompt = inv.getArgument(1);
+            java.util.List<String> handles = new java.util.ArrayList<>();
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?<![a-z0-9])(t\\d+)\\s").matcher(prompt);
+            while (m.find()) {
+                if (!handles.contains(m.group(1)) && handles.size() < selectAtMost) {
+                    handles.add(m.group(1));
+                }
+            }
+            return com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.structured(
+                    com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.selection(List.of(), handles, List.of()));
+        });
     }
+
+    /** 선택 호출이 고를 학습 항목 수 상한(기본: 전부). */
+    private int selectAtMost = Integer.MAX_VALUE;
 
     // ===== 준 것과 남은 것이 대응한다 =====
 
@@ -183,15 +228,15 @@ class PlanProvenanceCaptureTest {
      * 내용을 근거로 읽게 된다. 그것이 이 기능이 막으려는 바로 그 실패다.
      */
     @Test
-    void topicsCutByThePromptLimit_areInNeitherThePromptNorTheSnapshot() {
+    void topicsTheSelectionDidNotPick_areInNeitherThePlanPromptNorTheSnapshot() {
         List<TopicResponse> many = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            many.add(topic(200L + i, "주제" + i, i + "주차"));
+            many.add(TopicResponse.builder().topicId(200L + i).title("주제" + i).sourceLocator(i + "주차")
+                    .progressStatus(com.jungwoo.project.memo.learning.domain.TopicProgressStatus.LEARNED).build());
         }
         when(topicService.getTopicTree(anyLong(), anyLong())).thenReturn(many);
         givenOneItem();
-        // 예산을 줄여 잘리게 만든다. 항목 줄 하나가 대략 20자다.
-        materialContextService.setBudgetChars(200);
+        selectAtMost = 3;
 
         Generated generated = generator.generate(spec(null));
 
@@ -200,10 +245,9 @@ class PlanProvenanceCaptureTest {
                 .filter(s -> s.sourceType() == ProvenanceSourceType.TOPIC)
                 .map(ProvidedSource::sourceId).toList();
 
-        assertThat(recordedTopicIds).as("예산 안의 줄만 실린다").hasSizeLessThan(50).isNotEmpty();
-        assertThat(prompt).contains("입력 분량 제한으로 생략");
-        assertThat(prompt).as("잘린 주제는 모델에게 가지 않는다").doesNotContain("주제49");
-        assertThat(recordedTopicIds).as("잘린 주제는 스냅샷에도 없다").doesNotContain(249L);
+        assertThat(recordedTopicIds).as("선택 호출이 고른 항목만 계획 호출에 실린다").containsExactly(200L, 201L, 202L);
+        assertThat(prompt).as("고르지 않은 주제는 계획 모델에게 가지 않는다").doesNotContain("주제49");
+        assertThat(recordedTopicIds).as("고르지 않은 주제는 스냅샷에도 없다").doesNotContain(249L);
     }
 
     // ===== 당시 구조와 자료 파일은 모델에 준 값과 다른 자리에 남는다 =====
@@ -283,7 +327,11 @@ class PlanProvenanceCaptureTest {
         assertThat(provenance.serverCalculations())
                 .extracting(ServerCalculation::kind)
                 .containsExactly(ServerCalculation.ServerCalculationKind.AVAILABILITY_ESTIMATE,
-                        ServerCalculation.ServerCalculationKind.STUDY_BUDGET);
+                        ServerCalculation.ServerCalculationKind.STUDY_BUDGET,
+                        // 자료 선택 결과(후보가 없으면 NO_CANDIDATES)도 서버 계산으로 남는다.
+                        ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION,
+                        // 호출 수·토큰·지연·상한. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
+                        ServerCalculation.ServerCalculationKind.GENERATION_CALLS);
 
         ServerCalculation availability = provenance.serverCalculations().get(0);
         assertThat(availability.providedToModel()).isTrue();
@@ -326,7 +374,7 @@ class PlanProvenanceCaptureTest {
         assertThat(evidence.generationId()).isEqualTo(generated.provenance().generationId());
 
         // ref 검증 실패로 모델을 다시 부르지 않는다 — 되묻기 루프를 만들지 않는다.
-        verify(aiConsultationClient, times(1)).streamTurn(any(), any(), anyInt());
+        verify(aiConsultationClient, times(1)).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt());
     }
 
     @Test
@@ -403,7 +451,7 @@ class PlanProvenanceCaptureTest {
 
     private void givenAiItems(String itemsJson) {
         String json = "{\"title\":\"이번 주 계획\",\"goalSummary\":null,\"items\":" + itemsJson + "}";
-        when(aiConsultationClient.streamTurn(any(), any(), anyInt())).thenReturn(Flux.just(
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt())).thenReturn(Flux.just(
                 new ChatResponse(List.of(new Generation(new AssistantMessage(
                         "초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + json))))));
     }
@@ -411,7 +459,7 @@ class PlanProvenanceCaptureTest {
     /** 모델에 실제로 나간 사용자 프롬프트. 스냅샷을 대조할 유일한 기준이다. */
     private String capturedPrompt() {
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), captor.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), captor.capture(), anyInt());
         return captor.getValue();
     }
 }

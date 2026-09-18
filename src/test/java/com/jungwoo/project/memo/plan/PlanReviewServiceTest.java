@@ -182,6 +182,34 @@ class PlanReviewServiceTest {
 
     // ===== 스냅샷 밖 =====
 
+    /**
+     * 시간을 적지 않은 완료 항목은 예정 시간으로 세되 실측이라고 부르지 않는다. 학습 속도·원인 분석은 measuredMinutes만 본다.
+     */
+    @Test
+    void completedMinutes_separatesMeasuredFromEstimated_andSaysWhichIsWhich() {
+        givenPlan(snapshot(1L, "측정", LocalDate.of(2026, 8, 25), 40), snapshot(2L, "미기록", LocalDate.of(2026, 8, 26), 30));
+        givenCurrent(item(1L, ExecutionStatus.DONE, PlacementType.DATE_ONLY, LocalDate.of(2026, 8, 25)),
+                item(2L, ExecutionStatus.DONE, PlacementType.DATE_ONLY, LocalDate.of(2026, 8, 26)));
+        givenRecords(record(1L, ExecutionRecordOutcome.COMPLETED, 25, LocalDateTime.of(2026, 8, 25, 21, 0)),
+                record(2L, ExecutionRecordOutcome.COMPLETED, null, LocalDateTime.of(2026, 8, 26, 21, 0)));
+
+        PlanReviewResponse review = service.review(USER_ID, PLAN_VERSION_ID);
+
+        assertThat(review.getMeasuredMinutes()).isEqualTo(25);
+        assertThat(review.getEstimatedMinutes()).isEqualTo(30);
+        assertThat(review.getUnmeasuredDoneCount()).isEqualTo(1);
+        assertThat(review.getCompletedMinutes()).isEqualTo(55);
+        assertThat(review.getItems().get(0).getActualMinutesSource()).isEqualTo("MEASURED");
+        assertThat(review.getItems().get(1).getActualMinutesSource()).isEqualTo("ESTIMATED");
+        assertThat(review.getItems().get(1).getActualMinutes()).isNull();
+
+        when(planVersionMapper.findLatestConfirmed(USER_ID)).thenReturn(PlanVersion.builder()
+                .planVersionId(PLAN_VERSION_ID).startDate(START).endDate(END).title("이번 주").build());
+        String summary = service.summarizeLatestForPrompt(USER_ID);
+        assertThat(summary).contains("실제 측정 25분").contains("시간 미기록 1건(예정 합 30분, 추정)")
+                .doesNotContain("실제 55분");
+    }
+
     @Test
     void itemInPeriodButNotInSnapshot_isOutsidePlan() {
         givenPlan(snapshot(1L, "계획 항목", LocalDate.of(2026, 8, 25), 40));

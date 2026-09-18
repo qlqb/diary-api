@@ -106,6 +106,7 @@ public class AiProposalPersistenceService {
                     .scheduledEndAt(payload.scheduledEndAt())
                     .deadlineAt(payload.deadlineAt())
                     .deadlineDate(payload.deadlineDate())
+                    .deadlineSource(payload.deadlineSource())
                     .topicId(payload.topicId())
                     .actionType(payload.actionType())
                     .doneCriteria(payload.doneCriteria())

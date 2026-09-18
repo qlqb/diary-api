@@ -433,7 +433,7 @@
          WHERE execution_item_id = #{executionItemId}
            AND user_id           = #{userId}
            AND is_deleted        = 0
-           AND placement_type    = 'UNSCHEDULED'
+           AND placement_type   IN ('UNSCHEDULED', 'DATE_ONLY')
            AND status            = 'PLANNED'
            AND version           = #{version}
     </update>
@@ -472,6 +472,22 @@
               )
         ORDER BY scheduled_date IS NULL,
                  scheduled_date ASC, order_index ASC, execution_item_id ASC
+    </select>
+
+    <!-- 날짜는 정해졌고 시각만 없는 계획 항목. 배치는 그 날짜 안에서만 시각을 고른다 — 날짜를 옮기지 않는다. -->
+    <select id="findDateOnlyByPlanKey" resultMap="executionItemResultMap">
+        SELECT *
+        FROM execution_items
+        WHERE user_id        = #{userId}
+          AND is_deleted     = 0
+          AND placement_type = 'DATE_ONLY'
+          AND status         = 'PLANNED'
+          AND plan_version_id IN (
+                SELECT plan_version_id FROM plan_versions
+                 WHERE plan_key = #{planKey} AND user_id = #{userId}
+              )
+          AND scheduled_date BETWEEN #{windowStart} AND #{windowEnd}
+        ORDER BY scheduled_date ASC, priority = 'MUST' DESC, order_index ASC, execution_item_id ASC
     </select>
 
     <select id="findUnscheduledByPlanKey" resultMap="executionItemResultMap">

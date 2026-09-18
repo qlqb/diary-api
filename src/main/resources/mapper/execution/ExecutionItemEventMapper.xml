@@ -29,6 +29,17 @@
         ORDER BY occurred_at ASC, execution_item_event_id ASC
     </select>
 
+    <select id="findByExecutionItemIds" resultMap="executionItemEventResultMap">
+        SELECT *
+        FROM execution_item_events
+        WHERE user_id = #{userId}
+          AND execution_item_id IN
+        <foreach item="id" collection="executionItemIds" open="(" separator="," close=")">
+            #{id}
+        </foreach>
+        ORDER BY execution_item_id ASC, occurred_at ASC, execution_item_event_id ASC
+    </select>
+
     <insert id="insert" useGeneratedKeys="true" keyProperty="executionItemEventId">
         INSERT INTO execution_item_events (
             user_id,

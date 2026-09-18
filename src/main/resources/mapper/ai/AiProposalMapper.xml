@@ -18,6 +18,8 @@
         <result property="planTargetMinutes"  column="plan_target_minutes"/>
         <result property="planStrategyJson"   column="plan_strategy_json"/>
         <result property="planProvenanceJson" column="plan_provenance_json"/>
+        <result property="planRequestJson"    column="plan_request_json"/>
+        <result property="reviewStateJson"    column="review_state_json"/>
         <result property="status"          column="status"/>
         <result property="createdAt"       column="created_at"/>
         <result property="expiresAt"       column="expires_at"/>
@@ -91,6 +93,66 @@
                plan_target_minutes = #{planTargetMinutes},
                plan_strategy_json  = #{planStrategyJson},
                plan_provenance_json = #{planProvenanceJson}
+         WHERE proposal_id = #{proposalId}
+           AND user_id     = #{userId}
+    </update>
+
+    <!--
+      같은 요청 키의 열린 초안. plan_request_json 안의 requestKey를 본다 — 컬럼을 늘리지 않는다(요청 키는 생성 직후
+      잠깐만 뜻이 있다). MariaDB 10.2+의 JSON_VALUE.
+    -->
+    <select id="findLatestOpenPlanProposal" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE user_id = #{userId}
+          AND status  = 'PROPOSED'
+          AND plan_start_date IS NOT NULL
+        ORDER BY proposal_id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findProposedByRequestKey" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE user_id = #{userId}
+          AND status  = 'PROPOSED'
+          AND plan_request_json IS NOT NULL
+          AND JSON_VALUE(plan_request_json, '$.requestKey') = #{requestKey}
+        ORDER BY proposal_id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findProposedReplacing" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE user_id = #{userId}
+          AND status  = 'PROPOSED'
+          AND plan_request_json IS NOT NULL
+          AND JSON_VALUE(plan_request_json, '$.previousProposalId') = #{previousProposalId}
+        ORDER BY proposal_id DESC
+        LIMIT 1
+    </select>
+
+    <!--
+      검토 상태. 열린(PROPOSED) 초안에만 쓰고, 저장된 version이 기대값과 다르면(늦은 저장·다른 탭) 0행이다.
+      expectedVersion이 null이면 아직 저장된 상태가 없을 때만 쓴다.
+    -->
+    <update id="updateReviewState">
+        UPDATE ai_proposals
+           SET review_state_json = #{reviewStateJson}
+         WHERE proposal_id = #{proposalId}
+           AND user_id     = #{userId}
+           AND status      = 'PROPOSED'
+           AND <choose>
+                 <when test="expectedVersion == null">review_state_json IS NULL</when>
+                 <otherwise>JSON_VALUE(review_state_json, '$.version') = #{expectedVersion}</otherwise>
+               </choose>
+    </update>
+
+    <!-- 초안을 만든 요청. 같은 조건으로 다시 만들기(redraft)가 읽는다. -->
+    <update id="updatePlanRequest">
+        UPDATE ai_proposals
+           SET plan_request_json = #{planRequestJson}
          WHERE proposal_id = #{proposalId}
            AND user_id     = #{userId}
     </update>

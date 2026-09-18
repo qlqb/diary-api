@@ -33,7 +33,8 @@ public class PlanVersion {
 
     /**
      * 같은 계획의 여러 판(version)을 묶는 키. 지금은 확정할 때마다 새 UUID가 생기고
-     * version은 항상 1이다 — 재계획은 1차 범위 밖이다(11-period-plan.md §1-5).
+     * 처음 확정하면 1이고, 기존 계획 항목을 조정·유지하는 재계획을 확정하면 같은 plan_key의 다음 판이다
+     * (11-period-plan.md §5-1-3, 2026-09-17). 기존 항목의 출처(execution_items.plan_version_id)는 처음 판 그대로다.
      */
     private String planKey;
 

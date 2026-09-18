@@ -103,6 +103,83 @@ public class PlanDraftResponse {
      */
     private List<PendingMaterial> pendingMaterials;
 
+    /**
+     * 이번 생성에서 모델이 고른 자료와 서버가 읽어 넣은 원문 범위, 검토하지 못한 범위. 자료 선택을 거치지 않은
+     * 경로(v0·판단)는 null.
+     */
+    private com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary materialSelection;
+
+    /** 이 초안을 만든 요청 중 화면이 알아야 하는 것. 다시 만들기(redraft)는 서버에 남은 요청을 쓴다. */
+    private RequestContextView requestContext;
+
+    /**
+     * 이번 생성의 호출·토큰·지연과 상한, 자료 선택 재사용 여부. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
+     * 저장된 초안을 다시 읽을 때는 근거 스냅샷의 서버 계산(GENERATION_CALLS)에서 복원한다.
+     */
+    private GenerationView generation;
+
+    /** 이 초안이 대체한 초안과, 서버가 근거 스냅샷을 비교해 확인한 달라진 점. 처음 만든 초안이면 null. */
+    private PreviousDraftView previousDraft;
+
+    /** 상담 합의(ai_plan_briefs)에서 만든 초안이면 그 합의와 판. 계획 화면이면 null. */
+    private Long briefId;
+    private Integer briefVersion;
+
+    /** 저장된 검토 상태(제목·제외·편집값·답). 새 초안은 null. 새로고침 복구가 이 값으로 화면을 되돌린다. */
+    private PlanReviewState reviewState;
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class GenerationView {
+        private int normalCalls;
+        private int recoveryCalls;
+        private int maxNormalCalls;
+        private int maxTotalCalls;
+        private int retrievalRounds;
+        private int maxRetrievalRounds;
+        private int inputTokens;
+        private int outputTokens;
+        private long elapsedMs;
+        private boolean selectionReused;
+        private List<String> calls;
+    }
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class PreviousDraftView {
+        private Long proposalId;
+        private List<String> changes;
+    }
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class RequestContextView {
+        /** CONVERSATION / PLAN_SCREEN */
+        private String source;
+        private List<Long> courseIds;
+        /** 「이번만 빼기」 목록(제목은 알 때만). 다시 만들 때 이 목록을 고쳐 보낸다. */
+        private List<ExcludedTopic> excludedTopics;
+        /** 이번 요청에서 지정한 자료(화면 지정 + 지시 문장에서 찾은 것). */
+        private List<com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary.RequestedMaterialView> requestedMaterials;
+        /** 같은 조건으로 다시 만들 수 있는가(요청이 저장된 초안인가). */
+        private boolean redraftable;
+    }
+
+    @lombok.Getter
+    @lombok.Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ExcludedTopic {
+        private Long topicId;
+        private String title;
+    }
+
     @lombok.Getter
     @lombok.Builder
     @NoArgsConstructor

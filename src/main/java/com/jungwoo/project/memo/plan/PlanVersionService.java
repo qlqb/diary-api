@@ -43,13 +43,32 @@ public class PlanVersionService {
      */
     @Transactional(readOnly = true)
     public List<PlanVersion> findCoveringDate(Long userId, LocalDate date, Long courseId) {
-        List<PlanVersion> covering = planVersionMapper.findCoveringDate(userId, date);
+        List<PlanVersion> covering = latestPerPlanKey(planVersionMapper.findCoveringDate(userId, date));
         if (courseId == null) {
             return covering;
         }
         return covering.stream()
                 .filter(plan -> snapshotCodec.containsCourse(plan.getItemsSnapshot(), courseId))
                 .toList();
+    }
+
+    /**
+     * 같은 plan_key의 판이 여럿 덮이면(재계획) 최신 판 하나만 남긴다. 옛 판은 이력이지 지금의 계획이 아니다 —
+     * 화면·상담이 같은 계획을 두 줄로 보면 "어느 것이 지금 계획인가"를 사용자가 골라야 한다. 순서는 보존한다.
+     */
+    public static List<PlanVersion> latestPerPlanKey(List<PlanVersion> plans) {
+        java.util.Map<String, PlanVersion> latest = new java.util.HashMap<>();
+        for (PlanVersion plan : plans) {
+            if (plan.getPlanKey() == null) {
+                continue; // 키가 없는 판(옛 데이터·픽스처)은 묶지 않는다
+            }
+            PlanVersion known = latest.get(plan.getPlanKey());
+            if (known == null || (plan.getVersion() != null && known.getVersion() != null
+                    && plan.getVersion() > known.getVersion())) {
+                latest.put(plan.getPlanKey(), plan);
+            }
+        }
+        return plans.stream().filter(plan -> plan.getPlanKey() == null || latest.get(plan.getPlanKey()) == plan).toList();
     }
 
     /**

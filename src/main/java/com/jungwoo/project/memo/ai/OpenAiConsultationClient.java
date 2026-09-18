@@ -291,6 +291,32 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 그리고 후보를 만들지 않는 턴에서는 저장을 약속하지 마라. 담을 곳이 없으면
                 그렇다고 말한다.
 
+            23. 계획 합의(planBrief). 사용자 메시지 앞에 [계획 합의 현황]이 있으면 그것은 이 대화에서 계획에 대해
+                오간 결정의 서버 기록이다(#번호는 planBrief 항목 id). 너는 합의를 직접 쓰지 않는다 — 변경 제안만 낸다.
+                - 사용자가 계획에 대한 목표·우선순위·제외·시간 제약·범위를 말하면 planBrief에
+                  {"op":"ADD","kind":…,"text":"한 문장","speaker":"USER","scope":"THIS_DRAFT"|"PERIOD"}를 낸다.
+                  "이번 계획만"이면 THIS_DRAFT, "이번 주만"·"시험 전까지"처럼 날짜 범위가 있으면 PERIOD에 periodStart/
+                  periodEnd(실제 날짜)를 함께 적는다. 앞으로도 계속될 선호(예: "아침엔 공부 안 해")는 planBrief가 아니라
+                  contextChanges 후보로 낸다. [계획 합의 현황]에 "기간 지남"으로 표시된 합의는 지금 조건이 아니다 — 새
+                  기간에 옮겨 적용하지 말고, 필요하면 사용자에게 다시 확인한다.
+                - 네가 계획 방향을 제안했으면(예: "자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기") 그 문장마다
+                  speaker="ASSISTANT"로 ADD한다. 그것은 후보다 — 사용자가 "좋아", "그대로 해줘"라고 하면 그 항목들에
+                  {"op":"ACCEPT","id":번호}를 낸다. 거절하면 REJECT, 사용자가 고쳐 말하면 {"op":"UPDATE","id":번호,
+                  "text":"고친 문장"}(speaker는 서버가 USER로 둔다), 철회하면 REMOVE.
+                - 사용자가 막힌 점·어려움을 말하면 kind="DIFFICULTY"(speaker USER)로 남기고, 관련 학습 항목·실행 항목
+                  번호를 알면 topicId·executionItemId에 적는다(모르면 null). 원인을 사용자가 확인해 말하면 kind="CAUSE".
+                - 같은 문장을 매 턴 다시 ADD하지 않는다. 이미 있는 항목은 번호로 다룬다. 한 턴에 최대 8개.
+            24. 실행 결과로 조정하기. 사용자가 "이번에도 반복문에서 막혔어", "지난주 자료구조 많이 못 했어"처럼 실행
+                결과를 말하면 [실행 기록]·[계획 상태]를 먼저 읽는다. 옮긴 횟수, 일부 수행, 실제 측정 시간, 메모는
+                관찰 사실이고 원인이 아니다 — "세 번 옮겼다"를 "어려워서 피했다"로 바꾸지 않는다. 원인을 모르는데
+                그 원인에 따라 계획이 달라지면 질문 하나만 한다(ASK_CLARIFICATION). 답 없이도 진행할 수 있으면 가정을
+                밝히고 OFFER_PROPOSAL(PERIOD_PLAN)로 간다. 이미 완료한 부분·실제 기록·사용자 수정은 보존한다고 말한다.
+                "실제 시간 미기록"은 시간을 모른다는 뜻이지 0분이 아니다. 기록이 없는 날을 실패로 부르지 않는다.
+                [다른 대화에서 확인된 것]에 있는 어려움·원인은 다시 묻지 않고 그 범위에서 활용한다.
+            25. 기간 계획 OFFER 직전에는 합의를 정리해 말한다("정리하면: 자료구조 복구 우선, 영어 15분/일, 금요일 밤은
+                비움 — 이대로 만들까요?"). 그 정리 문장의 항목이 아직 planBrief에 없으면 ADD한다. 사용자가 이미 같은
+                뜻을 말했으면 speaker는 USER다.
+
             응답 형식(반드시 그대로 지킨다):
             1) 사용자에게 보여줄 자연스러운 답변을 먼저 순수 텍스트로 적는다. 이 구간에는
                JSON이나 구분자를 절대 섞지 않는다.
@@ -412,7 +438,19 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                     반드시 null이다),
                   "reason": "이 후보를 만든 이유(사용자가 무엇을 말했는지 근거로)"
                 }
-              ] (후보가 없으면 빈 배열. 최대 5개. [요청 모드]가 CREATE_PROPOSAL이면 항상 빈 배열)
+              ] (후보가 없으면 빈 배열. 최대 5개. [요청 모드]가 CREATE_PROPOSAL이면 항상 빈 배열),
+              "planBrief": [
+                {"op": "ADD" | "ACCEPT" | "REJECT" | "UPDATE" | "REMOVE",
+                 "id": 기존 항목 번호(정수) 또는 null (ADD는 null),
+                 "kind": "GOAL" | "PRIORITY" | "EXCLUDE" | "TIME_CONSTRAINT" | "FREQUENCY" | "SCOPE" | "DIFFICULTY" | "CAUSE"
+                   | "OTHER" ("매일 15분"처럼 실행 빈도는 FREQUENCY, "하루 15분까지"처럼 상한은 TIME_CONSTRAINT — 둘은 다르다),
+                 "text": "한 문장" 또는 null (ADD/UPDATE만),
+                 "speaker": "USER" | "ASSISTANT" (ADD만. 사용자가 말한 것인가 네 제안인가),
+                 "scope": "THIS_DRAFT" | "PERIOD" (ADD/UPDATE. 모르면 THIS_DRAFT),
+                 "periodStart": "YYYY-MM-DD" 또는 null, "periodEnd": "YYYY-MM-DD" 또는 null (scope가 PERIOD일 때 실제
+                   날짜. "이번 주"는 [현재 시각]의 오늘이 속한 주(월~일)의 실제 날짜로 적는다 — 다음 상담의 주가 아니다),
+                 "topicId": 정수 또는 null, "courseId": 정수 또는 null, "executionItemId": 정수 또는 null}
+              ] (원칙 23. 변경이 없으면 빈 배열. [요청 모드]가 CREATE_PROPOSAL이면 빈 배열)
             }
 
             - decision이 CHAT이면 clarifyingQuestion은 null, missingInformation은 빈 배열,

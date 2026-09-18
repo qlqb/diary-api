@@ -81,6 +81,18 @@ public class AiProposal {
      */
     private String planProvenanceJson;
 
+    /**
+     * 이 초안을 만든 요청(기간·강도·범위·지시·이번만 제외·지정 자료). 같은 조건으로 다시 만들 때 쓴다.
+     * 2026-09-15 전에 만든 초안은 NULL이고, 그 초안은 다시 만들기 대신 새로 만들기를 안내한다.
+     */
+    private String planRequestJson;
+
+    /**
+     * 사용자가 검토하며 고친 상태(제목·항목 포함/제외·직접 편집값·미해결 질문의 답). 실행 데이터가 아니다 — 확정할 때
+     * 화면이 같은 값으로 적용한다. 2026-09-18 전 초안은 NULL.
+     */
+    private String reviewStateJson;
+
     private AiProposalStatus status;
 
     private LocalDateTime createdAt;

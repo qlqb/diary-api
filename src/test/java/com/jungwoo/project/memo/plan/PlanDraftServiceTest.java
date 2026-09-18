@@ -129,6 +129,14 @@ class PlanDraftServiceTest {
 
     @Mock
     private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+    @Mock
+    private com.jungwoo.project.memo.plan.evidence.ExecutionEvidenceService evidenceService;
+    @Mock
+    private com.jungwoo.project.memo.routine.RoutineOccurrenceService occurrenceService;
+    @Mock
+    private com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    @Mock
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
     private PlanDraftService service;
 
@@ -147,7 +155,25 @@ class PlanDraftServiceTest {
                 aiUsageLimitService, planReviewService, courseMapper, topicService, courseNoteMapper,
                 analysisMapper, courseMaterialMapper, executionItemMapper, availabilityEstimateService,
                 Clock.fixed(Instant.parse("2026-08-23T09:00:00Z"), ZoneId.of("UTC")),
-                materialContextService, userContextMapper);
+                materialContextService, userContextMapper,
+                new com.jungwoo.project.memo.plan.selection.PlanMaterialSelector(aiConsultationClient, aiUsageLimitService,
+                        new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator()),
+                new com.jungwoo.project.memo.plan.selection.PlanMaterialRetriever(
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class),
+                        courseMaterialMapper,
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialTextUnitMapper.class),
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class)),
+                new com.jungwoo.project.memo.plan.selection.PlanRequestedMaterialResolver(courseMaterialMapper,
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialLinkMapper.class),
+                        org.mockito.Mockito.mock(com.jungwoo.project.memo.material.MaterialSectionMapper.class)),
+                new com.jungwoo.project.memo.plan.selection.PromptTokenEstimator(),
+                evidenceService, occurrenceService, planBriefService, aiMessageMapper);
+        when(evidenceService.collect(anyLong(), any(), any(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.empty(inv.getArgument(1), inv.getArgument(2)));
+        when(occurrenceService.expand(anyLong(), any(), any())).thenReturn(List.of());
+        when(planBriefService.load(anyLong(), any())).thenAnswer(inv ->
+                com.jungwoo.project.memo.ai.brief.PlanBriefService.View.empty(inv.getArgument(1)));
+        when(aiMessageMapper.findByConversationIdAndUserId(any(), anyLong())).thenReturn(List.of());
         ReflectionTestUtils.setField(generator, "maxCompletionTokens", 2000);
         ReflectionTestUtils.setField(generator, "requestTimeoutSeconds", 90);
         ReflectionTestUtils.setField(generator, "modelName", "test-model");
@@ -155,7 +181,8 @@ class PlanDraftServiceTest {
         service = new PlanDraftService(generator, aiConsultationClient, aiProposalService, aiProposalMapper,
                 planVersionService, new PlanStrategyCodec(), blockGeneratorV0,
                 planningContextBuilder, planJudgmentService, contextChangeSuggestionService, planItemService,
-                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService);
+                new com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec(), materialContextService,
+                new PlanGenerationProgress(), planBriefService, TestTransactions.template());
 
         when(aiConsultationClient.isConfigured()).thenReturn(true);
         when(planVersionService.resolveIntensity(anyLong(), any())).thenReturn(PlanIntensity.NORMAL);
@@ -171,6 +198,10 @@ class PlanDraftServiceTest {
         when(aiProposalService.createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any()))
                 .thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
         givenAvailableMinutes(DEFAULT_AVAILABLE);
+        // 자료 선택 호출(후보가 있을 때만 불린다)은 기본적으로 정상적인 빈 선택으로 답한다.
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt()))
+                .thenAnswer(inv -> com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.structured(
+                        com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.emptySelection()));
     }
 
     /** 기간 안에 이만큼 남는다고 가용시간 서비스가 답한다. 0이면 구간이 없다. */
@@ -203,7 +234,7 @@ class PlanDraftServiceTest {
         assertThat(draft.getTargetMinutesReason()).isNull();
         assertThat(draft.getAvailabilityConfidenceSummary()).contains("기본 시간대");
         verify(aiProposalMapper).updatePlanMetadata(
-                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), isNull(), any());
+                eq(77L), eq(USER_ID), eq(START), eq(END), eq(PlanIntensity.NORMAL), eq(390), any(), any());
     }
 
     @Test
@@ -314,10 +345,10 @@ class PlanDraftServiceTest {
         assertThat(draft.getEstimatedAvailableMinutes()).isEqualTo(7980);
         // 저장되는 목표도 깎인 값이다 — 스냅샷과 화면이 어긋나지 않는다.
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), any(), any(),
-                eq(PlanIntensity.FOCUSED), eq(3600), isNull(), any());
+                eq(PlanIntensity.FOCUSED), eq(3600), any(), any());
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
         assertThat(userPrompt.getValue())
                 .contains("[분량 안내]")
                 .contains("기간 전체를 빈틈없이 채우려 하지 말고");
@@ -335,7 +366,7 @@ class PlanDraftServiceTest {
         // 0분을 담지 못했다는 줄을 그리지 않도록 null이다.
         assertThat(draft.getUncoveredMinutes()).isNull();
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
         assertThat(userPrompt.getValue()).doesNotContain("[분량 안내]");
     }
 
@@ -346,7 +377,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
         assertThat(userPrompt.getValue())
                 .contains("항목은 최대 30개다. 이것은 만들어야 할 개수가 아니라 넘으면 안 되는 최대치다")
                 .contains("각 작업에 실제로 필요한 길이를 먼저 정한 다음 필요한 만큼만 만들어라")
@@ -360,7 +391,7 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request("시험 전까지 자료구조 위주로"));
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
         assertThat(userPrompt.getValue())
                 .contains("추정 남는 시간은 약 925분")
                 .contains("강도 NORMAL(남는 시간의 65%) 기준 학습 예산은 600분")
@@ -384,11 +415,12 @@ class PlanDraftServiceTest {
     void promptCarriesTopicsAndScheduleFromAppliedAnalyses() {
         givenAiResponse(BASELINE, null);
         when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(List.of(
-                TopicResponse.builder().title("파이썬 기초").sourceLocator("2주차")
-                        .children(List.of(TopicResponse.builder()
+                TopicResponse.builder().topicId(61L).title("파이썬 기초").sourceLocator("2주차")
+                        .progressStatus(TopicProgressStatus.NOT_STARTED)
+                        .children(List.of(TopicResponse.builder().topicId(62L).parentTopicId(61L)
                                 .title("변수·연산자·제어문").sourceLocator("2주차").children(List.of()).build()))
                         .build(),
-                TopicResponse.builder().title("NumPy").sourceLocator("3주차").children(List.of()).build()));
+                TopicResponse.builder().topicId(63L).title("NumPy").sourceLocator("3주차").children(List.of()).build()));
         when(analysisMapper.findAppliedByCourseIdAndUserId(6L, USER_ID)).thenReturn(List.of(
                 CourseMaterialAnalysis.builder().analysisId(1L)
                         .analysisJson("{\"keyDates\":[{\"title\":\"개강일\",\"date\":null,"
@@ -398,61 +430,44 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), userPrompt.capture(), anyInt());
+        ArgumentCaptor<String> selectionPrompt = ArgumentCaptor.forClass(String.class);
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), selectionPrompt.capture(), anyInt());
+        // 모든 학습 항목은 선택 호출의 후보로 보인다(항목 옆 괄호가 "몇 주차 내용"을 그대로 전달한다).
+        assertThat(selectionPrompt.getValue())
+                .contains("파이썬 기초 (2주차)")
+                .contains("변수·연산자·제어문 (2주차)")
+                .contains("NumPy (3주차)");
         assertThat(userPrompt.getValue())
-                // 항목 옆 괄호가 "몇 주차 내용"을 그대로 전달한다.
-                .contains("- 파이썬 기초 (2주차)")
-                .contains("  - 변수·연산자·제어문 (2주차)")
-                .contains("- NumPy (3주차)")
+                // 첫 미학습은 선택과 무관하게 판단 사실로 계획 호출에 남는다.
+                .contains("- 파이썬 기초 (2주차) · ← 첫 미학습")
                 // 개강일이 있어야 모델이 지금 몇 주차인지 계산할 수 있다.
                 .contains("개강일: 1주차: 개강일(8/25)")
                 .contains("몇 주차인지 계산하고")
                 .contains("당겨오지 마라");
     }
 
+    /**
+     * 기본 경로(계획 화면과 상담이 함께 쓰는 PlanDraftService.generate)가 자료 선택 호출 → 계획 호출을 실제로 탄다(T11).
+     * 선택 호출은 후보가 있을 때만 하고, 두 호출은 시스템 프롬프트가 다르다.
+     */
     @Test
-    void topicLinesAreBudgetedPerCourse_butInProgressAndFirstUnlearnedAlwaysSurvive() {
+    void defaultAiPath_runsTheMaterialSelectionCallBeforeThePlanCall() {
         givenAiResponse(BASELINE, null);
-        List<TopicResponse> many = new java.util.ArrayList<>();
-        for (int i = 1; i <= 55; i++) {
-            many.add(TopicResponse.builder().topicId((long) i).title("항목 " + i)
-                    .progressStatus(i <= 30 ? TopicProgressStatus.LEARNED
-                            : i == 55 ? TopicProgressStatus.IN_PROGRESS : TopicProgressStatus.NOT_STARTED)
-                    .children(List.of()).build());
-        }
-        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
-        // 예산을 줄여 "넘치면 어떻게 되나"를 본다. 기본값(12,000자)에서는 55개가 다 들어간다.
-        materialContextService.setBudgetChars(220);
+        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(List.of(
+                TopicResponse.builder().topicId(61L).title("파이썬 기초").progressStatus(TopicProgressStatus.NOT_STARTED)
+                        .children(List.of()).build()));
 
-        service.createDraft(USER_ID, request(null));
+        PlanDraftResponse draft = service.createDraft(USER_ID, request("이번 주는 개념 위주"));
 
-        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
-        // 고정 개수 컷이 없다: 첫 미학습(31)부터 순서대로 예산만큼, 진행 중(55)은 맨 뒤여도 반드시. 학습 완료(1~30)는 예산 밖.
-        assertThat(userPrompt.getValue())
-                .contains("- 항목 31 · ← 첫 미학습")
-                .contains("- 항목 32")
-                .contains("- 항목 55 · 진행 중")
-                .doesNotContain("- 항목 1 ")
-                .doesNotContain("- 항목 50")
-                .contains("개(입력 분량 제한으로 생략");
-    }
-
-    @Test
-    void withTheDefaultBudget_evenTheLargestRealCourseIsNotCut() {
-        givenAiResponse(BASELINE, null);
-        List<TopicResponse> many = new java.util.ArrayList<>();
-        for (int i = 1; i <= 77; i++) {
-            many.add(TopicResponse.builder().topicId((long) i).title("웹서버프로그래밍 " + i + "주차 실습과 과제 안내")
-                    .sourceLocator(i + "주차").children(List.of()).build());
-        }
-        when(topicService.getTopicTree(USER_ID, 6L)).thenReturn(many);
-
-        service.createDraft(USER_ID, request(null));
-
-        ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(any(), userPrompt.capture(), anyInt());
-        assertThat(userPrompt.getValue()).contains("- 웹서버프로그래밍 77주차").doesNotContain("입력 분량 제한으로 생략");
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(aiConsultationClient);
+        order.verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt());
+        order.verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt());
+        assertThat(draft.getMaterialSelection()).isNotNull();
+        assertThat(draft.getMaterialSelection().selectionCalls()).isEqualTo(1);
+        assertThat(draft.getMaterialSelection().status()).isEqualTo("EMPTY");
+        assertThat(draft.getRequestContext().isRedraftable()).isTrue();
+        verify(aiProposalMapper).updatePlanRequest(eq(77L), eq(USER_ID), org.mockito.ArgumentMatchers.contains("이번 주는 개념 위주"));
     }
 
     @Test
@@ -553,7 +568,8 @@ class PlanDraftServiceTest {
         service.createDraft(USER_ID, request(null));
 
         ArgumentCaptor<String> systemPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(systemPrompt.capture(), any(), anyInt());
+        verify(aiConsultationClient).streamTurn(org.mockito.ArgumentMatchers.argThat((String x) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(x)), any(), anyInt());
+        verify(aiConsultationClient, org.mockito.Mockito.atLeastOnce()).streamTurn(systemPrompt.capture(), any(), anyInt());
         com.jungwoo.project.memo.ai.PlanItemPromptRules.assertCarriesRules(systemPrompt.getValue());
         // 이 경로에서 출처로 삼을 수 있는 것은 [대상 프로젝트]에 실린 것뿐이다.
         assertThat(systemPrompt.getValue())
@@ -575,7 +591,7 @@ class PlanDraftServiceTest {
 
         ArgumentCaptor<String> systemPrompt = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> userPrompt = ArgumentCaptor.forClass(String.class);
-        verify(aiConsultationClient).streamTurn(systemPrompt.capture(), userPrompt.capture(), anyInt());
+        verify(aiConsultationClient, org.mockito.Mockito.atLeastOnce()).streamTurn(systemPrompt.capture(), userPrompt.capture(), anyInt());
         com.jungwoo.project.memo.ai.PlanItemPromptRules.assertCarriesDurationRules(systemPrompt.getValue());
         assertThat(userPrompt.getValue())
                 .contains("이 목표는 계획 예산이지 소진할 할당량이 아니다")
@@ -608,7 +624,7 @@ class PlanDraftServiceTest {
                   ]
                 }
                 """;
-        when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt()))
                 .thenReturn(Flux.just(chatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + json)));
 
         service.createDraft(USER_ID, request(null));
@@ -620,6 +636,35 @@ class PlanDraftServiceTest {
                 "마감이 있어서");
         // 짧은 항목(15분)은 이 경로에서 손대지 않고 그대로 넘긴다 — 범위 검사는 AiProposalService가 한다.
         assertThat(captor.getValue()).extracting(ProposalItem::expectedMinutes).containsExactly(40, 15);
+    }
+
+    /**
+     * 같은 요청 키로 다시 누르면 생성이 두 번 돌지 않는다 — 이미 만든 열린 초안을 저장된 모양으로 돌려준다.
+     */
+    @Test
+    void sameRequestKey_returnsTheExistingOpenDraft_withoutCallingTheModelAgain() {
+        givenAiResponse(BASELINE, null);
+        when(aiProposalMapper.findProposedByRequestKey(USER_ID, "key-1")).thenReturn(null);
+        PlanDraftRequest first = request(null);
+        first.setRequestKey("key-1");
+        service.createDraft(USER_ID, first);
+
+        com.jungwoo.project.memo.ai.domain.AiProposal stored = com.jungwoo.project.memo.ai.domain.AiProposal.builder()
+                .proposalId(77L).userId(USER_ID).status(com.jungwoo.project.memo.ai.domain.AiProposalStatus.PROPOSED)
+                .planStartDate(START).planEndDate(END).planIntensity(PlanIntensity.NORMAL).planTargetMinutes(600)
+                .planRequestJson("{\"version\":2,\"source\":\"PLAN_SCREEN\",\"startDate\":\"2026-08-24\",\"endDate\":\"2026-08-30\","
+                        + "\"intensity\":\"NORMAL\",\"courseIds\":[],\"excludeTopicIds\":[],\"requestKey\":\"key-1\"}")
+                .build();
+        when(aiProposalMapper.findProposedByRequestKey(USER_ID, "key-1")).thenReturn(stored);
+        when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(stored);
+        when(aiProposalService.get(77L, USER_ID)).thenReturn(AiProposalResponse.builder().proposalId(77L).items(List.of()).build());
+
+        PlanDraftResponse again = service.createDraft(USER_ID, first);
+
+        assertThat(again.getProposalId()).isEqualTo(77L);
+        assertThat(again.getRequestContext().isRedraftable()).isTrue();
+        // 모델 호출과 저장은 첫 요청의 한 번뿐이다.
+        verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }
 
     /*
@@ -636,7 +681,7 @@ class PlanDraftServiceTest {
 
         verify(aiProposalService).createFromItems(eq(USER_ID), eq(42L), eq(4201L), any(), any(), eq(START), any(), eq(30), any());
         verify(aiProposalMapper).updatePlanMetadata(eq(77L), eq(USER_ID), eq(START), eq(END),
-                eq(PlanIntensity.NORMAL), eq(BASELINE), isNull(), any());
+                eq(PlanIntensity.NORMAL), eq(BASELINE), any(), any());
         // generate는 DB에 쓰지 않는다 — 저장은 persist 한 곳뿐이다.
         verify(aiProposalService, times(1)).createFromItems(anyLong(), any(), any(), any(), any(), any(), any(), anyInt(), any());
     }
@@ -665,7 +710,7 @@ class PlanDraftServiceTest {
                      "scheduledDate":null,"reason":"포인터를 이미 아니까"},
                     {"title":"과제 2번","expectedMinutes":60,"priority":"SHOULD","courseId":6,
                      "scheduledDate":"2026-08-26","reason":"마감이""";
-        when(aiConsultationClient.streamTurn(any(), any(), anyInt())).thenReturn(Flux.just(
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt())).thenReturn(Flux.just(
                 truncatedChatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + truncated)));
 
         assertThatThrownBy(() -> service.createDraft(USER_ID, request(null)))
@@ -699,7 +744,7 @@ class PlanDraftServiceTest {
                 reason == null ? "null" : "\"" + reason + "\"",
                 courseId == null ? "null" : courseId.toString(),
                 courseId == null ? "null" : courseId.toString());
-        when(aiConsultationClient.streamTurn(any(), any(), anyInt()))
+        when(aiConsultationClient.streamTurn(org.mockito.ArgumentMatchers.argThat((String s) -> !com.jungwoo.project.memo.plan.selection.PlanSelectionFixture.isSelection(s)), any(), anyInt()))
                 .thenReturn(Flux.just(chatResponse("초안을 만들었어요\n" + AiStreamParser.DELIMITER + "\n" + json)));
     }
 

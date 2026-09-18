@@ -15,8 +15,10 @@ import java.util.List;
  * 생성의 몫이다. 이 경계를 흐리면 판단이 실행 세부에 묶여 재사용할 수 없게 된다 — 자료가
  * 바뀌어도 "다음 수업 전에 재귀를 먼저 본다"는 판단은 그대로여야 한다.
  *
- * <p>이 JSON은 스키마 없는 컬럼에 저장되고 몇 달 뒤에도 읽혀야 하므로 모르는 필드는
- * 무시하고 읽는다(PlanSnapshotItem과 같은 이유).
+ * <p>(2026-09-17) 기본 AI 경로의 최종 계획 호출도 이 판단을 낸다. 그때 추가된 필드(reach·keptDecisions·deferred·
+ * assumptions·openQuestions·unreadNotes·changes·existingDecisions)는 판단 경로(V1)의 전략에서는 비어 있다.
+ * 이 JSON은 스키마 없는 컬럼에 저장되고 몇 달 뒤에도 읽혀야 하므로 모르는 필드는 무시하고 읽는다
+ * (PlanSnapshotItem과 같은 이유). 예전 판에 없던 필드는 null로 읽힌다.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record PlanStrategy(
@@ -48,8 +50,40 @@ public record PlanStrategy(
          * 이 기간 내내 지켜야 할 규칙. "다음 수업 전 선수내용 완료", "알바 종료 후 무거운
          * 학습 없음"처럼 조각 하나가 아니라 계획 전체에 걸리는 조건이다.
          */
-        List<String> planningRules
+        List<String> planningRules,
+
+        /** 이번 기간의 현실적인 도달점(목표와 다를 수 있다). */
+        String reach,
+
+        /** 유지한 사용자 결정·제약. 상담 합의·지시에서 온 문장이다. */
+        List<String> keptDecisions,
+
+        /** 중요한 후보 중 이번에 미루거나 줄인 범위와 이유. topicId는 학습 항목을 가리킬 때만 있다. */
+        List<Deferred> deferred,
+
+        /** 확인되지 않은 가정. 확정 사실로 승격하지 않는다. */
+        List<String> assumptions,
+
+        /** 원인·조건에 따라 계획이 달라지는 질문. 답 없이도 초안은 만들어졌다. */
+        List<String> openQuestions,
+
+        /** 읽지 못한 중요한 자료·범위(모델이 말한 것 + 서버가 상한 때문에 싣지 못한 것). */
+        List<String> unreadNotes,
+
+        /** 이전 초안·합의에서 달라진 점과 그 근거. */
+        List<Change> changes,
+
+        /** 이 기간에 이미 있던 계획 항목을 어떻게 하기로 했는가(유지·줄임·이동·제외). */
+        List<ExistingDecision> existingDecisions
 ) {
+
+    /** 새 필드 없이 만드는 경로(판단 경로·예전 테스트). */
+    public PlanStrategy(String goal, String strategySummary, StrategySource strategySource, Long reusedFromVersionId,
+                        List<Long> referencedContextIds, List<CourseStrategy> courses, List<TopicTreatment> topics,
+                        List<String> planningRules) {
+        this(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds, courses, topics,
+                planningRules, null, null, null, null, null, null, null, null);
+    }
 
     /** 과목 하나를 이번 기간에 어떻게 볼 것인가. */
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -107,5 +141,24 @@ public record PlanStrategy(
             String value,
             Long refId
     ) {
+    }
+
+    /** 이번에 미루거나 줄인 범위. "이미 안다"(user_mark)와 다른 이유다 — 시간이 적어 이번엔 하지 않는다. */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Deferred(String title, String reason, Long topicId, Long sectionId) {
+    }
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record Change(String what, String why) {
+    }
+
+    /**
+     * 기존 계획 항목에 대한 결정.
+     *
+     * @param action KEEP / REDUCE / MOVE / DROP. KEEP 외는 제안의 조정 항목으로도 들어간다
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ExistingDecision(Long executionItemId, String title, String action, String reason,
+                                   Integer expectedMinutes, java.time.LocalDate toDate) {
     }
 }

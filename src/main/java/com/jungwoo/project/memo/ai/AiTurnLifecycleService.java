@@ -67,6 +67,7 @@ public class AiTurnLifecycleService {
     private final ContextChangeSuggestionService contextChangeSuggestionService;
     private final ScheduleSuggestionService scheduleSuggestionService;
     private final DraftPromotionService draftPromotionService;
+    private final com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초가 돼 stale 판정이 어긋난다.
@@ -305,6 +306,14 @@ public class AiTurnLifecycleService {
                     draftCommitOrNull.outcome(), draftCommitOrNull.facts());
             scheduleSuggestions.addAll(promoted.scheduleSuggestions());
         }
+        /*
+         * 계획 합의(발화자·동의 상태가 붙은 목표·우선순위·제외·시간 제약·어려움)도 같은 트랜잭션이다. 사용자 발화는
+         * requestMessageId, AI 제안은 방금 저장한 ASSISTANT 메시지 id를 출처로 남긴다.
+         */
+        if (draftCommitOrNull != null && draftCommitOrNull.hasBriefOps()) {
+            planBriefService.applyTurn(userId, conversationId, requestMessageId, assistantMessage.getMessageId(),
+                    draftCommitOrNull.briefOps(), draftCommitOrNull.briefPeriod());
+        }
 
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
@@ -380,8 +389,29 @@ public class AiTurnLifecycleService {
         }
     }
 
-    /** 이번 턴의 draft 판정 결과와 그때 쓴 실제 데이터. 트랜잭션 안에서 저장·승격에 쓴다. */
-    public record DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts) {
+    /**
+     * 이번 턴이 마무리 트랜잭션 안에서 저장할 부가 결과: draft 판정(outcome·facts)과 계획 합의 변경(briefOps).
+     * 둘 다 null일 수 있다 — outcome이 없으면 draft를 건드리지 않고, briefOps가 비어 있으면 합의를 건드리지 않는다.
+     */
+    public record DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts,
+                                  List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps,
+                                  com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod briefPeriod) {
+        public DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts) {
+            this(outcome, facts, null, null);
+        }
+
+        public DraftTurnCommit(DraftTurnResolver.Outcome outcome, DraftFacts facts,
+                               List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps) {
+            this(outcome, facts, briefOps, null);
+        }
+
+        public static DraftTurnCommit briefOnly(List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps) {
+            return new DraftTurnCommit(null, null, briefOps, null);
+        }
+
+        public boolean hasBriefOps() {
+            return briefOps != null && !briefOps.isEmpty();
+        }
     }
 
     public record TurnCompletionResult(

@@ -83,7 +83,9 @@ public class PlanStrategyCodec {
         return new PlanStrategy(
                 strategy.goal(), strategy.strategySummary(), strategy.strategySource(),
                 strategy.reusedFromVersionId(), strategy.referencedContextIds(),
-                strategy.courses(), topics, strategy.planningRules());
+                strategy.courses(), topics, strategy.planningRules(),
+                strategy.reach(), strategy.keptDecisions(), strategy.deferred(), strategy.assumptions(),
+                strategy.openQuestions(), strategy.unreadNotes(), strategy.changes(), strategy.existingDecisions());
     }
 
     private List<PlanStrategy.Evidence> knownEvidence(List<PlanStrategy.Evidence> evidence) {

@@ -47,6 +47,13 @@ public interface AiTurnEventSink {
     default void onPeriodPlanReady(PlanDraftResponse draft) {
     }
 
+    /**
+     * 기간 계획 생성의 진행 단계("자료 확인 중", "계획 정리 중"). 서버가 실제로 밟은 단계만 보낸다 — 모델이 완료를 선언하지
+     * 않는다. 기본 구현이 비어 있는 이유는 onPeriodPlanReady와 같다.
+     */
+    default void onPeriodPlanProgress(String stage, String label) {
+    }
+
     void onCompleted(AiTurnCompletedPayload payload);
 
     void onError(ErrorCode errorCode);

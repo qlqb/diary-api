@@ -52,6 +52,9 @@ public class AiProposalItemResponse {
      * 규칙이다("9/9까지"는 9/9 안에 끝내면 된다는 뜻이므로 경계는 9/10 00:00이다).
      */
     private LocalDate deadlineDate;
+
+    /** 마감의 출처(CLASS / ASSIGNMENT / AI_PROPOSED / USER). 확인된 사실과 AI 제안을 화면이 구분한다. */
+    private String deadlineSource;
     /**
      * 계획 경로가 채우는 학습 정보. 다른 제안 경로에서는 전부 null이다.
      *

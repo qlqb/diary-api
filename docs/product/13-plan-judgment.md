@@ -133,6 +133,10 @@ PlanStrategy / Codec       판단의 계약. plan_versions.strategy_json
   창은 "지금 볼 범위"의 기본값이지, 판단이 알아야 할 사실을 가리는 규칙이 아니다
 - **확정 과제**(마감·완료·연결 항목)는 `CourseContext.assignments`로 실린다. 판단 프롬프트의 `[과제]` 줄과 DEADLINE 근거가
   되고, 과제 수행 자체를 항목·조각으로 잡는 것은 사용자 지시가 있을 때만이다(15번 A17)
+- (2026-09-15) **기본 AI 경로와의 관계**: `plan.draft.generator=AI`(기본값)는 이 판단층을 거치지 않고 15번 문서 §7의
+  AI 자료 선택(선택 호출 → 원문 조회 → 계획 호출)을 쓴다. 계획 화면과 상담의 CREATE_PERIOD_PLAN이 모두 그 경로다.
+  `JUDGMENT`·`V1`은 여전히 이 컨텍스트 수집 규칙(창 + 판단 사실)으로 만들고, AI 자료 선택·지정 자료·같은 조건으로 다시
+  만들기(`redraft`)에는 **연결되지 않았다**. 이 경로를 켤 때 두 흐름을 합치는 것이 다음 결정이다
 - **현재 주차**는 수업 루틴의 `effective_from`에서 계산한다. 강의계획서의 개강일을 파싱하지
   않는다 — 루틴은 사용자가 확인한 값이고 분석 JSON은 모델이 읽은 값이다
 - **다음 수업**은 계획 종료일 + 14일까지 본다. 금요일에 끝나는 계획도 다음 화요일 수업을
@@ -579,6 +583,59 @@ eval 전에 `user_contexts`에 직접 넣고 끝나면 지운다.
 스냅샷(연결 기록 없음)은 "생성 당시 연결 기록이 없어 현재 연결된 자료를 열어요"다. 해석을
 바꾸는 상태(수정 전 근거, 적용 후 바뀜, 지워진 원본)는 상세 안이 아니라 기본 화면 맨 위에 글로
 쓴다 — 색이나 아이콘만으로 전하지 않는다.
+
+### 10.6 회차에 실리는 출처가 늘었다 (2026-09-17)
+
+| sourceType | 무엇 | providedValue |
+|---|---|---|
+| `CONVERSATION_MESSAGE` | [상담 기록]의 발화 한 줄(요청 메시지는 제외, 예산 안에서 최근 것부터) | role · text |
+| `PLAN_BRIEF` | [상담에서 합의한 것]의 합의 항목 하나(sourceId=brief_id, sourceVersion=version) | itemId · kind · speaker · accepted · scope · text · topicId · executionItemId · sourceMessageId |
+| `EXECUTION_HISTORY` | [관련 실행 기록]의 항목 한 줄(sourceId=execution_item_id, parentSourceId=topic) | status · plannedDate · currentDate · movedCount · measuredMinutes · unmeasured · note 유무 |
+| `NEXT_CLASS` | 프로젝트의 다음 수업(sourceId=routine_id) — deadlineRefId로 가리키면 CLASS 마감 | courseId · startAt · endAt · title |
+
+서버 계산에 `GENERATION_CALLS`(호출 수·토큰·지연·상한, 원문 없음)가 추가됐다. 규칙은 그대로다: 그 회차에 준 인용 번호만
+유효하고, 합의·기록도 "모델이 봤다"와 "사실이다"를 나눠 읽는다 — 합의는 사용자가 말했거나 수락한 것이지 등록된 일정이 아니다.
+
+## 11. 상담 메모리 — 합의는 발화자와 동의 상태를 잃지 않는다 (2026-09-17)
+
+"자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기"를 AI가 제안하고 사용자가 "좋아, 그대로"라고 했을 때, 생성기가 받는
+것이 최근 사용자 발언 8개뿐이면 그 결정은 어디에도 없다. `ai_plan_briefs`(대화당 1행, 05번 §10.8)가 합의 항목을 든다.
+
+- **항목**: kind(GOAL·PRIORITY·EXCLUDE·TIME_CONSTRAINT·SCOPE·DIFFICULTY·CAUSE·OTHER) · text · speaker(USER|ASSISTANT) · accepted ·
+  rejected · scope(THIS_DRAFT|PERIOD) · sourceMessageId · acceptedByMessageId · topicId/courseId/executionItemId · revision · history.
+- **규칙**: 사용자가 말한 것은 즉시 유효(accepted). AI가 제안한 것은 후보이고 사용자가 "좋아/그대로"라고 하면 그 번호에 ACCEPT가
+  붙는다 — 무엇을 받아들였는지가 번호로 남는다. 발화자를 모르는 ADD는 AI 제안(후보)으로 낮춰 적는다. 고쳐 말하면 UPDATE(최신
+  수정판이 우선, 이전 문장은 history). 같은 문장을 매 턴 다시 ADD하지 않는다.
+- **수명**: THIS_DRAFT는 이번 초안, PERIOD는 이번 기간. 다음 기간에도 유효한 선호는 여기가 아니라 `user_contexts`(사용자 확인 흐름)다.
+  다른 대화에서는 확인된 어려움(DIFFICULTY·CAUSE)과 PERIOD 합의만 [다른 대화에서 확인된 것]으로 이어 온다.
+- **쓰는 곳**: 상담 프롬프트 [계획 합의 현황](번호와 상태 — 모델이 ACCEPT/UPDATE에서 그 번호를 쓴다) · 계획 호출 [상담에서 합의한
+  것](유효한 합의 + "아직 답 없는 AI 제안"을 나눠 싣는다) · 초안 응답 `briefId`/`briefVersion`(그때 읽은 합의) · 초안 상단의 "유지한
+  결정". 생성 버튼은 저장된 합의·제안 id를 가리키지, 브라우저가 들고 있던 전략 문자열을 보내지 않는다.
+- **쓰기 권한**: 모델은 planBrief ops를 낼 뿐이고 서버가 턴 완료 시(assistant 메시지 저장 뒤) 적용한다. 화면 어디도 이 표를
+  사실(일정)로 읽지 않는다.
+
+**실행 결과로 조정하기(프롬프트 규칙 24).** 옮긴 횟수·일부 수행·실측 시간·메모는 관찰이고 원인이 아니다. 원인을 모르는데 그
+원인에 따라 계획이 달라지면 질문 하나만 한다. 답은 DIFFICULTY/CAUSE로 남아 다음 상담·계획에서 다시 묻지 않는다. 기록만으로
+자동 재계획하거나 사용자 성향을 단정하지 않는다.
+
+### 11.1 합의의 적용 범위 (2026-09-18 후속)
+
+`scope`만으로는 "이번 주만 영어 제외"가 다음 주 계획으로 넘어갔다. 항목이 범위를 갖는다:
+
+- **THIS_DRAFT**는 초안 흐름에 묶인다(`flowProposalId` = 처음 만든 초안 id, 같은 조건으로 다시 만들기는 같은 흐름). 아직 초안을
+  만들지 않은 합의는 다음 초안이 묶는다. 다른 흐름(이전 계획)의 합의는 새 초안에 실리지 않는다.
+- **PERIOD**는 실제 날짜(`periodStart`~`periodEnd`)를 갖는다. 모델이 날짜를 적으면 그것, 아니면 이번 턴의 OFFER 기간, 그것도 없으면
+  발언 시점의 주(월~일, 사용자 시간대 `saidOn`). 새 상담의 주로 다시 해석하지 않는다. 요청 기간과 겹치는 것만 계획 호출에 실리고,
+  일부만 겹치면 "원래 9/14~9/20에 적용"을 붙여 원래 범위 안에서만 적용한다. 상담 프롬프트는 지난 합의를 "기간 지남 — 지금 조건
+  아님"으로 표시하고, 모델은 그것을 새 기간에 옮기지 않는다(필요하면 다시 확인).
+- 날짜를 복원할 수 없는 옛 PERIOD 항목은 "범위 미확인(과거 참고)"이며 현재 합의처럼 전달되지 않는다. 임의로 영구 조건으로
+  만들지 않는다. 초안을 만들 때 날짜 없는 PERIOD 항목은 그 계획의 기간에 묶인다(복원 가능한 근거).
+- 지속 선호는 여전히 `user_contexts`다. 기간 합의를 자동 승격하지 않는다.
+- 다른 대화에서는 어려움·원인(과목·학습 항목·실행 항목·확인 시점을 함께)과, 지금 기간에 걸치는 PERIOD 합의만 이어 온다.
+  관계없는 과목으로 일반화하지 않는다.
+- 사용자가 고쳐 말하면(UPDATE, 날짜 포함) 최신 조건과 수락 출처가 남고 이전 문장은 history에 남는다. 확정·만료돼도 원본 상담과
+  합의 이력은 지우지 않는다.
+- 종류에 **FREQUENCY**(반복 빈도, "매일 15분")를 더했다. 상한("하루 15분까지")은 TIME_CONSTRAINT다.
 
 ## 9. 완료 기준
 

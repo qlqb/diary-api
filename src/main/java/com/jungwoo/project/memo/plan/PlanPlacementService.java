@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
 import com.jungwoo.project.memo.execution.ExecutionItemService;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.PlacementType;
 import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
 import com.jungwoo.project.memo.plan.domain.PlanVersion;
 import com.jungwoo.project.memo.plan.dto.PlanPlacementResponse;
@@ -95,8 +96,13 @@ public class PlanPlacementService {
 
         // planKey로 거른다 — plan_version_id는 불변 출처라, 재계획으로 v2가 생기면
         // v1이 만든 조각을 v2 화면·배치가 놓친다.
-        List<ExecutionItem> targets = executionItemMapper.findUnscheduledByPlanKey(
-                userId, plan.getPlanKey(), windowStart, windowEnd);
+        List<ExecutionItem> targets = new ArrayList<>(executionItemMapper.findUnscheduledByPlanKey(
+                userId, plan.getPlanKey(), windowStart, windowEnd));
+        /*
+         * 날짜가 의미인 항목("매일 15분"의 각 날짜)은 그 날짜 안에서만 시각을 정한다. 다른 날로 옮기거나 한 날에 몰지 않고,
+         * 그 날에 남는 시간이 없으면 이유를 붙여 미배치로 남긴다 — 사용자 승인 없이 횟수를 줄이지 않는다.
+         */
+        targets.addAll(executionItemMapper.findDateOnlyByPlanKey(userId, plan.getPlanKey(), windowStart, windowEnd));
 
         List<PlanPlacementResponse.PlacedItem> placed = new ArrayList<>();
         List<PlanPlacementResponse.UnplacedItem> unplaced = new ArrayList<>();
@@ -123,16 +129,23 @@ public class PlanPlacementService {
              * 결과에서 알아차릴 방법이 없다.
              */
             LocalDateTime deadline = item.getDeadlineAt();
+            LocalDate fixedDay = item.getPlacementType() == PlacementType.DATE_ONLY ? item.getScheduledDate() : null;
             List<TimeSlotOption> candidates = buildCandidates(
-                    availability.windows(), duration, now, windowEnd, deadline);
+                    fixedDay == null ? availability.windows() : windowsOn(availability.windows(), fixedDay),
+                    duration, now, windowEnd, deadline);
             if (candidates.isEmpty()) {
-                // 왜 못 넣었는지는 응답에 담지 않는다(UnplacedItem에 자리가 없다). 마감
-                // 때문인지 시간이 없어서인지는 운영에서 갈리는 질문이라 로그로만 남긴다.
-                if (deadline != null) {
-                    log.info("롤링 배치: 마감 전에 넣을 후보가 없어 미배치. executionItemId={}, deadline={}, duration={}분",
-                            item.getExecutionItemId(), deadline, duration);
+                String reason;
+                if (fixedDay != null) {
+                    reason = fixedDay.getMonthValue() + "/" + fixedDay.getDayOfMonth() + "에 남는 시간이 없어요"
+                            + (deadline != null ? " (마감 전)" : "");
+                } else if (deadline != null) {
+                    reason = "마감 전에 넣을 시간이 없어요";
+                } else {
+                    reason = "이번 창에 남는 시간이 없어요";
                 }
-                unplaced.add(toUnplaced(item));
+                log.info("롤링 배치: 후보가 없어 미배치. executionItemId={}, day={}, deadline={}, duration={}분",
+                        item.getExecutionItemId(), fixedDay, deadline, duration);
+                unplaced.add(toUnplaced(item, reason));
                 continue;
             }
             // courseId·orderIndex는 순서 제약(preferOrderIndexSequence)이 쓴다. 같은 프로젝트
@@ -151,7 +164,10 @@ public class PlanPlacementService {
             for (SchedulingTask task : solved.getTasks()) {
                 ExecutionItem item = findById(targets, task.getProposalItemId());
                 if (!task.isScheduled()) {
-                    unplaced.add(toUnplaced(item));
+                    unplaced.add(toUnplaced(item, item.getPlacementType() == PlacementType.DATE_ONLY
+                            ? item.getScheduledDate().getMonthValue() + "/" + item.getScheduledDate().getDayOfMonth()
+                            + "에 다른 항목과 겹쳐 자리가 없어요"
+                            : "다른 항목과 겹쳐 이번 창에 자리가 없어요"));
                     continue;
                 }
                 // 전이 규칙(§2-5)과 이벤트 기록, 영향 행 수 검증을 한곳에서 한다 —
@@ -219,12 +235,29 @@ public class PlanPlacementService {
                 .orElseThrow(() -> new IllegalStateException("배치 대상에 없는 항목: " + executionItemId));
     }
 
-    private PlanPlacementResponse.UnplacedItem toUnplaced(ExecutionItem item) {
+    private PlanPlacementResponse.UnplacedItem toUnplaced(ExecutionItem item, String reason) {
         return PlanPlacementResponse.UnplacedItem.builder()
                 .executionItemId(item.getExecutionItemId())
                 .title(item.getTitle())
                 .expectedMinutes(item.getExpectedMinutes())
+                .scheduledDate(item.getScheduledDate())
+                .reason(reason)
                 .build();
+    }
+
+    /** 그 날짜에 걸치는 남는 시간만 — 날짜가 정해진 항목은 그 날 안에서만 시각을 고른다. */
+    static List<AvailabilityWindow> windowsOn(List<AvailabilityWindow> windows, LocalDate day) {
+        LocalDateTime dayStart = day.atStartOfDay();
+        LocalDateTime dayEnd = day.plusDays(1).atStartOfDay();
+        List<AvailabilityWindow> out = new ArrayList<>();
+        for (AvailabilityWindow w : windows) {
+            LocalDateTime from = w.startAt().isBefore(dayStart) ? dayStart : w.startAt();
+            LocalDateTime to = w.endAt().isAfter(dayEnd) ? dayEnd : w.endAt();
+            if (to.isAfter(from)) {
+                out.add(new AvailabilityWindow(from, to, w.source(), w.confidence(), w.reason()));
+            }
+        }
+        return out;
     }
 
     private PlanPlacementResponse response(

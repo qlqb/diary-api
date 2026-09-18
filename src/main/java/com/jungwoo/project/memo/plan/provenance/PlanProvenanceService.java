@@ -304,6 +304,12 @@ public class PlanProvenanceService {
             case MATERIAL_SECTION -> LinkView.none("원본 자료 열기로 확인해요");
             case ASSIGNMENT -> LinkView.none("프로젝트의 과제 목록에서 확인해요");
             case PLAN_REVIEW, TURN_INPUT -> LinkView.none("가리킬 원본이 없어요");
+            // 대화 원문·합의는 AI 패널의 그 대화에서 본다. 실행 경과는 그 조각으로 연다.
+            case CONVERSATION_MESSAGE, PLAN_BRIEF -> LinkView.none("AI 대화에서 확인해요");
+            case EXECUTION_HISTORY -> executionItemMapper.findByIdAndUserIdIncludingDeleted(id, userId) != null
+                    ? LinkView.of("EXECUTION_ITEM", id) : deleted();
+            case NEXT_CLASS -> routineMapper.findByIdAndUserId(id, userId) != null
+                    ? LinkView.of("ROUTINE", id) : deleted();
         };
     }
 

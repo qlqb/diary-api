@@ -48,7 +48,7 @@ public class MaterialZipImportWorker {
             return false;
         }
         if (zipImport.getStatus() == ZipImportStatus.CANCELLED) {
-            txService.failEntry(entry.getEntryId(), "E409_020", "취소된 가져오기예요");
+            txService.failEntry(entry.getEntryId(), "E409_024", "취소된 가져오기예요");
             return false;
         }
         Path temp = null;

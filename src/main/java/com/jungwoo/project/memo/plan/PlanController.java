@@ -20,6 +20,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -84,6 +85,62 @@ public class PlanController {
         log.info("POST /api/plans/drafts/{}/items:regenerate - userId={}", proposalId, principal.getUserId());
 
         return ResponseEntity.ok(planDraftService.regenerateItems(principal.getUserId(), proposalId));
+    }
+
+    /**
+     * 같은 조건으로 초안 다시 만들기(「이번만 빼기」·되돌리기·「이미 알아요」 뒤). 계획 화면·상담 초안 공통.
+     * 기간·강도·범위·지시·지정 자료는 서버에 남은 요청을 쓰고, 본문에는 바뀐 제외 목록·지정 자료만 온다.
+     */
+    @PostMapping("/proposals/{proposalId}/redraft")
+    public ResponseEntity<PlanDraftResponse> redraft(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId,
+            @RequestBody(required = false) com.jungwoo.project.memo.plan.dto.PlanRedraftRequest request) {
+        return ResponseEntity.ok(planDraftService.redraft(principal.getUserId(), proposalId, request));
+    }
+
+    /**
+     * 검토 상태 저장(제목·항목 포함/제외·편집값·답). 실행 데이터를 바꾸지 않는다. 열린 초안에만, version이 낡았으면 409.
+     */
+    @PutMapping("/proposals/{proposalId}/review-state")
+    public ResponseEntity<com.jungwoo.project.memo.plan.dto.PlanReviewState> saveReviewState(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId,
+            @RequestBody com.jungwoo.project.memo.plan.dto.PlanReviewState body) {
+        return ResponseEntity.ok(planDraftService.saveReviewState(principal.getUserId(), proposalId, body));
+    }
+
+    /**
+     * 진행 중인 초안 생성의 단계. 화면이 "자료 확인 중 / 계획 정리 중"을 서버가 실제로 밟은 단계로 보여 준다.
+     * 모르는 키면 404가 아니라 known=false — 키는 생성이 끝나고 잠시 뒤 사라진다.
+     */
+    @GetMapping("/draft/progress")
+    public ResponseEntity<java.util.Map<String, Object>> draftProgress(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @RequestParam String requestKey
+    ) {
+        return ResponseEntity.ok(planDraftService.progressOf(principal.getUserId(), requestKey)
+                .<java.util.Map<String, Object>>map(state -> {
+                    java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+                    out.put("known", true);
+                    out.put("stage", state.stage().name());
+                    out.put("label", state.stageLabel());
+                    out.put("proposalId", state.proposalId());
+                    out.put("errorCode", state.errorCode());
+                    return out;
+                })
+                .orElse(java.util.Map.of("known", false)));
+    }
+
+    /**
+     * 저장된 초안을 다시 읽는다(새로고침·탭 이동 뒤 복구). 모델을 부르지 않는다.
+     */
+    @GetMapping("/proposals/{proposalId}/draft")
+    public ResponseEntity<PlanDraftResponse> loadDraft(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId
+    ) {
+        return ResponseEntity.ok(planDraftService.loadDraft(principal.getUserId(), proposalId));
     }
 
     @PostMapping("/proposals/{proposalId}/confirm")

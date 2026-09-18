@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.ai.domain.AiProposalStatus;
 import com.jungwoo.project.memo.ai.dto.AiProposalResponse;
 import com.jungwoo.project.memo.ai.dto.ProposalItem;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.BusinessException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
@@ -24,7 +25,15 @@ import com.jungwoo.project.memo.plan.dto.PlanItemDraft;
 import com.jungwoo.project.memo.plan.dto.PlanStrategyResponse;
 import com.jungwoo.project.memo.plan.dto.PlanJudgmentResult;
 import com.jungwoo.project.memo.plan.provenance.PlanItemEvidence;
+import com.jungwoo.project.memo.plan.provenance.PlanProvenance;
 import com.jungwoo.project.memo.plan.provenance.PlanProvenanceCodec;
+import com.jungwoo.project.memo.plan.provenance.ServerCalculation;
+import com.jungwoo.project.memo.plan.dto.PlanRedraftRequest;
+import com.jungwoo.project.memo.plan.dto.PlanReviewState;
+import com.jungwoo.project.memo.plan.selection.MaterialSelectionSummary;
+import com.jungwoo.project.memo.plan.selection.PlanRequestContext;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,17 +43,19 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 /**
- * 기간 계획 초안. 기존 PlanningAgentService.createDraft와 별개 경로다 — 그쪽은
- * recommendationId가 필수라 여러 프로젝트를 아우를 수 없고, 기존 동작을 건드리지 않는다.
+ * 기간 계획 초안. 기존 PlanningAgentService.createDraft와 별개 경로다.
  *
- * <p>생성 규칙(컨텍스트·프롬프트·검증·정규화)은 {@link PeriodPlanDraftGenerator}에 있고, 이
- * 서비스는 요청을 그 모양으로 옮기고 결과를 저장한다. 계획 화면(/api/plans/draft)과 AI 대화가
- * 둘 다 이 서비스를 거치므로 어느 탭에서 시작하든 같은 제안과 같은 계획 메타데이터가 남는다.
+ * <p>생성 규칙(컨텍스트·프롬프트·검증·정규화)은 {@link PeriodPlanDraftGenerator}에 있고, 이 서비스는 요청을 그 모양으로
+ * 옮기고 결과를 저장한다. 계획 화면(/api/plans/draft)과 AI 대화가 둘 다 이 서비스를 거친다.
  *
- * <p>이 서비스는 execution_items도 plan_versions도 만들지 않는다. ai_proposals만 만들고,
- * 실제 데이터는 사용자가 확정(PlanConfirmService)해야 생긴다.
+ * <p>★ 모델 호출은 트랜잭션 밖이다. 생성(수십 초, 모델 2~4회)을 트랜잭션 안에서 돌리면 커넥션·행 잠금을 그동안 붙잡고,
+ * 실패한 호출의 사용 기록까지 함께 롤백된다. 그래서 읽기(스냅샷) → 생성(밖) → 짧은 저장(트랜잭션) 순이다.
+ *
+ * <p>이 서비스는 execution_items도 plan_versions도 만들지 않는다. ai_proposals만 만들고, 실제 데이터는 사용자가
+ * 확정(PlanConfirmService)해야 생긴다.
  */
 @Slf4j
 @Service
@@ -64,78 +75,124 @@ public class PlanDraftService {
     private final PlanItemService planItemService;
     private final PlanProvenanceCodec provenanceCodec;
     private final PlanMaterialContextService materialContextService;
+    private final PlanGenerationProgress progress;
+    private final com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    /**
+     * 저장 구간의 실제 트랜잭션 경계. createDraft·redraft가 같은 클래스의 persist를 직접 부르므로 @Transactional은
+     * 프록시를 거치지 않아 적용되지 않았다(제안 저장만 따로 커밋되고 계획 메타·요청 맥락·옛 초안 폐기는 각각 autocommit).
+     * 이 템플릿이 그 구간을 하나로 묶는다. 모델 호출·자료 선택은 여전히 이 밖이다.
+     */
+    private final org.springframework.transaction.support.TransactionTemplate transactions;
+
+    private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     /**
      * 어느 경로로 초안을 만들 것인가. AI(기본) · V0 · JUDGMENT · V1.
      *
-     * <p>넷은 계단이다. 뒤로 갈수록 모델이 하는 일이 늘고, 앞의 것과 비교하면 그 늘어난
-     * 부분이 실제로 값을 하는지 따로 잴 수 있다(13-plan-judgment.md §8.2).
-     *
-     * <ul>
-     *   <li><b>V0</b> 모델 없음. 마감이 제안→확정→Timefold까지 살아남는지 확인할 때 켠다 —
-     *       모델을 끼우면 실패 원인이 "체인이 끊겼다"와 "모델이 마감을 안 냈다"로 갈린다.
-     *   <li><b>JUDGMENT</b> 판단만 모델. 조각은 v0와 같은 방식이라 V0와의 차이가 전부
-     *       판단에서 온다.
-     *   <li><b>V1</b> 판단 + 조각 생성. JUDGMENT와의 차이가 전부 조각 생성에서 온다.
-     *   <li><b>AI</b> 기존 단일 호출 경로. 운영 기본값이다.
-     * </ul>
+     * <p>AI가 운영 경로다. V0는 모델 없는 전환 검증용 기준선, JUDGMENT·V1은 판단층 측정용이다(13-plan-judgment.md §8.2).
      */
     @Value("${plan.draft.generator:AI}")
     private String generatorMode = "AI";
 
-    /** 계획 화면의 요청. 생성과 저장을 한 번에 한다. */
-    @Transactional
+    // ===== 계획 화면 =====
+
+    /** 계획 화면의 요청. 생성(트랜잭션 밖)과 저장(트랜잭션)을 나눠 부른다. 같은 요청 키면 다시 만들지 않는다. */
     public PlanDraftResponse createDraft(Long userId, PlanDraftRequest request) {
-        return persist(userId, generate(userId, request), null, null);
+        String requestKey = request.getRequestKey();
+        PlanDraftResponse existing = existingForKey(userId, requestKey, null);
+        if (existing != null) {
+            return existing;
+        }
+        if (!progress.start(requestKey, userId)) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_IN_PROGRESS);
+        }
+        try {
+            Generated generated = generate(userId, request, new PeriodPlanDraftGenerator.Origin(null, null, requestKey, null),
+                    null, stage -> progress.stage(requestKey, stage));
+            PlanDraftResponse response = persist(userId, generated, null, null);
+            progress.done(requestKey, response.getProposalId());
+            return response;
+        } catch (RuntimeException e) {
+            progress.failed(requestKey, e instanceof BusinessException b ? b.getErrorCode().getCode() : "ERROR");
+            throw e;
+        }
     }
 
     /**
-     * 요청을 검증하고 모델을 불러 초안을 만든다. DB에 쓰지 않는다.
+     * 같은 요청 키로 이미 만든 열린 초안이 있으면 그것을 돌려준다(중복 클릭·재시도·늦은 응답).
      *
-     * <p>대화 경로는 이 단계와 {@link #persist}를 나눠 부른다 — 모델 호출은 턴 트랜잭션 밖에서,
-     * 저장은 ASSISTANT 메시지와 같은 트랜잭션 안에서 해야 하기 때문이다.
+     * <p>키는 사용자 안에서만 찾고(조회가 user_id로 걸러진다), 요청 대상도 대조한다 — 다시 만들기의 키가 다른 원본 초안의
+     * 결과를 돌려주지 않게. 다시 만들기의 재시도는 원본이 이미 DISMISSED여도 여기서 먼저 답한다: 첫 시도가 성공했다면
+     * 원본을 폐기한 것이 바로 그 첫 시도이기 때문이다.
+     *
+     * @param expectedPrevious 다시 만들기라면 원본 초안 id, 계획 화면의 새 요청이면 null
+     */
+    private PlanDraftResponse existingForKey(Long userId, String requestKey, Long expectedPrevious) {
+        if (requestKey == null || requestKey.isBlank()) {
+            return null;
+        }
+        AiProposal proposal = aiProposalMapper.findProposedByRequestKey(userId, requestKey);
+        if (proposal == null) {
+            return null;
+        }
+        PlanRequestContext stored = readRequestContext(proposal.getPlanRequestJson());
+        Long storedPrevious = stored == null ? null : stored.previousProposalId();
+        if (!java.util.Objects.equals(storedPrevious, expectedPrevious)) {
+            log.warn("계획 초안: 요청 키 {}의 초안(proposalId={})은 다른 대상(previous={})의 결과라 돌려주지 않는다. 기대={}",
+                    requestKey, proposal.getProposalId(), storedPrevious, expectedPrevious);
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_IN_PROGRESS);
+        }
+        log.info("계획 초안: 같은 요청 키의 초안을 돌려준다. userId={}, requestKey={}, proposalId={}", userId, requestKey,
+                proposal.getProposalId());
+        return loadDraft(userId, proposal.getProposalId());
+    }
+
+    /** 진행 상태. 키를 모르면 empty. */
+    public java.util.Optional<PlanGenerationProgress.State> progressOf(Long userId, String requestKey) {
+        return progress.find(requestKey, userId);
+    }
+
+    /**
+     * 요청을 검증하고 모델을 불러 초안을 만든다. DB에 쓰지 않는다. 대화 경로가 이 단계와 {@link #persist}를 나눠 부른다.
      */
     public Generated generate(Long userId, PlanDraftRequest request) {
+        return generate(userId, request, null, null, null);
+    }
+
+    /**
+     * @param origin   요청의 출처(대화·요청 키·대체하는 초안). 없으면 계획 화면의 첫 요청
+     * @param previous 대체하는 초안의 요청 맥락(근거 스냅샷). 없으면 null
+     * @param stage    진행 단계 콜백. 없으면 null
+     */
+    public Generated generate(Long userId, PlanDraftRequest request, PeriodPlanDraftGenerator.Origin origin,
+                              PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> stage) {
         PeriodPlanDraftGenerator.validatePeriod(request.getStartDate(), request.getEndDate());
         PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
                 request.getInstruction(), request.getTitle(), request.getCourseIds(),
-                request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds());
+                request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds(),
+                request.getRequestedMaterialIds() == null ? List.of() : request.getRequestedMaterialIds(),
+                request.getRequestedSectionIds() == null ? List.of() : request.getRequestedSectionIds(),
+                origin);
 
         if ("V0".equalsIgnoreCase(generatorMode)) {
-            log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}",
-                    userId, spec.start(), spec.end());
+            log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}", userId, spec.start(), spec.end());
             return blockGeneratorV0.generate(spec);
         }
         if ("JUDGMENT".equalsIgnoreCase(generatorMode) || "V1".equalsIgnoreCase(generatorMode)) {
             return generateWithJudgment(spec, request, "V1".equalsIgnoreCase(generatorMode));
         }
-        // 모델이 설정돼 있어야 하는 것은 AI 경로뿐이다. v0는 모델을 부르지 않는다.
         if (!aiConsultationClient.isConfigured()) {
             throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
         }
-        return generator.generate(spec);
+        return generator.generate(spec, new PeriodPlanDraftGenerator.Options(previous, stage));
     }
 
-    /**
-     * 판단 → 조각. 서버 코드가 순서를 부른다 — 오케스트레이터도, 서로를 부르는 Agent도 없다.
-     *
-     * <p>되물어야 하면 조각을 만들지 않고 질문만 돌려준다. 일단 만들어 놓고 "이게 맞나요?"라고
-     * 묻는 것과 다르다 — 만들어진 계획은 그 자체로 화면의 기준점이 되어, 사용자가 답을 고르기
-     * 전에 이미 대답을 유도한다.
-     */
+    /** 판단 → 조각(측정용 경로). 서버 코드가 순서를 부른다. */
     private Generated generateWithJudgment(Spec spec, PlanDraftRequest request, boolean generateItems) {
         PlanningContext context = planningContextBuilder.build(spec);
-
-        /*
-         * 「이미 익숙해요」는 저장할 사실이다. 맥락으로 남기고 컨텍스트를 다시 모은다 —
-         * 그래야 이번 초안부터 그 사실이 근거가 된다. 답을 다음 계획에서야 반영하면 사용자는
-         * 방금 알려준 것이 무시됐다고 본다.
-         *
-         * 「처음이에요」/「일부는 익숙해요」는 저장할 것이 없다. 전자는 근거 없음이 이미
-         * 기본이고, 후자는 어느 것이 익숙한지를 이 답으로는 알 수 없다(그 자리는 항목별
-         * 「이미 알아요」다). 되묻기만 멈춘다.
-         */
         if (request.getFamiliarityAnswer() == FamiliarityAnswer.FAMILIAR) {
             String statement = planJudgmentService.familiarityStatement(
                     context, request.getFamiliarityTopicIds());
@@ -144,38 +201,30 @@ public class PlanDraftService {
                 context = planningContextBuilder.build(spec);
             }
         }
-
         PlanJudgmentResult judgment = planJudgmentService.judge(
                 context, request.getFamiliarityAnswer() != null);
         if (judgment.isAsk()) {
-            log.info("기간 계획 초안: 되묻고 끝낸다. userId={}, reason={}",
-                    spec.userId(), judgment.ask().reason());
+            log.info("기간 계획 초안: 되묻고 끝낸다. userId={}, reason={}", spec.userId(), judgment.ask().reason());
             return Generated.asking(spec, judgment.ask());
         }
         if (!generateItems) {
-            // JUDGMENT 모드: 조각은 v0와 같은 방식으로 만든다. 판단의 기여만 따로 재기 위한
-            // 경로이므로 조각 생성이 끼어들면 안 된다(13-plan-judgment.md §8.2).
             return blockGeneratorV0.generate(spec, context, judgment.strategy());
         }
         return withItems(spec, context, judgment.strategy());
     }
 
-    /** 판단 → 조각. 완성형 경로다. */
     private Generated withItems(Spec spec, PlanningContext context, PlanStrategy strategy) {
         List<PlanItemDraft> drafts = planItemService.generate(strategy, context, spec.maxItems());
         List<ProposalItem> items = new ArrayList<>();
         for (PlanItemDraft draft : drafts) {
             items.add(draft.toProposalItem());
         }
-
         int available = PeriodPlanDraftGenerator.availableMinutes(context.availability().windows());
         int target = spec.intensity().targetMinutesFor(available);
         String confidence = PeriodPlanDraftGenerator.confidenceSummary(context.availability().windows());
-
         log.info("기간 계획 초안(V1): userId={}, {}~{}, 조각={}개({}분), 가용={}분, 예산={}분",
                 spec.userId(), spec.start(), spec.end(), items.size(),
                 items.stream().mapToInt(ProposalItem::expectedMinutes).sum(), available, target);
-
         return new Generated(spec, target, target, null, false,
                 spec.title() != null && !spec.title().isBlank() ? spec.title() : strategy.goal(),
                 strategy.goal(), items,
@@ -183,42 +232,173 @@ public class PlanDraftService {
                 false, strategy, null);
     }
 
-    /**
-     * 판단은 그대로 두고 조각만 다시 만든다. 후속 재계획의 원형이다.
-     *
-     * <p>기존 제안을 고치지 않고 새 제안을 만든 뒤 원본을 폐기한다 — 제안 항목은 각자 상태를
-     * 갖고(적용됨·폐기됨) 그 위에 덮어쓰면 "무엇이 사용자에게 보였던 것인지"가 사라진다.
-     * 둘을 한 트랜잭션에서 처리해 살아 있는 제안이 둘로 남는 상태를 만들지 않는다.
-     *
-     * <p>판단을 다시 하지 않는 것이 요점이다. 사용자가 「이미 알아요」로 가정 하나를 고쳤을 때
-     * 목표와 과목 순서까지 흔들리면, 고친 것과 무관한 변화가 함께 와서 무엇 때문에 계획이
-     * 바뀌었는지 알 수 없게 된다.
-     */
+    // ===== 다시 만들기 =====
+
+    /** 판단은 그대로 두고 조각만 다시 만든다(판단 경로). */
     public PlanDraftResponse regenerateItems(Long userId, Long proposalId) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
         if (proposal == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }
+        /*
+         * 요청이 저장된 초안(새 운영 경로)은 옛 조각 재생성으로 가지 않는다 — 그 경로는 지시·과목 범위·상담 출처·합의·실행
+         * 기록·기존 항목 조정을 모르는 Spec으로 옛 생성기를 부른다. 저장된 요청 맥락이 있으면 같은 조건으로 다시 만들기가
+         * 곧 "표식을 반영한 재생성"이다(2026-09-17 지시서 §4). 옛 UI가 이 엔드포인트를 불러도 우회가 되지 않는다.
+         */
+        if (readRequestContext(proposal.getPlanRequestJson()) != null) {
+            log.info("조각만 재생성 요청을 같은 조건으로 다시 만들기로 보낸다: userId={}, proposalId={}", userId, proposalId);
+            return redraft(userId, proposalId, PlanRedraftRequest.builder().requestKey("regen-" + proposalId + "-"
+                    + java.util.UUID.randomUUID()).build());
+        }
         if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
             throw new ConflictException(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED);
         }
         PlanStrategy strategy = strategyCodec.fromJson(proposal.getPlanStrategyJson());
-        if (strategy == null || proposal.getPlanStartDate() == null || proposal.getPlanEndDate() == null) {
-            // 판단 없이 만든 초안이다. 다시 만들 근거가 없으므로 새 초안을 만들어야 한다.
+        if (strategy == null || proposal.getPlanStartDate() == null || proposal.getPlanEndDate() == null
+                || strategy.courses() == null) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
-
         Spec spec = new Spec(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(),
                 proposal.getPlanIntensity(), null, null, List.of());
-        // 컨텍스트는 다시 모은다 — 그 사이 「이미 알아요」가 눌렸다면 그것이 반영돼야 한다.
         PlanningContext context = planningContextBuilder.build(spec);
-        // 판단은 다시 하지 않고, 표식이 가리키는 항목의 취급만 서버가 내린다.
-        Generated generated = withItems(spec, context,
-                planJudgmentService.applyUserMarks(strategy, context));
-
+        Generated generated = withItems(spec, context, planJudgmentService.applyUserMarks(strategy, context));
         log.info("조각만 재생성: userId={}, 원본 proposalId={}", userId, proposalId);
         return persist(userId, generated, null, null, proposalId);
     }
+
+    /**
+     * 같은 조건으로 다시 만들기. 「이번만 빼기」·되돌리기·「이미 알아요」 뒤 재생성이 쓴다(계획 화면·상담 초안 공통).
+     *
+     * <p>기간·강도·범위·지시·지정 자료는 이 초안을 만든 요청(plan_request_json)을 그대로 쓴다. 근거 스냅샷도 함께 넘겨
+     * 달라진 것이 없으면 자료 선택을 생략하고, 달라졌으면 그 점을 초안에 표시한다.
+     *
+     * <p>모델 호출은 트랜잭션 밖이다. 실패하면 아무것도 바뀌지 않는다(기존 초안은 그대로 PROPOSED). 성공하면 짧은
+     * 트랜잭션에서 옛 초안이 아직 PROPOSED인지 잠그고 본 뒤 새 초안을 저장하고 옛 초안을 폐기한다.
+     */
+    public PlanDraftResponse redraft(Long userId, Long proposalId, PlanRedraftRequest body) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        // 같은 요청 키의 완료 결과가 있으면 원본 상태보다 먼저 본다 — 첫 시도가 성공해 원본이 DISMISSED가 됐다는 이유로
+        // 재시도(늦은 응답·새로고침)를 막지 않는다.
+        String requestKey = body == null ? null : body.getRequestKey();
+        PlanDraftResponse existing = existingForKey(userId, requestKey, proposalId);
+        if (existing != null) {
+            return existing;
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        }
+        PlanRequestContext context = readRequestContext(proposal.getPlanRequestJson());
+        if (context == null) {
+            throw new ConflictException(ErrorCode.PLAN_REDRAFT_CONTEXT_MISSING);
+        }
+        if (!progress.start(requestKey, userId)) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_IN_PROGRESS);
+        }
+        try {
+            PlanDraftRequest request = PlanDraftRequest.builder()
+                    .startDate(context.startDate())
+                    .endDate(context.endDate())
+                    .intensity(context.intensity())
+                    .title(context.title())
+                    .instruction(context.instruction())
+                    .courseIds(context.courseIds())
+                    .familiarityAnswer(context.familiarityAnswer())
+                    .familiarityTopicIds(context.familiarityTopicIds())
+                    .excludeTopicIds(body != null && body.getExcludeTopicIds() != null
+                            ? body.getExcludeTopicIds() : context.excludeTopicIds())
+                    .requestedMaterialIds(body != null && body.getRequestedMaterialIds() != null
+                            ? body.getRequestedMaterialIds() : context.requestedMaterialIds())
+                    .requestedSectionIds(context.requestedSectionIds())
+                    .requestKey(requestKey)
+                    .build();
+            // 다시 만들기는 같은 초안 흐름이다 — 처음 초안 id를 흐름의 뿌리로 이어 간다(THIS_DRAFT 합의의 범위).
+            Long flowRoot = context.flowRootProposalId() != null ? context.flowRootProposalId() : proposalId;
+            PeriodPlanDraftGenerator.Origin origin = new PeriodPlanDraftGenerator.Origin(context.conversationId(),
+                    null, requestKey, proposalId, flowRoot);
+            Generated generated = generate(userId, request, origin, context, stage -> progress.stage(requestKey, stage));
+            log.info("같은 조건으로 초안 다시 만들기: userId={}, 원본 proposalId={}, 제외={}개, 지정자료={}개, 선택 재사용={}",
+                    userId, proposalId, request.getExcludeTopicIds() == null ? 0 : request.getExcludeTopicIds().size(),
+                    request.getRequestedMaterialIds() == null ? 0 : request.getRequestedMaterialIds().size(),
+                    generated.extras() != null && generated.extras().selectionReused());
+            PlanDraftResponse response = persistSuperseding(userId, generated, context.conversationId(), proposalId);
+            progress.done(requestKey, response.getProposalId());
+            return response;
+        } catch (RuntimeException e) {
+            progress.failed(requestKey, e instanceof BusinessException b ? b.getErrorCode().getCode() : "ERROR");
+            throw e;
+        }
+    }
+
+    /**
+     * 옛 초안을 잠근 채(FOR UPDATE) 아직 PROPOSED인지 보고 → 새 제안·항목·계획 메타·요청 맥락 저장 → 옛 초안 폐기까지 한
+     * 트랜잭션이다. 그 사이 확정·폐기됐으면(동시 요청) 409 — 늦은 결과는 저장되지 않고 최신 초안을 덮지 않는다. 서로
+     * 다른 요청 키로 같은 원본을 동시에 대체해도 잠금이 직렬화하므로 유효한 대체 결과는 하나뿐이다.
+     */
+    public PlanDraftResponse persistSuperseding(Long userId, Generated generated, Long conversationId, Long supersededId) {
+        return transactions.execute(status -> {
+            AiProposal locked = aiProposalMapper.findByIdAndUserIdForUpdate(supersededId, userId);
+            if (locked == null || locked.getStatus() != AiProposalStatus.PROPOSED) {
+                throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+            }
+            return persistInTransaction(userId, generated, conversationId, null, supersededId);
+        });
+    }
+
+    PlanRequestContext readRequestContext(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(json, PlanRequestContext.class);
+        } catch (Exception e) {
+            log.warn("계획 요청 맥락을 읽지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private String requestContextJson(Spec spec, Generated generated, Long conversationId) {
+        PeriodPlanDraftGenerator.Extras extras = generated.extras();
+        PeriodPlanDraftGenerator.Origin origin = spec.origin();
+        try {
+            return requestJson.writeValueAsString(new PlanRequestContext(PlanRequestContext.VERSION,
+                    conversationId != null ? "CONVERSATION" : "PLAN_SCREEN", spec.start(), spec.end(),
+                    spec.intensity(), spec.title(), spec.instruction(), spec.courseIds(), spec.excludeTopicIds(),
+                    spec.requestedMaterialIds(), spec.requestedSectionIds(), null, null, conversationId,
+                    origin == null ? null : origin.requestKey(),
+                    extras == null ? null : extras.briefId(), extras == null ? null : extras.briefVersion(),
+                    origin == null ? null : origin.previousProposalId(),
+                    generated.extras() == null ? null : generated.extras().evidence(),
+                    origin == null ? null : origin.flowRootProposalId()));
+        } catch (Exception e) {
+            log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private PlanDraftResponse.RequestContextView requestContextView(Spec spec, MaterialSelectionSummary selection,
+                                                                    Long conversationId, boolean redraftable) {
+        java.util.Map<Long, String> titles = new java.util.HashMap<>();
+        if (selection != null) {
+            selection.excludedTopics().stream().filter(e -> "THIS_TIME".equals(e.reason()))
+                    .forEach(e -> titles.put(e.topicId(), e.title()));
+        }
+        List<PlanDraftResponse.ExcludedTopic> excluded = (spec.excludeTopicIds() == null ? List.<Long>of() : spec.excludeTopicIds())
+                .stream().distinct()
+                .map(id -> new PlanDraftResponse.ExcludedTopic(id, titles.get(id)))
+                .toList();
+        return PlanDraftResponse.RequestContextView.builder()
+                .source(conversationId != null ? "CONVERSATION" : "PLAN_SCREEN")
+                .courseIds(spec.courseIds())
+                .excludedTopics(excluded)
+                .requestedMaterials(selection == null ? List.of() : selection.requestedMaterials())
+                .redraftable(redraftable)
+                .build();
+    }
+
+    // ===== 저장 =====
 
     /**
      * 생성 결과를 제안과 계획 메타데이터로 저장한다. 어느 진입점이든 이 한 곳을 지난다.
@@ -226,25 +406,29 @@ public class PlanDraftService {
      * @param conversationId  대화에서 만들었으면 그 대화. 계획 화면이면 null.
      * @param sourceMessageId 대화에서 만들었으면 그 ASSISTANT 메시지. 계획 화면이면 null.
      */
-    @Transactional
     public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId, Long sourceMessageId) {
         return persist(userId, generated, conversationId, sourceMessageId, null);
     }
 
     /**
-     * @param supersededProposalId 이 초안이 대체하는 기존 제안. 같은 트랜잭션에서 폐기해
-     *                             살아 있는 제안이 둘로 남지 않게 한다
+     * 저장 구간. 상담 경로(AiTurnLifecycleService의 턴 완료 트랜잭션)에서 불리면 그 트랜잭션에 참여하고, 계획 화면 경로에서
+     * 불리면 여기서 하나를 연다. 어느 쪽이든 제안·항목·계획 메타·요청 맥락·옛 초안 폐기가 함께 성공하거나 함께 되돌아간다.
+     *
+     * @param supersededProposalId 이 초안이 대체하는 기존 제안. 같은 트랜잭션에서 폐기한다
      */
-    @Transactional
     public PlanDraftResponse persist(Long userId, Generated generated, Long conversationId,
                                      Long sourceMessageId, Long supersededProposalId) {
+        return transactions.execute(status -> persistInTransaction(userId, generated, conversationId, sourceMessageId,
+                supersededProposalId));
+    }
+
+    private PlanDraftResponse persistInTransaction(Long userId, Generated generated, Long conversationId,
+                                                   Long sourceMessageId, Long supersededProposalId) {
         Spec spec = generated.spec();
         int days = spec.days();
         int maxItems = spec.maxItems();
 
         if (generated.ask() != null) {
-            // 되묻는 중이다. 제안을 만들지 않는다 — 만들어진 계획은 사용자가 답을 고르기 전에
-            // 이미 화면의 기준점이 되어 대답을 유도한다.
             log.info("기간 계획 초안: 되묻기로 종료. userId={}, reason={}", userId, generated.ask().reason());
             return PlanDraftResponse.builder()
                     .startDate(spec.start()).endDate(spec.end()).days(days).intensity(spec.intensity())
@@ -252,10 +436,7 @@ public class PlanDraftService {
                     .ask(generated.ask())
                     .build();
         }
-
         if (generated.noAvailableTime()) {
-            // 남는 시간이 없으면 제안을 만들지 않는다. 실패가 아니라 "현재 추정으로는 배치할
-            // 시간이 없다"는 안내이고, 화면이 가용시간 수정 경로를 보여준다.
             log.info("기간 계획 초안: 가용시간 0으로 제안을 만들지 않음. userId={}, {}~{}", userId, spec.start(), spec.end());
             return PlanDraftResponse.builder()
                     .startDate(spec.start()).endDate(spec.end()).days(days).intensity(spec.intensity())
@@ -269,28 +450,35 @@ public class PlanDraftService {
         }
 
         AiProposalResponse proposal = aiProposalService.createFromItems(
-                userId, conversationId, sourceMessageId, generated.items(), List.of(), spec.start(), List.of(),
-                maxItems, evidenceJson(generated));
+                userId, conversationId, sourceMessageId, generated.items(), generated.adjustments(), spec.start(),
+                List.of(), maxItems, evidenceJson(generated));
 
-        // 판단은 제안에 얹어 둔다. 확정이 여기서 읽어 plan_versions로 옮기므로 클라이언트가
-        // 다시 보낼 필요가 없고, 사용자가 화면에서 본 판단과 저장되는 판단이 갈라지지 않는다.
-        // 출처 스냅샷도 같은 자리에 같은 이유로 얹는다.
         aiProposalMapper.updatePlanMetadata(
                 proposal.getProposalId(), userId, spec.start(), spec.end(), spec.intensity(),
                 generated.targetMinutes(), strategyCodec.toJson(generated.strategy()),
                 provenanceCodec.toJson(generated.provenance()));
-
+        String requestContext = requestContextJson(spec, generated, conversationId);
+        if (requestContext != null) {
+            aiProposalMapper.updatePlanRequest(proposal.getProposalId(), userId, requestContext);
+        }
         if (supersededProposalId != null) {
             aiProposalMapper.updateStatusAndRespondedAt(
                     supersededProposalId, userId, AiProposalStatus.DISMISSED, LocalDateTime.now());
         }
+        if (generated.extras() != null && generated.extras().briefId() != null) {
+            Long flowRoot = spec.origin() != null && spec.origin().flowRootProposalId() != null
+                    ? spec.origin().flowRootProposalId() : proposal.getProposalId();
+            planBriefService.markProposal(userId, generated.extras().briefId(), proposal.getProposalId(), flowRoot,
+                    spec.start(), spec.end());
+        }
 
-        log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, "
-                        + "baseline={}분, target={}분, 조정={}, 항목={}개, conversationId={}",
+        log.info("기간 계획 초안 생성: userId={}, proposalId={}, {}~{}({}일), intensity={}, target={}분, 항목={}개, 조정={}개, "
+                        + "conversationId={}, 대체={}",
                 userId, proposal.getProposalId(), spec.start(), spec.end(), days, spec.intensity(),
-                generated.baselineMinutes(), generated.targetMinutes(), generated.targetAdjusted(),
-                generated.items().size(), conversationId);
+                generated.targetMinutes(), generated.items().size(), generated.adjustments().size(), conversationId,
+                supersededProposalId);
 
+        PeriodPlanDraftGenerator.Extras extras = generated.extras();
         return PlanDraftResponse.builder()
                 .proposalId(proposal.getProposalId())
                 .startDate(spec.start())
@@ -311,13 +499,168 @@ public class PlanDraftService {
                 .proposal(proposal)
                 .strategy(PlanStrategyResponse.from(generated.strategy()))
                 .pendingMaterials(pendingMaterials(userId, spec))
+                .materialSelection(generated.materialSelection())
+                .requestContext(requestContextView(spec, generated.materialSelection(), conversationId, requestContext != null))
+                .generation(extras == null ? null : generationView(extras.budget(), extras.selectionReused()))
+                .previousDraft(supersededProposalId == null ? null : PlanDraftResponse.PreviousDraftView.builder()
+                        .proposalId(supersededProposalId)
+                        .changes(extras == null ? List.of() : extras.changesFromPrevious())
+                        .build())
+                .briefId(extras == null ? null : extras.briefId())
+                .briefVersion(extras == null ? null : extras.briefVersion())
                 .build();
     }
 
+    // ===== 검토 상태 =====
+
     /**
-     * 초안이 보지 못한 자료. 분석이 끝나지 않은 자료가 있어도 계획은 만든다 — 다만 그 사실을 응답에 싣는다.
-     * 조회 실패는 초안 실패가 아니다.
+     * 검토 상태 저장. 열린(PROPOSED) 초안에만 쓴다. 클라이언트가 보낸 version이 저장된 것과 다르면 409 — 늦은 자동 저장이
+     * 새 편집을 덮지 않는다. 저장은 실행 데이터를 바꾸지 않는다.
      */
+    public PlanReviewState saveReviewState(Long userId, Long proposalId, PlanReviewState incoming) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            throw new ConflictException(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        }
+        PlanReviewState stored = readReviewState(proposal.getReviewStateJson());
+        Integer storedVersion = stored == null ? null : stored.version();
+        Integer sent = incoming == null ? null : incoming.version();
+        if (!java.util.Objects.equals(storedVersion, sent)) {
+            throw new ConflictException(ErrorCode.PLAN_REVIEW_STATE_STALE);
+        }
+        PlanReviewState next = new PlanReviewState(storedVersion == null ? 1 : storedVersion + 1,
+                incoming == null ? null : blank(incoming.title()),
+                incoming == null || incoming.excludedProposalItemIds() == null ? List.of()
+                        : incoming.excludedProposalItemIds().stream().filter(java.util.Objects::nonNull).distinct().toList(),
+                incoming == null || incoming.editedItems() == null ? List.of() : incoming.editedItems(),
+                incoming == null || incoming.answers() == null ? java.util.Map.of() : incoming.answers(),
+                LocalDateTime.now());
+        String json;
+        try {
+            json = requestJson.writeValueAsString(next);
+        } catch (Exception e) {
+            throw new IllegalStateException("검토 상태 직렬화 실패", e);
+        }
+        int updated = aiProposalMapper.updateReviewState(proposalId, userId, json, storedVersion);
+        if (updated != 1) {
+            throw new ConflictException(ErrorCode.PLAN_REVIEW_STATE_STALE);
+        }
+        return next;
+    }
+
+    PlanReviewState readReviewState(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(json, PlanReviewState.class);
+        } catch (Exception e) {
+            log.warn("검토 상태를 읽지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    private static String blank(String s) {
+        return s == null || s.isBlank() ? null : s.strip();
+    }
+
+    // ===== 저장된 초안 다시 읽기 =====
+
+    /**
+     * 저장된 초안을 PlanDraftResponse 모양으로 다시 만든다. 새로고침·탭 이동 뒤 화면이 열린 초안을 되찾는 경로다.
+     * 모델을 부르지 않는다. 자료 선택·호출 계측은 근거 스냅샷의 서버 계산에서 복원한다.
+     */
+    @Transactional(readOnly = true)
+    public PlanDraftResponse loadDraft(Long userId, Long proposalId) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        /*
+         * 「이미 알아요」·되돌리기·다시 만들기는 새 초안을 만들고 옛 초안을 DISMISSED로 바꾼다. 상담 메시지나 세션이 옛 id를
+         * 들고 있어도 지금 열린 초안(대체 사슬의 끝)을 돌려준다 — 새로고침이 옛 초안이 아니라 최신 초안을 되찾게.
+         */
+        int hops = 0;
+        while (proposal.getStatus() == AiProposalStatus.DISMISSED && hops++ < 10) {
+            AiProposal replacement = aiProposalMapper.findProposedReplacing(userId, proposal.getProposalId());
+            if (replacement == null) {
+                break;
+            }
+            log.info("저장된 초안 다시 읽기: proposalId={}는 {}로 대체됐다", proposal.getProposalId(), replacement.getProposalId());
+            proposal = replacement;
+        }
+        if (proposal.getPlanStartDate() == null || proposal.getPlanEndDate() == null) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        AiProposalResponse response = aiProposalService.get(proposal.getProposalId(), userId);
+        PlanRequestContext context = readRequestContext(proposal.getPlanRequestJson());
+        PlanProvenance provenance = provenanceCodec.fromJson(proposal.getPlanProvenanceJson());
+        MaterialSelectionSummary selection = null;
+        PlanDraftResponse.GenerationView generation = null;
+        if (provenance != null && provenance.serverCalculations() != null) {
+            for (ServerCalculation calc : provenance.serverCalculations()) {
+                try {
+                    if (calc.kind() == ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION) {
+                        selection = requestJson.convertValue(calc.result(), MaterialSelectionSummary.class);
+                    } else if (calc.kind() == ServerCalculation.ServerCalculationKind.GENERATION_CALLS) {
+                        GenerationBudget.Summary summary = requestJson.convertValue(calc.result(), GenerationBudget.Summary.class);
+                        generation = generationView(summary, false);
+                    }
+                } catch (Exception e) {
+                    log.debug("저장된 초안의 서버 계산을 복원하지 못했다: kind={}", calc.kind());
+                }
+            }
+        }
+        Spec spec = new Spec(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(), proposal.getPlanIntensity(),
+                context == null ? null : context.instruction(), context == null ? null : context.title(),
+                context == null ? List.of() : context.courseIds(),
+                context == null || context.excludeTopicIds() == null ? List.of() : context.excludeTopicIds());
+        int items = response.getItems() == null ? 0 : response.getItems().size();
+        return PlanDraftResponse.builder()
+                .proposalId(proposal.getProposalId())
+                .startDate(spec.start()).endDate(spec.end()).days(spec.days()).intensity(spec.intensity())
+                .baselineMinutes(proposal.getPlanTargetMinutes()).targetMinutes(proposal.getPlanTargetMinutes())
+                .noAvailableTime(false)
+                .suggestedTitle(spec.title() != null ? spec.title()
+                        : spec.start().getMonthValue() + "월 " + spec.start().getDayOfMonth() + "일 ~ "
+                        + spec.end().getMonthValue() + "월 " + spec.end().getDayOfMonth() + "일 계획")
+                .proposal(response)
+                .strategy(PlanStrategyResponse.from(strategyCodec.fromJson(proposal.getPlanStrategyJson())))
+                .pendingMaterials(pendingMaterials(userId, spec))
+                .materialSelection(selection)
+                .requestContext(requestContextView(spec, selection, proposal.getConversationId(), context != null))
+                .generation(generation)
+                .previousDraft(context == null || context.previousProposalId() == null ? null
+                        : PlanDraftResponse.PreviousDraftView.builder().proposalId(context.previousProposalId())
+                        .changes(List.of()).build())
+                .briefId(context == null ? null : context.briefId())
+                .briefVersion(context == null ? null : context.briefVersion())
+                .reviewState(readReviewState(proposal.getReviewStateJson()))
+                .build();
+    }
+
+    private static PlanDraftResponse.GenerationView generationView(GenerationBudget.Summary s, boolean reused) {
+        if (s == null) {
+            return null;
+        }
+        List<String> calls = new ArrayList<>();
+        for (GenerationBudget.CallRecord r : s.calls() == null ? List.<GenerationBudget.CallRecord>of() : s.calls()) {
+            calls.add(r.kind() + "#" + r.round() + (r.success() ? "" : "(실패)")
+                    + (r.inputTokens() == null ? "" : " in=" + r.inputTokens())
+                    + (r.outputTokens() == null ? "" : " out=" + r.outputTokens()) + " " + r.latencyMs() + "ms");
+        }
+        return PlanDraftResponse.GenerationView.builder()
+                .normalCalls(s.normalCalls()).recoveryCalls(s.recoveryCalls())
+                .maxNormalCalls(s.maxNormalCalls()).maxTotalCalls(s.maxTotalCalls())
+                .retrievalRounds(s.retrievalRounds()).maxRetrievalRounds(s.maxRetrievalRounds())
+                .inputTokens(s.inputTokens()).outputTokens(s.outputTokens()).elapsedMs(s.elapsedMs())
+                .selectionReused(reused).calls(calls)
+                .build();
+    }
+
     private List<PlanDraftResponse.PendingMaterial> pendingMaterials(Long userId, Spec spec) {
         try {
             List<Long> courseIds = spec.courseIds() == null || spec.courseIds().isEmpty()
@@ -333,13 +676,6 @@ public class PlanDraftService {
         }
     }
 
-    /**
-     * 항목별 근거를 저장 계층이 받는 모양(JSON 문자열)으로 옮긴다.
-     *
-     * <p>근거를 못 만든 경로(v0 등)는 빈 목록이고, 그러면 저장도 근거를 붙이지 않는다.
-     * 항목 수와 근거 수가 어긋나면 붙이지 않는다 — 저장 계층에도 같은 검사가 있지만,
-     * 여기서 먼저 걸러야 어느 생성 경로가 어긋났는지가 로그에 남는다.
-     */
     private List<String> evidenceJson(Generated generated) {
         List<PlanItemEvidence> evidence = generated.itemEvidence();
         if (evidence == null || evidence.isEmpty()) {
@@ -357,10 +693,6 @@ public class PlanDraftService {
         return json;
     }
 
-    /**
-     * 강도대로라면 담겼어야 하는데 상한 때문에 못 담은 시간. 상한에 걸리지 않았으면 null이다 —
-     * 0을 보내면 화면이 "0분 못 담았다"는 줄을 그린다.
-     */
     private Integer uncoveredMinutes(Generated generated) {
         if (!generated.targetCappedByItemLimit()) {
             return null;
