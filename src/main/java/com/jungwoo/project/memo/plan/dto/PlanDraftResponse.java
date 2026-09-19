@@ -54,6 +54,41 @@ public class PlanDraftResponse {
      */
     private String availabilityConfidenceSummary;
 
+    /**
+     * 가용시간이 어디서 왔는가: ALL_ASSUMED(등록된 일정·가용시간이 없어 기본 시간대를 가정) / PARTLY_ASSUMED /
+     * CONFIRMED / NONE. 화면은 가정일 때 "학습 목표 N분"처럼 단정하지 않고 임시 배치임을 말한다.
+     * 일정 조회가 실패하면 생성 자체가 실패한다 — 조회 오류가 "일정 없음"으로 바뀌어 여기까지 오지 않는다.
+     */
+    public String getAvailabilityBasis() {
+        if (availabilityConfidenceSummary == null) {
+            return "NONE";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_ALL_DEFAULT)) {
+            return "ALL_ASSUMED";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_PARTLY_DEFAULT)) {
+            return "PARTLY_ASSUMED";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_CONFIRMED)) {
+            return "CONFIRMED";
+        }
+        return "NONE";
+    }
+
+    /** 실제로 제안된(빼지 않은) 항목의 예상 시간 합(분). 예산(targetMinutes)은 상한이지 목표량이 아니다. */
+    public Integer getProposedMinutes() {
+        if (proposal == null || proposal.getItems() == null) {
+            return null;
+        }
+        return proposal.getItems().stream()
+                .filter(i -> i.getStatus() == null
+                        || i.getStatus() != com.jungwoo.project.memo.ai.domain.AiProposalItemStatus.DISMISSED)
+                .mapToInt(i -> i.getExpectedMinutes() == null ? 0 : i.getExpectedMinutes()).sum();
+    }
+
     /** 추정 남는 시간에서 학습 예산을 뺀 여유(분). 휴식·변동에 남겨 둔 시간이다. */
     private Integer reservedBufferMinutes;
 

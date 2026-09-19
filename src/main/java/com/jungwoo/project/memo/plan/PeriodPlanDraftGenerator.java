@@ -124,7 +124,7 @@ public class PeriodPlanDraftGenerator {
     public static final int SHORT_PLAN_DAYS = 7;
 
     /** 일정·평가 줄 수 상한. 개강일·시험·평가 비율이면 충분하다. */
-    private static final int MAX_SCHEDULE_LINES_PER_COURSE = 8;
+    private static final int MAX_SCHEDULE_LINES_PER_COURSE = 12;
 
     /** AiProposalService가 강제하는 항목별 시간 범위. 프롬프트에도 같은 값을 알려준다. */
     public static final int MIN_ITEM_MINUTES = 5;
@@ -155,6 +155,14 @@ public class PeriodPlanDraftGenerator {
     private final AiMessageMapper aiMessageMapper;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
+    /** 실제 전달 기록. 생성의 부속물이라 없어도(단위 테스트) 생성은 돈다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService traceService;
+
+    public void setTraceService(com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService traceService) {
+        this.traceService = traceService;
+    }
+
     /**
      * 계획 호출 한 번의 입력 토큰 예산(시스템 + 사용자, 추정·여유 포함). 넘으면 [더 읽을 수 있는 구간] 목록을 빼고, 고른
      * 구간의 원문 글자 상한을 줄이고, 그래도 넘으면 뒤에서부터 원문을 싣지 않는다(결과에 NOT_RETRIEVED_BUDGET으로 남긴다).
@@ -182,16 +190,32 @@ public class PeriodPlanDraftGenerator {
     private String defaultTimeZoneId = "Asia/Seoul";
 
     /** 한 생성의 정상 모델 호출 상한(선택 1~2 + 계획 1~2). */
-    @Value("${plan.draft.max-normal-calls:3}")
-    private int maxNormalCalls = 3;
+    @Value("${plan.draft.max-normal-calls:4}")
+    private int maxNormalCalls = 4;
 
     /** 형식·검증 오류의 복구 호출 상한. */
     @Value("${plan.draft.max-recovery-calls:1}")
     private int maxRecoveryCalls = 1;
 
     /** 요청 전체 모델 호출 상한. */
-    @Value("${plan.draft.max-total-calls:4}")
-    private int maxTotalCalls = 4;
+    @Value("${plan.draft.max-total-calls:5}")
+    private int maxTotalCalls = 5;
+
+    /** 한 회차의 입력 토큰 합 상한(선택 + 계획 + 추가 읽기 + 복구). */
+    @Value("${plan.draft.max-total-input-tokens:90000}")
+    private int maxTotalInputTokens = 90000;
+
+    /** 한 회차의 전체 경과 시간 상한(초). 넘으면 새 호출을 시작하지 않는다. */
+    @Value("${plan.draft.max-elapsed-seconds:170}")
+    private int maxElapsedSeconds = 170;
+
+    /** 선택적 호출(펼친 선택·추가 읽기 뒤 계획)을 새로 시작할 수 있는 마지막 시점(초). */
+    @Value("${plan.draft.optional-call-deadline-seconds:75}")
+    private int optionalCallDeadlineSeconds = 75;
+
+    /** 선택 호출 한 번의 입력 예산(선택기와 같은 값 — 펼친 선택을 허용할지 셈할 때 쓴다). */
+    @Value("${plan.selection.input-token-budget:16000}")
+    private int selectionInputTokenBudget = 16000;
 
     /** 본문 조회 라운드 상한(첫 조회 + 추가 읽기). */
     @Value("${plan.draft.max-retrieval-rounds:2}")
@@ -493,7 +517,10 @@ public class PeriodPlanDraftGenerator {
         Options opts = options == null ? Options.none() : options;
         int maxItems = maxItemsFor(days);
         List<Course> courses = resolveCourses(spec.userId(), spec.courseIds());
-        GenerationBudget budget = new GenerationBudget(maxNormalCalls, maxRecoveryCalls, maxTotalCalls, maxRetrievalRounds);
+        GenerationBudget budget = new GenerationBudget(new GenerationBudget.Limits(maxNormalCalls, maxRecoveryCalls,
+                maxTotalCalls, maxRetrievalRounds, maxTotalInputTokens, maxElapsedSeconds * 1000L,
+                optionalCallDeadlineSeconds * 1000L), System::currentTimeMillis);
+        List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry> traceEntries = new ArrayList<>();
         opts.stage(PlanGenerationProgress.Stage.COLLECTING);
 
         /*
@@ -571,8 +598,18 @@ public class PeriodPlanDraftGenerator {
             selection = materialSelector.select(new PlanMaterialSelector.Request(
                     spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), spec.instruction(),
                     catalogs, contexts.stream().map(UserContext::getContent).toList(), requested.materials(),
-                    requested.ambiguities()));
+                    requested.ambiguities(),
+                    /*
+                     * 펼친 선택은 선택적 호출이다. 이 시점에 첫 선택 호출은 아직 예산에 기록되지 않았으므로(선택이 끝난 뒤
+                     * 한꺼번에 기록한다) 남겨 둘 필수 호출을 2(방금 한 첫 선택 + 최종 계획)로 센다.
+                     */
+                    () -> budget.canCallOptional("펼친 자료 선택", 2, selectionInputTokenBudget * 2, planInputTokenBudget)));
             long latency = System.currentTimeMillis() - startedAt;
+            for (PlanMaterialSelector.CallTrace t : selection.traces()) {
+                traceEntries.add(new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry(t.kind(),
+                        modelName, t.estimatedTokens(), t.systemPrompt(), t.userPrompt(), t.sectionIds(), t.topicIds(),
+                        List.of(), materialIdsOf(catalogs), courseCounts(selection, List.of())));
+            }
             for (int i = 0; i < selection.calls(); i++) {
                 Integer estimate = selection.estimatedInputTokens().size() > i ? selection.estimatedInputTokens().get(i) : null;
                 budget.record(i == 0 ? GenerationBudget.Call.SELECTION : GenerationBudget.Call.SELECTION_EXPAND, i + 1,
@@ -594,8 +631,14 @@ public class PeriodPlanDraftGenerator {
 
         // ===== 4. 최종 계획 호출(+ 복구 1회) =====
         opts.stage(PlanGenerationProgress.Stage.PLANNING);
-        PlanDraftAiResult ai = callWithRecovery(spec, prompt, days, maxItems, generationId, budget,
-                GenerationBudget.Call.PLAN, 1);
+        traceEntries.add(planTrace("PLAN", prompt, inputs, catalogs));
+        PlanDraftAiResult ai;
+        try {
+            ai = callWithRecovery(spec, prompt, days, maxItems, generationId, budget, GenerationBudget.Call.PLAN, 1);
+        } catch (RuntimeException e) {
+            saveTraces(spec.userId(), generationId, traceEntries); // 실패한 회차일수록 무엇을 보냈는지가 필요하다.
+            throw e;
+        }
 
         // ===== 5. 추가 근거 요청(상한 안에서 1회) =====
         List<String> serverUnread = new ArrayList<>();
@@ -603,11 +646,13 @@ public class PeriodPlanDraftGenerator {
             List<PlanMaterialRetriever.Target> more = moreTargets(ai.moreEvidence(), selection, prompt, catalogs, retrieved);
             if (more.isEmpty()) {
                 serverUnread.add("최종 판단이 추가로 읽자고 한 구간이 후보 목록에 없거나 이미 읽은 것이라 더 읽지 않았다");
-            } else if (!budget.canRetrieveAgain() || !budget.canCallNormal()) {
-                serverUnread.add("최종 판단이 구간 " + more.size() + "개를 더 읽자고 했지만 호출·조회 상한("
-                        + budget.maxNormalCalls() + "회/" + budget.maxRetrievalRounds() + "라운드)에 닿아 읽지 못했다 — "
-                        + "읽은 범위에서 만든 초안이다");
-                log.info("계획 초안: 추가 읽기 요청 {}개를 상한 때문에 거절. workflowId={}", more.size(), generationId);
+            } else if (!budget.canRetrieveAgain()
+                    || !budget.canCallOptional("추가 읽기 뒤 계획", 0, prompt.estimatedTokens(), 0)) {
+                List<String> why = budget.refusals();
+                serverUnread.add("최종 판단이 구간 " + more.size() + "개를 더 읽자고 했지만 이번 회차의 한도("
+                        + (why.isEmpty() ? "조회 " + budget.maxRetrievalRounds() + "라운드" : why.get(why.size() - 1))
+                        + ")에 닿아 읽지 못했다 — 읽은 범위에서 만든 초안이다");
+                log.info("계획 초안: 추가 읽기 요청 {}개를 상한 때문에 거절({}). workflowId={}", more.size(), why, generationId);
             } else {
                 opts.stage(PlanGenerationProgress.Stage.READING_MORE);
                 List<PlanMaterialRetriever.Retrieved> extra = materialRetriever.retrieve(spec.userId(), more, scope,
@@ -624,8 +669,17 @@ public class PeriodPlanDraftGenerator {
                         cappedByItemLimit, generationId, capturedAt, inputs);
                 inputs = prompt.inputs();
                 opts.stage(PlanGenerationProgress.Stage.PLANNING);
-                ai = callWithRecovery(spec, prompt, days, maxItems, generationId, budget,
-                        GenerationBudget.Call.PLAN_MORE_EVIDENCE, 2);
+                traceEntries.add(planTrace("PLAN_MORE_EVIDENCE", prompt, inputs, catalogs));
+                PlanDraftAiResult firstDraft = ai;
+                try {
+                    ai = callWithRecovery(spec, prompt, days, maxItems, generationId, budget,
+                            GenerationBudget.Call.PLAN_MORE_EVIDENCE, 2);
+                } catch (RuntimeException e) {
+                    // 추가 읽기는 선택적이다 — 실패하면 처음 읽은 범위의 초안을 그대로 쓴다.
+                    log.warn("계획 초안: 추가 읽기 뒤 계획 호출 실패 — 첫 초안을 쓴다. workflowId={}", generationId);
+                    serverUnread.add("구간을 더 읽은 뒤 다시 정리하는 데 실패해 처음 읽은 범위의 초안을 그대로 썼다");
+                    ai = firstDraft;
+                }
                 if (ai.moreEvidence() != null && !ai.moreEvidence().isEmpty()) {
                     serverUnread.add("두 번째 판단도 근거를 더 요청했지만 조회 라운드 상한이라 읽지 않았다");
                 }
@@ -639,6 +693,7 @@ public class PeriodPlanDraftGenerator {
         PlanResultNormalizer.Normalized normalized = PlanResultNormalizer.normalize(ai, spec.start(), spec.end(),
                 capturedAt, courses, provenance, prompt.deadlineFacts(), prompt.existingByRef(), serverUnread,
                 changesFromPrevious);
+        saveTraces(spec.userId(), generationId, traceEntries);
         if (normalized.items().isEmpty() && normalized.adjustments().isEmpty()) {
             log.warn("계획 초안: 쓸 항목이 없다. userId={}, 모델 항목 수={}, 고른 구간={}, workflowId={}", spec.userId(),
                     ai.items() == null ? 0 : ai.items().size(), selection.sections().size(), generationId);
@@ -664,15 +719,119 @@ public class PeriodPlanDraftGenerator {
                 budget.elapsedMs(), reused, normalized.items().size(), normalized.adjustments().size(),
                 normalized.unknownRefs());
 
+        List<com.jungwoo.project.memo.plan.domain.ProjectOutcome> outcomes = projectOutcomes(courses, catalogs,
+                selection, retrieved, prompt, ai, normalized.items());
+        PlanStrategy finalStrategy = normalized.strategy().withProjects(outcomes);
+        collector.calculation(ServerCalculation.ServerCalculationKind.PROJECT_OUTCOMES, false, List.of(),
+                ServerCalculation.InputLineage.COMPLETE,
+                "대상 프로젝트별 처리 결과와 실제 전달 집계. 입력 전문과 줄로 실린 id는 plan_generation_traces(generationId)에 있다",
+                Map.of("projects", objectMapper.convertValue(outcomes, List.class),
+                        "apiCommit", traceService == null || traceService.commit() == null ? "" : traceService.commit()));
+
         PlanRequestContext.EvidenceSnapshot snapshot = snapshot(fingerprint, capturedAt, selection, retrieved);
         return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
                 blankToNull(ai.goalSummary()) != null ? ai.goalSummary() : normalized.strategy().goal(),
                 normalized.items(), available, confidence, available - target, false, cappedByItemLimit,
-                normalized.strategy(), null, collector.build(), normalized.evidence(), summary,
+                finalStrategy, null, collector.build(), normalized.evidence(), summary,
                 new Extras(budgetSummary, snapshot, normalized.adjustments(), changesFromPrevious, reused,
                         facts.brief() == null ? null : facts.brief().briefId(),
                         facts.brief() == null ? null : facts.brief().version()));
+    }
+
+    // ===== 프로젝트별 처리 결과·전달 기록 =====
+
+    private List<com.jungwoo.project.memo.plan.domain.ProjectOutcome> projectOutcomes(
+            List<Course> courses, List<PlanMaterialContextService.CourseCatalog> catalogs,
+            PlanMaterialSelector.Result selection, List<PlanMaterialRetriever.Retrieved> retrieved, PlanPrompt prompt,
+            PlanDraftAiResult ai, List<ProposalItem> items) {
+        Map<Long, PlanMaterialContextService.CourseCatalog> catalogByCourse = new HashMap<>();
+        catalogs.forEach(c -> catalogByCourse.put(c.courseId(), c));
+        Map<Long, PlanMaterialSelector.CourseExposure> exposureByCourse = new HashMap<>();
+        selection.exposure().forEach(e -> exposureByCourse.put(e.courseId(), e));
+        boolean reused = selection.mode() == PlanMaterialSelector.Mode.REUSED;
+
+        List<com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.Facts> facts = new ArrayList<>();
+        for (Course course : courses) {
+            Long courseId = course.getCourseId();
+            PlanMaterialContextService.CourseCatalog catalog = catalogByCourse.get(courseId);
+            PlanMaterialSelector.CourseExposure exposure = exposureByCourse.get(courseId);
+            int selected = (int) selection.sections().stream()
+                    .filter(s -> Objects.equals(s.catalog().courseId(), courseId)).count();
+            List<Long> delivered = new ArrayList<>();
+            int failed = 0;
+            for (PlanMaterialRetriever.Retrieved r : retrieved) {
+                if (!Objects.equals(r.target().courseId(), courseId)) {
+                    continue;
+                }
+                if (prompt.refBySection().containsKey(r.target().sectionId())) {
+                    delivered.add(r.target().sectionId());
+                } else {
+                    failed++;
+                }
+            }
+            facts.add(new com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.Facts(courseId,
+                    course.getTitle(), catalog == null ? 0 : catalog.materials().size(),
+                    catalog == null ? 0 : catalog.pending().size(), catalog == null ? 0 : catalog.candidateCount(),
+                    reused || exposure == null ? null : exposure.shown(), selected, delivered.size(), failed, delivered,
+                    exposure == null ? null : exposure.modelDecision(), exposure == null ? null : exposure.modelReason(),
+                    exposure != null && exposure.outlineShown() && !exposure.expandRequested()));
+        }
+        List<com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.ModelOut> outs = new ArrayList<>();
+        if (ai.strategy() != null && ai.strategy().projects() != null) {
+            for (PlanDraftAiResult.ProjectOut p : ai.strategy().projects()) {
+                if (p != null) {
+                    outs.add(new com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.ModelOut(p.courseId(),
+                            p.disposition(), p.reason(), p.nextAction()));
+                }
+            }
+        }
+        Map<Long, com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.ItemTotals> totals = new HashMap<>();
+        for (ProposalItem item : items) {
+            if (item.courseId() == null) {
+                continue;
+            }
+            totals.merge(item.courseId(),
+                    new com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.ItemTotals(1,
+                            item.expectedMinutes() == null ? 0 : item.expectedMinutes()),
+                    (a, b) -> new com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.ItemTotals(
+                            a.count() + b.count(), a.minutes() + b.minutes()));
+        }
+        return com.jungwoo.project.memo.plan.generation.ProjectOutcomeResolver.resolve(facts, outs, totals);
+    }
+
+    private com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry planTrace(
+            String kind, PlanPrompt prompt, PlanInputs inputs, List<PlanMaterialContextService.CourseCatalog> catalogs) {
+        List<Long> delivered = new ArrayList<>(prompt.refBySection().keySet());
+        return new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry(kind, modelName,
+                prompt.estimatedTokens(), SYSTEM_PROMPT, prompt.text(), List.of(), List.of(), delivered,
+                materialIdsOf(catalogs), courseCounts(inputs.selection(), delivered));
+    }
+
+    private static List<Long> materialIdsOf(List<PlanMaterialContextService.CourseCatalog> catalogs) {
+        return catalogs.stream().flatMap(c -> c.materials().stream()).map(CourseMaterial::getMaterialId).distinct().toList();
+    }
+
+    private static List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.CourseCount> courseCounts(
+            PlanMaterialSelector.Result selection, List<Long> deliveredSectionIds) {
+        Set<Long> delivered = new HashSet<>(deliveredSectionIds);
+        List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.CourseCount> out = new ArrayList<>();
+        for (PlanMaterialSelector.CourseExposure e : selection.exposure()) {
+            int deliveredCount = (int) selection.sections().stream()
+                    .filter(s -> Objects.equals(s.catalog().courseId(), e.courseId()))
+                    .filter(s -> delivered.contains(s.line().section().getSectionId())).count();
+            out.add(new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.CourseCount(e.courseId(),
+                    e.courseTitle(), e.candidates(), e.shown(), e.selected(), deliveredCount));
+        }
+        return out;
+    }
+
+    private void saveTraces(Long userId, String generationId,
+                            List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry> entries) {
+        if (traceService != null && !entries.isEmpty()) {
+            traceService.save(userId, generationId, new ArrayList<>(entries));
+            entries.clear();
+        }
     }
 
     // ===== 사실 수집 =====
@@ -1054,6 +1213,10 @@ public class PeriodPlanDraftGenerator {
         return Math.toIntExact(total);
     }
 
+    public static final String CONFIDENCE_ALL_DEFAULT = "기본 시간대(09~23시에서 확정 일정을 뺀 시간)를 사용한 추정";
+    public static final String CONFIDENCE_PARTLY_DEFAULT = "일부는 기본 시간대를 사용한 추정";
+    public static final String CONFIDENCE_CONFIRMED = "사용자가 확인한 시간 기준";
+
     /** 추정 근거 요약. 기본 시간대(근거 없음, LOW)가 섞여 있으면 그 사실을 말한다. */
     static String confidenceSummary(List<AvailabilityWindow> windows) {
         if (windows.isEmpty()) {
@@ -1065,12 +1228,12 @@ public class PeriodPlanDraftGenerator {
         boolean allDefault = windows.stream()
                 .allMatch(w -> w.source() == AvailabilitySource.DEFAULT_INFERENCE);
         if (allDefault) {
-            return "기본 시간대(09~23시에서 확정 일정을 뺀 시간)를 사용한 추정";
+            return CONFIDENCE_ALL_DEFAULT;
         }
         if (anyDefault) {
-            return "일부는 기본 시간대를 사용한 추정";
+            return CONFIDENCE_PARTLY_DEFAULT;
         }
-        return "사용자가 확인한 시간 기준";
+        return CONFIDENCE_CONFIRMED;
     }
 
     // ===== AI 호출 =====
@@ -1095,7 +1258,9 @@ public class PeriodPlanDraftGenerator {
                 "assumptions": ["확인되지 않은 가정(식사·휴식·익숙함 등)"],
                 "questions": ["답에 따라 계획이 달라지는 질문 하나(없으면 빈 배열)"],
                 "unread": ["읽지 못했지만 중요해 보이는 자료·범위"],
-                "changes": [{"what": "이전 초안·합의에서 달라진 점", "why": "근거"}]
+                "changes": [{"what": "이전 초안·합의에서 달라진 점", "why": "근거"}],
+                "projects": [{"courseId": 정수, "disposition": "INCLUDED" | "EXCLUDED" | "UNDECIDED",
+                              "reason": "사용자가 읽을 한 문장", "nextAction": null}]
               },
               "items": [
                 {
@@ -1111,7 +1276,8 @@ public class PeriodPlanDraftGenerator {
                   "reflects": "이전 실행 결과에서 반영한 것(없으면 null)",
                   "refIds": ["s3"],
                   "deadlineRefId": "s9" 또는 null,
-                  "targetCompleteAt": "YYYY-MM-DDTHH:mm" 또는 null
+                  "targetCompleteAt": "YYYY-MM-DDTHH:mm" 또는 null,
+                  "origin": "SOURCE_TASK" | "AI_PRACTICE" | "USER_REQUEST"
                 }
               ],
               "existingItems": [{"refId": "s12", "action": "KEEP" | "REDUCE" | "MOVE" | "DROP",
@@ -1123,6 +1289,21 @@ public class PeriodPlanDraftGenerator {
             - refIds에는 이 항목의 근거가 된 입력 줄의 대괄호 값(예: s3)만 넣는다. 아래 입력에 실제로 있는 값만 쓴다 —
               없는 값은 서버가 버리고 근거로 보여주지 않는다. 근거로 삼은 줄이 없으면 빈 배열로 둔다. 있어 보이게 채우지 마라.
             - courseId는 [대상 프로젝트]에 실린 id만 쓴다. 해당 없으면 null.
+            - strategy.projects에는 [대상 프로젝트]의 프로젝트를 하나도 빠짐없이, 각각 한 번씩 적는다. 항목을 만들었으면
+              INCLUDED, 네가 판단해서 이번에 뺐으면 EXCLUDED(사용자 지시·이미 앎·시간 등 이유를 적는다), 본 범위만으로는
+              정할 수 없으면 UNDECIDED(무엇을 알면 정할 수 있는지 적는다). 원문이나 목록을 보지 못한 프로젝트를 "중요도가
+              낮아서 미뤘다"고 쓰지 않는다 — 보지 못했으면 UNDECIDED이고 이유는 "보지 못함"이다. 자료 상태는 서버가 따로
+              붙이므로 네가 추측해 적지 않는다.
+            - origin: 자료 원문에 실제로 있는 과제·실습·문제를 하는 항목이면 SOURCE_TASK(그 원문 구간을 refIds에 넣는다),
+              원문을 바탕으로 네가 만든 추가 연습·회수·변형이면 AI_PRACTICE, 사용자가 직접 요청한 준비 작업이면 USER_REQUEST.
+              네가 만든 연습을 원문에 있는 문제처럼 쓰지 않는다.
+            - 운영 안내(평가 비율·출결·연락처·수업 규칙·교재 안내)는 계획을 판단하는 배경이다. 시험 범위·마감·주차 주제는
+              일정과 범위의 근거로 쓰되, 운영 안내 자체를 요약·정리·암기하는 항목은 사용자가 요청했을 때만 만든다
+              (그때는 origin을 USER_REQUEST로 한다). 설명과 운영 안내가 섞인 구간에서는 학습 내용만 항목으로 만든다.
+            - 자료가 있다는 것, 수업에서 다뤘다는 것, 사용자가 해 봤다는 것, 이해했다는 것은 서로 다른 사실이다. 입력에 없는
+              것을 가정하지 않는다 — 모르면 assumptions나 questions에 적는다. "기록 없음"은 "안 배움"이 아니다.
+            - [일정 후보]는 자료에서 읽은 날짜일 뿐 확정된 시간표·마감이 아니다. 범위를 가늠하는 데 쓰되 확정 마감처럼
+              deadlineRefId로 가리키지 않는다. 자료 번호를 주차로 단정하지 않는다.
             - 마감: 수업 전에 끝내야 하는 항목은 그 프로젝트의 "다음 수업" 줄을 deadlineRefId로 가리키고, 과제 마감 전에
               끝내야 하는 항목은 그 과제 줄을 가리킨다. 서버가 그 사실의 시각을 붙인다 — 수업·과제 시각을 네가 옮겨 적지 않는다.
               그런 사실 없이 네가 완료 목표를 제안하려면 targetCompleteAt에 적는다(사용자가 고칠 수 있는 제안으로 표시된다).
@@ -1682,9 +1863,10 @@ public class PeriodPlanDraftGenerator {
         PlanPromptBlocks.appendHistory(sb, inputs.facts().history(), courseId, collector, "  ");
 
         if (course != null) {
-            List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId());
+            List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId(), catalog);
             if (!scheduleLines.isEmpty()) {
-                sb.append("  [일정·평가]").append("\n");
+                sb.append("  [일정·평가] (\"일정 후보\"로 시작하는 줄은 자료에서 읽은 날짜다 — 사용자가 확인한 시간표·마감이 아니다)")
+                        .append("\n");
                 Map<Long, CourseMaterial> materials = materialsOfSchedule(userId, scheduleLines);
                 for (ScheduleLine line : scheduleLines) {
                     CourseMaterial material = line.materialId() != null ? materials.get(line.materialId()) : null;
@@ -2038,8 +2220,15 @@ public class PeriodPlanDraftGenerator {
     }
 
     /** 일정과 평가. 개강일이 있어야 모델이 "지금 몇 주차인지"를 계산할 수 있다. */
-    private List<ScheduleLine> courseScheduleLines(Long userId, Long courseId) {
+    private List<ScheduleLine> courseScheduleLines(Long userId, Long courseId,
+                                                   PlanMaterialContextService.CourseCatalog catalog) {
         List<ScheduleLine> lines = new ArrayList<>();
+        /*
+         * (2026-09-19) 자동 분석 흐름의 일정. 옛 흐름(course_material_analyses.keyDates)만 읽으면 자료를 올리기만 한
+         * 사용자에게는 강의계획서의 개강일·시험·주차가 계획 입력에 전혀 들어가지 않는다. 구간의 날짜 후보를 "일정 후보"로
+         * 싣는다 — 후보는 자료에서 읽은 것이지 사용자가 확인한 시간표가 아니므로 확정 일정(루틴·약속)과 섞지 않는다.
+         */
+        lines.addAll(sectionScheduleCandidates(catalog));
         for (CourseMaterialAnalysis analysis : analysisMapper.findAppliedByCourseIdAndUserId(courseId, userId)) {
             String json = analysis.getEditedJson() != null ? analysis.getEditedJson() : analysis.getAnalysisJson();
             try {
@@ -2075,6 +2264,54 @@ public class PeriodPlanDraftGenerator {
             }
         }
         return distinct;
+    }
+
+    /** 자동 분석이 구간에 남긴 날짜 후보. 연도가 확실한 것은 날짜로, 월·일만 있는 것은 그 표현 그대로 싣는다. */
+    private List<ScheduleLine> sectionScheduleCandidates(PlanMaterialContextService.CourseCatalog catalog) {
+        if (catalog == null) {
+            return List.of();
+        }
+        List<ScheduleLine> out = new ArrayList<>();
+        List<Object[]> ranked = new ArrayList<>();
+        for (PlanMaterialContextService.SectionLine line : catalog.sections()) {
+            MaterialSection section = line.section();
+            String json = section.getDateCandidatesJson();
+            if (json == null || json.isBlank() || "[]".equals(json.trim())) {
+                continue;
+            }
+            try {
+                List<com.jungwoo.project.memo.material.analysis.ContentAnalysisPayload.DateCandidate> candidates =
+                        objectMapper.readValue(json, objectMapper.getTypeFactory().constructCollectionType(List.class,
+                                com.jungwoo.project.memo.material.analysis.ContentAnalysisPayload.DateCandidate.class));
+                for (var c : candidates) {
+                    if (c == null || c.text() == null || c.text().isBlank()) {
+                        continue;
+                    }
+                    String kind = c.kind() == null ? "OTHER" : c.kind().toUpperCase(java.util.Locale.ROOT);
+                    String kindLabel = switch (kind) {
+                        case "DUE" -> "제출";
+                        case "EXAM" -> "시험";
+                        case "CLASS" -> "수업";
+                        default -> "날짜";
+                    };
+                    String when = c.isoDate() != null ? c.isoDate()
+                            : c.monthDay() != null ? c.monthDay() + "(연도 미확인)" : "날짜 미확인";
+                    String text = "일정 후보(" + kindLabel + ", 미확정): " + PlanCatalogText.cut(PlanCatalogText.flat(c.text()), 80)
+                            + " — " + when + (Boolean.TRUE.equals(c.relative()) ? ", 기준일이 있어야 해석됨" : "")
+                            + " · 자료 " + (line.material() == null ? "" : line.material().getOriginalFilename())
+                            + (section.locator().isBlank() ? "" : " " + section.locator());
+                    ranked.add(new Object[]{"EXAM".equals(kind) ? 0 : "DUE".equals(kind) ? 1 : "CLASS".equals(kind) ? 2 : 3,
+                            c.isoDate() == null ? "9999" : c.isoDate(),
+                            new ScheduleLine(ProvenanceSourceType.MATERIAL_KEY_DATE, null, text, section.getMaterialId())});
+                }
+            } catch (Exception e) {
+                log.debug("계획 생성: 구간의 날짜 후보를 읽지 못했다. sectionId={}", section.getSectionId());
+            }
+        }
+        // 시험·제출을 먼저, 그다음 수업 날짜를 이른 순으로(개강일이 있어야 지금이 몇 주차인지 가늠할 수 있다).
+        ranked.sort(java.util.Comparator.<Object[], Integer>comparing(r -> (Integer) r[0]).thenComparing(r -> (String) r[1]));
+        ranked.forEach(r -> out.add((ScheduleLine) r[2]));
+        return out;
     }
 
     /** 대상 프로젝트. 지정한 id는 소유 확인을 거치고, 비어 있으면 활성 전체다. */

@@ -215,6 +215,20 @@ public class PlanController {
     }
 
     /**
+     * 이 초안을 만든 회차에 모델 호출마다 <b>실제로 보낸 것</b>: 줄로 실린 구간·학습 항목 id, 원문이 실린 구간 id,
+     * 프로젝트별 집계, 실행 서버 커밋. 개발 검증용이다 — 소유자만 읽고, 기본은 id·집계·해시만 준다.
+     * 프롬프트 전문(자료 원문 포함)은 {@code includeText=true}일 때만 준다. 자료를 지웠으면 전문은 이미 없다.
+     */
+    @GetMapping("/drafts/{proposalId}/trace")
+    public ResponseEntity<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse> draftTrace(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId,
+            @RequestParam(defaultValue = "false") boolean includeText
+    ) {
+        return ResponseEntity.ok(planProvenanceService.traceForProposal(principal.getUserId(), proposalId, includeText));
+    }
+
+    /**
      * 적용된 실행 조각의 근거. 계획 화면과 오늘 화면이 같은 응답을 쓴다.
      *
      * <p>같은 사실을 화면마다 다른 모양으로 복제하지 않으려고 초안 경로와 같은 DTO를 쓴다.

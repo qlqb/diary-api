@@ -647,17 +647,67 @@ public class AiConversationService {
         return kept.isEmpty() ? null : kept;
     }
 
+    private static String minutesText(int minutes) {
+        if (minutes < 60) {
+            return minutes + "분";
+        }
+        return (minutes / 60) + "시간" + (minutes % 60 == 0 ? "" : " " + (minutes % 60) + "분");
+    }
+
+    /** 대상 프로젝트 중 이번 초안에 없는 것을 이유의 종류별로 말한다. 숨은 패널을 열지 않아도 누락을 알 수 있어야 한다. */
+    static String coverageSentence(com.jungwoo.project.memo.plan.domain.PlanStrategy strategy) {
+        if (strategy == null || strategy.projects() == null || strategy.projects().size() < 2) {
+            return "";
+        }
+        List<String> notReviewed = new ArrayList<>();
+        List<String> undecided = new ArrayList<>();
+        List<String> excluded = new ArrayList<>();
+        for (com.jungwoo.project.memo.plan.domain.ProjectOutcome p : strategy.projects()) {
+            switch (p.disposition()) {
+                case NOT_REVIEWED -> notReviewed.add(p.courseTitle());
+                case UNDECIDED -> undecided.add(p.courseTitle());
+                case EXCLUDED_BY_CHOICE -> excluded.add(p.courseTitle());
+                default -> {
+                }
+            }
+        }
+        if (notReviewed.isEmpty() && undecided.isEmpty() && excluded.isEmpty()) {
+            return " 대상 프로젝트 " + strategy.projects().size() + "개를 모두 다뤘어요.";
+        }
+        StringBuilder sb = new StringBuilder(" 대상 프로젝트 ").append(strategy.projects().size()).append("개 중 ");
+        List<String> parts = new ArrayList<>();
+        if (!notReviewed.isEmpty()) {
+            parts.add(String.join("·", notReviewed) + "은(는) 이번에 검토하지 못했어요(중요도 판단이 아니에요)");
+        }
+        if (!undecided.isEmpty()) {
+            parts.add(String.join("·", undecided) + "은(는) 아직 정하지 못했어요");
+        }
+        if (!excluded.isEmpty()) {
+            parts.add(String.join("·", excluded) + "은(는) 이번에는 뺐어요");
+        }
+        return sb.append(String.join(", ", parts)).append(".").toString();
+    }
+
     private String periodPlanReply(PeriodPlanDraftGenerator.Generated generated) {
         LocalDate start = generated.spec().start();
         LocalDate end = generated.spec().end();
         String period = start.equals(end)
                 ? start.getMonthValue() + "/" + start.getDayOfMonth()
                 : start.getMonthValue() + "/" + start.getDayOfMonth() + "~" + end.getMonthValue() + "/" + end.getDayOfMonth();
+        int proposed = generated.items().stream().mapToInt(i -> i.expectedMinutes() == null ? 0 : i.expectedMinutes()).sum();
+        /*
+         * 첫 문장은 실제로 제안한 양이다. 예산("학습 목표 N분")을 앞세우면 낮은 신뢰도의 가용시간 가정이 채워야 할
+         * 목표처럼 읽힌다(2026-09-19 진단: 기본 시간대 가정 705분을 목표로 안내). 예산은 채울 할당량이 아니다.
+         */
         StringBuilder sb = new StringBuilder(period).append(" 계획 초안을 만들었어요. 항목 ")
-                .append(generated.items().size()).append("개, 학습 목표 약 ").append(generated.targetMinutes()).append("분.");
+                .append(generated.items().size()).append("개, 합계 약 ").append(minutesText(proposed)).append(".");
+        if (PeriodPlanDraftGenerator.CONFIDENCE_ALL_DEFAULT.equals(generated.availabilityConfidenceSummary())) {
+            sb.append(" 등록된 일정이 없어 하루 중 가능한 시간은 가정이에요 — 배치는 임시예요.");
+        }
         if (generated.strategy() != null && hasText(generated.strategy().goal())) {
             sb.append(" 목표: ").append(generated.strategy().goal().strip());
         }
+        sb.append(coverageSentence(generated.strategy()));
         if (generated.strategy() != null && generated.strategy().openQuestions() != null
                 && !generated.strategy().openQuestions().isEmpty()) {
             sb.append(" 확인이 필요한 것: ").append(generated.strategy().openQuestions().get(0));

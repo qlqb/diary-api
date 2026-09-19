@@ -331,7 +331,8 @@ class PlanProvenanceCaptureTest {
                         // 자료 선택 결과(후보가 없으면 NO_CANDIDATES)도 서버 계산으로 남는다.
                         ServerCalculation.ServerCalculationKind.MATERIAL_SELECTION,
                         // 호출 수·토큰·지연·상한. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
-                        ServerCalculation.ServerCalculationKind.GENERATION_CALLS);
+                        ServerCalculation.ServerCalculationKind.GENERATION_CALLS,
+                        ServerCalculation.ServerCalculationKind.PROJECT_OUTCOMES);
 
         ServerCalculation availability = provenance.serverCalculations().get(0);
         assertThat(availability.providedToModel()).isTrue();

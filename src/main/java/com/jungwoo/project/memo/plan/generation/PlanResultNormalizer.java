@@ -82,6 +82,7 @@ public final class PlanResultNormalizer {
 
         List<ProposalItem> items = new ArrayList<>();
         List<PlanItemEvidence> evidence = new ArrayList<>();
+        List<PlanStrategy.Deferred> operationalDeferred = new ArrayList<>();
         int totalUnknown = 0;
         for (PlanDraftAiResult.PlanDraftAiItem raw : ai.items() == null ? List.<PlanDraftAiResult.PlanDraftAiItem>of() : ai.items()) {
             if (raw == null || raw.title() == null || raw.title().isBlank()) {
@@ -103,6 +104,20 @@ public final class PlanResultNormalizer {
                 }
             }
             totalUnknown += unknown;
+
+            String origin = normalizeOrigin(raw.origin(), refs, byRef);
+            if (citesOnlyOperationalInfo(refs, byRef) && !ORIGIN_USER_REQUEST.equals(origin)) {
+                /*
+                 * 운영 안내(평가 비율·연락처·수업 규칙)만 근거로 든 항목은 요청 없이 학습 항목이 되지 않는다. 판단 기준은 제목의
+                 * 단어가 아니라 분석이 붙인 구간 역할이다 — 설명과 운영 안내가 섞인 구간(역할에 CONCEPT 등이 함께 있다)은
+                 * 걸리지 않는다. 버리지 않고 "미룬 범위"에 이유와 함께 남긴다.
+                 */
+                log.info("계획 초안: 운영 안내만 근거로 든 항목을 학습 항목으로 만들지 않는다. title={}", raw.title());
+                operationalDeferred.add(new PlanStrategy.Deferred(cut(raw.title(), MAX_TEXT),
+                        "운영 안내(평가·연락처·수업 규칙 등)는 계획을 판단하는 배경으로만 썼어요. 직접 정리하고 싶으면 상담에서 "
+                                + "요청하면 준비 작업으로 넣어요.", null, firstSectionId(refs, byRef)));
+                continue;
+            }
 
             LocalDate scheduled = parseDateInRange(raw.scheduledDate(), start, end);
             /*
@@ -135,7 +150,7 @@ public final class PlanResultNormalizer {
 
             List<String> estimates = aiEstimates(raw, scheduled, deadline);
             evidence.add(PlanItemEvidence.of(provenance.generationId(), refs, blankToNull(raw.reason()), estimates,
-                    List.of(), unknown + (deadline.unknownRef ? 1 : 0)));
+                    List.of(), unknown + (deadline.unknownRef ? 1 : 0)).withOrigin(origin));
         }
         if (totalUnknown > 0) {
             log.warn("계획 초안: 모델이 이번 회차에 없는 인용 {}건을 냈다. generationId={}", totalUnknown,
@@ -146,7 +161,84 @@ public final class PlanResultNormalizer {
         List<ProposalAdjustment> adjustments = existingDecisions(ai.existingItems(), existing, byRef, start, end,
                 existingDecisions);
         PlanStrategy strategy = strategy(ai, allowedCourseIds, byRef, serverUnread, changesFromPrevious, existingDecisions);
+        if (!operationalDeferred.isEmpty()) {
+            List<PlanStrategy.Deferred> merged = new ArrayList<>(strategy.deferred() == null ? List.of() : strategy.deferred());
+            merged.addAll(operationalDeferred);
+            strategy = strategy.withDeferred(merged);
+        }
         return new Normalized(items, evidence, strategy, adjustments, existingDecisions, totalUnknown);
+    }
+
+    // ===== 출처 유형·운영 안내 =====
+
+    public static final String ORIGIN_SOURCE_TASK = "SOURCE_TASK";
+    public static final String ORIGIN_AI_PRACTICE = "AI_PRACTICE";
+    public static final String ORIGIN_USER_REQUEST = "USER_REQUEST";
+
+    /**
+     * 모델이 낸 출처 유형을 검증한다. SOURCE_TASK("자료 원문에 있는 과제·실습")는 이번 회차에 원문이 전달된 구간을
+     * 인용했을 때만 인정하고, 아니면 AI_PRACTICE로 낮춘다 — 모델이 만든 연습이 원문 문제처럼 보이면 안 된다.
+     * 값이 없거나 모르는 값이면 null(표시하지 않음)이다.
+     */
+    static String normalizeOrigin(String raw, List<String> refs, Map<String, ProvidedSource> byRef) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String origin = raw.trim().toUpperCase(Locale.ROOT);
+        if (ORIGIN_SOURCE_TASK.equals(origin)) {
+            boolean citesText = refs.stream().map(byRef::get)
+                    .anyMatch(s -> s != null && s.sourceType() == ProvenanceSourceType.MATERIAL_SECTION);
+            return citesText ? ORIGIN_SOURCE_TASK : ORIGIN_AI_PRACTICE;
+        }
+        if (ORIGIN_AI_PRACTICE.equals(origin) || ORIGIN_USER_REQUEST.equals(origin)) {
+            return origin;
+        }
+        return null;
+    }
+
+    /** 인용한 근거가 구간뿐이고, 그 구간의 역할이 전부 운영 안내(ADMIN, 또는 ADMIN과 SCHEDULE)뿐인가. */
+    static boolean citesOnlyOperationalInfo(List<String> refs, Map<String, ProvidedSource> byRef) {
+        boolean anySection = false;
+        for (String ref : refs) {
+            ProvidedSource s = byRef.get(ref);
+            if (s == null) {
+                continue;
+            }
+            if (s.sourceType() != ProvenanceSourceType.MATERIAL_SECTION) {
+                if (s.sourceType() == ProvenanceSourceType.TOPIC) {
+                    return false; // 학습 항목을 함께 근거로 들었다.
+                }
+                continue;
+            }
+            anySection = true;
+            Object roles = s.providedValue() == null ? null : s.providedValue().get("roles");
+            if (!(roles instanceof java.util.Collection<?> list) || list.isEmpty()) {
+                return false; // 역할을 모르면 막지 않는다.
+            }
+            boolean hasAdmin = false;
+            for (Object role : list) {
+                String r = String.valueOf(role).toUpperCase(Locale.ROOT);
+                if ("ADMIN".equals(r)) {
+                    hasAdmin = true;
+                } else if (!"SCHEDULE".equals(r)) {
+                    return false; // 설명·예제·연습이 섞인 구간이다.
+                }
+            }
+            if (!hasAdmin) {
+                return false;
+            }
+        }
+        return anySection;
+    }
+
+    private static Long firstSectionId(List<String> refs, Map<String, ProvidedSource> byRef) {
+        for (String ref : refs) {
+            ProvidedSource s = byRef.get(ref);
+            if (s != null && s.sourceType() == ProvenanceSourceType.MATERIAL_SECTION) {
+                return s.sourceId();
+            }
+        }
+        return null;
     }
 
     // ===== 마감 =====

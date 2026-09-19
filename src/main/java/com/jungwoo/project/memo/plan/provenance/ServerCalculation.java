@@ -40,7 +40,10 @@ public record ServerCalculation(
         MATERIAL_SELECTION,
 
         /** 이번 생성의 호출·토큰·지연·상한. 원문은 없다. */
-        GENERATION_CALLS
+        GENERATION_CALLS,
+
+        /** 대상 프로젝트별 처리 결과(포함·의도적 제외·판단 보류·미검토)와 실제 전달 집계, 실행 서버 커밋. */
+        PROJECT_OUTCOMES
     }
 
     public enum InputLineage {

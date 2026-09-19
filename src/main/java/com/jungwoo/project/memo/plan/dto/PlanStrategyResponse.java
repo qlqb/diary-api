@@ -32,7 +32,9 @@ public record PlanStrategyResponse(
         List<String> openQuestions,
         List<String> unreadNotes,
         List<ChangeLine> changes,
-        List<ExistingLine> existingDecisions
+        List<ExistingLine> existingDecisions,
+        /** 대상 프로젝트별 처리 결과. 예전 초안은 빈 목록이다. */
+        List<com.jungwoo.project.memo.plan.domain.ProjectOutcome> projects
 ) {
 
     /**
@@ -96,7 +98,8 @@ public record PlanStrategyResponse(
         }
         return new PlanStrategyResponse(strategy.goal(), strategy.strategySummary(), courses, topics,
                 strategy.reach(), orEmpty(strategy.keptDecisions()), deferred, orEmpty(strategy.assumptions()),
-                orEmpty(strategy.openQuestions()), orEmpty(strategy.unreadNotes()), changes, existing);
+                orEmpty(strategy.openQuestions()), orEmpty(strategy.unreadNotes()), changes, existing,
+                strategy.projects() == null ? List.of() : strategy.projects());
     }
 
     private static List<String> orEmpty(List<String> list) {
