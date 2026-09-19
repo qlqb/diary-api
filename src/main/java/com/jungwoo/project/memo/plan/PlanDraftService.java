@@ -480,7 +480,7 @@ public class PlanDraftService {
                 supersededProposalId);
 
         PeriodPlanDraftGenerator.Extras extras = generated.extras();
-        return PlanDraftResponse.builder()
+        return withItemReasons(userId, PlanDraftResponse.builder()
                 .proposalId(proposal.getProposalId())
                 .startDate(spec.start())
                 .endDate(spec.end())
@@ -509,7 +509,7 @@ public class PlanDraftService {
                         .build())
                 .briefId(extras == null ? null : extras.briefId())
                 .briefVersion(extras == null ? null : extras.briefVersion())
-                .build();
+                .build());
     }
 
     // ===== 검토 상태 =====
@@ -612,8 +612,16 @@ public class PlanDraftService {
         List<String> reasons = new ArrayList<>();
         try {
             if (context != null && context.briefId() != null && context.briefVersion() != null) {
+                /*
+                 * 판 번호만 비교하면 안 된다 — 초안을 만든 직후 서버가 합의에 "이 초안으로 이어짐"을 적으면서도 판이
+                 * 오른다(실호출에서 방금 만든 초안이 곧바로 "갱신 필요"로 보였다). 초안이 저장된 뒤에 바뀐 합의 항목이
+                 * 실제로 있는지를 본다.
+                 */
                 var brief = planBriefService.loadById(userId, context.briefId());
-                if (brief != null && brief.version() > context.briefVersion()) {
+                java.time.LocalDateTime createdAt = proposal.getCreatedAt();
+                if (brief != null && brief.version() > context.briefVersion() && createdAt != null
+                        && brief.items().stream().anyMatch(i -> i.updatedAt() != null
+                        && i.updatedAt().isAfter(createdAt.plusSeconds(2)))) {
                     reasons.add("이 초안을 만든 뒤 상담에서 조건이 바뀌었어요.");
                 }
             }
@@ -643,6 +651,39 @@ public class PlanDraftService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.AiProposalItemMapper aiProposalItemMapper;
+
+    /**
+     * 항목 카드가 첫 화면에서 보여야 하는 근거 두 가지(선정 이유·출처 유형)를 항목 응답에 붙인다. 근거 원본은
+     * evidence_json 하나다 — 저장 직후·재조회·다시 만들기 어느 경로로 와도 같은 값이 보이게 여기 한곳에서 읽는다.
+     */
+    private PlanDraftResponse withItemReasons(Long userId, PlanDraftResponse response) {
+        if (response == null || response.getProposal() == null || response.getProposal().getItems() == null
+                || aiProposalItemMapper == null) {
+            return response;
+        }
+        try {
+            java.util.Map<Long, com.jungwoo.project.memo.plan.provenance.PlanItemEvidence> byItem = new java.util.HashMap<>();
+            for (var row : aiProposalItemMapper.findByProposalIdAndUserId(response.getProposalId(), userId)) {
+                var evidence = provenanceCodec.evidenceFromJson(row.getEvidenceJson());
+                if (evidence != null) {
+                    byItem.put(row.getProposalItemId(), evidence);
+                }
+            }
+            for (var item : response.getProposal().getItems()) {
+                var evidence = byItem.get(item.getProposalItemId());
+                if (evidence != null) {
+                    item.setSelectionReason(evidence.reason());
+                    item.setOrigin(evidence.origin());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("초안 항목의 선정 이유를 붙이지 못했다: proposalId={}", response.getProposalId());
+        }
+        return response;
+    }
 
     public PlanDraftResponse loadDraft(Long userId, Long proposalId) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
@@ -689,7 +730,7 @@ public class PlanDraftService {
                 context == null ? List.of() : context.courseIds(),
                 context == null || context.excludeTopicIds() == null ? List.of() : context.excludeTopicIds());
         int items = response.getItems() == null ? 0 : response.getItems().size();
-        return PlanDraftResponse.builder()
+        return withItemReasons(userId, PlanDraftResponse.builder()
                 .proposalId(proposal.getProposalId())
                 .startDate(spec.start()).endDate(spec.end()).days(spec.days()).intensity(spec.intensity())
                 .baselineMinutes(proposal.getPlanTargetMinutes()).targetMinutes(proposal.getPlanTargetMinutes())
@@ -710,7 +751,7 @@ public class PlanDraftService {
                 .briefVersion(context == null ? null : context.briefVersion())
                 .reviewState(readReviewState(proposal.getReviewStateJson()))
                 .freshness(freshnessOf(userId, proposal, context, provenance))
-                .build();
+                .build());
     }
 
     private static PlanDraftResponse.GenerationView generationView(GenerationBudget.Summary s, boolean reused) {

@@ -338,7 +338,7 @@ public class AiConversationService {
     private com.jungwoo.project.memo.ai.consult.ConsultTurnService consultTurnService;
 
     static final String ASSUMED_INTENSITY_NOTE =
-            " (분량은 우선 '보통'으로 가정했어요. 쓸 수 있는 시간이 정해져 있으면 말해 주세요 — 그 시간이 우선이에요.)";
+            " (분량은 '보통'을 기준으로 잡아요. 쓸 수 있는 시간을 말해 줬다면 그 시간이 우선이에요.)";
 
     static final String PLAN_NOW_MESSAGE = "지금까지 얘기한 내용으로 계획을 만들어 줘. 남은 질문은 가정으로 두고 진행해 줘.";
 

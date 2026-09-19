@@ -64,7 +64,13 @@ public class ConsultTurnService {
                             saved.getContent(), saved.getEvidenceType().name(), scopeLabel(saved), true));
                 }
             }
-            understanding.addAll(briefUnderstanding(userId, conversationId, userMessageId));
+            // 같은 말이 기억과 합의 양쪽에 남았으면 화면에는 한 번만 보인다(기억 쪽 — 바로 고칠 수 있다).
+            for (ConsultView.Understanding brief : briefUnderstanding(userId, conversationId, userMessageId)) {
+                boolean sameAsMemory = understanding.stream().anyMatch(m -> similar(m.text(), brief.text()));
+                if (!sameAsMemory) {
+                    understanding.add(brief);
+                }
+            }
 
             ConsultView view = new ConsultView(question(out, assistantMessageId), understanding, direction(out),
                     activity(out));
@@ -205,6 +211,14 @@ public class ConsultTurnService {
                     ContextEvidenceType.STATED.name(), scope, true));
         }
         return out;
+    }
+
+    /** 표시용 중복 판단: 공백·문장부호를 뺀 앞부분이 같으면 같은 말로 본다. 저장에는 영향을 주지 않는다. */
+    static boolean similar(String a, String b) {
+        String x = a == null ? "" : a.replaceAll("[\\s\\p{Punct}·…]+", "");
+        String y = b == null ? "" : b.replaceAll("[\\s\\p{Punct}·…]+", "");
+        int n = Math.min(14, Math.min(x.length(), y.length()));
+        return n >= 8 && x.regionMatches(0, y, 0, n);
     }
 
     private static String scopeLabel(UserContextResponse c) {

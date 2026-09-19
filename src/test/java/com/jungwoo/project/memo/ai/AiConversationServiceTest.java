@@ -711,7 +711,7 @@ class AiConversationServiceTest {
 
         // (2026-09-19) 강도는 필수 질문이 아니다. 모르면 '보통'을 가정으로 두고 그렇게 말한 뒤 바로 제안한다.
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
-        assertThat(sink.completed.reply()).startsWith("만들어볼까요?").contains("'보통'으로 가정");
+        assertThat(sink.completed.reply()).startsWith("만들어볼까요?").contains("'보통'을 기준으로");
         assertThat(sink.completed.quickReplies()).isEmpty();
         assertThat(sink.offerAction).isNotNull();
         assertThat(sink.offerAction.intensity())

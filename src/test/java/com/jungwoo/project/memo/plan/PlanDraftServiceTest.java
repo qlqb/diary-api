@@ -806,4 +806,31 @@ class PlanDraftServiceTest {
                 List.of(), List.of(), new AvailabilityEstimateResult(List.of(), List.of()),
                 List.of(), null, null);
     }
+
+    /**
+     * handoff §14.2 — 바뀌지 않은 결과를 최신처럼, 바뀌지 않았는데 오래된 것처럼 보여 주지 않는다.
+     * 실호출에서 방금 만든 초안이 "갱신 필요"로 보였다: 생성 직후 서버가 합의에 초안 id를 적으면서도 판이 오른다.
+     */
+    @Test
+    void freshness_합의_판만_올랐을_때는_최신이고_초안_뒤에_바뀐_합의_항목이_있을_때만_갱신_필요다() {
+        java.time.LocalDateTime created = java.time.LocalDateTime.of(2026, 9, 19, 17, 33);
+        AiProposal proposal = AiProposal.builder().proposalId(9L).createdAt(created).build();
+        com.jungwoo.project.memo.plan.selection.PlanRequestContext context = org.mockito.Mockito.mock(
+                com.jungwoo.project.memo.plan.selection.PlanRequestContext.class);
+        when(context.briefId()).thenReturn(5L);
+        when(context.briefVersion()).thenReturn(3);
+        java.util.function.Function<java.time.LocalDateTime, com.jungwoo.project.memo.ai.brief.PlanBriefItem> item = at ->
+                new com.jungwoo.project.memo.ai.brief.PlanBriefItem(1, "TIME_BUDGET", "오늘 한 시간만", "USER", true, false,
+                        false, "THIS_DRAFT", 1L, 1L, null, null, null, null, 1, List.of(), at);
+
+        when(planBriefService.loadById(1L, 5L)).thenReturn(new com.jungwoo.project.memo.ai.brief.PlanBriefService.View(
+                5L, 7L, 4, List.of(item.apply(created.minusMinutes(1))), 9L));
+        assertThat(service.freshnessOf(1L, proposal, context, null).state()).isEqualTo("CURRENT");
+
+        when(planBriefService.loadById(1L, 5L)).thenReturn(new com.jungwoo.project.memo.ai.brief.PlanBriefService.View(
+                5L, 7L, 5, List.of(item.apply(created.plusMinutes(4))), 9L));
+        PlanDraftResponse.Freshness stale = service.freshnessOf(1L, proposal, context, null);
+        assertThat(stale.state()).isEqualTo("STALE");
+        assertThat(stale.reasons()).singleElement().asString().contains("상담에서 조건이 바뀌었어요");
+    }
 }

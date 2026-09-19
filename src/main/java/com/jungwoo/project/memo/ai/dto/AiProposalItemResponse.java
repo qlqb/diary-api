@@ -80,4 +80,13 @@ public class AiProposalItemResponse {
     private LocalDate beforeScheduledDate;
     /** 왜 이렇게 바꾸자는지. 조정 카드에서만 채운다. */
     private String reason;
+
+    /**
+     * (기간 계획의 새 항목) 왜 지금 이것을 하는지 — 모델이 쓴 한 문장. 판단이지 확인된 사실이 아니다.
+     * "꼭" 항목은 이 이유가 함께 보여야 한다. 서버가 가진 근거(evidence_json)에서 읽어 붙이며 클라이언트가 덮어쓸 수 없다.
+     */
+    private String selectionReason;
+
+    /** 항목의 출처 유형(서버 검증 뒤): SOURCE_TASK / AI_PRACTICE / USER_REQUEST. 없으면 null. */
+    private String origin;
 }
