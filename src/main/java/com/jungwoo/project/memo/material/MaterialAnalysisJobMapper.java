@@ -26,7 +26,13 @@ public interface MaterialAnalysisJobMapper {
      */
     List<MaterialAnalysisJob> findClaimable(@Param("now") LocalDateTime now,
                                             @Param("minPriority") Integer minPriority,
-                                            @Param("limit") int limit);
+                                            @Param("limit") int limit,
+                                            @Param("blocked") List<java.util.Map<String, Object>> blocked);
+
+    /** 한도 제외 없이 찾는 옛 시그니처. */
+    default List<MaterialAnalysisJob> findClaimable(LocalDateTime now, Integer minPriority, int limit) {
+        return findClaimable(now, minPriority, limit, List.of());
+    }
 
     /**
      * 원자적 선점. 영향 행이 1이어야 실행한다. leaseToken은 +1, attempt는 +1.
@@ -86,6 +92,10 @@ public interface MaterialAnalysisJobMapper {
 
     /** 오늘 시작한(선점된) 작업 수 — 사용자별 하루 한도. */
     int countStartedSince(@Param("userId") Long userId, @Param("since") LocalDateTime since);
+
+    /** 종류별 하루 사용량. 한도는 CONTENT와 LINK를 따로 센다. */
+    int countStartedSinceByKind(@Param("userId") Long userId, @Param("since") LocalDateTime since,
+                                @Param("kind") String kind);
 
     /** CONTENT 결과가 있는데 LINK 작업이 아직 없는 (자료, 프로젝트) 링크. LINK 등록 대상. */
     List<MaterialAnalysisJob> findContentDoneWithoutLink(@Param("analysisVersion") Integer analysisVersion,

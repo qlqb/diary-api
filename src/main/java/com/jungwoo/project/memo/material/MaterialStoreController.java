@@ -111,6 +111,8 @@ public class MaterialStoreController {
         String encodedName = URLEncoder.encode(file.filename(), StandardCharsets.UTF_8).replace("+", "%20");
         ResponseEntity.BodyBuilder response = ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename*=UTF-8''" + encodedName)
+                // 저장한 형식 그대로만 해석하게 한다 — 평문 자료(.sh)를 브라우저가 다른 형식으로 추측해 열지 않는다.
+                .header("X-Content-Type-Options", "nosniff")
                 .contentType(file.contentType() != null
                         ? MediaType.parseMediaType(file.contentType())
                         : MediaType.APPLICATION_OCTET_STREAM);

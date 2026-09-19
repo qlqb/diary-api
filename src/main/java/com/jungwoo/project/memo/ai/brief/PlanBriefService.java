@@ -43,6 +43,7 @@ public class PlanBriefService {
     public static final int MAX_ITEMS = 40;
     public static final int MAX_TEXT_CHARS = 300;
     static final Set<String> KINDS = Set.of("GOAL", "PRIORITY", "EXCLUDE", "TIME_CONSTRAINT", "FREQUENCY", "SCOPE",
+            "DEPTH", "TIME_BUDGET",
             "DIFFICULTY", "CAUSE", "OTHER");
     static final Set<String> OPS = Set.of("ADD", "ACCEPT", "REJECT", "UPDATE", "REMOVE");
 
@@ -296,7 +297,7 @@ public class PlanBriefService {
                 continue;
             }
             if ("ADD".equals(kind)) {
-                String text = clean(op.text());
+                String text = withTimeBudget(clean(op.text()), op);
                 if (text == null || items.stream().filter(i -> !i.removed()).count() >= MAX_ITEMS) {
                     continue;
                 }
@@ -328,7 +329,7 @@ public class PlanBriefService {
                 case "REJECT" -> current.rejected() ? null : current.withRejected(now);
                 case "REMOVE" -> current.removed() ? null : current.withRemoved(now);
                 case "UPDATE" -> {
-                    String text = clean(op.text());
+                    String text = withTimeBudget(clean(op.text()), op);
                     LocalDate start = parseDate(op.periodStart());
                     LocalDate end = parseDate(op.periodEnd());
                     boolean datesGiven = start != null && end != null && !end.isBefore(start);
@@ -424,6 +425,48 @@ public class PlanBriefService {
         return flat.length() <= MAX_TEXT_CHARS ? flat : flat.substring(0, MAX_TEXT_CHARS);
     }
 
+    // ===== 쓸 수 있는 시간 =====
+
+    private static final java.util.regex.Pattern TIME_BUDGET_TAG =
+            java.util.regex.Pattern.compile("\\(쓸 수 있는 시간 (\\d{1,4})분 · (계획 전체|하루)\\)$");
+
+    /** 사용자가 말한 시간. per가 DAY면 하루 기준이다. */
+    public record TimeBudget(int minutes, boolean perDay) {
+        /** 기간 전체로 환산한 분. */
+        public int totalFor(int days) {
+            return perDay ? minutes * Math.max(1, days) : minutes;
+        }
+    }
+
+    /**
+     * TIME_BUDGET 합의의 분(minutes)을 문장 끝에 읽을 수 있는 꼬리표로 붙여 저장한다 — 합의 항목은 문장이 원본이고, 같은
+     * 문장에서 서버가 값을 다시 읽는다(별도 필드를 두면 문장과 값이 어긋난 채 남을 수 있다). 사용자에게도 그대로 보인다.
+     */
+    static String withTimeBudget(String text, PlanBriefOp op) {
+        if (text == null || !"TIME_BUDGET".equals(kindOf(op.kind())) || op.minutes() == null
+                || op.minutes() < 5 || op.minutes() > 9999 || TIME_BUDGET_TAG.matcher(text).find()) {
+            return text;
+        }
+        boolean perDay = "DAY".equalsIgnoreCase(op.per());
+        String tagged = text + " (쓸 수 있는 시간 " + op.minutes() + "분 · " + (perDay ? "하루" : "계획 전체") + ")";
+        return tagged.length() > MAX_TEXT_CHARS ? text : tagged;
+    }
+
+    /** 유효한 합의 중 사용자가 말한 "쓸 수 있는 시간". 여러 개면 가장 최근 것. 없으면 null. */
+    public static TimeBudget timeBudgetOf(List<PlanBriefItem> effective) {
+        TimeBudget found = null;
+        for (PlanBriefItem item : effective == null ? List.<PlanBriefItem>of() : effective) {
+            if (!"TIME_BUDGET".equals(item.kind()) || !PlanBriefItem.SPEAKER_USER.equals(item.speaker())) {
+                continue; // AI가 제안만 한 시간은 사용자의 제약이 아니다.
+            }
+            java.util.regex.Matcher m = TIME_BUDGET_TAG.matcher(item.text());
+            if (m.find()) {
+                found = new TimeBudget(Integer.parseInt(m.group(1)), "하루".equals(m.group(2)));
+            }
+        }
+        return found;
+    }
+
     // ===== 프롬프트 =====
 
     public static String kindLabel(String kind) {
@@ -434,6 +477,8 @@ public class PlanBriefService {
             case "TIME_CONSTRAINT" -> "시간 제약(상한)";
             case "FREQUENCY" -> "반복 빈도(매일 등)";
             case "SCOPE" -> "범위";
+            case "DEPTH" -> "깊이(점검·복습·처음부터·문제 풀이)";
+            case "TIME_BUDGET" -> "쓸 수 있는 시간";
             case "DIFFICULTY" -> "확인된 어려움";
             case "CAUSE" -> "원인(사용자 확인)";
             default -> "기타";

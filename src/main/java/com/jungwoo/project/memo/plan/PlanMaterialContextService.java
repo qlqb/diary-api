@@ -125,6 +125,10 @@ public class PlanMaterialContextService {
     public record AssignmentLine(CourseAssignment assignment, MaterialSection section, CourseMaterial material) {
     }
 
+    /** 승인 전 구조 제안의 노드 하나. nodeId는 "p{proposalId}:{tempId}" — 학습 항목 id가 아니다. */
+    public record ProposedGroup(String nodeId, String title) {
+    }
+
     public record PendingMaterial(Long materialId, String filename, String state, Long courseId) {
     }
 
@@ -143,10 +147,52 @@ public class PlanMaterialContextService {
      * @param unconfirmed  아직 과제인지 확인하지 않은 후보
      * @param materials    이 프로젝트의 자료(요청 지정 자료 포함)
      */
+    /** 승인 전 구조 제안의 읽기 전용 색인. 없으면(단위 테스트) 색인 없이 자료별 묶음으로 보인다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.structure.ProposedTopicIndex proposedTopicIndex;
+
+    public void setProposedTopicIndex(com.jungwoo.project.memo.learning.structure.ProposedTopicIndex index) {
+        this.proposedTopicIndex = index;
+    }
+
+    /**
+     * 학습 항목에 연결되지 않은 구간만 제안 노드로 묶는다. 이미 승인된 구조가 있는 구간은 그 구조가 우선이다.
+     * 아무것도 쓰지 않는다 — 승인 전 제안을 읽었다고 학습 항목이나 진도가 생기지 않는다.
+     */
+    private Map<Long, ProposedGroup> proposedGroups(Long userId, Long courseId, Map<Long, CourseMaterial> materials,
+                                                    List<SectionLine> sections) {
+        if (proposedTopicIndex == null || courseId == null || sections.stream().noneMatch(s -> s.topicIds().isEmpty())) {
+            return Map.of();
+        }
+        Map<Long, com.jungwoo.project.memo.learning.structure.ProposedTopicIndex.Node> bySection =
+                proposedTopicIndex.forCourse(userId, courseId, materials).bySection();
+        Map<Long, ProposedGroup> out = new HashMap<>();
+        for (SectionLine line : sections) {
+            var node = line.topicIds().isEmpty() ? bySection.get(line.section().getSectionId()) : null;
+            if (node != null && node.title() != null) {
+                out.put(line.section().getSectionId(), new ProposedGroup(node.nodeId(), node.title()));
+            }
+        }
+        return out;
+    }
+
     public record CourseCatalog(Long courseId, String courseTitle, List<TopicLine> topics, List<SectionLine> sections,
                                 List<ExcludedTopic> excluded, List<AssignmentLine> open,
                                 List<AssignmentLine> completed, List<AssignmentLine> unconfirmed,
-                                List<PendingMaterial> pending, List<CourseMaterial> materials, int totalTopics) {
+                                List<PendingMaterial> pending, List<CourseMaterial> materials, int totalTopics,
+                                /**
+                                 * 구간 → 승인 전 구조 제안의 노드(읽기 전용 색인). 학습 항목에 연결되지 않은 구간을 목록에서
+                                 * 주제로 묶어 보여 주는 데만 쓴다. 학습 항목 id가 아니다.
+                                 */
+                                Map<Long, ProposedGroup> proposedBySection) {
+
+        public CourseCatalog(Long courseId, String courseTitle, List<TopicLine> topics, List<SectionLine> sections,
+                             List<ExcludedTopic> excluded, List<AssignmentLine> open, List<AssignmentLine> completed,
+                             List<AssignmentLine> unconfirmed, List<PendingMaterial> pending,
+                             List<CourseMaterial> materials, int totalTopics) {
+            this(courseId, courseTitle, topics, sections, excluded, open, completed, unconfirmed, pending, materials,
+                    totalTopics, Map.of());
+        }
 
         public List<TopicLine> requiredTopics() {
             return topics.stream().filter(TopicLine::requiredFact).toList();
@@ -325,7 +371,8 @@ public class PlanMaterialContextService {
 
         List<CourseMaterial> materialList = new ArrayList<>(materials.values());
         return new CourseCatalog(courseId, courseTitle, candidates, sections, excluded, open, completed, unconfirmed,
-                pendingOf(userId, courseId, materialList), materialList, all.size());
+                pendingOf(userId, courseId, materialList), materialList, all.size(),
+                proposedGroups(userId, courseId, materials, sections));
     }
 
     /**

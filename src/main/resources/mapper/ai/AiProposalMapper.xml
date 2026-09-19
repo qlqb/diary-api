@@ -111,6 +111,16 @@
         LIMIT 1
     </select>
 
+    <select id="findOpenPlanDraftsByUserId" resultMap="aiProposalResultMap">
+        SELECT *
+        FROM ai_proposals
+        WHERE user_id = #{userId}
+          AND status  = 'PROPOSED'
+          AND plan_start_date IS NOT NULL
+        ORDER BY proposal_id DESC
+        LIMIT 20
+    </select>
+
     <select id="findProposedByRequestKey" resultMap="aiProposalResultMap">
         SELECT *
         FROM ai_proposals

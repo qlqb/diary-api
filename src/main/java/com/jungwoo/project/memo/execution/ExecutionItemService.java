@@ -167,6 +167,15 @@ public class ExecutionItemService {
     // ===== 완료 =====
 
     @Transactional
+    /** 모르는 값은 버린다(null). DB CHECK와 같은 집합이다. */
+    static String blockerKindOf(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String kind = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        return java.util.Set.of("TIME", "CONCEPT", "ENERGY", "OTHER").contains(kind) ? kind : null;
+    }
+
     public ExecutionItemResponse complete(Long executionItemId, Long userId, ExecutionItemCompleteRequest request) {
         ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
         requireVersion(item, request.getVersion());
@@ -186,6 +195,7 @@ public class ExecutionItemService {
                 .actualMinutes(request.getActualMinutes())
                 .completionPercent(100)
                 .note(request.getNote())
+                .blockerKind(blockerKindOf(request.getBlockerKind()))
                 .build();
         executionRecordMapper.insert(record);
 
@@ -782,6 +792,7 @@ public class ExecutionItemService {
                 .actualMinutes(request.getActualMinutes())
                 .completionPercent(percent)
                 .note(request.getNote())
+                .blockerKind(blockerKindOf(request.getBlockerKind()))
                 .remainingExecutionItemId(remaining.getExecutionItemId())
                 .build());
 

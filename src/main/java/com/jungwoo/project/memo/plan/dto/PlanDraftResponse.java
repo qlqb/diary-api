@@ -163,6 +163,22 @@ public class PlanDraftResponse {
     /** 저장된 검토 상태(제목·제외·편집값·답). 새 초안은 null. 새로고침 복구가 이 값으로 화면을 되돌린다. */
     private PlanReviewState reviewState;
 
+    /**
+     * 이 초안이 지금의 상담·기억을 반영하고 있는가. STALE이면 화면은 "최신 답변 반영 전 버전"이라고 표시하고 다시 만들기를
+     * 권한다 — 바뀌지 않은 결과를 최신처럼 보여 주지 않는다. 서버가 자동으로 다시 만들지는 않는다.
+     */
+    private Freshness freshness;
+
+    /** 다시 만들기에서 새 초안으로 옮긴 사용자의 직접 편집. 다시 만들기 응답에만 있다. */
+    private List<com.jungwoo.project.memo.plan.ReviewStateCarryOver.CarriedEdit> carriedEdits;
+
+    /** 사용자가 고친 값과 새 초안의 제안이 어긋난 곳. 기본은 사용자 값 유지다. 다시 만들기 응답에만 있다. */
+    private List<com.jungwoo.project.memo.plan.ReviewStateCarryOver.EditConflict> editConflicts;
+
+    /** @param state CURRENT / STALE */
+    public record Freshness(String state, List<String> reasons) {
+    }
+
     @lombok.Getter
     @lombok.Builder
     @NoArgsConstructor

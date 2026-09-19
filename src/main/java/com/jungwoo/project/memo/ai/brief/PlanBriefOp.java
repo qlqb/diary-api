@@ -29,11 +29,20 @@ public record PlanBriefOp(
         Long courseId,
         Long executionItemId,
         String periodStart,
-        String periodEnd
+        String periodEnd,
+        /** TIME_BUDGET만: 이번 계획에 쓸 수 있는 시간(분). */
+        Integer minutes,
+        /** TIME_BUDGET만: PLAN(계획 전체) / DAY(하루). */
+        String per
 ) {
+    public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
+                       Long courseId, Long executionItemId, String periodStart, String periodEnd) {
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, periodStart, periodEnd, null, null);
+    }
+
     /** 날짜 없이 만드는 경로(기존 호출부·테스트). */
     public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
                        Long courseId, Long executionItemId) {
-        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, null, null);
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, null, null, null, null);
     }
 }

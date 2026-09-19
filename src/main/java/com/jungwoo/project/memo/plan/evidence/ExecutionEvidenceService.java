@@ -139,8 +139,15 @@ public class ExecutionEvidenceService {
         }
         String note = null;
         for (ExecutionRecord record : records) {
-            if (record.getNote() != null && !record.getNote().isBlank()) {
-                note = record.getNote().strip();
+            /*
+             * 막힌 이유(선택 답)는 메모 앞에 붙여 같은 자리로 전달한다 — "시간이 없었다"와 "개념에서 막혔다"는 다음 계획을
+             * 다르게 바꾸는 사용자의 말이다. 서버가 원인을 추정해 붙이지 않는다(값이 있을 때만).
+             */
+            String blocker = blockerLabel(record.getBlockerKind());
+            if (blocker != null && (record.getNote() == null || record.getNote().isBlank())) {
+                note = "(이유: " + blocker + ")";
+            } else if (record.getNote() != null && !record.getNote().isBlank()) {
+                note = (blocker == null ? "" : "(이유: " + blocker + ") ") + record.getNote().strip();
             }
         }
         return new ExecutionEvidence.ItemHistory(
@@ -230,6 +237,19 @@ public class ExecutionEvidenceService {
         return sb.toString();
     }
 
+    static String blockerLabel(String kind) {
+        if (kind == null) {
+            return null;
+        }
+        return switch (kind) {
+            case "TIME" -> "시간이 없었다";
+            case "CONCEPT" -> "개념에서 막혔다";
+            case "ENERGY" -> "컨디션이 좋지 않았다";
+            case "OTHER" -> "다른 이유";
+            default -> null;
+        };
+    }
+
     static String statusText(ExecutionEvidence.ItemHistory h) {
         if (h.deleted() || h.status() == ExecutionStatus.CANCELLED) {
             return "계획에서 뺌";
@@ -240,12 +260,12 @@ public class ExecutionEvidenceService {
         if (h.status() == ExecutionStatus.DONE) {
             String base = h.latestOutcome() == ExecutionRecordOutcome.PARTIAL ? "일부 수행" : "완료";
             if (h.measuredMinutes() != null) {
-                return base + "(실제 " + h.measuredMinutes() + "분, 측정)";
+                return base + "(실제 " + h.measuredMinutes() + "분, 사용자가 적은 시간)";
             }
             return base + "(실제 시간 미기록)";
         }
         if (h.status() == ExecutionStatus.PARTIAL) {
-            return h.measuredMinutes() != null ? "일부 진행(실제 " + h.measuredMinutes() + "분, 측정)"
+            return h.measuredMinutes() != null ? "일부 진행(실제 " + h.measuredMinutes() + "분, 사용자가 적은 시간)"
                     : "일부 진행(실제 시간 미기록)";
         }
         if (h.recordCount() > 0 && h.latestOutcome() == ExecutionRecordOutcome.NOT_DONE) {
@@ -273,7 +293,7 @@ public class ExecutionEvidenceService {
         if (s.moved() > 0) {
             sb.append(" · 옮긴 항목 ").append(s.moved()).append("개");
         }
-        sb.append(" · 실제 측정 ").append(s.measuredMinutes()).append("분");
+        sb.append(" · 사용자가 적은 실제 시간 ").append(s.measuredMinutes()).append("분");
         if (s.unmeasuredDone() > 0) {
             sb.append(" · 시간 미기록 ").append(s.unmeasuredDone()).append("건");
         }

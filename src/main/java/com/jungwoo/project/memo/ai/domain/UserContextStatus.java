@@ -5,5 +5,8 @@ public enum UserContextStatus {
     ACTIVE,
     STALE,
     SUPERSEDED,
-    ARCHIVED
+    ARCHIVED,
+
+    /** 사용자가 지웠다(철회). 상담·계획에 쓰지 않고, 같은 내용을 다시 저장하지도 않는다. */
+    WITHDRAWN
 }

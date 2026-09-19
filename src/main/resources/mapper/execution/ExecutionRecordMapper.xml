@@ -15,6 +15,7 @@
         <result property="actualMinutes"             column="actual_minutes"/>
         <result property="completionPercent"        column="completion_percent"/>
         <result property="note"                     column="note"/>
+        <result property="blockerKind"              column="blocker_kind"/>
         <result property="remainingExecutionItemId" column="remaining_execution_item_id"/>
         <result property="recordedAt"               column="recorded_at"/>
         <result property="createdAt"                column="created_at"/>
@@ -30,6 +31,7 @@
             actual_minutes,
             completion_percent,
             note,
+            blocker_kind,
             remaining_execution_item_id
         ) VALUES (
             #{userId},
@@ -40,6 +42,7 @@
             #{actualMinutes},
             #{completionPercent},
             #{note},
+            #{blockerKind},
             #{remainingExecutionItemId}
         )
     </insert>
@@ -55,6 +58,7 @@
             r.actual_minutes      AS actualMinutes,
             r.completion_percent  AS completionPercent,
             r.note                AS note,
+            r.blocker_kind        AS blockerKind,
             r.recorded_at         AS recordedAt
         FROM execution_records r
         LEFT JOIN execution_items i

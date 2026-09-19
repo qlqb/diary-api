@@ -188,7 +188,7 @@ public class PlanReviewService {
          * 실측과 추정을 한 숫자로 뭉치지 않는다. "실제 N분 수행"이라고 적으면 시간을 적지 않은 완료 항목의 예정 시간이
          * 관측된 실제 시간으로 읽히고, 그 위에서 학습 속도·실패 원인이 추정된다.
          */
-        sb.append(" · 실제 측정 ").append(review.getMeasuredMinutes() == null ? 0 : review.getMeasuredMinutes()).append("분");
+        sb.append(" · 사용자가 적은 실제 시간 ").append(review.getMeasuredMinutes() == null ? 0 : review.getMeasuredMinutes()).append("분");
         int unmeasured = review.getUnmeasuredDoneCount() == null ? 0 : review.getUnmeasuredDoneCount();
         if (unmeasured > 0) {
             sb.append(" · 완료했지만 시간 미기록 ").append(unmeasured).append("건(예정 합 ")

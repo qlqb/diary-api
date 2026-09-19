@@ -34,6 +34,16 @@ public interface UserContextMapper {
                           @Param("toStatus") UserContextStatus toStatus);
 
     /** CONFIRM 전용: STALE일 때만 ACTIVE로 바꾸고 confirmed_at을 채운다. */
+    List<UserContext> findWithdrawnByUserId(@Param("userId") Long userId, @Param("limit") int limit);
+
+    int withdraw(@Param("contextId") Long contextId, @Param("userId") Long userId,
+                 @Param("withdrawnAt") LocalDateTime withdrawnAt);
+
+    int confirmInferred(@Param("contextId") Long contextId, @Param("userId") Long userId,
+                        @Param("confirmedAt") LocalDateTime confirmedAt);
+
+    List<UserContext> findActiveSelfChecks(@Param("userId") Long userId, @Param("courseId") Long courseId);
+
     int confirmIfStale(@Param("contextId") Long contextId, @Param("userId") Long userId,
                         @Param("confirmedAt") LocalDateTime confirmedAt);
 }

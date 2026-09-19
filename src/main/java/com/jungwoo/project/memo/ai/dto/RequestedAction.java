@@ -17,5 +17,11 @@ public enum RequestedAction {
      * 같은 PlanDraftService로 기간 계획 초안을 만든다(15/30개 상한, 검토 후 PlanVersion 확정).
      * periodPlan 필드가 필수다.
      */
-    CREATE_PERIOD_PLAN
+    CREATE_PERIOD_PLAN,
+
+    /**
+     * "지금까지 얘기로 계획해줘". 사용자가 질문을 그만 받고 계획으로 넘어가겠다는 뜻이다. AUTO 턴으로 처리하되
+     * 남은 질문은 가정으로 돌리게 한다 — 없으면 만들 수 없는 것(기간)만 묻는다.
+     */
+    PLAN_NOW
 }

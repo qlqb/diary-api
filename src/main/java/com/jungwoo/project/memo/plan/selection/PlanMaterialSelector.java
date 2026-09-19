@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.material.analysis.ModelJson;
+import com.jungwoo.project.memo.plan.PlanMaterialContextService;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.AssignmentLine;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.CourseCatalog;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.PendingMaterial;
@@ -1069,16 +1070,25 @@ public class PlanMaterialSelector {
                     r.topicCatalog.put(handle, catalog);
                     r.topicHandle.put(topic.topicId(), handle);
                 }
-                Map<Long, Group> unlinkedByMaterial = new LinkedHashMap<>();
+                Map<Object, Group> unlinkedByMaterial = new LinkedHashMap<>();
                 for (SectionLine section : catalog.sections()) {
                     Group group = section.topicIds().isEmpty() ? null : groupByTopic.get(section.topicIds().get(0));
                     if (group == null) {
                         Long materialId = section.section().getMaterialId();
-                        group = unlinkedByMaterial.get(materialId);
+                        /*
+                         * 승인 전 구조 제안이 이 구간을 어떤 주제로 묶었으면 그 주제로 묶어 보여 준다(읽기 전용 색인).
+                         * 상태를 제목에 그대로 밝힌다 — 사용자가 승인한 구조가 아니고, 학습 항목(t) 핸들도 주지 않는다.
+                         */
+                        PlanMaterialContextService.ProposedGroup proposed = catalog.proposedBySection() == null ? null
+                                : catalog.proposedBySection().get(section.section().getSectionId());
+                        Object groupKey = proposed != null ? proposed.nodeId() : materialId;
+                        group = unlinkedByMaterial.get(groupKey);
                         if (group == null) {
                             String filename = section.material() == null ? "자료" : section.material().getOriginalFilename();
-                            group = new Group("g" + g++, catalog, "토픽에 연결되지 않은 자료 · " + filename, true);
-                            unlinkedByMaterial.put(materialId, group);
+                            group = new Group("g" + g++, catalog, proposed != null
+                                    ? "자동 분석 제안(승인 전) · " + proposed.title()
+                                    : "토픽에 연결되지 않은 자료 · " + filename, true);
+                            unlinkedByMaterial.put(groupKey, group);
                             r.groups.put(group.handle, group);
                             cg.children.add(group);
                         }

@@ -37,6 +37,11 @@ public class ExecutionRecord {
     private Integer completionPercent;
 
     private String note;
+    /**
+     * 다 하지 못했거나 어려웠던 이유(선택): TIME(시간이 없었다) / CONCEPT(개념에서 막혔다) / ENERGY(컨디션) / OTHER.
+     * 묻지 않았거나 답하지 않았으면 null이다 — "시간이 없었다"와 "개념에서 막혔다"는 다음 계획을 다르게 바꾼다.
+     */
+    private String blockerKind;
 
     /** outcome이 PARTIAL일 때만 값이 있다. 남은 분량을 담은 새 조각. */
     private Long remainingExecutionItemId;

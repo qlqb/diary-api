@@ -694,7 +694,7 @@ class AiConversationServiceTest {
      * 강도를 추측해 채우는 것도, 계약 위반으로 503을 내는 것도 아니다.
      */
     @Test
-    void auto_periodPlanOfferWithoutIntensity_asksOnce_withThreeQuickReplies() {
+    void auto_periodPlanOfferWithoutIntensity_offersWithAssumedNormal_insteadOfAsking() {
         when(contextSnapshotService.buildContextBlock(any(), any(), any(), anyInt(), any())).thenReturn("");
         String raw = "만들어볼까요?\n<<<AI_STRUCTURED>>>\n"
                 + "{\"decision\":\"OFFER_PROPOSAL\",\"proposalPurpose\":\"PERIOD_PLAN\","
@@ -709,10 +709,13 @@ class AiConversationServiceTest {
         Disposable d = service.streamAndComplete(preparedTurn(), request("오늘 공부 계획 짜줘", "k-pi"), sink);
         awaitTerminal(sink, d);
 
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
-        assertThat(sink.completed.reply()).isEqualTo(AiConversationService.INTENSITY_QUESTION);
-        assertThat(sink.completed.quickReplies()).containsExactly("가볍게", "보통", "집중");
-        assertThat(sink.offerAction).isNull();
+        // (2026-09-19) 강도는 필수 질문이 아니다. 모르면 '보통'을 가정으로 두고 그렇게 말한 뒤 바로 제안한다.
+        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.OFFER);
+        assertThat(sink.completed.reply()).startsWith("만들어볼까요?").contains("'보통'으로 가정");
+        assertThat(sink.completed.quickReplies()).isEmpty();
+        assertThat(sink.offerAction).isNotNull();
+        assertThat(sink.offerAction.intensity())
+                .isEqualTo(com.jungwoo.project.memo.plan.domain.PlanIntensity.NORMAL);
     }
 
     /** 모델이 스스로 강도를 되물을 때(missingInformation=PLAN_INTENSITY)도 같은 선택지가 붙는다. */
@@ -2122,7 +2125,7 @@ class AiConversationServiceTest {
         awaitTerminal(sink, d);
 
         assertThat(sink.errorCode).isNull();
-        assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
+        // 강도를 되묻는 고정 문구는 어느 경로에서도 나오지 않는다(2026-09-19: 강도는 필수 질문이 아니다).
         assertThat(sink.completed.reply()).isNotEqualTo(AiConversationService.INTENSITY_QUESTION);
         assertThat(sink.completed.quickReplies()).isEmpty();
         // 프롬프트에는 열려 있는 작업 블록이 실려 나간다.

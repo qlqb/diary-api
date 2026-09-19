@@ -574,6 +574,24 @@ public class PeriodPlanDraftGenerator {
         List<UserContext> contexts = loadUserContexts(spec.userId());
         Facts facts = collectFacts(spec, courses, capturedAt, opts);
 
+        /*
+         * 시간은 범위·깊이와 따로 온다. 사용자가 상담에서 "오늘 한 시간만"처럼 쓸 수 있는 시간을 말했으면(TIME_BUDGET 합의)
+         * 그것이 분량의 상한이다 — 강도 비율로 계산한 예산이 더 커도 사용자의 말이 이긴다. 더 작으면 그대로 둔다.
+         * 이 값은 모델에게도 알리고, 결과가 넘치면 서버가 뒤에서부터 덜어 낸다(초안과 배치까지 유지된다).
+         */
+        Long flowRootForBudget = spec.origin() == null ? null : spec.origin().flowRootProposalId();
+        PlanBriefService.TimeBudget saidTime = facts.brief() == null ? null
+                : PlanBriefService.timeBudgetOf(facts.brief().effectiveFor(spec.start(), spec.end(), flowRootForBudget)
+                .stream().map(PlanBriefService.Applicable::item).toList());
+        Integer userTimeLimit = saidTime == null ? null : Math.max(MIN_ITEM_MINUTES, saidTime.totalFor(days));
+        String timeNote = null;
+        if (userTimeLimit != null && userTimeLimit < target) {
+            timeNote = "사용자가 이번 계획에 쓸 수 있다고 말한 시간은 " + (saidTime.perDay() ? "하루 " + saidTime.minutes() + "분(기간 합 "
+                    + userTimeLimit + "분)" : userTimeLimit + "분") + "이다. 강도로 계산한 예산(" + target
+                    + "분)보다 이 값이 우선이다 — 항목의 예상 시간 합이 " + userTimeLimit + "분을 넘지 않게 한다.";
+            target = userTimeLimit;
+        }
+
         EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.busyWindows(), capturedAt, spec.start(), spec.end(),
                 courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds());
         PlanRequestContext previous = opts.previous();
@@ -624,7 +642,8 @@ public class PeriodPlanDraftGenerator {
         budget.retrievalRound();
 
         PlanInputs inputs = new PlanInputs(catalogs, selection, retrieved, new java.util.LinkedHashSet<>(),
-                RETRIEVAL_CAPS[0], contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of());
+                RETRIEVAL_CAPS[0], contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(),
+                timeNote);
         PlanPrompt prompt = fitPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
                 cappedByItemLimit, generationId, capturedAt, inputs);
         inputs = prompt.inputs();
@@ -664,7 +683,7 @@ public class PeriodPlanDraftGenerator {
                         + "개를 더 읽었다" + (blankToNull(ai.moreEvidence().reason()) == null ? ""
                         : " (이유: " + PlanCatalogText.cut(PlanCatalogText.flat(ai.moreEvidence().reason()), 200) + ")");
                 inputs = new PlanInputs(catalogs, selection, retrieved, new java.util.LinkedHashSet<>(), RETRIEVAL_CAPS[0],
-                        contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(note));
+                        contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(note), timeNote);
                 prompt = fitPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
                         cappedByItemLimit, generationId, capturedAt, inputs);
                 inputs = prompt.inputs();
@@ -694,6 +713,9 @@ public class PeriodPlanDraftGenerator {
                 capturedAt, courses, provenance, prompt.deadlineFacts(), prompt.existingByRef(), serverUnread,
                 changesFromPrevious);
         saveTraces(spec.userId(), generationId, traceEntries);
+        if (userTimeLimit != null) {
+            normalized = fitToUserTime(normalized, userTimeLimit);
+        }
         if (normalized.items().isEmpty() && normalized.adjustments().isEmpty()) {
             log.warn("계획 초안: 쓸 항목이 없다. userId={}, 모델 항목 수={}, 고른 구간={}, workflowId={}", spec.userId(),
                     ai.items() == null ? 0 : ai.items().size(), selection.sections().size(), generationId);
@@ -737,6 +759,57 @@ public class PeriodPlanDraftGenerator {
                 new Extras(budgetSummary, snapshot, normalized.adjustments(), changesFromPrevious, reused,
                         facts.brief() == null ? null : facts.brief().briefId(),
                         facts.brief() == null ? null : facts.brief().version()));
+    }
+
+    // ===== 사용자가 말한 시간 =====
+
+    /**
+     * 항목 합이 사용자가 말한 시간을 넘으면 뒤에서부터(덜 중요한 것부터) 덜어 낸다. 조용히 버리지 않는다 — 덜어 낸 항목은
+     * "미룬 범위"에 이유와 함께 남는다. 첫 항목 하나가 이미 넘치면 그 항목은 남긴다(빈 계획을 만들지 않는다).
+     */
+    static PlanResultNormalizer.Normalized fitToUserTime(PlanResultNormalizer.Normalized normalized, int limitMinutes) {
+        List<ProposalItem> items = normalized.items();
+        int total = items.stream().mapToInt(i -> i.expectedMinutes() == null ? 0 : i.expectedMinutes()).sum();
+        if (total <= limitMinutes || items.size() <= 1) {
+            return normalized;
+        }
+        // 덜어 낼 순서: OPTIONAL → SHOULD → MUST, 같은 중요도 안에서는 뒤의 것부터.
+        List<Integer> order = new ArrayList<>();
+        for (String priority : List.of("OPTIONAL", "SHOULD", "MUST")) {
+            for (int i = items.size() - 1; i >= 0; i--) {
+                String p = items.get(i).priority() == null ? "SHOULD" : items.get(i).priority();
+                if (p.equalsIgnoreCase(priority)) {
+                    order.add(i);
+                }
+            }
+        }
+        Set<Integer> dropped = new HashSet<>();
+        for (int index : order) {
+            if (total <= limitMinutes || dropped.size() >= items.size() - 1) {
+                break;
+            }
+            dropped.add(index);
+            total -= items.get(index).expectedMinutes() == null ? 0 : items.get(index).expectedMinutes();
+        }
+        if (dropped.isEmpty()) {
+            return normalized;
+        }
+        List<ProposalItem> keptItems = new ArrayList<>();
+        List<PlanItemEvidence> keptEvidence = new ArrayList<>();
+        List<PlanStrategy.Deferred> deferred = new ArrayList<>(normalized.strategy().deferred() == null
+                ? List.of() : normalized.strategy().deferred());
+        for (int i = 0; i < items.size(); i++) {
+            if (dropped.contains(i)) {
+                deferred.add(new PlanStrategy.Deferred(items.get(i).title(),
+                        "말해 준 시간(" + limitMinutes + "분) 안에 들어가지 않아 이번에는 뺐어요.", items.get(i).topicId(), null));
+            } else {
+                keptItems.add(items.get(i));
+                keptEvidence.add(normalized.evidence().get(i));
+            }
+        }
+        log.info("계획 초안: 사용자가 말한 시간 {}분을 넘어 항목 {}개를 미룬 범위로 옮겼다", limitMinutes, dropped.size());
+        return new PlanResultNormalizer.Normalized(keptItems, keptEvidence, normalized.strategy().withDeferred(deferred),
+                normalized.adjustments(), normalized.existingDecisions(), normalized.unknownRefs());
     }
 
     // ===== 프로젝트별 처리 결과·전달 기록 =====
@@ -1063,15 +1136,17 @@ public class PeriodPlanDraftGenerator {
     record PlanInputs(List<PlanMaterialContextService.CourseCatalog> catalogs, PlanMaterialSelector.Result selection,
                       List<PlanMaterialRetriever.Retrieved> retrieved, Set<Long> budgetDropped, int cap,
                       List<UserContext> contexts, PlanRequestedMaterialResolver.Resolution requested, Facts facts,
-                      int moreLines, List<String> changesFromPrevious, List<String> roundNotes) {
+                      int moreLines, List<String> changesFromPrevious, List<String> roundNotes,
+                      /** 사용자가 말한 "쓸 수 있는 시간"으로 예산을 줄였을 때의 설명. 없으면 null. */
+                      String timeNote) {
         PlanInputs withCap(int newCap) {
             return new PlanInputs(catalogs, selection, retrieved, budgetDropped, newCap, contexts, requested, facts,
-                    moreLines, changesFromPrevious, roundNotes);
+                    moreLines, changesFromPrevious, roundNotes, timeNote);
         }
 
         PlanInputs withMoreLines(int lines) {
             return new PlanInputs(catalogs, selection, retrieved, budgetDropped, cap, contexts, requested, facts, lines,
-                    changesFromPrevious, roundNotes);
+                    changesFromPrevious, roundNotes, timeNote);
         }
     }
 
@@ -1510,6 +1585,9 @@ public class PeriodPlanDraftGenerator {
                 .append("넘으면 안 되는 최대치다. 개수를 채우려 하지 말고, 각 작업에 실제로 필요한 ")
                 .append("길이를 먼저 정한 다음 필요한 만큼만 만들어라. 15~30분짜리 짧은 항목을 넣기 위해 ")
                 .append("다른 항목을 길게 부풀리지 마라 — 남는 예산은 그대로 남겨도 된다.\n\n");
+        if (inputs.timeNote() != null) {
+            sb.append("[사용자가 말한 시간]\n").append(inputs.timeNote()).append("\n\n");
+        }
         if (cappedByItemLimit) {
             sb.append("[분량 안내]\n")
                     .append("이 기간의 남는 시간에 강도를 적용한 값은 위 학습 예산보다 크지만, 한 번에 ")
@@ -2176,7 +2254,9 @@ public class PeriodPlanDraftGenerator {
         if (contexts == null || contexts.isEmpty()) {
             return;
         }
-        sb.append("[사용자가 확인한 맥락]\n");
+        sb.append("[사용자가 확인한 맥락] (괄호 안은 근거와 적용 범위다. \"자기평가\"는 사용자가 스스로 말한 느낌이지 혼자 해낸 "
+                + "증거가 아니고, \"AI 추정, 확인 전\"은 사실이 아니다 — 가정으로만 쓰고 assumptions에 밝힌다. "
+                + "\"프로젝트 #n 한정\"·날짜 한정은 그 범위 밖으로 일반화하지 않는다)\n");
         for (UserContext context : contexts) {
             String stale = context.getStatus() != null && "STALE".equals(context.getStatus().name()) ? " (확인이 오래됨)" : "";
             sb.append("- ").append(collector.mark(
@@ -2184,7 +2264,8 @@ public class PeriodPlanDraftGenerator {
                     ProvenanceRepresentation.EXCERPT,
                     ProvenanceCollector.value("content", context.getContent(),
                             "status", context.getStatus() == null ? null : context.getStatus().name()),
-                    context.getContent() + stale).text()).append("\n");
+                    context.getContent() + com.jungwoo.project.memo.ai.ContextSnapshotService.qualifier(context) + stale)
+                    .text()).append("\n");
         }
         sb.append("\n");
     }

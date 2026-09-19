@@ -28,6 +28,11 @@ public interface AiMessageMapper {
                                                           @Param("excludeMessageId") Long excludeMessageId);
 
     /** 동일 사용자의 동일 idempotencyKey 재전송 감지용. */
+    AiMessage findByIdAndUserId(@Param("messageId") Long messageId, @Param("userId") Long userId);
+
+    int updateConsultJson(@Param("messageId") Long messageId, @Param("userId") Long userId,
+                          @Param("consultJson") String consultJson);
+
     AiMessage findByUserIdAndIdempotencyKey(@Param("userId") Long userId,
                                              @Param("idempotencyKey") String idempotencyKey);
 

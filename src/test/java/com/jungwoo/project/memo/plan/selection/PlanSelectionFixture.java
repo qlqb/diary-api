@@ -110,6 +110,7 @@ public class PlanSelectionFixture {
     public final com.jungwoo.project.memo.ai.AiMessageMapper messageMapper =
             mock(com.jungwoo.project.memo.ai.AiMessageMapper.class);
     public final ExecutionItemMapper executionItemMapper = mock(ExecutionItemMapper.class);
+    public final AvailabilityEstimateService availability = mock(AvailabilityEstimateService.class);
 
     public final Map<Long, Course> courses = new LinkedHashMap<>();
     public final Map<Long, List<TopicResponse>> trees = new LinkedHashMap<>();
@@ -147,7 +148,6 @@ public class PlanSelectionFixture {
         PlanReviewService planReviewService = mock(PlanReviewService.class);
         CourseNoteMapper courseNoteMapper = mock(CourseNoteMapper.class);
         CourseMaterialAnalysisMapper analysisMapper = mock(CourseMaterialAnalysisMapper.class);
-        AvailabilityEstimateService availability = mock(AvailabilityEstimateService.class);
         generator = new PeriodPlanDraftGenerator(ai, usage, planReviewService, courseMapper, topicService,
                 courseNoteMapper, analysisMapper, courseMaterialMapper, executionItemMapper, availability,
                 Clock.fixed(Instant.parse("2026-09-13T09:00:00Z"), ZoneId.of("UTC")), catalogService,

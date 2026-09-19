@@ -112,6 +112,7 @@ public enum ErrorCode {
     MATERIAL_SECTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_027", "자료 구간을 찾을 수 없습니다"),
     ZIP_IMPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_028", "압축 파일 가져오기를 찾을 수 없습니다"),
     ZIP_IMPORT_ENTRY_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_029", "가져오기 항목을 찾을 수 없습니다"),
+    CONTEXT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_030", "기억한 내용을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -148,6 +149,7 @@ public enum ErrorCode {
     MATERIAL_ALREADY_EXTRACTED(HttpStatus.CONFLICT, "E409_023", "이미 본문을 읽은 자료입니다"),
     ZIP_IMPORT_NOT_READY(HttpStatus.CONFLICT, "E409_024", "지금은 가져올 수 있는 상태가 아닙니다"),
     ZIP_IMPORT_ENTRY_NOT_RETRYABLE(HttpStatus.CONFLICT, "E409_025", "다시 시도할 수 있는 항목이 아닙니다"),
+    CONTEXT_ALREADY_CHANGED(HttpStatus.CONFLICT, "E409_027", "이미 고쳤거나 지운 내용이에요. 최신 목록을 다시 불러옵니다."),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

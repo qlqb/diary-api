@@ -329,7 +329,43 @@ public class AiConversationService {
      * SSE 스트림을 시작하기 전이므로 컨트롤러까지 그대로 전파돼 실제 HTTP 상태 코드로 응답한다.
      */
     public AiTurnLifecycleService.PreparedTurn prepareTurn(Long conversationId, Long userId, AiMessageRequest request) {
+        normalizeConsultRequest(conversationId, userId, request);
         return aiTurnLifecycleService.prepareTurn(conversationId, userId, request);
+    }
+
+    /** 상담 턴의 질문·해석·방향. 단위 테스트처럼 없을 수 있다 — 없으면 부가 정보 없이 답변만 간다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.consult.ConsultTurnService consultTurnService;
+
+    static final String ASSUMED_INTENSITY_NOTE =
+            " (분량은 우선 '보통'으로 가정했어요. 쓸 수 있는 시간이 정해져 있으면 말해 주세요 — 그 시간이 우선이에요.)";
+
+    static final String PLAN_NOW_MESSAGE = "지금까지 얘기한 내용으로 계획을 만들어 줘. 남은 질문은 가정으로 두고 진행해 줘.";
+
+    /**
+     * 빠른 답과 "지금까지 얘기로 계획해줘"를 보통의 사용자 발화로 바꾼다. 둘 다 새 경로를 만들지 않는다 — 고른 선택지도,
+     * 계획으로 넘어가겠다는 말도 대화 기록에 그대로 남고 같은 AUTO 턴으로 처리된다.
+     */
+    private void normalizeConsultRequest(Long conversationId, Long userId, AiMessageRequest request) {
+        boolean noText = request.getMessage() == null || request.getMessage().isBlank();
+        if (request.getRequestedAction() == RequestedAction.PLAN_NOW) {
+            request.setRequestedAction(RequestedAction.AUTO);
+            if (noText) {
+                request.setMessage(PLAN_NOW_MESSAGE);
+            }
+            return;
+        }
+        AiMessageRequest.Answer answer = request.getAnswer();
+        if (answer == null || !noText || request.getRequestedAction() != RequestedAction.AUTO) {
+            return;
+        }
+        String composed = consultTurnService == null ? null : consultTurnService.composeAnswer(userId, conversationId,
+                answer.getQuestionId(), answer.getChoiceIds(), answer.isSkipped());
+        if (composed == null) {
+            // 저장된 질문의 선택지가 아니다. 클라이언트가 보낸 라벨을 대신 믿지 않는다.
+            throw new com.jungwoo.project.memo.common.exception.BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        request.setMessage(composed);
     }
 
     /** idempotency 재생: 새로 스트리밍하지 않고 저장된 결과를 그대로 재생한다. AI를 다시 부르지 않는다. */
@@ -909,9 +945,20 @@ public class AiConversationService {
             sink.onScheduleSuggestionsReady(completion.scheduleSuggestions());
         }
 
+        /*
+         * 이번 답변으로 알게 된 것·바뀐 방향·다음 질문. 턴은 이미 저장됐다 — 이 단계가 실패해도 답변은 그대로 간다.
+         * 버튼 턴(CREATE_PROPOSAL)은 이미 확정된 요청이라 기억·질문을 새로 만들지 않는다.
+         */
+        com.jungwoo.project.memo.ai.consult.ConsultView consult = null;
+        if (consultTurnService != null && requestedAction == RequestedAction.AUTO) {
+            consult = consultTurnService.finish(conversation.getUserId(), conversation.getConversationId(),
+                    requestMessageId, completion.assistantMessage().getMessageId(), request.getMessage(),
+                    structured == null ? null : structured.consult());
+        }
+
         sink.onCompleted(new AiTurnCompletedPayload(
                 resolved.responseType(), resolved.reply(), proposalId, proposalItemResponses, offerAction,
-                requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies()));
+                requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies(), consult));
     }
 
     private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,
@@ -1249,7 +1296,7 @@ public class AiConversationService {
          * draft가 열려 있는 대화에서 모델이 PERIOD_PLAN OFFER를 내면 그것은 잘못 들어간 경로라,
          * 강도를 물어 사용자를 다시 기간 계획으로 끌고 가지 않고 일반 답변으로 둔다.
          */
-        if (!allowPeriodPlanQuestions && (!periodValid || structured.planIntensity() == null)) {
+        if (!allowPeriodPlanQuestions && !periodValid) {
             log.info("기간 계획 OFFER 되묻기 생략: 열려 있는 draft가 CREATE_PERIOD_PLAN이 아님");
             return ResolvedTurn.withoutProposal(AiResponseType.CHAT, offerReply, todayDate, null, contextChanges);
         }
@@ -1257,12 +1304,19 @@ public class AiConversationService {
             log.warn("기간 계획 OFFER인데 기간이 없거나 틀림({}~{}) — 기간을 되묻는다", start, end);
             return ResolvedTurn.withoutProposal(AiResponseType.CHAT, PERIOD_QUESTION, todayDate, null, contextChanges);
         }
-        if (structured.planIntensity() == null) {
-            return ResolvedTurn.withoutProposal(AiResponseType.CHAT, INTENSITY_QUESTION, todayDate, null,
-                    contextChanges, INTENSITY_QUICK_REPLIES);
+        /*
+         * (2026-09-19) 강도는 더 이상 필수 질문이 아니다. "가볍게/보통/집중" 하나로 깊이와 쓸 수 있는 시간을 함께
+         * 추정하게 하면, "훑어보기"를 원한 사용자가 이전 대화의 "집중" 때문에 10시간짜리 초안을 받는다(2026-09-19 진단).
+         * 사용자가 말하지 않았으면 '보통'을 <b>가정</b>으로 두고 그렇게 말한다. 실제 분량의 상한은 사용자가 말한 시간
+         * (TIME_BUDGET 합의)이 있으면 그것이 정한다.
+         */
+        PlanIntensity intensity = structured.planIntensity();
+        if (intensity == null) {
+            intensity = PlanIntensity.NORMAL;
+            offerReply = offerReply + ASSUMED_INTENSITY_NOTE;
         }
         List<Long> courseIds = ownedCourseIds(userId, structured.targetCourseIds());
-        PeriodPlanRequest plan = new PeriodPlanRequest(start, end, structured.planIntensity(),
+        PeriodPlanRequest plan = new PeriodPlanRequest(start, end, intensity,
                 courseIds != null ? courseIds : List.of());
         return ResolvedTurn.withoutProposal(AiResponseType.OFFER, offerReply, todayDate,
                 OfferAction.createPeriodPlan(DEFAULT_OFFER_LABEL, plan), contextChanges);
@@ -1643,6 +1697,7 @@ public class AiConversationService {
                 .responseType(message.getResponseType())
                 .proposalId(proposalId)
                 .createdAt(message.getCreatedAt())
+                .consult(consultTurnService == null ? null : consultTurnService.read(message.getConsultJson()))
                 .build();
     }
 }

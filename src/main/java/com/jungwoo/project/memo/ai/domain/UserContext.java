@@ -30,6 +30,22 @@ public class UserContext {
 
     private ContextSourceType sourceType;
 
+    /** 근거 유형. 옛 행은 STATED(전부 사용자가 확정·승인한 것이다). */
+    @Builder.Default
+    private ContextEvidenceType evidenceType = ContextEvidenceType.STATED;
+
+    /** 적용 범위. 전부 null이면 범위를 모르는(전반적인) 것이다. */
+    private Long courseId;
+    private Long topicId;
+    private Long sectionId;
+    private java.time.LocalDate scopeStart;
+    private java.time.LocalDate scopeEnd;
+
+    /** 점검 활동의 자기평가 값: KNOW / UNSURE / NEW. 숙달도가 아니다. */
+    private String selfLevel;
+
+    private LocalDateTime withdrawnAt;
+
     private Long sourceMessageId;
 
     /** SUPERSEDE로 이 행이 생겼다면 대체된 기존 context_id. */

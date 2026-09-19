@@ -11,6 +11,14 @@
         <result property="content"              column="content"/>
         <result property="status"               column="status"/>
         <result property="sourceType"           column="source_type"/>
+        <result property="evidenceType"         column="evidence_type"/>
+        <result property="courseId"             column="course_id"/>
+        <result property="topicId"              column="topic_id"/>
+        <result property="sectionId"            column="section_id"/>
+        <result property="scopeStart"           column="scope_start"/>
+        <result property="scopeEnd"             column="scope_end"/>
+        <result property="selfLevel"            column="self_level"/>
+        <result property="withdrawnAt"          column="withdrawn_at"/>
         <result property="sourceMessageId"      column="source_message_id"/>
         <result property="supersedesContextId"  column="supersedes_context_id"/>
         <result property="confirmedAt"          column="confirmed_at"/>
@@ -24,6 +32,13 @@
             content,
             status,
             source_type,
+            evidence_type,
+            course_id,
+            topic_id,
+            section_id,
+            scope_start,
+            scope_end,
+            self_level,
             source_message_id,
             supersedes_context_id,
             confirmed_at
@@ -32,6 +47,13 @@
             #{content},
             #{status},
             #{sourceType},
+            #{evidenceType},
+            #{courseId},
+            #{topicId},
+            #{sectionId},
+            #{scopeStart},
+            #{scopeEnd},
+            #{selfLevel},
             #{sourceMessageId},
             #{supersedesContextId},
             #{confirmedAt}
@@ -74,6 +96,48 @@
             #{s}
         </foreach>
     </update>
+
+    <!-- 사용자가 지운 기억. 같은 내용을 다시 저장하지 않으려고 최근 것을 읽는다. -->
+    <select id="findWithdrawnByUserId" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND status = 'WITHDRAWN'
+        ORDER BY withdrawn_at DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 철회. 이력은 남긴다(행을 지우지 않는다). 이미 철회·대체된 것은 0행이다. -->
+    <update id="withdraw">
+        UPDATE user_contexts
+        SET status = 'WITHDRAWN',
+            withdrawn_at = #{withdrawnAt}
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+    </update>
+
+    <!-- AI 추정을 사용자가 "맞아요"로 확인했다. -->
+    <update id="confirmInferred">
+        UPDATE user_contexts
+        SET evidence_type = 'STATED',
+            status        = 'ACTIVE',
+            confirmed_at  = #{confirmedAt}
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+    </update>
+
+    <!-- 같은 점검 대상의 예전 자기평가. 새 자기평가가 들어오면 대체한다. -->
+    <select id="findActiveSelfChecks" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND course_id = #{courseId}
+          AND source_type = 'SELF_CHECK'
+          AND status IN ('ACTIVE', 'STALE')
+        ORDER BY updated_at DESC
+    </select>
 
     <update id="confirmIfStale">
         UPDATE user_contexts

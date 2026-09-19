@@ -130,6 +130,7 @@ public class ContextSnapshotService {
         String longTermSection = buildPrefixSection(LONG_TERM_HEADER, longTermLines, budget.longTermChars());
 
         StringBuilder sb = new StringBuilder();
+        appendWithdrawn(sb, userId);
         appendSection(sb, summarySection);
         appendSection(sb, recentSection);
         appendSection(sb, longTermSection);
@@ -264,8 +265,31 @@ public class ContextSnapshotService {
         return roleLabel + ": " + message.getContent() + "\n";
     }
 
+    /**
+     * 사용자가 지운 기억. 대화 기록에는 그 말이 그대로 남아 있어 모델이 다시 뽑아낼 수 있다 — 철회했다는 사실을 함께
+     * 보여 줘 다시 저장하지도, 사실로 쓰지도 않게 한다(서버도 같은 내용의 저장을 거절한다).
+     */
+    private void appendWithdrawn(StringBuilder sb, Long userId) {
+        List<UserContext> withdrawn;
+        try {
+            withdrawn = userContextMapper.findWithdrawnByUserId(userId, 10);
+        } catch (Exception e) {
+            return;
+        }
+        if (withdrawn == null || withdrawn.isEmpty()) {
+            return;
+        }
+        sb.append("[사용자가 지운 기억] (사용자가 틀렸다고 지운 내용이다. 사실로 쓰지 않고 다시 저장하지 않는다)\n");
+        for (UserContext context : withdrawn) {
+            String text = context.getContent();
+            sb.append("- ").append(text.length() > 120 ? text.substring(0, 120) : text).append('\n');
+        }
+        sb.append('\n');
+    }
+
     private String renderLongTermLine(UserContext context) {
-        return "#" + context.getContextId() + " [" + context.getStatus() + "] " + context.getContent() + "\n";
+        return "#" + context.getContextId() + " [" + context.getStatus() + "] " + context.getContent()
+                + qualifier(context) + "\n";
     }
 
     private <T> List<String> renderLines(List<T> items, Function<T, String> renderer) {
@@ -285,6 +309,25 @@ public class ContextSnapshotService {
     }
 
     /** allocateBudget이 계산한, 각 영역에 실제로 쓸 수 있는 최대 문자 수. */
+    /**
+     * 근거 유형과 적용 범위. 사용자가 직접 말한 전반적인 사실(기본)에는 붙이지 않는다 — 자기평가·AI 추정·범위가 있는 것만
+     * 표시해, 모델이 추정을 사실로 쓰거나 한 프로젝트의 이야기를 전체로 일반화하지 않게 한다.
+     */
+    public static String qualifier(UserContext context) {
+        List<String> parts = new java.util.ArrayList<>();
+        if (context.getEvidenceType() != null
+                && context.getEvidenceType() != com.jungwoo.project.memo.ai.domain.ContextEvidenceType.STATED) {
+            parts.add(context.getEvidenceType().label());
+        }
+        if (context.getCourseId() != null) {
+            parts.add("프로젝트 #" + context.getCourseId() + " 한정");
+        }
+        if (context.getScopeStart() != null && context.getScopeEnd() != null) {
+            parts.add(context.getScopeStart() + "~" + context.getScopeEnd() + " 한정");
+        }
+        return parts.isEmpty() ? "" : " (" + String.join(" · ", parts) + ")";
+    }
+
     private record ContextBudget(int recentChars, int longTermChars, int summaryChars) {
     }
 }
