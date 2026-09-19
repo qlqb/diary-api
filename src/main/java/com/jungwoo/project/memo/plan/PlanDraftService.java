@@ -625,6 +625,16 @@ public class PlanDraftService {
                     reasons.add("이 초안을 만든 뒤 상담에서 조건이 바뀌었어요.");
                 }
             }
+            /*
+             * 답변이 합의가 아니라 "내 상황"(기억)으로만 저장되면 합의는 그대로다. 그래도 그 답이 초안의 분량·대상·활동 방식을
+             * 바꾼다고 상담이 표시했으면(direction.affectsDraft) 초안은 오래된 것이다 — 화면의 임시 표시가 아니라 서버 기록으로
+             * 판단해야 새로고침 뒤에도 "갱신 필요"가 유지된다(2026-09-19 실호출 s3에서 확인).
+             */
+            if (reasons.isEmpty() && aiMessageMapper != null && proposal.getConversationId() != null
+                    && proposal.getCreatedAt() != null && aiMessageMapper.countDraftAffectingDirectionsAfter(
+                    proposal.getConversationId(), userId, proposal.getCreatedAt().plusSeconds(2)) > 0) {
+                reasons.add("이 초안을 만든 뒤의 답변으로 계획 방향이 바뀌었어요.");
+            }
             if (provenance != null && provenance.providedSources() != null && userContextMapper != null) {
                 for (var source : provenance.providedSources()) {
                     if (source.sourceType() != com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType.USER_CONTEXT
@@ -654,6 +664,9 @@ public class PlanDraftService {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.AiProposalItemMapper aiProposalItemMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
     /**
      * 항목 카드가 첫 화면에서 보여야 하는 근거 두 가지(선정 이유·출처 유형)를 항목 응답에 붙인다. 근거 원본은

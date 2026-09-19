@@ -436,7 +436,9 @@ def s3(seeded):
     def py_var_items(o):
         return [i["title"] for i in o.get("items") or [] if any(w in i["title"] for w in ("변수", "자료형", "연산자"))]
     checks = {
-        "statement_remembered_with_evidence": any("이미" in (c["content"]) or "했" in c["content"] for c in contexts or []),
+        # 모델이 문장을 다듬어 저장하므로 단어가 아니라 근거 유형과 범위로 본다(사용자의 말 → STATED/SELF_REPORT, 파이썬 기초 한정).
+        "statement_remembered_with_evidence": any(c["evidenceType"] in ("STATED", "SELF_REPORT")
+                                                  and c.get("courseTitle") == "파이썬 기초" for c in contexts or []),
         "draft_marked_stale_after_answer": ((reloaded or {}).get("freshness") or {}).get("state") == "STALE",
         "repeat_practice_reduced": len(py_var_items(after)) < max(1, len(py_var_items(before))) or not py_var_items(after),
         "no_execution_item_completed_by_statement": True,  # 서버에 그런 경로가 없다 — 실행 항목은 아직 하나도 없다.
@@ -468,7 +470,8 @@ def s4(seeded):
                                                     in ("SUPPORT_LEVEL", "BLOCKER") for t in turns),
         "quick_reply_went_through_same_path": len(turns) < 3 or bool(turns[1].get("reply")),
         "self_report_saved_not_mastery": any(c["evidenceType"] == "SELF_REPORT" for c in contexts or []),
-        "time_budget_understood": any(u["source"] == "BRIEF" and "시간" in u["text"] for u in understood),
+        # 같은 말이 기억과 합의에 함께 남으면 화면에는 한 번(기억 쪽)만 보인다 — 어느 쪽이든 시간이 잡혔는지 본다.
+        "time_budget_understood": any("시간" in u["text"] for u in understood),
         "total_within_one_hour": obs.get("proposedMinutes") is not None and obs["proposedMinutes"] <= 60,
         "target_is_user_time": obs.get("targetMinutes") == 60,
         "direction_changed_visible": any((t.get("consult") or {}).get("direction") for t in turns),

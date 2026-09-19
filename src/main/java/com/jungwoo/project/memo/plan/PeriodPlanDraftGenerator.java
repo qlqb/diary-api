@@ -1089,7 +1089,9 @@ public class PeriodPlanDraftGenerator {
                 ? selection.status() : PlanMaterialSelector.Status.SELECTED, selection.mode(), sections, selection.topics(),
                 selection.insufficientEvidence(), selection.note(), selection.calls(), selection.expanded(),
                 selection.candidateTotal(), selection.candidateShown(), selection.unreviewed(), selection.unknownIds(),
-                selection.estimatedInputTokens(), selection.overLimit(), selection.sectionHandles(), selection.byHandle());
+                selection.estimatedInputTokens(), selection.overLimit(), selection.sectionHandles(), selection.byHandle(),
+                // 추가 읽기는 고른 구간만 늘린다 — 선택 단계에서 무엇을 목록으로 보여 줬는지(노출 집계·전달 기록)는 그대로다.
+                selection.exposure(), selection.traces());
     }
 
     private static PlanRequestContext.EvidenceSnapshot snapshot(EvidenceFingerprint fingerprint, LocalDateTime capturedAt,
@@ -1398,6 +1400,10 @@ public class PeriodPlanDraftGenerator {
               참고 범위: 짧은 회수·환경 확인 15~30분, 수업 직후 핵심 복습 20~40분, 짧은 코드
               실습 30~45분, 개념 이해와 문제 풀이 45~90분. 배치 격자와 맞도록 짧은 작업은
               15분을 우선한다. 15분 미만은 사용자가 명시했거나 작업상 필요한 경우에만 쓴다.
+            - 깊이와 분량은 함께 간다. 사용자의 목표가 "훑어보기·전체 상태 점검·빠른 복습"이면 개념을 깊게 파는 길이
+              (45~90분)를 쓰지 않는다 — 위 참고 범위의 짧은 회수·점검 쪽으로 잡고, 프로젝트가 여럿이면 각각 짧게 본다.
+              사용자가 쓸 수 있는 시간을 말하지 않았으면 하루를 가득 채우지 말고, 시간을 어떻게 가정했는지 assumptions에
+              적는다. "처음부터 제대로 이해"나 "문제 풀이"를 원했을 때만 긴 항목을 쓴다.
             - 항목은 사용자가 앉아서 바로 시작할 수 있는 학습 행동이어야 한다. 제목에
               과목·대상·행동이 드러나야 하고, description에는 실제로 할 행동 1~3개와
               확인 가능한 완료 기준을 "행동 · 완료: 기준" 형식으로 적는다(doneCriteria에도 같은 기준을 적는다).

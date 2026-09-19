@@ -833,8 +833,15 @@ public class ExecutionItemService {
                 .sourceExecutionItemId(source.getExecutionItemId())
                 .title(source.getTitle() + " (남은 분량)")
                 .description(source.getDescription())
-                .placementType(PlacementType.DATE_ONLY)
+                /*
+                 * 아직 날짜를 받지 못한(UNSCHEDULED) 계획 항목에도 "일부 했어요"를 기록할 수 있다 — 기간 계획을 확정한 직후가
+                 * 그렇다. 그때 남은 분량을 DATE_ONLY로 만들면 날짜가 없어 배치 제약(chk_execution_items_placement)에 걸려
+                 * 기록 자체가 500으로 실패했다(2026-09-19 실호출 s6). 원본이 날짜 미정이면 남은 분량도 같은 계획 기간의 날짜 미정이다.
+                 */
+                .placementType(source.getScheduledDate() == null ? PlacementType.UNSCHEDULED : PlacementType.DATE_ONLY)
                 .scheduledDate(source.getScheduledDate())
+                .planningStartDate(source.getScheduledDate() == null ? source.getPlanningStartDate() : null)
+                .planningEndDate(source.getScheduledDate() == null ? source.getPlanningEndDate() : null)
                 .deadlineAt(source.getDeadlineAt())
                 .expectedMinutes(remainingMinutes)
                 .status(ExecutionStatus.PLANNED)

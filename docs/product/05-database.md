@@ -541,6 +541,20 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 `UPDATE courses SET topic_tree_version=+1 WHERE topic_tree_version=?`(0행이면 409) → 활성 항목 FOR UPDATE. 과제 갱신은 `version`
 대조(0행이면 409 VERSION_CONFLICT).
 
+## 18. 상담 이해·전달 기록·막힌 이유 (2026-09-19)
+
+전부 추가형이고 재실행할 수 있다. **로컬 검증은 격리 DB `memo_consult`에만 적용했다 — `memo`와 배포 DB에는 적용하지 않았다.**
+이 브랜치의 서버는 아래 두 파일이 적용된 DB에서만 뜬다(`user_contexts` INSERT가 새 컬럼을 쓴다).
+
+| 파일 | 내용 |
+|---|---|
+| `docs/sql/2026-09-19-plan-generation-traces.sql` | `plan_generation_traces` 신설(호출별 입력 전문·줄로 실린 id·프로젝트별 집계·서버 커밋). FK 없음, 소유권은 `user_id` 조건. 자료 삭제 시 전문 NULL, 30일 보존 |
+| `docs/sql/2026-09-19-consult-understanding.sql` | `user_contexts`에 `evidence_type`·`course_id`·`topic_id`·`section_id`·`scope_start/end`·`self_level`·`withdrawn_at`, status에 WITHDRAWN, source_type에 CONSULT_AUTO·USER_EDITED·SELF_CHECK. `ai_messages.consult_json`. `execution_records.blocker_kind` |
+
+- backfill 없음: 기존 `user_contexts` 행은 기본값 STATED로 읽힌다(전부 사용자가 확정·승인한 것이다). 행 수는 바뀌지 않는다.
+- 적용 전 dry-run 쿼리, 적용 후 확인 쿼리, 롤백 절차(새 값이 들어간 행이 있으면 먼저 확인 — 자동으로 지우지 않는다)는 각 SQL 파일 머리에 있다.
+- 옛 서버 코드는 새 컬럼을 모른 채 동작한다(전부 NULL 허용이거나 기본값이 있다). 반대 방향(새 서버 + 옛 스키마)은 안 된다.
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

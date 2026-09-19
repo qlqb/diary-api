@@ -95,6 +95,17 @@
           AND user_id    = #{userId}
     </select>
 
+    <select id="countDraftAffectingDirectionsAfter" resultType="int">
+        SELECT COUNT(*)
+        FROM ai_messages
+        WHERE conversation_id = #{conversationId}
+          AND user_id         = #{userId}
+          AND role            = 'ASSISTANT'
+          AND created_at      &gt; #{after}
+          AND consult_json IS NOT NULL
+          AND JSON_VALUE(consult_json, '$.direction.affectsDraft') IN ('true', '1')
+    </select>
+
     <!-- 상담 부가 정보는 턴이 저장된 뒤(트랜잭션 밖)에 붙인다. 소유자의 ASSISTANT 메시지에만. -->
     <update id="updateConsultJson">
         UPDATE ai_messages

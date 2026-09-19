@@ -60,6 +60,41 @@ class ExecutionItemServiceTest {
     @InjectMocks
     private ExecutionItemService service;
 
+    /**
+     * 2026-09-19 실호출 s6에서 찾은 결함: 기간 계획을 확정한 직후의 항목은 아직 날짜가 없다(UNSCHEDULED). 거기에 "일부 했어요"를
+     * 기록하면 남은 분량을 DATE_ONLY·날짜 없음으로 만들어 배치 제약에 걸려 기록이 500으로 실패했다.
+     */
+    @Test
+    void recordPartial_onUnscheduledItem_keepsRemainderUnscheduledWithinSamePlanningRange() {
+        ExecutionItem item = plannedItem(0L);
+        item.setPlacementType(com.jungwoo.project.memo.execution.domain.PlacementType.UNSCHEDULED);
+        item.setScheduledDate(null);
+        item.setPlanningStartDate(DATE);
+        item.setPlanningEndDate(DATE.plusDays(2));
+        item.setExpectedMinutes(40);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.updateStatusWithVersion(any(), any(), any(), any())).thenReturn(1);
+        // DB가 붙여 주는 생성 키를 흉내 낸다.
+        org.mockito.Mockito.doAnswer(inv -> {
+            ((ExecutionItem) inv.getArgument(0)).setExecutionItemId(11L);
+            return null;
+        }).when(executionItemMapper).insert(any());
+
+        service.recordPartial(ITEM_ID, USER_ID, com.jungwoo.project.memo.execution.dto.ExecutionItemPartialRequest.builder()
+                .version(0L).completionPercent(30).blockerKind("concept").build());
+
+        verify(executionItemMapper).insert(argThat(remaining ->
+                remaining.getPlacementType() == com.jungwoo.project.memo.execution.domain.PlacementType.UNSCHEDULED
+                        && remaining.getScheduledDate() == null
+                        && DATE.equals(remaining.getPlanningStartDate())
+                        && DATE.plusDays(2).equals(remaining.getPlanningEndDate())
+                        && remaining.getExpectedMinutes() == 28));
+        // 시간은 적지 않았다 — 예정 시간으로 채우지 않는다. 막힌 이유는 정해진 값으로만 남는다.
+        verify(executionRecordMapper).insert(argThat(record ->
+                record.getOutcome() == ExecutionRecordOutcome.PARTIAL && record.getActualMinutes() == null
+                        && "CONCEPT".equals(record.getBlockerKind())));
+    }
+
     @Test
     void complete_deniesAccess_whenItemNotOwnedByCurrentUser() {
         // findByIdAndUserId already scopes by user_id — 다른 사용자 소유 항목이면 null이 반환된다
