@@ -353,6 +353,49 @@ class AiProposalServiceTest {
                 any(), any(), any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any());
     }
 
+    /*
+     * 버리기는 서버에 남아야 한다. 화면에서만 지우면 대화를 다시 열 때 서버의 PROPOSED가 그대로 되살아나,
+     * 사용자가 방금 버린 초안이 다시 나타난다.
+     */
+    @Test
+    void dismiss_marksProposalDismissed_soItIsNotRestored() {
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
+
+        service.dismiss(PROPOSAL_ID, USER_ID);
+
+        verify(aiProposalMapper).updateStatusAndRespondedAt(
+                eq(PROPOSAL_ID), eq(USER_ID), eq(AiProposalStatus.DISMISSED), any());
+    }
+
+    @Test
+    void dismiss_isIdempotent_whenAlreadyDismissed() {
+        AiProposal dismissed = AiProposal.builder()
+                .proposalId(PROPOSAL_ID).userId(USER_ID)
+                .status(AiProposalStatus.DISMISSED)
+                .targetScope(AiProposalTargetScope.TODAY)
+                .build();
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(dismissed);
+
+        service.dismiss(PROPOSAL_ID, USER_ID);
+
+        verify(aiProposalMapper, never()).updateStatusAndRespondedAt(any(), any(), any(), any());
+    }
+
+    @Test
+    void dismiss_returnsConflict_whenAlreadyApplied() {
+        AiProposal applied = AiProposal.builder()
+                .proposalId(PROPOSAL_ID).userId(USER_ID)
+                .status(AiProposalStatus.APPLIED)
+                .targetScope(AiProposalTargetScope.TODAY)
+                .build();
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(applied);
+
+        assertThatThrownBy(() -> service.dismiss(PROPOSAL_ID, USER_ID))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED));
+        verify(aiProposalMapper, never()).updateStatusAndRespondedAt(any(), any(), any(), any());
+    }
+
     @Test
     void apply_rejectsUnknownProposalItemId_andCreatesNothing() {
         when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposedProposal());
