@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.material.analysis.ModelJson;
+import com.jungwoo.project.memo.plan.PlanMaterialContextService;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.AssignmentLine;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.CourseCatalog;
 import com.jungwoo.project.memo.plan.PlanMaterialContextService.PendingMaterial;
@@ -108,13 +109,56 @@ public class PlanMaterialSelector {
     public record Request(Long userId, String workflowId, LocalDate start, LocalDate end, LocalDate today,
                          String instruction, List<CourseCatalog> catalogs, List<String> userContexts,
                          List<PlanRequestedMaterialResolver.RequestedMaterial> requested,
-                         List<PlanRequestedMaterialResolver.Ambiguity> ambiguities) {
+                         List<PlanRequestedMaterialResolver.Ambiguity> ambiguities,
+                         /** 두 번째(펼친) 선택 호출을 해도 최종 계획 호출의 예산이 남는가. null이면 항상 허용. */
+                         java.util.function.BooleanSupplier canExpand) {
+
+        public Request(Long userId, String workflowId, LocalDate start, LocalDate end, LocalDate today,
+                       String instruction, List<CourseCatalog> catalogs, List<String> userContexts,
+                       List<PlanRequestedMaterialResolver.RequestedMaterial> requested,
+                       List<PlanRequestedMaterialResolver.Ambiguity> ambiguities) {
+            this(userId, workflowId, start, end, today, instruction, catalogs, userContexts, requested, ambiguities, null);
+        }
+    }
+
+    /** 선택 모델이 프로젝트 하나에 대해 남긴 판단. */
+    public record CourseDecision(String decision, String reason) {
     }
 
     public record SelectedSection(String handle, SectionLine line, CourseCatalog catalog, String reason) {
     }
 
     public record SelectedTopic(String handle, TopicLine line, CourseCatalog catalog, String reason) {
+    }
+
+    /**
+     * 프로젝트 하나의 후보 노출. "목록에 있음"과 "모델에 줄로 전달됨"은 다른 단계다.
+     *
+     * @param candidates     이 프로젝트의 후보(학습 항목 + 구간) 수
+     * @param shown          그중 선택 호출 입력에 줄로 실린 수(묶음 요약에만 포함된 것은 세지 않는다)
+     * @param sections       후보 구간 수
+     * @param shownSections  줄로 실린 구간 수
+     * @param selected       모델이 고른 구간 수
+     * @param modelDecision  선택 모델이 이 프로젝트에 대해 남긴 판단(SELECTED/SKIPPED/UNSURE). 남기지 않았으면 null
+     * @param modelReason    그 이유(사용자에게 보여 줄 한 문장)
+     */
+    public record CourseExposure(Long courseId, String courseTitle, int candidates, int shown, int sections,
+                                 int shownSections, int selected, int pendingMaterials, String modelDecision,
+                                 String modelReason,
+                                 /** 접힌 묶음 요약(개요)으로는 보여 줬는가. 줄은 0이어도 개요는 본 것이다. */
+                                 boolean outlineShown,
+                                 /** 모델이 이 프로젝트의 묶음을 펼쳐 달라고 했는가. 했는데 줄이 0이면 한도 때문에 못 본 것이다. */
+                                 boolean expandRequested) {
+    }
+
+    /**
+     * 선택 호출 한 번의 실제 입력.
+     *
+     * @param sectionIds 입력에 줄로 실린 구간의 DB id
+     * @param topicIds   입력에 줄로 실린 학습 항목의 DB id
+     */
+    public record CallTrace(String kind, String systemPrompt, String userPrompt, List<Long> sectionIds,
+                            List<Long> topicIds, Integer estimatedTokens) {
     }
 
     /** 원문 후보를 보여 주지 못한(요약만 봤거나 아예 못 본) 묶음. */
@@ -134,7 +178,21 @@ public class PlanMaterialSelector {
                          /** 이 요청의 구간 핸들(sectionId → m7). 최종 계획 호출이 "더 읽을 수 있는 구간"을 같은 핸들로 보여 준다. */
                          Map<Long, String> sectionHandles,
                          /** 핸들 → 구간 줄. 추가 읽기 요청의 핸들을 다시 찾는 데 쓴다. */
-                         Map<String, SelectedSection> byHandle) {
+                         Map<String, SelectedSection> byHandle,
+                         /** 대상 프로젝트마다 후보가 몇 개였고 그중 몇 개를 실제로 목록 줄로 보여 줬는가. */
+                         List<CourseExposure> exposure,
+                         /** 선택 호출마다 실제로 보낸 입력과 그 안에 줄로 실린 id. 근거 기록(plan_generation_traces)에 남긴다. */
+                         List<CallTrace> traces) {
+
+        public Result(Status status, Mode mode, List<SelectedSection> sections, List<SelectedTopic> topics,
+                      boolean insufficientEvidence, String note, int calls, boolean expanded,
+                      int candidateTotal, int candidateShown, List<Unreviewed> unreviewed, int unknownIds,
+                      List<Integer> estimatedInputTokens, int overLimit, Map<Long, String> sectionHandles,
+                      Map<String, SelectedSection> byHandle) {
+            this(status, mode, sections, topics, insufficientEvidence, note, calls, expanded, candidateTotal,
+                    candidateShown, unreviewed, unknownIds, estimatedInputTokens, overLimit, sectionHandles, byHandle,
+                    List.of(), List.of());
+        }
 
         public Result(Status status, Mode mode, List<SelectedSection> sections, List<SelectedTopic> topics,
                       boolean insufficientEvidence, String note, int calls, boolean expanded,
@@ -187,6 +245,7 @@ public class PlanMaterialSelector {
             - 후보 줄: "t12 학습 항목" / "m7 [역할] 구간 제목 (위치) · 수행 · 설명". 들여쓰기는 소속이다.
               설명은 목록용 짧은 요약이지 원문이 아니다.
             - "g3 …"/"c2 …" 줄은 접힌 묶음이다. 안의 후보 id는 펼쳐야 보인다.
+            - "== c2 프로젝트 …" 줄의 c2는 그 프로젝트의 id다(courseDecisions에 쓴다).
 
             고르는 법:
             - 사용자 지시와 선호를 따른다(예: "개념 먼저", "문제부터", "이 PDF 중심으로"). 역할에 정해진 순서는 없다 —
@@ -200,7 +259,13 @@ public class PlanMaterialSelector {
             - 완료한 과제의 구간은 과제를 다시 하려고 고르지 않는다. 개념이 필요할 때만 고르고 이유에 그렇게 적는다.
             - 미완료 과제의 안내 구간을 "과제를 하려고" 고르지 않는다. 과제 수행은 사용자가 요청했을 때만 계획에 들어간다.
               사용자가 요청하지 않았으면 과제에 필요한 개념·연습 구간을 고른다.
-            - 이번 기간에 실제로 볼 만큼만 고른다(보통 구간 3~15개). 제목만 보고 내용을 안다고 가정하지 마라.
+            - 이번 기간에 실제로 볼 만큼만 고른다. 몇 개가 맞는지는 기간·사용자가 말한 시간·목표(훑어보기인지 깊게 파기인지)·
+              대상 프로젝트 수로 정한다 — 정해진 개수는 없다. 제목만 보고 내용을 안다고 가정하지 마라.
+            - 대상 프로젝트가 여럿이고 사용자가 범위를 좁히지 않았으면 모든 프로젝트를 검토한다. 목록에서 앞에 나온
+              프로젝트라는 이유로 먼저 고르지 않는다. 묶음이 접혀 있으면 프로젝트마다 볼 묶음을 고르게 펼친다 — 서버는 펼친
+              묶음마다 앞부분부터 돌아가며 보여 준다(분량을 똑같이 나누라는 뜻이 아니다. 볼 기회를 고르게 주는 것이다).
+            - 프로젝트마다 courseDecisions에 결과를 남긴다: 구간을 골랐으면 SELECTED, 이번 요청에 필요 없다고 판단했으면
+              SKIPPED와 이유, 목록만으로는 판단할 수 없으면 UNSURE와 이유. 후보를 보지 못한 프로젝트를 SKIPPED로 적지 않는다.
             - 학습 항목(t)을 고르면 "이번 계획의 초점"이라는 뜻이다. 그 항목의 원문을 읽히려면 구간(m)을 따로 고른다.
             - 접힌 묶음 안을 봐야 판단할 수 있으면 expandGroupIds에 적는다. 펼칠 기회는 이번 요청에서 한 번뿐이다.
             - id는 입력에 보이는 것만 쓴다. 없는 id를 만들지 마라.
@@ -212,7 +277,9 @@ public class PlanMaterialSelector {
             2) 다음 줄에 정확히: %s
             3) 그 아래 JSON 객체 하나:
             {"selectedSectionIds": ["m7"], "selectedTopicIds": ["t12"], "expandGroupIds": ["g3"],
-             "reasons": [{"id": "m7", "reason": "한 문장"}], "insufficientEvidence": false, "note": null}
+             "reasons": [{"id": "m7", "reason": "한 문장"}],
+             "courseDecisions": [{"courseId": "c1", "decision": "SELECTED", "reason": "한 문장"}],
+             "insufficientEvidence": false, "note": null}
             """.formatted(AiStreamParser.DELIMITER);
 
     static final String ROUND2_RULE = """
@@ -253,17 +320,24 @@ public class PlanMaterialSelector {
             }
         }
 
-        Parsed first = call(request, SYSTEM_PROMPT, round1.prompt(), round1.shown(), true);
+        List<CallTrace> traces = new ArrayList<>();
+        traces.add(trace("SELECTION", SYSTEM_PROMPT, round1, registry, estimates.get(0)));
+        Parsed first = call(request, SYSTEM_PROMPT, round1.prompt(), round1.shown(), true, registry);
         Set<String> shownItems = new LinkedHashSet<>(round1.shownItems());
         int calls = 1;
         boolean expanded = false;
         Parsed second = null;
 
-        if (mode != Mode.FULL && !first.expand().isEmpty()) {
+        boolean mayExpand = request.canExpand() == null || request.canExpand().getAsBoolean();
+        if (mode != Mode.FULL && !first.expand().isEmpty() && !mayExpand) {
+            log.info("자료 선택: 묶음 {}개를 펼치자고 했지만 생성 예산 때문에 두 번째 선택 호출을 하지 않는다", first.expand().size());
+        }
+        if (mode != Mode.FULL && !first.expand().isEmpty() && mayExpand) {
             Round round2 = expandRound(header, registry, factHandles, round1, first);
             if (!round2.shownItems().isEmpty()) {
                 estimates.add(estimator.estimateCall(SYSTEM_PROMPT + ROUND2_RULE, round2.prompt()));
-                second = call(request, SYSTEM_PROMPT + ROUND2_RULE, round2.prompt(), round2.shown(), false);
+                traces.add(trace("SELECTION_EXPAND", SYSTEM_PROMPT + ROUND2_RULE, round2, registry, estimates.get(1)));
+                second = call(request, SYSTEM_PROMPT + ROUND2_RULE, round2.prompt(), round2.shown(), false, registry);
                 shownItems.addAll(round2.shownItems());
                 calls = 2;
                 expanded = true;
@@ -276,7 +350,9 @@ public class PlanMaterialSelector {
         int unknown = first.unknown();
         boolean insufficient = first.insufficientEvidence();
         String note = first.note();
+        Map<String, CourseDecision> decisions = new LinkedHashMap<>(first.decisions());
         if (second != null) {
+            decisions.putAll(second.decisions());
             second.sections().stream().filter(h -> !sectionHandles.contains(h)).forEach(sectionHandles::add);
             second.topics().stream().filter(h -> !topicHandles.contains(h)).forEach(topicHandles::add);
             second.reasons().forEach(reasons::putIfAbsent);
@@ -303,7 +379,60 @@ public class PlanMaterialSelector {
         registry.sections.forEach((h, line) -> byHandle.put(h, new SelectedSection(h, line, registry.sectionCatalog.get(h),
                 reasons.get(h))));
         return new Result(status, mode, sections, topics, insufficient, note, calls, expanded, total, shownCount,
-                unreviewed, unknown, estimates, overLimit, Map.copyOf(registry.sectionHandle), byHandle);
+                unreviewed, unknown, estimates, overLimit, Map.copyOf(registry.sectionHandle), byHandle,
+                exposure(registry, shownItems, sections, decisions, mode != Mode.FULL, first.expand()), traces);
+    }
+
+    /** 프로젝트별 노출 집계. 모델 응답이 아니라 서버가 실제로 보낸 줄에서 센다. */
+    static List<CourseExposure> exposure(Registry registry, Set<String> shownItems, List<SelectedSection> selected,
+                                         Map<String, CourseDecision> decisions, boolean folded, List<String> expand) {
+        List<CourseExposure> out = new ArrayList<>();
+        for (CourseGroup cg : registry.courseGroups.values()) {
+            int candidates = 0;
+            int shown = 0;
+            int sections = 0;
+            int shownSections = 0;
+            for (Group group : cg.children) {
+                for (TopicLine t : group.topics) {
+                    candidates++;
+                    if (shownItems.contains(registry.topicHandle.get(t.topicId()))) {
+                        shown++;
+                    }
+                }
+                for (SectionLine sl : group.sections) {
+                    candidates++;
+                    sections++;
+                    if (shownItems.contains(registry.sectionHandle.get(sl.section().getSectionId()))) {
+                        shown++;
+                        shownSections++;
+                    }
+                }
+            }
+            int picked = (int) selected.stream().filter(sel -> sel.catalog() == cg.catalog).count();
+            CourseDecision decision = decisions.get(cg.handle);
+            out.add(new CourseExposure(cg.catalog.courseId(), plainCourseTitle(cg.catalog), candidates, shown, sections,
+                    shownSections, picked, cg.catalog.pending().size(),
+                    decision == null ? null : decision.decision(), decision == null ? null : decision.reason(),
+                    folded, expand.contains(cg.handle) || cg.children.stream().anyMatch(g -> expand.contains(g.handle))));
+        }
+        return out;
+    }
+
+    private static CallTrace trace(String kind, String system, Round round, Registry registry, Integer estimate) {
+        List<Long> sectionIds = new ArrayList<>();
+        List<Long> topicIds = new ArrayList<>();
+        for (String h : round.shownItems()) {
+            SectionLine sl = registry.sections.get(h);
+            if (sl != null) {
+                sectionIds.add(sl.section().getSectionId());
+                continue;
+            }
+            TopicLine tl = registry.topics.get(h);
+            if (tl != null) {
+                topicIds.add(tl.topicId());
+            }
+        }
+        return new CallTrace(kind, system, round.prompt(), sectionIds, topicIds, estimate);
     }
 
     // ===== 라운드 구성 =====
@@ -345,7 +474,7 @@ public class PlanMaterialSelector {
         }
         sb.append("\n[판단에 꼭 필요한 사실 — 선택과 무관하게 계획 단계에 넘어간다]\n");
         for (CourseCatalog catalog : request.catalogs()) {
-            sb.append("== ").append(courseTitle(catalog)).append('\n');
+            sb.append("== ").append(registry.courseHandle(catalog)).append(' ').append(courseTitle(catalog)).append('\n');
             for (TopicLine topic : catalog.requiredTopics()) {
                 String handle = registry.topicHandle.get(topic.topicId());
                 factHandles.add(handle);
@@ -395,7 +524,7 @@ public class PlanMaterialSelector {
         for (Group group : registry.groups.values()) {
             if (group.catalog != current) {
                 current = group.catalog;
-                sb.append("== ").append(courseTitle(current)).append('\n');
+                sb.append("== ").append(registry.courseHandle(current)).append(' ').append(courseTitle(current)).append('\n');
             }
             if (group.unlinked) {
                 sb.append("  [").append(group.title).append("]\n");
@@ -441,7 +570,7 @@ public class PlanMaterialSelector {
             for (Group group : registry.groups.values()) {
                 if (group.catalog != current) {
                     current = group.catalog;
-                    sb.append("== ").append(courseTitle(current)).append('\n');
+                    sb.append("== ").append(registry.courseHandle(current)).append(' ').append(courseTitle(current)).append('\n');
                 }
                 sb.append(groupSummary(group)).append('\n');
                 groupsShown.add(group.handle);
@@ -486,28 +615,77 @@ public class PlanMaterialSelector {
         String system = SYSTEM_PROMPT + ROUND2_RULE;
         int used = estimator.estimateCall(system, sb.toString());
         Set<String> expandedItems = new LinkedHashSet<>();
-        outer:
+        /*
+         * 예산이 모자랄 때 앞의 묶음이 목록을 독점하지 않게 한다. 프로젝트를 돌아가며, 프로젝트 안에서는 묶음을 돌아가며 한 줄씩
+         * 허용량을 준다 — 뒤쪽 프로젝트도 앞부분은 반드시 보인다. 이것은 "볼 기회"의 공정성이지 학습 분량을 똑같이 나누는 규칙이
+         * 아니다. 허용량을 다 정한 뒤 묶음 단위로 이어서 출력해 목록은 읽기 쉬운 순서를 유지한다.
+         */
+        Map<Group, List<Line>> linesOf = new LinkedHashMap<>();
+        Map<Group, Integer> granted = new LinkedHashMap<>();
+        Map<CourseCatalog, List<Group>> byCourse = new LinkedHashMap<>();
         for (Group group : toExpand) {
-            String head = "== " + courseTitle(group.catalog) + " · " + group.handle + " " + group.title + "\n";
-            int headCost = withMargin(estimator.count(head));
-            if (used + headCost > inputTokenBudget) {
-                break;
-            }
-            sb.append(head);
-            used += headCost;
-            for (Line line : groupLines(group, registry)) {
-                int cost = withMargin(estimator.count(line.text()) + 1);
-                if (used + cost > inputTokenBudget) {
-                    break outer; // 이 묶음의 나머지와 뒤의 묶음은 이번에 보여 주지 못한다(검토 범위에 남긴다).
+            linesOf.put(group, groupLines(group, registry));
+            granted.put(group, 0);
+            byCourse.computeIfAbsent(group.catalog, k -> new ArrayList<>()).add(group);
+        }
+        Map<CourseCatalog, Integer> cursor = new HashMap<>();
+        boolean progressed = true;
+        boolean exhausted = false;
+        while (progressed && !exhausted) {
+            progressed = false;
+            for (Map.Entry<CourseCatalog, List<Group>> course : byCourse.entrySet()) {
+                List<Group> groups = course.getValue();
+                int start = cursor.getOrDefault(course.getKey(), 0);
+                for (int step = 0; step < groups.size(); step++) {
+                    Group group = groups.get((start + step) % groups.size());
+                    int have = granted.get(group);
+                    List<Line> lines = linesOf.get(group);
+                    if (have >= lines.size()) {
+                        continue;
+                    }
+                    int cost = withMargin(estimator.count(lines.get(have).text()) + 1);
+                    if (have == 0) {
+                        cost += withMargin(estimator.count(expandHead(group, registry)));
+                    }
+                    if (used + cost > inputTokenBudget) {
+                        exhausted = true;
+                        break;
+                    }
+                    used += cost;
+                    granted.put(group, have + 1);
+                    cursor.put(course.getKey(), (start + step + 1) % groups.size());
+                    progressed = true;
+                    break; // 이 프로젝트는 이번 바퀴에 한 줄 받았다. 다음 프로젝트로.
                 }
+                if (exhausted) {
+                    break;
+                }
+            }
+        }
+        for (Group group : toExpand) {
+            int count = granted.get(group);
+            if (count == 0) {
+                continue; // 한 줄도 못 보여 준 묶음은 검토하지 못한 범위에 남는다.
+            }
+            List<Line> lines = linesOf.get(group);
+            sb.append(expandHead(group, registry));
+            for (Line line : lines.subList(0, count)) {
                 sb.append(line.text()).append('\n');
                 expandedItems.add(line.handle());
-                used += cost;
+            }
+            if (count < lines.size()) {
+                sb.append("    (이 묶음의 나머지 ").append(lines.size() - count)
+                        .append("줄은 입력 한도 때문에 이번에 보여 주지 못했다 — 없는 것이 아니다)\n");
             }
         }
         items.addAll(expandedItems);
         Set<String> shown = new LinkedHashSet<>(items);
         return new Round(sb.toString(), shown, expandedItems.isEmpty() ? Set.of() : items, Set.of());
+    }
+
+    private String expandHead(Group group, Registry registry) {
+        return "== " + registry.courseHandle(group.catalog) + " " + courseTitle(group.catalog) + " · " + group.handle
+                + " " + group.title + "\n";
     }
 
     /** 접어도 항상 줄로 보이는 후보: 지정 자료의 구간, 미완료 과제의 구간. 판단 사실의 항목 핸들은 이미 사실 줄에 있다. */
@@ -645,10 +823,15 @@ public class PlanMaterialSelector {
 
     /** 파싱 결과. 핸들은 이 라운드에서 보여 준 것만 남긴다. */
     record Parsed(List<String> sections, List<String> topics, List<String> expand, Map<String, String> reasons,
-                  boolean insufficientEvidence, String note, int unknown) {
+                  boolean insufficientEvidence, String note, int unknown, Map<String, CourseDecision> decisions) {
+        Parsed(List<String> sections, List<String> topics, List<String> expand, Map<String, String> reasons,
+               boolean insufficientEvidence, String note, int unknown) {
+            this(sections, topics, expand, reasons, insufficientEvidence, note, unknown, Map.of());
+        }
     }
 
-    private Parsed call(Request request, String system, String prompt, Set<String> shown, boolean allowExpand) {
+    private Parsed call(Request request, String system, String prompt, Set<String> shown, boolean allowExpand,
+                        Registry registry) {
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> finishReason = new AtomicReference<>();
@@ -678,7 +861,7 @@ public class PlanMaterialSelector {
             log.warn("자료 선택: 출력이 상한({})에서 잘림. userId={}", maxCompletionTokens, request.userId());
             throw new ServiceUnavailableException(ErrorCode.PLAN_MATERIAL_SELECTION_INVALID);
         }
-        Parsed parsed = parse(result.structuredJson(), shown, allowExpand);
+        Parsed parsed = parse(result.structuredJson(), shown, allowExpand, registry.courseGroups.keySet());
         if (parsed == null) {
             record(request, lastUsage.get(), UsageResultStatus.FAILED, ErrorCode.PLAN_MATERIAL_SELECTION_INVALID.getCode());
             log.warn("자료 선택: 구조화 응답을 읽지 못했다. userId={}", request.userId());
@@ -695,6 +878,10 @@ public class PlanMaterialSelector {
      * 것이 아니면 읽을 수 없는 응답으로 본다 — 지어낸 id를 "아무것도 안 골랐다"로 바꾸면 실패가 정상처럼 보인다.
      */
     Parsed parse(String raw, Set<String> shown, boolean allowExpand) {
+        return parse(raw, shown, allowExpand, Set.of());
+    }
+
+    Parsed parse(String raw, Set<String> shown, boolean allowExpand, Set<String> courseHandles) {
         String json = ModelJson.unwrapObject(raw);
         if (json == null) {
             return null;
@@ -754,8 +941,26 @@ public class PlanMaterialSelector {
         if ("null".equalsIgnoreCase(note)) {
             note = null;
         }
+        Map<String, CourseDecision> decisions = new LinkedHashMap<>();
+        JsonNode decisionNode = root.get("courseDecisions");
+        if (decisionNode != null && decisionNode.isArray()) {
+            for (JsonNode one : decisionNode) {
+                String h = normalizeHandle(ModelJson.textOf(one, "courseId"));
+                String decision = ModelJson.textOf(one, "decision");
+                if (h == null || !courseHandles.contains(h) || decision == null) {
+                    continue; // 이 요청에 없는 프로젝트에 대한 판단은 받지 않는다.
+                }
+                String d = decision.trim().toUpperCase(Locale.ROOT);
+                if (!Set.of("SELECTED", "SKIPPED", "UNSURE").contains(d)) {
+                    continue;
+                }
+                String reason = ModelJson.textOf(one, "reason");
+                decisions.put(h, new CourseDecision(d,
+                        reason == null ? null : PlanCatalogText.cut(PlanCatalogText.flat(reason), MAX_REASON_CHARS)));
+            }
+        }
         return new Parsed(sections, topics, expand, reasons, insufficient,
-                note == null ? null : PlanCatalogText.cut(PlanCatalogText.flat(note), 300), unknown[0]);
+                note == null ? null : PlanCatalogText.cut(PlanCatalogText.flat(note), 300), unknown[0], decisions);
     }
 
     private static List<String> handles(JsonNode array, char prefix, Set<String> shown, int[] unknown, int[] returned) {
@@ -832,6 +1037,15 @@ public class PlanMaterialSelector {
         final Map<String, Group> groups = new LinkedHashMap<>();
         final Map<String, CourseGroup> courseGroups = new LinkedHashMap<>();
 
+        String courseHandle(CourseCatalog catalog) {
+            for (CourseGroup cg : courseGroups.values()) {
+                if (cg.catalog == catalog) {
+                    return cg.handle;
+                }
+            }
+            return "c0";
+        }
+
         static Registry of(List<CourseCatalog> catalogs) {
             Registry r = new Registry();
             int t = 1;
@@ -856,16 +1070,25 @@ public class PlanMaterialSelector {
                     r.topicCatalog.put(handle, catalog);
                     r.topicHandle.put(topic.topicId(), handle);
                 }
-                Map<Long, Group> unlinkedByMaterial = new LinkedHashMap<>();
+                Map<Object, Group> unlinkedByMaterial = new LinkedHashMap<>();
                 for (SectionLine section : catalog.sections()) {
                     Group group = section.topicIds().isEmpty() ? null : groupByTopic.get(section.topicIds().get(0));
                     if (group == null) {
                         Long materialId = section.section().getMaterialId();
-                        group = unlinkedByMaterial.get(materialId);
+                        /*
+                         * 승인 전 구조 제안이 이 구간을 어떤 주제로 묶었으면 그 주제로 묶어 보여 준다(읽기 전용 색인).
+                         * 상태를 제목에 그대로 밝힌다 — 사용자가 승인한 구조가 아니고, 학습 항목(t) 핸들도 주지 않는다.
+                         */
+                        PlanMaterialContextService.ProposedGroup proposed = catalog.proposedBySection() == null ? null
+                                : catalog.proposedBySection().get(section.section().getSectionId());
+                        Object groupKey = proposed != null ? proposed.nodeId() : materialId;
+                        group = unlinkedByMaterial.get(groupKey);
                         if (group == null) {
                             String filename = section.material() == null ? "자료" : section.material().getOriginalFilename();
-                            group = new Group("g" + g++, catalog, "토픽에 연결되지 않은 자료 · " + filename, true);
-                            unlinkedByMaterial.put(materialId, group);
+                            group = new Group("g" + g++, catalog, proposed != null
+                                    ? "자동 분석 제안(승인 전) · " + proposed.title()
+                                    : "토픽에 연결되지 않은 자료 · " + filename, true);
+                            unlinkedByMaterial.put(groupKey, group);
                             r.groups.put(group.handle, group);
                             cg.children.add(group);
                         }

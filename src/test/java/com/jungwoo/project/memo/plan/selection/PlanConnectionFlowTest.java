@@ -189,7 +189,7 @@ class PlanConnectionFlowTest {
         assertThat(f.planCalls()).hasSize(1);
         assertThat(generated.extras().budget().retrievalRounds()).isEqualTo(1);
         assertThat(generated.strategy().unreadNotes())
-                .anyMatch(n -> n.contains("구간 1개를 더 읽자고 했지만 호출·조회 상한") && n.contains("1라운드"));
+                .anyMatch(n -> n.contains("구간 1개를 더 읽자고 했지만 이번 회차의 한도") && n.contains("1라운드"));
         assertThat(generated.materialSelection().sections()).extracting(s -> s.sectionId()).containsExactly(101L);
     }
 

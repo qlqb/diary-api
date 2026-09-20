@@ -47,6 +47,21 @@ public class AiMessageRequest {
     /** requestedAction=CREATE_PERIOD_PLAN에서만 값을 가진다. */
     private PeriodPlanRequest periodPlan;
 
+    /**
+     * 질문 카드의 빠른 답. message가 비어 있으면 서버가 저장된 질문의 선택지 라벨로 사용자 발화를 만든다 —
+     * 선택 답과 자유 답은 같은 경로이고 둘 다 대화 기록에 남는다.
+     */
+    private Answer answer;
+
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class Answer {
+        private String questionId;
+        private java.util.List<String> choiceIds;
+        private boolean skipped;
+    }
+
     @NotBlank(message = "idempotencyKey는 필수입니다")
     private String idempotencyKey;
 }

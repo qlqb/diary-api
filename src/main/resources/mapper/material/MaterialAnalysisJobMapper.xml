@@ -65,6 +65,11 @@
                OR (j.status = 'RUNNING' AND j.lease_until IS NOT NULL AND j.lease_until &lt; #{now}))
           AND NOT EXISTS (SELECT 1 FROM material_analysis_controls c WHERE c.user_id = j.user_id AND c.paused = 1)
           <if test="minPriority != null">AND j.priority &gt;= #{minPriority}</if>
+          <if test="blocked != null and blocked.size() > 0">
+            <foreach collection="blocked" item="b">
+              AND NOT (j.user_id = #{b.userId} AND j.job_kind = #{b.kind})
+            </foreach>
+          </if>
         ORDER BY j.priority ASC, j.next_run_at ASC, j.job_id ASC
         LIMIT #{limit}
     </select>
@@ -168,6 +173,11 @@
         AND material_id IN
         <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
         ORDER BY job_id DESC
+    </select>
+
+    <select id="countStartedSinceByKind" resultType="int">
+        SELECT COUNT(*) FROM material_analysis_jobs
+        WHERE user_id = #{userId} AND job_kind = #{kind} AND attempt &gt; 0 AND updated_at &gt;= #{since}
     </select>
 
     <select id="countStartedSince" resultType="int">

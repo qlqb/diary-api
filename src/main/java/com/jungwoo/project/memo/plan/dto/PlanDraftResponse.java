@@ -54,6 +54,41 @@ public class PlanDraftResponse {
      */
     private String availabilityConfidenceSummary;
 
+    /**
+     * 가용시간이 어디서 왔는가: ALL_ASSUMED(등록된 일정·가용시간이 없어 기본 시간대를 가정) / PARTLY_ASSUMED /
+     * CONFIRMED / NONE. 화면은 가정일 때 "학습 목표 N분"처럼 단정하지 않고 임시 배치임을 말한다.
+     * 일정 조회가 실패하면 생성 자체가 실패한다 — 조회 오류가 "일정 없음"으로 바뀌어 여기까지 오지 않는다.
+     */
+    public String getAvailabilityBasis() {
+        if (availabilityConfidenceSummary == null) {
+            return "NONE";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_ALL_DEFAULT)) {
+            return "ALL_ASSUMED";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_PARTLY_DEFAULT)) {
+            return "PARTLY_ASSUMED";
+        }
+        if (availabilityConfidenceSummary.equals(
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.CONFIDENCE_CONFIRMED)) {
+            return "CONFIRMED";
+        }
+        return "NONE";
+    }
+
+    /** 실제로 제안된(빼지 않은) 항목의 예상 시간 합(분). 예산(targetMinutes)은 상한이지 목표량이 아니다. */
+    public Integer getProposedMinutes() {
+        if (proposal == null || proposal.getItems() == null) {
+            return null;
+        }
+        return proposal.getItems().stream()
+                .filter(i -> i.getStatus() == null
+                        || i.getStatus() != com.jungwoo.project.memo.ai.domain.AiProposalItemStatus.DISMISSED)
+                .mapToInt(i -> i.getExpectedMinutes() == null ? 0 : i.getExpectedMinutes()).sum();
+    }
+
     /** 추정 남는 시간에서 학습 예산을 뺀 여유(분). 휴식·변동에 남겨 둔 시간이다. */
     private Integer reservedBufferMinutes;
 
@@ -127,6 +162,22 @@ public class PlanDraftResponse {
 
     /** 저장된 검토 상태(제목·제외·편집값·답). 새 초안은 null. 새로고침 복구가 이 값으로 화면을 되돌린다. */
     private PlanReviewState reviewState;
+
+    /**
+     * 이 초안이 지금의 상담·기억을 반영하고 있는가. STALE이면 화면은 "최신 답변 반영 전 버전"이라고 표시하고 다시 만들기를
+     * 권한다 — 바뀌지 않은 결과를 최신처럼 보여 주지 않는다. 서버가 자동으로 다시 만들지는 않는다.
+     */
+    private Freshness freshness;
+
+    /** 다시 만들기에서 새 초안으로 옮긴 사용자의 직접 편집. 다시 만들기 응답에만 있다. */
+    private List<com.jungwoo.project.memo.plan.ReviewStateCarryOver.CarriedEdit> carriedEdits;
+
+    /** 사용자가 고친 값과 새 초안의 제안이 어긋난 곳. 기본은 사용자 값 유지다. 다시 만들기 응답에만 있다. */
+    private List<com.jungwoo.project.memo.plan.ReviewStateCarryOver.EditConflict> editConflicts;
+
+    /** @param state CURRENT / STALE */
+    public record Freshness(String state, List<String> reasons) {
+    }
 
     @lombok.Getter
     @lombok.Builder

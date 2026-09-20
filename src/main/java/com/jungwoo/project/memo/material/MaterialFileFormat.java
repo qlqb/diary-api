@@ -25,13 +25,18 @@ public enum MaterialFileFormat {
     HWP("hwp", "application/x-hwp", Signature.OLE),
     /** HWPX(OWPML). 속은 XML 묶음을 담은 zip이다. */
     HWPX("hwpx", "application/hwp+zip", Signature.ZIP),
-    IPYNB("ipynb", "application/x-ipynb+json", Signature.JSON);
+    IPYNB("ipynb", "application/x-ipynb+json", Signature.JSON),
+    /**
+     * 셸 스크립트. <b>실행하지 않는 텍스트 자료</b>로만 읽는다(PlainTextExtractor). 평문에는 시그니처가 없어 앞머리에
+     * NUL 바이트가 없는지만 본다 — 실제로 글자로 풀리는지는 추출 단계가 판단한다.
+     */
+    SH("sh", "text/plain", Signature.TEXT);
 
     /** 시그니처 확인에 읽는 앞머리 길이. ipynb는 BOM·공백 뒤의 '{'를 봐야 해서 넉넉히 읽는다. */
     public static final int HEADER_BYTES = 64;
 
     enum Signature {
-        PDF, OLE, ZIP, JSON
+        PDF, OLE, ZIP, JSON, TEXT
     }
 
     private static final byte[] PDF_SIGNATURE = {'%', 'P', 'D', 'F', '-'};
@@ -92,6 +97,7 @@ public enum MaterialFileFormat {
             case OLE -> startsWith(header, OLE_SIGNATURE);
             case ZIP -> startsWith(header, ZIP_LOCAL_HEADER) || startsWith(header, ZIP_EMPTY);
             case JSON -> looksLikeJsonObject(header);
+            case TEXT -> looksLikeText(header);
         };
     }
 
@@ -105,6 +111,21 @@ public enum MaterialFileFormat {
             }
         }
         return true;
+    }
+
+    /** 앞머리에 NUL이 없고, 잘 알려진 바이너리 시그니처(PDF·OLE·ZIP·ELF·PE)로 시작하지 않는가. */
+    private static boolean looksLikeText(byte[] header) {
+        if (header.length == 0) {
+            return false;
+        }
+        for (byte b : header) {
+            if (b == 0) {
+                return false;
+            }
+        }
+        return !startsWith(header, PDF_SIGNATURE) && !startsWith(header, OLE_SIGNATURE)
+                && !startsWith(header, ZIP_LOCAL_HEADER) && !startsWith(header, new byte[]{0x7F, 'E', 'L', 'F'})
+                && !startsWith(header, new byte[]{'M', 'Z'});
     }
 
     /** UTF-8 BOM과 공백을 건너뛴 첫 글자가 '{'인가. 노트북 파일은 JSON 객체다. */

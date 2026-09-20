@@ -193,11 +193,13 @@ class OpenAiConsultationClientTest {
         assertThat(prompt).contains("어느 탭에서 말했는지가 아니라 사용자의");
         assertThat(prompt).contains("PERIOD_PLAN(기간 계획)");
         assertThat(prompt).contains("EXECUTION_CHANGE(실행 조정·단건)");
-        assertThat(prompt).contains("missingInformation=[\"PLAN_INTENSITY\"]");
+        // (2026-09-19) 강도는 필수 질문이 아니고, 범위·깊이·시간은 서로 다른 조건이다.
+        assertThat(prompt).contains("강도를 묻는 것은 필수 절차가 아니다");
+        assertThat(prompt).contains("범위·깊이·시간은 서로 다른 조건이다");
+        assertThat(prompt).contains("TIME_BUDGET");
         assertThat(prompt).contains("\"조금만·핵심만·가볍게\" → LIGHT");
-        assertThat(prompt).contains("\"적당히·균형 있게·알아서\" → NORMAL");
-        assertThat(prompt).contains("\"빡세게·가능한 만큼·거의 꽉 채워\" → FOCUSED");
-        assertThat(prompt).contains("이미 말했으면 다시 묻지 않는다");
+        assertThat(prompt).contains("같은 확인을 두 번 하지 않는다");
+        assertThat(prompt).contains("\"consult\": {");
         assertThat(prompt).contains("기간 계획과 기존 항목 조정을 한 번에 섞지 않는다");
         assertThat(prompt).contains("PERIOD_PLAN에서");
         assertThat(prompt).contains("proposalItems를 미리 채우지 않는다");

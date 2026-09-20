@@ -324,6 +324,7 @@ public class PlanDraftService {
                     request.getRequestedMaterialIds() == null ? 0 : request.getRequestedMaterialIds().size(),
                     generated.extras() != null && generated.extras().selectionReused());
             PlanDraftResponse response = persistSuperseding(userId, generated, context.conversationId(), proposalId);
+            carryReviewState(userId, proposal, proposalId, response);
             progress.done(requestKey, response.getProposalId());
             return response;
         } catch (RuntimeException e) {
@@ -479,7 +480,7 @@ public class PlanDraftService {
                 supersededProposalId);
 
         PeriodPlanDraftGenerator.Extras extras = generated.extras();
-        return PlanDraftResponse.builder()
+        return withItemReasons(userId, PlanDraftResponse.builder()
                 .proposalId(proposal.getProposalId())
                 .startDate(spec.start())
                 .endDate(spec.end())
@@ -508,7 +509,7 @@ public class PlanDraftService {
                         .build())
                 .briefId(extras == null ? null : extras.briefId())
                 .briefVersion(extras == null ? null : extras.briefVersion())
-                .build();
+                .build());
     }
 
     // ===== 검토 상태 =====
@@ -574,6 +575,129 @@ public class PlanDraftService {
      * 모델을 부르지 않는다. 자료 선택·호출 계측은 근거 스냅샷의 서버 계산에서 복원한다.
      */
     @Transactional(readOnly = true)
+    /**
+     * 옛 초안의 검토 상태(직접 고친 값·뺀 항목·제목·답)를 새 초안으로 옮긴다. 옮기지 못해도 다시 만들기는 성공이다.
+     */
+    private void carryReviewState(Long userId, AiProposal oldProposal, Long oldProposalId, PlanDraftResponse response) {
+        try {
+            PlanReviewState oldState = readReviewState(oldProposal.getReviewStateJson());
+            if (oldState == null || response.getProposal() == null) {
+                return;
+            }
+            AiProposalResponse oldItems = aiProposalService.get(oldProposalId, userId);
+            ReviewStateCarryOver.Result carried = ReviewStateCarryOver.carry(oldState,
+                    oldItems == null ? List.of() : oldItems.getItems(), response.getProposal().getItems());
+            if (carried.state() != null) {
+                String json = requestJson.writeValueAsString(carried.state());
+                if (aiProposalMapper.updateReviewState(response.getProposalId(), userId, json, null) == 1) {
+                    response.setReviewState(carried.state());
+                }
+            }
+            response.setCarriedEdits(carried.carried());
+            response.setEditConflicts(carried.conflicts());
+            log.info("다시 만들기: 사용자의 검토 상태를 새 초안으로 옮겼다. {} -> {}, 옮김={}건, 충돌={}건", oldProposalId,
+                    response.getProposalId(), carried.carried().size(), carried.conflicts().size());
+        } catch (Exception e) {
+            log.warn("다시 만들기: 검토 상태를 옮기지 못했다(초안은 만들어졌다). {} -> {}, {}", oldProposalId,
+                    response.getProposalId(), e.getClass().getSimpleName());
+        }
+    }
+
+    /**
+     * 이 초안을 만든 뒤 상담 합의나 그때 읽은 기억이 바뀌었는가. 바뀌었으면 STALE과 그 이유를 돌려준다.
+     * 판단은 서버 기록의 비교다(합의 판 번호, 근거로 든 기억 행의 상태·수정 시각) — 모델에게 묻지 않는다.
+     */
+    PlanDraftResponse.Freshness freshnessOf(Long userId, AiProposal proposal, PlanRequestContext context,
+                                            PlanProvenance provenance) {
+        List<String> reasons = new ArrayList<>();
+        try {
+            if (context != null && context.briefId() != null && context.briefVersion() != null) {
+                /*
+                 * 판 번호만 비교하면 안 된다 — 초안을 만든 직후 서버가 합의에 "이 초안으로 이어짐"을 적으면서도 판이
+                 * 오른다(실호출에서 방금 만든 초안이 곧바로 "갱신 필요"로 보였다). 초안이 저장된 뒤에 바뀐 합의 항목이
+                 * 실제로 있는지를 본다.
+                 */
+                var brief = planBriefService.loadById(userId, context.briefId());
+                java.time.LocalDateTime createdAt = proposal.getCreatedAt();
+                if (brief != null && brief.version() > context.briefVersion() && createdAt != null
+                        && brief.items().stream().anyMatch(i -> i.updatedAt() != null
+                        && i.updatedAt().isAfter(createdAt.plusSeconds(2)))) {
+                    reasons.add("이 초안을 만든 뒤 상담에서 조건이 바뀌었어요.");
+                }
+            }
+            /*
+             * 답변이 합의가 아니라 "내 상황"(기억)으로만 저장되면 합의는 그대로다. 그래도 그 답이 초안의 분량·대상·활동 방식을
+             * 바꾼다고 상담이 표시했으면(direction.affectsDraft) 초안은 오래된 것이다 — 화면의 임시 표시가 아니라 서버 기록으로
+             * 판단해야 새로고침 뒤에도 "갱신 필요"가 유지된다(2026-09-19 실호출 s3에서 확인).
+             */
+            if (reasons.isEmpty() && aiMessageMapper != null && proposal.getConversationId() != null
+                    && proposal.getCreatedAt() != null && aiMessageMapper.countDraftAffectingDirectionsAfter(
+                    proposal.getConversationId(), userId, proposal.getCreatedAt().plusSeconds(2)) > 0) {
+                reasons.add("이 초안을 만든 뒤의 답변으로 계획 방향이 바뀌었어요.");
+            }
+            if (provenance != null && provenance.providedSources() != null && userContextMapper != null) {
+                for (var source : provenance.providedSources()) {
+                    if (source.sourceType() != com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType.USER_CONTEXT
+                            || source.sourceId() == null) {
+                        continue;
+                    }
+                    var row = userContextMapper.findByIdAndUserId(source.sourceId(), userId);
+                    if (row == null) {
+                        continue;
+                    }
+                    boolean changed = row.getStatus() != com.jungwoo.project.memo.ai.domain.UserContextStatus.ACTIVE
+                            && row.getStatus() != com.jungwoo.project.memo.ai.domain.UserContextStatus.STALE;
+                    if (changed) {
+                        reasons.add("이 초안이 참고한 '내 상황'을 고치거나 지웠어요.");
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("초안 최신성 판단 실패 — 최신으로 본다: proposalId={}", proposal.getProposalId());
+        }
+        return new PlanDraftResponse.Freshness(reasons.isEmpty() ? "CURRENT" : "STALE", reasons);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.UserContextMapper userContextMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.AiProposalItemMapper aiProposalItemMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
+
+    /**
+     * 항목 카드가 첫 화면에서 보여야 하는 근거 두 가지(선정 이유·출처 유형)를 항목 응답에 붙인다. 근거 원본은
+     * evidence_json 하나다 — 저장 직후·재조회·다시 만들기 어느 경로로 와도 같은 값이 보이게 여기 한곳에서 읽는다.
+     */
+    private PlanDraftResponse withItemReasons(Long userId, PlanDraftResponse response) {
+        if (response == null || response.getProposal() == null || response.getProposal().getItems() == null
+                || aiProposalItemMapper == null) {
+            return response;
+        }
+        try {
+            java.util.Map<Long, com.jungwoo.project.memo.plan.provenance.PlanItemEvidence> byItem = new java.util.HashMap<>();
+            for (var row : aiProposalItemMapper.findByProposalIdAndUserId(response.getProposalId(), userId)) {
+                var evidence = provenanceCodec.evidenceFromJson(row.getEvidenceJson());
+                if (evidence != null) {
+                    byItem.put(row.getProposalItemId(), evidence);
+                }
+            }
+            for (var item : response.getProposal().getItems()) {
+                var evidence = byItem.get(item.getProposalItemId());
+                if (evidence != null) {
+                    item.setSelectionReason(evidence.reason());
+                    item.setOrigin(evidence.origin());
+                }
+            }
+        } catch (Exception e) {
+            log.debug("초안 항목의 선정 이유를 붙이지 못했다: proposalId={}", response.getProposalId());
+        }
+        return response;
+    }
+
     public PlanDraftResponse loadDraft(Long userId, Long proposalId) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
         if (proposal == null) {
@@ -619,7 +743,7 @@ public class PlanDraftService {
                 context == null ? List.of() : context.courseIds(),
                 context == null || context.excludeTopicIds() == null ? List.of() : context.excludeTopicIds());
         int items = response.getItems() == null ? 0 : response.getItems().size();
-        return PlanDraftResponse.builder()
+        return withItemReasons(userId, PlanDraftResponse.builder()
                 .proposalId(proposal.getProposalId())
                 .startDate(spec.start()).endDate(spec.end()).days(spec.days()).intensity(spec.intensity())
                 .baselineMinutes(proposal.getPlanTargetMinutes()).targetMinutes(proposal.getPlanTargetMinutes())
@@ -639,7 +763,8 @@ public class PlanDraftService {
                 .briefId(context == null ? null : context.briefId())
                 .briefVersion(context == null ? null : context.briefVersion())
                 .reviewState(readReviewState(proposal.getReviewStateJson()))
-                .build();
+                .freshness(freshnessOf(userId, proposal, context, provenance))
+                .build());
     }
 
     private static PlanDraftResponse.GenerationView generationView(GenerationBudget.Summary s, boolean reused) {

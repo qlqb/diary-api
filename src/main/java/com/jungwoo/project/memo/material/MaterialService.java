@@ -218,7 +218,14 @@ public class MaterialService {
         // 열린 변경안은 STALE. 취소 뒤에 오므로 그 사이 새 변경안이 생길 수 없다.
         topicChangeProposalService.staleFor(userId, materialId, null);
         fileStorageService.deleteQuietly(materialId, material.getStoragePath());
+        // 계획 생성 전달 기록에 남은 이 자료의 원문(프롬프트 전문)도 지운다 — id·집계는 남는다.
+        if (planGenerationTraceService != null) {
+            planGenerationTraceService.purgeForMaterial(userId, materialId);
+        }
     }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService planGenerationTraceService;
 
     /**
      * 자료를 프로젝트에 연결한다. materialType은 업로드가 아니라 이 시점에 정해진다.

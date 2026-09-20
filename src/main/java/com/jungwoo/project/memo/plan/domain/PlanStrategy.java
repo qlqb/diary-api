@@ -74,8 +74,37 @@ public record PlanStrategy(
         List<Change> changes,
 
         /** 이 기간에 이미 있던 계획 항목을 어떻게 하기로 했는가(유지·줄임·이동·제외). */
-        List<ExistingDecision> existingDecisions
+        List<ExistingDecision> existingDecisions,
+
+        /**
+         * 대상 프로젝트별 처리 결과(2026-09-19). 요청한 대상이 모두 정확히 한 번 나온다 — 포함·의도적 제외·판단 보류·
+         * 시스템 제약으로 미검토. 예전 판에서는 null이다.
+         */
+        List<ProjectOutcome> projects
 ) {
+
+    /** projects가 생기기 전의 16필드 경로. */
+    public PlanStrategy(String goal, String strategySummary, StrategySource strategySource, Long reusedFromVersionId,
+                        List<Long> referencedContextIds, List<CourseStrategy> courses, List<TopicTreatment> topics,
+                        List<String> planningRules, String reach, List<String> keptDecisions, List<Deferred> deferred,
+                        List<String> assumptions, List<String> openQuestions, List<String> unreadNotes,
+                        List<Change> changes, List<ExistingDecision> existingDecisions) {
+        this(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds, courses, topics,
+                planningRules, reach, keptDecisions, deferred, assumptions, openQuestions, unreadNotes, changes,
+                existingDecisions, null);
+    }
+
+    public PlanStrategy withProjects(List<ProjectOutcome> newProjects) {
+        return new PlanStrategy(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds,
+                courses, topics, planningRules, reach, keptDecisions, deferred, assumptions, openQuestions,
+                unreadNotes, changes, existingDecisions, newProjects);
+    }
+
+    public PlanStrategy withDeferred(List<Deferred> newDeferred) {
+        return new PlanStrategy(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds,
+                courses, topics, planningRules, reach, keptDecisions, newDeferred, assumptions, openQuestions,
+                unreadNotes, changes, existingDecisions, projects);
+    }
 
     /** 새 필드 없이 만드는 경로(판단 경로·예전 테스트). */
     public PlanStrategy(String goal, String strategySummary, StrategySource strategySource, Long reusedFromVersionId,

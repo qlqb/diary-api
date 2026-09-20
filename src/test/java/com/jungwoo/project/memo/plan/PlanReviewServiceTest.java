@@ -206,7 +206,7 @@ class PlanReviewServiceTest {
         when(planVersionMapper.findLatestConfirmed(USER_ID)).thenReturn(PlanVersion.builder()
                 .planVersionId(PLAN_VERSION_ID).startDate(START).endDate(END).title("이번 주").build());
         String summary = service.summarizeLatestForPrompt(USER_ID);
-        assertThat(summary).contains("실제 측정 25분").contains("시간 미기록 1건(예정 합 30분, 추정)")
+        assertThat(summary).contains("사용자가 적은 실제 시간 25분").contains("시간 미기록 1건(예정 합 30분, 추정)")
                 .doesNotContain("실제 55분");
     }
 

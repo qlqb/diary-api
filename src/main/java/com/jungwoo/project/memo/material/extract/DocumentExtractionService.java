@@ -30,7 +30,10 @@ import java.util.concurrent.TimeoutException;
 @RequiredArgsConstructor
 public class DocumentExtractionService {
 
-    private static final Set<String> EXTENSIONS = Set.of("ipynb", "hwp", "hwpx");
+    private static final Set<String> EXTENSIONS = Set.of("ipynb", "hwp", "hwpx", "sh");
+
+    /** 평문 자료 읽기. 상태가 없어 주입하지 않는다. 읽기만 하고 아무것도 실행하지 않는다. */
+    private final PlainTextExtractor plainTextExtractor = new PlainTextExtractor();
 
     private final NotebookExtractor notebookExtractor;
     private final HwpExtractor hwpExtractor;
@@ -61,6 +64,7 @@ public class DocumentExtractionService {
             case "ipynb" -> notebookExtractor.extract(readAll(file));
             case "hwp" -> hwpExtractor.extract(file);
             case "hwpx" -> hwpxExtractor.extract(file);
+            case "sh" -> plainTextExtractor.extract(readAll(file));
             default -> throw new DocumentExtractionException(DocumentExtractionException.Reason.CORRUPTED,
                     "읽는 방법을 모르는 형식이에요: " + ext);
         });

@@ -71,6 +71,38 @@ public class PlanProvenanceService {
     private final MaterialService materialService;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService traceService;
+
+    /** 초안을 만든 회차의 실제 전달 기록. 소유권은 제안 조회(userId 조건)와 기록 조회(userId 조건) 양쪽에서 확인한다. */
+    @Transactional(readOnly = true)
+    public com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse traceForProposal(Long userId, Long proposalId,
+                                                                                           boolean includeText) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        PlanProvenance provenance = codec.fromJson(proposal.getPlanProvenanceJson());
+        String generationId = provenance == null ? null : provenance.generationId();
+        if (generationId == null || traceService == null) {
+            return new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse(false, generationId, List.of());
+        }
+        List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse.Call> calls = new ArrayList<>();
+        for (com.jungwoo.project.memo.plan.trace.PlanGenerationTrace row : traceService.find(userId, generationId)) {
+            com.fasterxml.jackson.databind.JsonNode shown;
+            try {
+                shown = objectMapper.readTree(row.getShownJson());
+            } catch (Exception e) {
+                shown = null;
+            }
+            calls.add(new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse.Call(row.getCallKind(),
+                    row.getCallOrder(), row.getApiCommit(), row.getModelName(), row.getEstimatedTokens(),
+                    row.getPromptSha256(), shown, row.getTextPurgedAt() != null, row.getCreatedAt(),
+                    includeText ? row.getSystemPrompt() : null, includeText ? row.getUserPrompt() : null));
+        }
+        return new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceResponse(!calls.isEmpty(), generationId, calls);
+    }
+
     /** 초안(제안) 하나의 생성 정보와 항목별 근거. */
     @Transactional(readOnly = true)
     public PlanProvenanceResponse forProposal(Long userId, Long proposalId) {

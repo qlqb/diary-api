@@ -21,4 +21,21 @@ public class MaterialAnalysisOverviewResponse {
     private int failed;
     private int unavailable;
     private List<MaterialAnalysisStatusResponse> materials;
+
+    /**
+     * 오늘의 분석 한도. reached면 대기 중인 작업은 실패나 영구 정지가 아니라 resumesAt부터 이어서 처리된다.
+     * 화면은 이 값을 보고 "한도 때문에 대기 중"과 그 시각을 말한다.
+     */
+    private Limit limit;
+
+    @Getter
+    @Builder
+    public static class Limit {
+        private int contentUsed;
+        private int contentLimit;
+        private int linkUsed;
+        private int linkLimit;
+        private boolean reached;
+        private java.time.LocalDateTime resumesAt;
+    }
 }

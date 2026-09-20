@@ -56,6 +56,10 @@ public class MaterialAnalysisJobService {
     @Value("${material.analysis.daily-job-limit:60}")
     private int dailyJobLimit = 60;
 
+    /** 구조 연결(LINK) 작업의 하루 한도. 내용 분석과 따로 센다. */
+    @Value("${material.analysis.daily-link-job-limit:120}")
+    private int dailyLinkJobLimit = 120;
+
     // ===== 등록 =====
 
     /** 업로드 직후. 추출이 실패한 자료는 등록하지 않는다 — 읽을 원문이 없다. */
@@ -166,54 +170,102 @@ public class MaterialAnalysisJobService {
     /**
      * 실행할 작업을 최대 n개 선점한다. 우선순위 순이되, 대기 중인 기존 자료(priority ≥ 10)가 있으면
      * 그중 하나는 반드시 포함한다 — 새 업로드가 계속 들어와도 기존 자료가 굶지 않는다.
-     * 사용자별 하루 시작 한도를 넘긴 작업은 건너뛴다(QUEUED로 남는다).
+     *
+     * <p>(2026-09-19) 하루 한도는 <b>종류별</b>이다 — 내용 분석(CONTENT)과 구조 연결(LINK)을 합쳐 세면 자료 36개를 올리고
+     * 프로젝트를 다시 연결한 계정에서 LINK가 다음 날까지 멈췄다. LINK도 공짜는 아니라 따로 유한한 한도를 둔다.
+     * 한도에 닿은 (사용자, 종류)는 QUEUED로 남기고 <b>후보 조회에서 빼고 다시 찾는다</b> — 예전에는 우선순위 앞쪽 후보가
+     * 전부 한도에 걸리면 그 뒤의 실행 가능한 작업(다른 종류·다른 사용자)까지 멈췄다. 날짜가 바뀌면 재시작 없이 다시 잡힌다
+     * (dayStart를 호출마다 계산한다).
      */
     public List<MaterialAnalysisJob> claimNext(String owner, int n) {
         if (n <= 0) {
             return List.of();
         }
         LocalDateTime now = LocalDateTime.now();
-        Map<Long, MaterialAnalysisJob> candidates = new LinkedHashMap<>();
-        for (MaterialAnalysisJob job : jobMapper.findClaimable(now, null, n * 3)) {
-            candidates.put(job.getJobId(), job);
-        }
-        boolean hasBackfill = candidates.values().stream().anyMatch(j -> j.getPriority() >= PRIORITY_BACKFILL);
-        if (!hasBackfill) {
-            for (MaterialAnalysisJob job : jobMapper.findClaimable(now, PRIORITY_BACKFILL, 1)) {
+        LocalDateTime dayStart = LocalDate.now().atStartOfDay();
+        List<MaterialAnalysisJob> claimed = new ArrayList<>();
+        List<Map<String, Object>> blocked = new ArrayList<>();
+        Map<String, Integer> startedToday = new LinkedHashMap<>();
+        boolean reservedBackfill = false;
+        for (int round = 0; round < MAX_CLAIM_ROUNDS && claimed.size() < n; round++) {
+            Map<Long, MaterialAnalysisJob> candidates = new LinkedHashMap<>();
+            for (MaterialAnalysisJob job : jobMapper.findClaimable(now, null, n * 3, blocked)) {
                 candidates.put(job.getJobId(), job);
             }
-        }
-        List<MaterialAnalysisJob> ordered = new ArrayList<>(candidates.values());
-        List<MaterialAnalysisJob> claimed = new ArrayList<>();
-        boolean reservedBackfill = false;
-        Map<Long, Integer> startedToday = new LinkedHashMap<>();
-        LocalDateTime dayStart = LocalDate.now().atStartOfDay();
-        for (MaterialAnalysisJob job : ordered) {
-            if (claimed.size() >= n) {
+            boolean hasBackfill = candidates.values().stream().anyMatch(j -> j.getPriority() >= PRIORITY_BACKFILL);
+            if (!hasBackfill) {
+                for (MaterialAnalysisJob job : jobMapper.findClaimable(now, PRIORITY_BACKFILL, 1, blocked)) {
+                    candidates.put(job.getJobId(), job);
+                }
+            }
+            List<MaterialAnalysisJob> ordered = new ArrayList<>(candidates.values());
+            ordered.removeIf(claimed::contains);
+            if (ordered.isEmpty()) {
                 break;
             }
-            boolean backfill = job.getPriority() >= PRIORITY_BACKFILL;
-            // 마지막 자리는 backfill 몫으로 남긴다(후보에 backfill이 있고 아직 하나도 못 잡았을 때).
-            if (!backfill && !reservedBackfill && claimed.size() == n - 1
-                    && ordered.stream().anyMatch(j -> j.getPriority() >= PRIORITY_BACKFILL && !claimed.contains(j))) {
-                continue;
-            }
-            int started = startedToday.computeIfAbsent(job.getUserId(),
-                    uid -> jobMapper.countStartedSince(uid, dayStart));
-            if (started >= dailyJobLimit) {
-                continue;
-            }
-            int rows = jobMapper.claim(job.getJobId(), owner, now, now.plusSeconds(leaseSeconds));
-            if (rows == 1) {
-                MaterialAnalysisJob fresh = jobMapper.findById(job.getJobId());
-                claimed.add(fresh);
-                startedToday.put(job.getUserId(), started + 1);
-                if (backfill) {
-                    reservedBackfill = true;
+            int blockedBefore = blocked.size();
+            for (MaterialAnalysisJob job : ordered) {
+                if (claimed.size() >= n) {
+                    break;
                 }
+                boolean backfill = job.getPriority() >= PRIORITY_BACKFILL;
+                // 마지막 자리는 backfill 몫으로 남긴다(후보에 backfill이 있고 아직 하나도 못 잡았을 때).
+                if (!backfill && !reservedBackfill && claimed.size() == n - 1
+                        && ordered.stream().anyMatch(j -> j.getPriority() >= PRIORITY_BACKFILL && !claimed.contains(j))) {
+                    continue;
+                }
+                String key = job.getUserId() + ":" + job.getJobKind().name();
+                int started = startedToday.computeIfAbsent(key,
+                        k -> jobMapper.countStartedSinceByKind(job.getUserId(), dayStart, job.getJobKind().name()));
+                if (started >= limitOf(job.getJobKind())) {
+                    if (blocked.stream().noneMatch(b -> b.get("userId").equals(job.getUserId())
+                            && b.get("kind").equals(job.getJobKind().name()))) {
+                        blocked.add(Map.of("userId", job.getUserId(), "kind", job.getJobKind().name()));
+                    }
+                    continue;
+                }
+                int rows = jobMapper.claim(job.getJobId(), owner, now, now.plusSeconds(leaseSeconds));
+                if (rows == 1) {
+                    claimed.add(jobMapper.findById(job.getJobId()));
+                    startedToday.put(key, started + 1);
+                    if (backfill) {
+                        reservedBackfill = true;
+                    }
+                }
+            }
+            if (blocked.size() == blockedBefore) {
+                break; // 한도 때문에 건너뛴 것이 없다 — 더 찾아도 같은 후보다.
             }
         }
         return claimed;
+    }
+
+    static final int MAX_CLAIM_ROUNDS = 4;
+
+    int limitOf(AnalysisJobKind kind) {
+        return kind == AnalysisJobKind.LINK ? dailyLinkJobLimit : dailyJobLimit;
+    }
+
+    /**
+     * 오늘의 한도 사용량. 화면이 "한도 때문에 대기 중"과 "실패·영구 정지"를 구분하고 언제 다시 도는지 말하는 데 쓴다.
+     *
+     * @param resumesAt 한도에 닿았을 때 다시 처리되는 시각(서버 기준 다음 날 0시). 닿지 않았으면 null
+     */
+    public record DailyLimitStatus(int contentUsed, int contentLimit, int linkUsed, int linkLimit,
+                                   boolean contentReached, boolean linkReached, LocalDateTime resumesAt) {
+        public boolean reached() {
+            return contentReached || linkReached;
+        }
+    }
+
+    public DailyLimitStatus dailyLimitStatus(Long userId) {
+        LocalDateTime dayStart = LocalDate.now().atStartOfDay();
+        int content = jobMapper.countStartedSinceByKind(userId, dayStart, AnalysisJobKind.CONTENT.name());
+        int link = jobMapper.countStartedSinceByKind(userId, dayStart, AnalysisJobKind.LINK.name());
+        boolean contentReached = content >= dailyJobLimit;
+        boolean linkReached = link >= dailyLinkJobLimit;
+        return new DailyLimitStatus(content, dailyJobLimit, link, dailyLinkJobLimit, contentReached, linkReached,
+                contentReached || linkReached ? dayStart.plusDays(1) : null);
     }
 
     /** 임대 연장. false면 임대를 잃었다 — 호출자는 즉시 멈추고 아무것도 저장하지 않는다. */

@@ -28,6 +28,18 @@ public interface AiMessageMapper {
                                                           @Param("excludeMessageId") Long excludeMessageId);
 
     /** 동일 사용자의 동일 idempotencyKey 재전송 감지용. */
+    AiMessage findByIdAndUserId(@Param("messageId") Long messageId, @Param("userId") Long userId);
+
+    /**
+     * 이 시각 뒤에, 열린 초안에 영향을 주는 방향 변화(consult.direction.affectsDraft=true)를 낸 ASSISTANT 메시지 수.
+     * 초안의 최신성 판단에 쓴다 — 답변이 기억으로만 저장돼 합의가 바뀌지 않은 경우에도 초안은 오래된 것이다.
+     */
+    int countDraftAffectingDirectionsAfter(@Param("conversationId") Long conversationId, @Param("userId") Long userId,
+                                           @Param("after") java.time.LocalDateTime after);
+
+    int updateConsultJson(@Param("messageId") Long messageId, @Param("userId") Long userId,
+                          @Param("consultJson") String consultJson);
+
     AiMessage findByUserIdAndIdempotencyKey(@Param("userId") Long userId,
                                              @Param("idempotencyKey") String idempotencyKey);
 

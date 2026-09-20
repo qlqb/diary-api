@@ -30,6 +30,15 @@ public class MaterialAnalysisStatusResponse {
     private LocalDateTime finishedAt;
     private List<LinkState> linkStates;
 
+    /**
+     * 끝나지 않은 작업이 왜 기다리는가: DAILY_LIMIT(오늘 한도) / PAUSED(사용자가 멈춤) / SERVICE_UNAVAILABLE(모델 미설정·
+     * 인증 문제) / QUEUED(차례를 기다림). 끝났거나 실패한 자료는 null이다.
+     */
+    private String waitingReason;
+
+    /** 프로젝트 연결(구조 제안) 작업 중 가장 덜 끝난 상태. 연결이 없으면 null. */
+    private String linkState;
+
     @Getter
     @Builder
     public static class LinkState {

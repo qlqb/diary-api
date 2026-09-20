@@ -66,7 +66,7 @@ class ExecutionEvidenceServiceTest {
         ExecutionEvidence.ItemHistory h1 = evidence.items().get(0);
         assertThat(h1.measuredMinutes()).isEqualTo(20);
         assertThat(h1.userNote()).isEqualTo("반복문에서 막힘");
-        assertThat(ExecutionEvidenceService.describe(h1)).contains("일부 수행(실제 20분, 측정)").contains("사용자 메모: \"반복문에서 막힘\"");
+        assertThat(ExecutionEvidenceService.describe(h1)).contains("일부 수행(실제 20분, 사용자가 적은 시간)").contains("사용자 메모: \"반복문에서 막힘\"");
         ExecutionEvidence.ItemHistory h2 = evidence.items().get(1);
         assertThat(h2.measuredMinutes()).isNull();
         assertThat(h2.unmeasured()).isTrue();
@@ -82,7 +82,7 @@ class ExecutionEvidenceServiceTest {
         assertThat(summary.measuredMinutes()).isEqualTo(20);
         assertThat(summary.unmeasuredDone()).isEqualTo(1);
         assertThat(summary.moved()).isEqualTo(1);
-        assertThat(ExecutionEvidenceService.summaryLine(summary)).contains("실제 측정 20분").contains("시간 미기록 1건");
+        assertThat(ExecutionEvidenceService.summaryLine(summary)).contains("사용자가 적은 실제 시간 20분").contains("시간 미기록 1건");
     }
 
     @Test

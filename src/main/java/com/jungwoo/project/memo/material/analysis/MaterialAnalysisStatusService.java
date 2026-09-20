@@ -55,6 +55,7 @@ public class MaterialAnalysisStatusService {
     @Transactional(readOnly = true)
     public MaterialAnalysisOverviewResponse overview(Long userId) {
         List<CourseMaterial> materials = courseMaterialMapper.findAllByUserId(userId);
+        MaterialAnalysisJobService.DailyLimitStatus limit = jobService.dailyLimitStatus(userId);
         List<MaterialAnalysisStatusResponse> rows = statuses(userId, materials);
         int queued = 0, running = 0, partial = 0, done = 0, failed = 0, unavailable = 0;
         for (MaterialAnalysisStatusResponse row : rows) {
@@ -74,6 +75,10 @@ public class MaterialAnalysisStatusService {
                 .serviceAvailable(aiConsultationClient.isConfigured())
                 .queued(queued).running(running).partial(partial).done(done).failed(failed).unavailable(unavailable)
                 .materials(rows)
+                .limit(MaterialAnalysisOverviewResponse.Limit.builder()
+                        .contentUsed(limit.contentUsed()).contentLimit(limit.contentLimit())
+                        .linkUsed(limit.linkUsed()).linkLimit(limit.linkLimit())
+                        .reached(limit.reached()).resumesAt(limit.resumesAt()).build())
                 .build();
     }
 
@@ -98,10 +103,13 @@ public class MaterialAnalysisStatusService {
             sectionCounts.merge(section.getMaterialId(), 1, Integer::sum);
         }
         List<MaterialAnalysisStatusResponse> out = new ArrayList<>();
+        waitContext.set(new WaitContext(jobService.isPaused(userId), aiConsultationClient.isConfigured(),
+                jobService.dailyLimitStatus(userId)));
         for (CourseMaterial material : materials) {
             out.add(statusOf(userId, material, jobsByMaterial.getOrDefault(material.getMaterialId(), List.of()),
                     sectionCounts.getOrDefault(material.getMaterialId(), 0)));
         }
+        waitContext.remove();
         return out;
     }
 
@@ -151,7 +159,43 @@ public class MaterialAnalysisStatusService {
                 .updatedAt(content == null ? null : content.getUpdatedAt())
                 .finishedAt(content == null ? null : content.getFinishedAt())
                 .linkStates(links)
+                .waitingReason(waitingReason(state, links))
+                .linkState(worstLinkState(links))
                 .build();
+    }
+
+    /** 한 번의 상태 조회 동안 같은 값(일시중지·서비스·한도)을 자료마다 다시 묻지 않으려고 둔다. */
+    private record WaitContext(boolean paused, boolean serviceAvailable, MaterialAnalysisJobService.DailyLimitStatus limit) {
+    }
+
+    private final ThreadLocal<WaitContext> waitContext = new ThreadLocal<>();
+
+    private String waitingReason(String contentState, List<MaterialAnalysisStatusResponse.LinkState> links) {
+        boolean contentWaiting = "QUEUED".equals(contentState) || "NONE".equals(contentState) || "PAUSED".equals(contentState);
+        boolean linkWaiting = links.stream().anyMatch(l -> "QUEUED".equals(l.getState()) || "PAUSED".equals(l.getState()));
+        if (!contentWaiting && !linkWaiting) {
+            return null;
+        }
+        WaitContext ctx = waitContext.get();
+        if (ctx == null) {
+            return "QUEUED";
+        }
+        if (ctx.paused()) {
+            return "PAUSED";
+        }
+        if (!ctx.serviceAvailable()) {
+            return "SERVICE_UNAVAILABLE";
+        }
+        if ((contentWaiting && ctx.limit().contentReached()) || (!contentWaiting && ctx.limit().linkReached())) {
+            return "DAILY_LIMIT";
+        }
+        return "QUEUED";
+    }
+
+    private static String worstLinkState(List<MaterialAnalysisStatusResponse.LinkState> links) {
+        List<String> order = List.of("FAILED", "UNAVAILABLE", "QUEUED", "PAUSED", "RUNNING", "PARTIAL", "DONE");
+        return links.stream().map(MaterialAnalysisStatusResponse.LinkState::getState)
+                .min(Comparator.comparingInt(s -> order.indexOf(s) < 0 ? order.size() : order.indexOf(s))).orElse(null);
     }
 
     @Transactional(readOnly = true)

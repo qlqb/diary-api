@@ -22,14 +22,25 @@ public record AiTurnCompletedPayload(
         Long userMessageId,
         Long assistantMessageId,
         PlanDraftResponse periodPlanDraft,
-        List<String> quickReplies
+        List<String> quickReplies,
+        /** 질문 카드·이번 턴에 이해한 것·바뀐 방향·선택 활동. 없으면 null. */
+        com.jungwoo.project.memo.ai.consult.ConsultView consult
 ) {
+    public AiTurnCompletedPayload(
+            AiResponseType responseType, String reply, Long proposalId, List<AiProposalItemResponse> proposalItems,
+            OfferAction offerAction, Long userMessageId, Long assistantMessageId, PlanDraftResponse periodPlanDraft,
+            List<String> quickReplies
+    ) {
+        this(responseType, reply, proposalId, proposalItems, offerAction, userMessageId, assistantMessageId,
+                periodPlanDraft, quickReplies, null);
+    }
+
     /** 기간 계획도 선택지도 없는 기존 턴. */
     public AiTurnCompletedPayload(
             AiResponseType responseType, String reply, Long proposalId, List<AiProposalItemResponse> proposalItems,
             OfferAction offerAction, Long userMessageId, Long assistantMessageId
     ) {
         this(responseType, reply, proposalId, proposalItems, offerAction, userMessageId, assistantMessageId,
-                null, List.of());
+                null, List.of(), null);
     }
 }

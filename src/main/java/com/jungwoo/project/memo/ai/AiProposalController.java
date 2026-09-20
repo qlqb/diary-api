@@ -50,4 +50,20 @@ public class AiProposalController {
         return ResponseEntity.ok(
                 aiProposalService.apply(proposalId, principal.getUserId(), safeRequest));
     }
+
+    /**
+     * 이 제안을 버린다. 화면에서 지우는 것과 달리 서버에 남는다 — 대화를 다시 열어도 되살아나지 않는다.
+     * 이미 버린 제안이면 그대로 204다.
+     */
+    @PostMapping("/{proposalId}/dismiss")
+    public ResponseEntity<Void> dismiss(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long proposalId
+    ) {
+        log.info("POST /api/ai/proposals/{}/dismiss - userId={}", proposalId, principal.getUserId());
+
+        aiProposalService.dismiss(proposalId, principal.getUserId());
+
+        return ResponseEntity.noContent().build();
+    }
 }

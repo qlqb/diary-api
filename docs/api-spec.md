@@ -490,3 +490,85 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 | 코드 | 상태 | 뜻 |
 |---|---|---|
 | `E409_022` | 409 | 검토 상태가 다른 곳에서 먼저 저장됨 — 최신 상태를 다시 읽는다 |
+
+## 프로젝트 상담·계획·실행 통합 (2026-09-19)
+
+설계는 11번 §5-1-5, 13번 §12, 15번 §4-3·§7.2·§7.3, DB는 05번 §18. 모든 추가 필드는 예전 초안·예전 대화에서 null/빈 목록이다.
+
+### 계획 초안 `PlanDraftResponse` 추가 필드
+
+| 필드 | 뜻 |
+|---|---|
+| `proposedMinutes` | 빼지 않은 항목의 예상 시간 합. 첫 화면의 분량 |
+| `availabilityBasis` | `ALL_ASSUMED` / `PARTLY_ASSUMED` / `CONFIRMED` / `NONE` |
+| `strategy.projects[]` | `{courseId, courseTitle, disposition, reason, decidedBy(MODEL|SERVER), materialState, candidates, shown(null=선택 재사용), selected, delivered, itemCount, itemMinutes, sectionIds[], nextAction}` — 대상 프로젝트가 모두 정확히 한 번 |
+| `proposal.items[].selectionReason` / `.origin` | 선정 이유(모델의 한 문장) / `SOURCE_TASK`·`AI_PRACTICE`·`USER_REQUEST`·null. 근거 기록에서 서버가 읽어 붙인다 |
+| `freshness` | `{state: CURRENT|STALE, reasons[]}` — 재조회(`GET /plans/proposals/{id}/draft`)에서 계산 |
+| `carriedEdits[]`, `editConflicts[]` | 다시 만들기 응답에만. `{title, fields[]}`, `{title, field, yours, suggested}` |
+| `generation.maxInputTokens`·`maxElapsedMs`·`refusals[]` | 한 회차 예산과, 선택적 호출을 하지 않은 이유 |
+
+`disposition`: `INCLUDED` / `EXCLUDED_BY_CHOICE` / `UNDECIDED` / `NOT_REVIEWED`.
+`materialState`: `NO_MATERIAL` / `ANALYSIS_PENDING` / `NO_RELEVANT_CONTENT` / `NOT_LISTED` / `OUTLINE_ONLY` / `RETRIEVAL_FAILED` / `TEXT_DELIVERED`.
+`nextAction`: `ANSWER_QUESTION` / `UPLOAD_MATERIAL` / `WAIT_ANALYSIS` / `RETRY_ANALYSIS` / `NARROW_SCOPE` / `REVIEW_LATER` / null.
+
+### `GET /api/plans/drafts/{proposalId}/trace?includeText=false`
+
+이 초안을 만든 회차에 모델 호출마다 실제로 보낸 것(개발 검증용, 소유자만).
+
+```json
+{ "recorded": true, "generationId": "gen-…",
+  "calls": [ { "callKind": "SELECTION|SELECTION_EXPAND|PLAN|PLAN_MORE_EVIDENCE|PLAN_RECOVERY", "callOrder": 1,
+               "apiCommit": "5acf4ab…", "modelName": "…", "estimatedTokens": 3333, "promptSha256": "…",
+               "shown": { "sectionIds": [], "topicIds": [], "deliveredSectionIds": [],
+                          "perCourse": [ { "courseId": 1, "courseTitle": "…", "candidates": 21, "shown": 21, "selected": 3, "delivered": 3 } ] },
+               "textPurged": false, "createdAt": "…", "systemPrompt": null, "userPrompt": null } ] }
+```
+
+기록이 없으면(이전 초안·보존 기간 경과) `recorded=false`다 — 오류가 아니다. 전문은 `includeText=true`일 때만, 자료를 지웠으면 없다.
+
+### 상담 턴 `POST /api/ai/conversations/{id}/messages`
+
+- 요청: `requestedAction`에 `PLAN_NOW` 추가. `answer: {questionId, choiceIds[], skipped}` — `message`가 비면 서버가 **저장된 질문의
+  선택지 라벨**로 사용자 발화를 만든다(그 질문의 선택지가 아니면 400). `skipped=true`면 "이 질문은 건너뛸게요."
+- 응답(`message.completed` payload, 그리고 `GET …/messages`의 ASSISTANT 메시지): `consult`
+  ```json
+  { "question": { "id": "q-<assistantMessageId>", "text": "…", "why": null,
+                  "topic": "SUPPORT_LEVEL|BLOCKER|TIME|SCOPE|DEPTH|SUBMISSION|OTHER",
+                  "choices": [ { "id": "c1", "label": "…" } ], "multiSelect": false },
+    "understanding": [ { "id": "91", "source": "MEMORY|BRIEF", "text": "…",
+                         "evidenceType": "STATED|SELF_REPORT|OBSERVED|INFERRED", "scopeLabel": "파이썬 기초 · 9/19", "isNew": true } ],
+    "direction": { "before": "…", "after": "…", "reason": "…", "affectsDraft": true },
+    "activity": { "kind": "SELF_CHECK", "courseId": 1, "title": "…", "items": [ { "key": "a1", "label": "…", "topicId": null, "sectionId": null } ] } }
+  ```
+- 기간 계획 OFFER는 강도 없이도 나온다(`intensity`=NORMAL 가정, 답변 끝에 가정이라고 말한다). 강도 되묻기 고정 문구는 더 나오지 않는다.
+
+### `POST /api/ai/proposals/{proposalId}/dismiss`
+
+이 제안을 버린다 → 204. 상태를 `DISMISSED`로만 바꾸고 내용은 지우지 않는다(다음 상담의 근거다).
+이미 버렸으면 그대로 204(멱등), 이미 적용했으면 409 `E409_005`, 남의 것·없는 것이면 404 `E404_009`.
+
+화면의 [초안 버리기]는 이 호출 없이 끝내지 않는다 — 열린 초안이 있는지는 서버가 들고 있어서, 화면에서만 지우면
+대화를 다시 읽을 때(탭 이동·새로고침) 되살아난다. 되살리기는 `PROPOSED`만 되살린다.
+
+### AI가 이해한 내 상황 `/api/contexts`
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/contexts` | `[{contextId, content, status, sourceType, evidenceType, courseId, courseTitle, topicId, scopeStart, scopeEnd, selfLevel, sourceMessageId, confirmedAt, updatedAt}]` |
+| PATCH | `/api/contexts/{id}` `{content}` | 고치기. 옛 행 SUPERSEDED, 새 행 STATED/USER_EDITED |
+| POST | `/api/contexts/{id}/confirm` | AI 추정을 확인(STATED로) |
+| DELETE | `/api/contexts/{id}` | 철회(WITHDRAWN). 같은 내용은 다시 저장되지 않는다 |
+
+변경 셋의 응답은 `{context, staleDraftIds[]}`. 이미 고쳤거나 지운 것이면 409 `E409_027`, 없으면 404 `E404_030`.
+
+### 학습 지도·점검
+
+- `GET /api/courses/{courseId}/learning-map` → `{courseId, title, treeVersion, state{materials, analysisPending, analysisFailed, linkWaiting, openProposals, topics, hasRecords}, topics[], proposed[], unlinked[], weeks[]}` (15번 §7.3).
+- `POST /api/courses/{courseId}/self-checks` `{items:[{key,label,topicId,sectionId,level(KNOW|UNSURE|NEW),note}]}` → 204. 자기평가로만 저장.
+
+### 자료 분석·실행 기록
+
+- `GET /api/materials/analysis/overview`: `limit{contentUsed, contentLimit, linkUsed, linkLimit, reached, resumesAt}`, 자료마다 `waitingReason`·`linkState`.
+- 업로드·ZIP 허용 확장자에 `sh`(text/plain으로 저장, 실행하지 않음). 파일 응답에 `X-Content-Type-Options: nosniff`.
+- `POST /api/execution-items/{id}/complete|partial`: 선택 필드 `blockerKind`(`TIME|CONCEPT|ENERGY|OTHER`, 모르는 값은 버린다).
+  `GET /api/execution-records`의 각 행에 `blockerKind`.

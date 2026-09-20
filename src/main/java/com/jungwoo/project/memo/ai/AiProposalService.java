@@ -505,6 +505,35 @@ public class AiProposalService {
                 .build();
     }
 
+    // ===== 버리기 =====
+
+    /**
+     * 사용자가 이 제안을 버렸다. 화면에서 지우는 것으로는 부족하다 — 열린 초안이 있는지는 서버가 들고 있고,
+     * 대화를 다시 열 때마다 거기서 되살아나기 때문이다. 버리기도 서버에 쓰는 행위로 만들어서, 되살리는 쪽은
+     * "PROPOSED만 되살린다"는 지금 규칙 그대로 두고 다시 나오지 않게 한다.
+     *
+     * 내용을 지우지는 않는다(DISMISSED). 무엇을 만들었고 사용자가 버렸는지는 다음 상담의 근거다.
+     * 이미 버린 제안을 다시 버리는 것은 성공으로 본다 — 버튼을 두 번 누르거나 다른 탭이 먼저 버렸을 수 있다.
+     * 이미 적용한 제안은 버릴 수 없다(409).
+     */
+    @Transactional
+    public void dismiss(Long proposalId, Long userId) {
+        AiProposal proposal = aiProposalMapper.findByIdAndUserIdForUpdate(proposalId, userId);
+        if (proposal == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        if (proposal.getStatus() == AiProposalStatus.APPLIED
+                || proposal.getStatus() == AiProposalStatus.MODIFIED_APPLIED) {
+            throw new ConflictException(ErrorCode.AI_PROPOSAL_ALREADY_RESPONDED);
+        }
+        if (proposal.getStatus() != AiProposalStatus.PROPOSED) {
+            return;
+        }
+        aiProposalMapper.updateStatusAndRespondedAt(
+                proposalId, userId, AiProposalStatus.DISMISSED, LocalDateTime.now());
+        log.info("제안 버리기: proposalId={}, userId={}", proposalId, userId);
+    }
+
     // ===== 전체 적용 =====
 
     @Transactional

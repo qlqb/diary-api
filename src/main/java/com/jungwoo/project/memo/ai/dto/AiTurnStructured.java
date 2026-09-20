@@ -92,6 +92,8 @@ public record AiTurnStructured(
          * 계획 합의(ai_plan_briefs) 변경 <b>제안</b>. 사용자가 말한 목표·우선순위·제외·시간 제약·어려움과, AI가 제안한
          * 방향에 대한 수락·거절·수정을 서버가 검증해 적용한다(PlanBriefService). 없으면 null(예전 출력 호환).
          */
-        List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> planBrief
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> planBrief,
+        /** 질문 카드·방향 변화·기억할 사용자 상황(검증 전). ConsultTurnService가 검증한다. */
+        com.jungwoo.project.memo.ai.consult.ConsultOut consult
 ) {
 }

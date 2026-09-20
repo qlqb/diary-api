@@ -53,8 +53,20 @@ public record PlanDraftAiResult(
             List<String> assumptions,
             List<String> questions,
             List<String> unread,
-            List<ChangeOut> changes
+            List<ChangeOut> changes,
+            /** 대상 프로젝트별 처리 결과(모델의 판단). 서버가 대상 집합·자료 상태와 대조해 완성한다. */
+            List<ProjectOut> projects
     ) {
+        public StrategyOut(String goal, String reach, String summary, List<String> keptDecisions,
+                           List<CourseOut> courses, List<DeferredOut> deferred, List<String> assumptions,
+                           List<String> questions, List<String> unread, List<ChangeOut> changes) {
+            this(goal, reach, summary, keptDecisions, courses, deferred, assumptions, questions, unread, changes, null);
+        }
+    }
+
+    /** @param disposition INCLUDED / EXCLUDED / UNDECIDED */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ProjectOut(Long courseId, String disposition, String reason, String nextAction) {
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)
@@ -103,13 +115,26 @@ public record PlanDraftAiResult(
             List<String> refIds,
             String deadlineRefId,
             String targetCompleteAt,
-            String reflects
+            String reflects,
+            /**
+             * 이 항목이 어디서 왔는가: SOURCE_TASK(자료 원문에 있는 과제·실습·문제) / AI_PRACTICE(모델이 만든 추가 연습) /
+             * USER_REQUEST(사용자가 요청한 준비 작업). 서버는 SOURCE_TASK가 실제로 전달된 원문을 인용했는지 확인한다.
+             */
+            String origin
     ) {
+        public PlanDraftAiItem(String title, String description, String doneCriteria, String actionType,
+                               Integer expectedMinutes, String priority, Long courseId, String scheduledDate,
+                               String reason, List<String> refIds, String deadlineRefId, String targetCompleteAt,
+                               String reflects) {
+            this(title, description, doneCriteria, actionType, expectedMinutes, priority, courseId, scheduledDate,
+                    reason, refIds, deadlineRefId, targetCompleteAt, reflects, null);
+        }
+
         /** 예전 스키마(행동·완료 기준·마감 참조 없음)로 만드는 생성자. 테스트 픽스처가 쓴다. */
         public PlanDraftAiItem(String title, String description, Integer expectedMinutes, String priority,
                                Long courseId, String scheduledDate, String reason, List<String> refIds) {
             this(title, description, null, null, expectedMinutes, priority, courseId, scheduledDate, reason, refIds,
-                    null, null, null);
+                    null, null, null, null);
         }
     }
 

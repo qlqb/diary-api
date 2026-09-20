@@ -35,8 +35,24 @@ public record PlanItemEvidence(
         List<String> serverCalculationIds,
         EvidenceStatus status,
         List<String> staleReasons,
-        int unknownRefCount
+        int unknownRefCount,
+        /**
+         * 항목의 출처 유형(서버 검증 뒤): SOURCE_TASK / AI_PRACTICE / USER_REQUEST. 예전 항목은 null.
+         * SOURCE_TASK는 "자료 원문에 있는 과제·실습"이고 전달된 원문 구간을 인용했을 때만 남는다.
+         */
+        String origin
 ) {
+
+    public PlanItemEvidence(String generationId, List<String> refIds, String reason, List<String> aiEstimates,
+                            List<String> serverCalculationIds, EvidenceStatus status, List<String> staleReasons,
+                            int unknownRefCount) {
+        this(generationId, refIds, reason, aiEstimates, serverCalculationIds, status, staleReasons, unknownRefCount, null);
+    }
+
+    public PlanItemEvidence withOrigin(String newOrigin) {
+        return new PlanItemEvidence(generationId, refIds, reason, aiEstimates, serverCalculationIds, status,
+                staleReasons, unknownRefCount, newOrigin);
+    }
 
     public static PlanItemEvidence of(String generationId, List<String> refIds, String reason,
                                       List<String> aiEstimates, List<String> serverCalculationIds,
@@ -48,7 +64,7 @@ public record PlanItemEvidence(
     /** 상태만 바꾼 사본. 근거 자체는 그대로 둔다. */
     public PlanItemEvidence withStatus(EvidenceStatus newStatus, List<String> reasons) {
         return new PlanItemEvidence(generationId, refIds, reason, aiEstimates, serverCalculationIds,
-                newStatus, safe(reasons), unknownRefCount);
+                newStatus, safe(reasons), unknownRefCount, origin);
     }
 
     private static List<String> safe(List<String> values) {

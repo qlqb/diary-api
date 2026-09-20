@@ -42,4 +42,7 @@ public class AiMessage {
     private MessageStatus status;
 
     private LocalDateTime createdAt;
+
+    /** ASSISTANT 메시지의 상담 부가 정보(질문 카드·이번 턴에 이해한 것·바뀐 방향). 없으면 null. */
+    private String consultJson;
 }

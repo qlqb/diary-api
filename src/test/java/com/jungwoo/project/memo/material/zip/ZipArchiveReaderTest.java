@@ -52,18 +52,21 @@ class ZipArchiveReaderTest {
                 new String[]{"3주차/데이터.csv", "a,b"},
                 new String[]{"3주차/실행.exe", "MZ"},
                 new String[]{"3주차/코드.py", "print(1)"},
+                new String[]{"3주차/setup.sh", "#!/bin/bash"},
                 new String[]{"3주차/묶음.zip", "PK"},
                 new String[]{"__MACOSX/3주차/._강의.pdf", "x"},
                 new String[]{"3주차/.DS_Store", "x"}));
 
         ZipArchiveReader.Listing listing = reader.list(file, LIMITS);
 
-        assertThat(listing.selectableCount()).isEqualTo(5);
+        assertThat(listing.selectableCount()).isEqualTo(6);
         assertThat(listing.entries()).extracting(ZipArchiveReader.ArchiveEntry::path,
                         ZipArchiveReader.ArchiveEntry::supported)
                 .contains(tuple("3주차/강의.pdf", true), tuple("3주차/슬라이드.pptx", true),
                         tuple("3주차/실습.ipynb", true), tuple("3주차/안내.hwp", true),
                         tuple("3주차/안내.hwpx", true),
+                        // .sh는 실행하지 않는 텍스트 자료로 가져온다. 같은 묶음의 미지원 파일은 이유와 함께 남는다.
+                        tuple("3주차/setup.sh", true),
                         tuple("3주차/데이터.csv", false), tuple("3주차/실행.exe", false),
                         tuple("3주차/코드.py", false), tuple("3주차/묶음.zip", false));
         // OS 메타데이터는 목록에도 남기지 않는다 — 사용자가 고를 일이 없는 잡음이다.
