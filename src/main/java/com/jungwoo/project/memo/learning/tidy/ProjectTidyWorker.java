@@ -119,6 +119,8 @@ public class ProjectTidyWorker {
             return Result.LOST;
         }
         ProjectTidyAnalyzer.Draft draft = analyzer.analyze(job.getUserId(), input);
+        // 무엇을 목록으로 보고 무엇을 자세히 읽었는지로 범위를 채운다. 정리안에 그대로 저장된다.
+        input = inputBuilder.finalizeScope(input, draft.review());
 
         Set<Long> sectionIds = input.sections().stream()
                 .map(MaterialSection::getSectionId).collect(Collectors.toSet());

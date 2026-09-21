@@ -40,20 +40,17 @@ import java.util.Set;
  * 사용자가 승인 화면에서 본 근거와 실제로 쓴 근거가 달라진다. 요청 이후에 끝난 자료는 이번
  * 정리에 들어가지 않고, 화면이 "새 자료 N개를 반영할 수 있어요"로 따로 알린다.
  *
- * <p>입력 한도: 구간을 전부 실을 수 없으면 우선순위대로 자른다.
- * <ol>
- *   <li>아직 학습 항목과 이어지지 않은 자료의 구간 — 바뀔 것이 가장 많다</li>
- *   <li>제출 단서가 있는 구간 — 과제로 이어진다</li>
- *   <li>나머지(자료·위치 순)</li>
- * </ol>
- * 자른 사실과 못 본 수는 {@link ProjectTidyScope}에 남고 화면이 "부분 정리"라고 말한다.
+ * <p>입력 한도: 여기서는 자르지 않는다. 모든 구간을 넘기고, 무엇을 목록으로 보고 무엇을 자세히
+ * 읽을지는 {@link ProjectTidyReviewPlanner}가 정한다. 예전에는 여기서 글자 예산 안으로 잘랐는데,
+ * 그 순서가 입력 순서에 묶여 뒤쪽 자료가 매번 빠졌다.
+ *
+ * <p>{@link #chooseWithinBudget}는 그 옛 방식이다. 더 이상 입력 경로에서 쓰지 않고, 무엇을 고쳤는지
+ * 비교하는 테스트(ProjectTidyReviewPlannerTest, ProjectTidyBudgetTest)만 쓴다.
  */
 @Component
 @RequiredArgsConstructor
 public class ProjectTidyInputBuilder {
 
-    /** 모델에게 보여 줄 학습 구조의 최대 줄 수. */
-    static final int MAX_TREE_LINES = 300;
     /** 구간 한 줄의 최대 길이. 넘으면 수행 내용을 줄인다. */
     private static final int MAX_TASK_CHARS = 140;
 
@@ -150,36 +147,72 @@ public class ProjectTidyInputBuilder {
         for (TopicMaterialLink link : topicLinks) {
             linkedMaterialIds.add(link.getMaterialId());
         }
-        List<MaterialSection> chosen = chooseWithinBudget(all, linkedMaterialIds);
-
-        Map<Long, Integer> reviewedPerMaterial = new HashMap<>();
-        for (MaterialSection section : chosen) {
-            reviewedPerMaterial.merge(section.getMaterialId(), 1, Integer::sum);
-        }
+        /*
+         * 여기서는 자르지 않는다. 예전에는 글자 예산 안에서 입력 순서대로 잘라 뒤쪽 자료가 매번
+         * 빠졌다. 이제 모든 구간을 넘기고, 무엇을 목록으로 보고 무엇을 자세히 읽을지는
+         * ProjectTidyReviewPlanner가 정한다. 범위의 수는 그 결과로 finalizeScope가 채운다.
+         */
         List<ProjectTidyScope.Member> members = new ArrayList<>();
         List<ProjectTidyScope.Excluded> excluded = new ArrayList<>(split.excluded());
         for (CourseMaterial material : byId.values()) {
             int total = split.sectionCounts().getOrDefault(material.getMaterialId(), 0);
-            int reviewed = reviewedPerMaterial.getOrDefault(material.getMaterialId(), 0);
-            if (reviewed == 0 && total > 0) {
-                excluded.add(new ProjectTidyScope.Excluded(material.getMaterialId(),
-                        material.getOriginalFilename(), TidyExcludeReason.OVER_BUDGET.name(),
-                        TidyExcludeReason.OVER_BUDGET.label()));
-                continue;
-            }
             members.add(new ProjectTidyScope.Member(material.getMaterialId(), material.getOriginalFilename(),
-                    material.getFileHash(), first(all, material.getMaterialId()), total, reviewed));
+                    material.getFileHash(), first(all, material.getMaterialId()), total, 0, 0));
         }
         ProjectTidyScope scope = new ProjectTidyScope(courseId, treeVersion, topics.size(),
-                Math.min(topics.size(), MAX_TREE_LINES), members, excluded,
-                chosen.size() < all.size() || topics.size() > MAX_TREE_LINES,
-                all.size(), chosen.size());
+                Math.min(topics.size(), ProjectTidyReviewPlanner.MAX_TREE_LINES), members, excluded,
+                topics.size() > ProjectTidyReviewPlanner.MAX_TREE_LINES,
+                all.size(), 0, 0, 0);
+        List<MaterialSection> chosen = all;
 
         List<CourseAssignment> assignments = assignmentMapper.findByCourseId(courseId, userId).stream()
                 .filter(a -> a.getConfirmStatus() != AssignmentConfirmStatus.NOT_ASSIGNMENT
                         && a.getConfirmStatus() != AssignmentConfirmStatus.DUPLICATE)
                 .toList();
         return new Input(course, topics, topicLinks, chosen, byId, assignments, scope);
+    }
+
+    /**
+     * 무엇을 목록으로 보고 무엇을 자세히 읽었는지로 범위를 채운다.
+     *
+     * <p>목록에서도 보지 못한 자료(고르기 호출 한도 초과)는 검토 목록에서 빼 제외로 옮긴다 —
+     * 사유 "이번에 못 실음". 목록으로만 본 자료는 검토 목록에 남고, 자세히 읽은 수가 따로 적힌다.
+     */
+    public Input finalizeScope(Input input, ProjectTidyReviewPlanner.Review review) {
+        if (review == null) {
+            return input;
+        }
+        ProjectTidyScope scope = input.scope();
+        Map<Long, Integer> listed = new HashMap<>();
+        Map<Long, Integer> detailed = new HashMap<>();
+        Set<Long> detailIds = new HashSet<>(review.detailSectionIds());
+        for (MaterialSection s : input.sections()) {
+            if (review.listedSectionIds().contains(s.getSectionId())) {
+                listed.merge(s.getMaterialId(), 1, Integer::sum);
+            }
+            if (detailIds.contains(s.getSectionId())) {
+                detailed.merge(s.getMaterialId(), 1, Integer::sum);
+            }
+        }
+        List<ProjectTidyScope.Member> members = new ArrayList<>();
+        List<ProjectTidyScope.Excluded> excluded = new ArrayList<>(scope.excluded());
+        for (ProjectTidyScope.Member m : scope.reviewed()) {
+            if (review.unlistedMaterialIds().contains(m.materialId())) {
+                excluded.add(new ProjectTidyScope.Excluded(m.materialId(), m.filename(),
+                        TidyExcludeReason.OVER_BUDGET.name(), TidyExcludeReason.OVER_BUDGET.label()));
+                continue;
+            }
+            members.add(new ProjectTidyScope.Member(m.materialId(), m.filename(), m.fileHash(),
+                    m.analysisVersion(), m.sectionCount(), detailed.getOrDefault(m.materialId(), 0),
+                    listed.getOrDefault(m.materialId(), 0)));
+        }
+        ProjectTidyScope finalScope = new ProjectTidyScope(scope.courseId(), scope.treeVersion(),
+                scope.topicCount(), scope.treeLinesShown(), members, excluded,
+                review.partial() || review.listedSectionIds().size() < input.sections().size(),
+                input.sections().size(), review.detailSectionIds().size(), review.listedSectionIds().size(),
+                review.modelCalls());
+        return new Input(input.course(), input.topics(), input.topicLinks(), input.sections(),
+                input.materialsById(), input.assignments(), finalScope);
     }
 
     private static Integer first(List<MaterialSection> sections, Long materialId) {

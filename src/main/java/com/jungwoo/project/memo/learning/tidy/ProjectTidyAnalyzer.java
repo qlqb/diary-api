@@ -52,6 +52,11 @@ public class ProjectTidyAnalyzer {
     private final AiConsultationClient aiConsultationClient;
     private final AiUsageLimitService aiUsageLimitService;
     private final ObjectMapper objectMapper;
+    private final ProjectTidyReviewPlanner planner;
+
+    /** 고르기 호출의 출력 상한. id 목록과 한 문장이라 판단 호출보다 훨씬 작다. */
+    @Value("${ai.tidy.select-max-completion-tokens:1500}")
+    private int selectMaxCompletionTokens = 1500;
 
     @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
     private String modelName = "gpt-5.6-luna";
@@ -73,7 +78,10 @@ public class ProjectTidyAnalyzer {
             입력:
             - [기존 학습 구조]: "#id 제목" 줄. 들여쓰기가 계층이다. (자료 n곳)은 이미 연결된 구간 수다.
             - [이번에 검토할 자료]: "M{id} 파일명 (역할)" 줄.
-            - [자료 구간]: "S{id} @M{자료id} [위치] 제목 — 역할 — 수행 내용".
+            - [자료 구간]: 모든 구간이 한 줄씩 있다. 두 종류가 섞여 있다.
+              "상세" 줄: "S{id} @M{자료id} [위치] 제목 — 역할 — 발췌: … — 수행: …". 내용을 읽은 구간이다.
+              "목록" 줄: "S{id} @M{자료id} [위치] 제목 — 역할". 무엇이 어디에 있는지만 안다.
+              목록 줄만 있는 구간은 제목·위치만으로 분명할 때만 근거로 쓴다. 애매하면 쓰지 않는다.
             - [기존 과제]: "A{id} 제목".
 
             판단 원칙:
@@ -125,18 +133,57 @@ public class ProjectTidyAnalyzer {
     }
 
     /** 모델을 부른 결과. 검증 전이다. */
-    public record Draft(List<TopicChangeOp> ops, String summary, String model) {
+    /**
+     * @param review 무엇을 목록으로 보고 무엇을 자세히 읽었는가. 정리안 범위에 그대로 남는다
+     */
+    public record Draft(List<TopicChangeOp> ops, String summary, String model,
+                        ProjectTidyReviewPlanner.Review review) {
+
+        public Draft(List<TopicChangeOp> ops, String summary, String model) {
+            this(ops, summary, model, null);
+        }
     }
 
+    /**
+     * 모든 구간을 목록으로 훑고, 필요하면 무엇을 자세히 읽을지 먼저 고른 뒤, 한 번에 판단한다.
+     * 호출 수·예산은 {@link ProjectTidyReviewPlanner} 참고(기본 최대 4회).
+     */
     public Draft analyze(Long userId, ProjectTidyInputBuilder.Input input) {
-        String prompt = buildUserPrompt(input);
+        ProjectTidyReviewPlanner.Review review = planner.plan(input.topics(), input.materialsById(),
+                input.sections(), (prompt, max) -> callSelect(userId, prompt, max));
+        String prompt = buildUserPrompt(input, review);
         TidyPayload payload = callModel(userId, prompt);
-        return new Draft(payload.ops() == null ? List.of() : payload.ops(), payload.summary(), modelName);
+        return new Draft(payload.ops() == null ? List.of() : payload.ops(), payload.summary(), modelName, review);
+    }
+
+    /** 고르기 호출. 구간 id만 돌려받는다. 목록에 없는 번호는 planner가 버린다. */
+    private List<Long> callSelect(Long userId, String userPrompt, int max) {
+        String prompt = userPrompt + "\n최대 " + max + "개까지 고른다.\n";
+        String json = streamStructured(userId, ProjectTidyReviewPlanner.SELECT_SYSTEM_PROMPT, prompt,
+                selectMaxCompletionTokens);
+        String object = ModelJson.unwrapObject(json);
+        if (object == null) {
+            throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "고르기 응답을 읽지 못했다");
+        }
+        try {
+            List<Long> ids = ModelJson.longsOf(objectMapper.readTree(object), "read");
+            return ids.size() > max ? ids.subList(0, max) : ids;
+        } catch (Exception e) {
+            throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "고르기 응답을 읽지 못했다", e);
+        }
     }
 
     // ===== 프롬프트 =====
 
+    /** 옛 모양. 전부를 상세로 싣는다 — 작은 입력의 테스트가 쓴다. */
     String buildUserPrompt(ProjectTidyInputBuilder.Input input) {
+        java.util.Set<Long> all = new java.util.LinkedHashSet<>();
+        input.sections().forEach(s -> all.add(s.getSectionId()));
+        return buildUserPrompt(input, new ProjectTidyReviewPlanner.Review(all, new ArrayList<>(all),
+                java.util.Set.of(), 0, false));
+    }
+
+    String buildUserPrompt(ProjectTidyInputBuilder.Input input, ProjectTidyReviewPlanner.Review review) {
         StringBuilder sb = new StringBuilder();
         sb.append("프로젝트: ").append(input.course().getTitle()).append('\n');
         if (input.course().getTextbookTitle() != null) {
@@ -156,7 +203,7 @@ public class ProjectTidyAnalyzer {
                     .sorted(Comparator.comparing(CourseTopic::getOrderIndex)).toList()) {
                 lines = appendTopic(sb, root, input.topics(), linkCount, 0, lines);
             }
-            if (lines >= ProjectTidyInputBuilder.MAX_TREE_LINES) {
+            if (lines >= ProjectTidyReviewPlanner.MAX_TREE_LINES) {
                 sb.append("… (항목이 더 있음 — 보이지 않는 항목은 건드리지 않는다)\n");
             }
         }
@@ -167,22 +214,25 @@ public class ProjectTidyAnalyzer {
                     .append(material.getOriginalFilename()).append('\n');
         }
 
+        /*
+         * 모든 구간을 한 줄씩. 자세히 읽기로 고른 것은 상세 줄, 나머지는 목록 줄이다. 순서는
+         * 자료·위치 순 그대로 — 모델이 "어느 자료의 어디쯤"을 한눈에 보게 한다. 잘라 내지 않는다.
+         */
         sb.append("\n[자료 구간]\n");
+        java.util.Set<Long> detail = new java.util.HashSet<>(review.detailSectionIds());
         for (MaterialSection section : input.sections()) {
-            sb.append('S').append(section.getSectionId())
-                    .append(" @M").append(section.getMaterialId())
-                    .append(" [").append(section.locator()).append("] ")
-                    .append(section.getDisplayTitle()).append(" — ").append(rolesOf(section));
-            if (section.getTaskText() != null) {
-                sb.append(" — ").append(cut(section.getTaskText(), 160));
+            if (!review.listedSectionIds().contains(section.getSectionId())) {
+                continue;
             }
-            if (section.isAssignmentCue()) {
-                sb.append(" — 제출 단서 있음");
-            }
-            sb.append('\n');
+            String roles = rolesOf(section);
+            sb.append(detail.contains(section.getSectionId())
+                    ? ProjectTidyReviewPlanner.detailLine(section, roles)
+                    : ProjectTidyReviewPlanner.listLine(section, roles)).append('\n');
         }
-        if (input.scope().truncated()) {
-            sb.append("… (구간이 더 있음 — 이번 입력에 실리지 않은 구간은 판단 근거로 쓰지 않는다)\n");
+        if (!review.unlistedMaterialIds().isEmpty()) {
+            sb.append("… (자료가 많아 다음 자료는 이번에 보지 못했다: ");
+            review.unlistedMaterialIds().forEach(id -> sb.append('M').append(id).append(' '));
+            sb.append("— 그 자료에 대한 변경은 내지 않는다)\n");
         }
 
         sb.append("\n[기존 과제]\n");
@@ -198,7 +248,7 @@ public class ProjectTidyAnalyzer {
 
     private int appendTopic(StringBuilder sb, CourseTopic topic, List<CourseTopic> all, Map<Long, Long> linkCount,
                             int depth, int lines) {
-        if (lines >= ProjectTidyInputBuilder.MAX_TREE_LINES) {
+        if (lines >= ProjectTidyReviewPlanner.MAX_TREE_LINES) {
             return lines;
         }
         sb.append("  ".repeat(depth)).append('#').append(topic.getTopicId()).append(' ').append(topic.getTitle());
@@ -232,12 +282,25 @@ public class ProjectTidyAnalyzer {
     // ===== 모델 =====
 
     private TidyPayload callModel(Long userId, String userPrompt) {
+        String json = streamStructured(userId, SYSTEM_PROMPT, userPrompt, maxCompletionTokens);
+        TidyPayload payload = parsePayload(json);
+        if (payload == null) {
+            throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "구조화 응답을 읽지 못했다");
+        }
+        return payload;
+    }
+
+    /**
+     * 모델을 한 번 부르고 구조화 JSON 부분을 돌려준다. 사용량은 호출마다 기록한다 — 고르기
+     * 호출도 비용이고, 한 정리에 몇 번 불렀는지가 사용량 기록에 그대로 남아야 한다.
+     */
+    private String streamStructured(Long userId, String systemPrompt, String userPrompt, int maxTokens) {
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> finishReason = new AtomicReference<>();
         long startedAt = System.currentTimeMillis();
         try {
-            aiConsultationClient.streamTurn(SYSTEM_PROMPT, userPrompt, maxCompletionTokens)
+            aiConsultationClient.streamTurn(systemPrompt, userPrompt, maxTokens)
                     .timeout(Duration.ofSeconds(requestTimeoutSeconds))
                     .doOnNext(chatResponse -> {
                         parser.onChunk(AiChatResponseUtils.extractText(chatResponse));
@@ -261,13 +324,12 @@ public class ProjectTidyAnalyzer {
             record(userId, lastUsage.get(), UsageResultStatus.FAILED, "TRUNCATED", startedAt);
             throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "응답이 출력 한도에서 잘렸다");
         }
-        TidyPayload payload = parsePayload(result.structuredJson());
-        if (payload == null) {
+        if (result.structuredJson() == null || ModelJson.unwrapObject(result.structuredJson()) == null) {
             record(userId, lastUsage.get(), UsageResultStatus.FAILED, "BAD_JSON", startedAt);
             throw new AnalysisFailure(AnalysisFailureClassifier.Kind.BAD_OUTPUT, "구조화 응답을 읽지 못했다");
         }
         record(userId, lastUsage.get(), UsageResultStatus.SUCCESS, null, startedAt);
-        return payload;
+        return result.structuredJson();
     }
 
     /** 모델 출력을 너그럽게 읽는다. 값을 지어내지는 않는다 — 숫자가 아닌 id는 null이 되어 검증에서 버려진다. */
