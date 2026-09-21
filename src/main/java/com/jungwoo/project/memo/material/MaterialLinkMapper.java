@@ -20,6 +20,13 @@ public interface MaterialLinkMapper {
     List<MaterialLink> findByCourseIdAndUserId(@Param("courseId") Long courseId, @Param("userId") Long userId);
 
     /**
+     * 같은 것을 잠근 채 읽는다. 정리안 적용이 "이 자료들이 아직 이 프로젝트에 붙어 있다"를 확인한
+     * 뒤 트리를 고치는 동안, 같은 순간의 연결 해제가 기다리게 한다.
+     */
+    List<MaterialLink> findByCourseIdAndUserIdForUpdate(@Param("courseId") Long courseId,
+                                                        @Param("userId") Long userId);
+
+    /**
      * 이 자료가 걸려 있는 연결 중 ACTIVE 프로젝트로의 연결만. 자료 상세의 "연결된 프로젝트"에 쓴다.
      * 보관된 프로젝트로의 연결은 행이 남아있어도(보관 해제 시 복원) 여기서는 보이지 않는다.
      */

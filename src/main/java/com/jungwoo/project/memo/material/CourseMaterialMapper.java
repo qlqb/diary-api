@@ -20,6 +20,13 @@ public interface CourseMaterialMapper {
      * topic 트리는 자료 하나당 여러 항목이 달리므로 항상 여러 건을 한 번에 묻는다 —
      * 단건 조회를 반복하면 트리 크기만큼 쿼리가 늘어난다.
      */
+    /**
+     * 정리안 적용처럼 "검증한 값으로 쓰기"를 하는 자리에서 쓴다. 이 행들을 잠가 두면 같은 순간에
+     * 들어온 자료 삭제가 우리 트랜잭션이 끝날 때까지 기다린다 — 검증과 쓰기 사이에 사라지지 않는다.
+     */
+    List<CourseMaterial> findByIdsAndUserIdForUpdate(@Param("materialIds") List<Long> materialIds,
+                                                     @Param("userId") Long userId);
+
     List<CourseMaterial> findByIdsAndUserIdIncludingDeleted(@Param("materialIds") List<Long> materialIds,
                                                               @Param("userId") Long userId);
 

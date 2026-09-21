@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.learning.tidy.ProjectTidyMapper;
 import com.jungwoo.project.memo.course.dto.CourseUpdateRequest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -31,6 +32,10 @@ class CourseServiceTest {
 
     @Mock
     private CourseMapper courseMapper;
+
+    /** 보관할 때 도는 정리 작업을 무효화한다. 여기서는 그 호출이 일어나는지만 본다. */
+    @Mock
+    private ProjectTidyMapper tidyMapper;
 
     @InjectMocks
     private CourseService service;

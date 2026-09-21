@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 
 import javax.sql.DataSource;
 import java.sql.Connection;
@@ -33,8 +34,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * 변경안 적용을 실제 DB에서 본다(표 8·10·11·12): id 보존, 병합의 기록 처리, 오래된 트리 버전 거부,
  * 재적용 거부, 잘못된 부모의 전체 거부(부분 적용 없음). 로컬 memo DB 필요. CI 제외.
+ *
+ * <p>(2026-09-21) 자료별 변경안은 프로젝트 단위 정리로 옮겼고 새로 만들지 않는다. 이 테스트는
+ * 레거시 경로를 켠 채 돈다 — 트리를 고치는 불변식(id 보존·기록 승계·부분 적용 없음)은 새 경로도
+ * 같은 {@link TopicTreeEditor}를 쓰므로 여전히 이 테스트가 지킨다. 전환 자체는
+ * {@code ProjectTidyLegacyTransitionDbTest}가 본다.
  */
 @SpringBootTest
+@TestPropertySource(properties = "material.analysis.link-jobs.enabled=true")
 class TopicChangeProposalApplyDbTest {
 
     private static final long USER = 999_000_303L;
@@ -100,6 +107,7 @@ class TopicChangeProposalApplyDbTest {
     void cleanUp() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM topic_change_proposals WHERE user_id = ?",
                     "DELETE FROM topic_material_links WHERE user_id = ?",
                     "DELETE FROM topic_progress WHERE user_id = ?",

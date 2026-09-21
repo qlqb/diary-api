@@ -73,6 +73,20 @@ public class TopicChangeProposalService {
     @Transactional
     public TopicChangeProposal create(Long userId, Long courseId, Long materialId, Long jobId, String fileHash,
                                       Long baseTreeVersion, TopicChangeOpsValidator.Result validated, String model) {
+        /*
+         * 전환 이후에는 자료별 변경안을 만들지 않는다. 등록 경로를 막았지만, 전환 직전에 선점된
+         * 작업이 뒤늦게 결과를 들고 여기 올 수 있다. 저장 입구에서도 막아 두 곳 어디로도 새 변경안이
+         * 생기지 않게 한다 — "오래된 자료별 변경안 재노출"을 없애는 둘째 자물쇠다.
+         */
+        if (!analysisJobService.isLinkJobsEnabled()) {
+            log.info("자료별 변경안 저장을 건너뛴다(프로젝트 단위 정리로 전환됨): materialId={}, courseId={}",
+                    materialId, courseId);
+            return TopicChangeProposal.builder()
+                    .userId(userId).courseId(courseId).materialId(materialId).jobId(jobId).fileHash(fileHash)
+                    .baseTreeVersion(baseTreeVersion).status(TopicChangeProposalStatus.SUPERSEDED)
+                    .summaryJson("{}").opsJson("[]").model(model)
+                    .build();
+        }
         TopicChangeProposal open = proposalMapper.findOpenByMaterialAndCourse(materialId, courseId, userId);
         if (open != null) {
             proposalMapper.updateStatus(open.getProposalId(), userId, TopicChangeProposalStatus.STALE.name(),
@@ -181,9 +195,12 @@ public class TopicChangeProposalService {
                 writeJson(Map.of("selected", selected, "created", applied.createdTopicIds(),
                         "reviewNotes", applied.reviewNotes())), LocalDateTime.now());
         /*
-         * 같은 프로젝트의 다른 열린 변경안은 이제 옛 트리 기준이다. 사용자가 하나씩 눌러 충돌을 보게 하지 않고
-         * STALE로 내린 뒤 그 (자료, 프로젝트)의 LINK 분석을 앞순위로 다시 등록한다 — 적용된 새 구조를 보고
-         * 다시 제안하게 한다. 적용 전 변경안에는 저장된 사용자 편집이 없으므로 덮는 것이 없다.
+         * 같은 프로젝트의 다른 열린 변경안은 이제 옛 트리 기준이라 STALE로 내린다.
+         *
+         * 예전에는 여기서 그 (자료, 프로젝트)의 LINK 분석을 앞순위로 <다시 등록>했다. 그것이
+         * 되풀이의 원인이었다 — 자료 셋이 같은 개념을 건드리면 하나를 적용할 때마다 나머지 둘이
+         * 다시 분석되고, 새로 나온 변경안이 또 서로 어긋났다. 이제 다시 제안하는 일은 사용자가
+         * [이 프로젝트 자료 정리]를 누를 때 프로젝트 단위로 한 번에 한다.
          */
         for (TopicChangeProposal other : proposalMapper.findOpenByCourseId(proposal.getCourseId(), userId)) {
             if (other.getProposalId().equals(proposalId)) {
@@ -191,7 +208,6 @@ public class TopicChangeProposalService {
             }
             proposalMapper.updateStatus(other.getProposalId(), userId, TopicChangeProposalStatus.STALE.name(), null,
                     LocalDateTime.now());
-            analysisJobService.retryLink(userId, other.getMaterialId(), other.getCourseId(), other.getFileHash());
         }
         log.info("변경안 적용: proposalId={}, courseId={}, link={}, add={}, rename={}, move={}, merge={}, split={}",
                 proposalId, proposal.getCourseId(), applied.linked(), applied.added(), applied.renamed(),

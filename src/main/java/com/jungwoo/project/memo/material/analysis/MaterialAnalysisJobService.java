@@ -60,6 +60,13 @@ public class MaterialAnalysisJobService {
     @Value("${material.analysis.daily-link-job-limit:120}")
     private int dailyLinkJobLimit = 120;
 
+    /**
+     * 자료별 연결 분석(LINK)을 계속 만들 것인가. 기본 false — 프로젝트 단위 정리로 옮겼다.
+     * 되살리려면 {@code material.analysis.link-jobs.enabled=true}.
+     */
+    @Value("${material.analysis.link-jobs.enabled:false}")
+    private boolean linkJobsEnabled = false;
+
     // ===== 등록 =====
 
     /** 업로드 직후. 추출이 실패한 자료는 등록하지 않는다 — 읽을 원문이 없다. */
@@ -72,8 +79,27 @@ public class MaterialAnalysisJobService {
                 AnalysisJobKind.CONTENT, hash, priority);
     }
 
+    /**
+     * (레거시) 자료 하나 × 프로젝트 하나의 연결 분석.
+     *
+     * <p>2026-09-21부터 <b>새로 만들지 않는다.</b> 트리 변경안은 프로젝트에 연결된 자료를 함께 보고
+     * 하나로 만든다({@code learning/tidy}). 자료별로 만들면 같은 개념을 건드리는 변경안끼리 충돌하고,
+     * 하나를 적용하는 순간 나머지가 STALE로 내려가 다시 분석되는 되풀이가 생긴다.
+     *
+     * <p>메서드를 지우지 않고 남겨 둔 이유: 이미 쌓인 LINK 행과 이 경로를 부르는 옛 화면 요청이 있다.
+     * 여기서 막으면 그 전부가 조용히 아무 일도 하지 않는다. {@code material.analysis.link-jobs.enabled=true}
+     * 로 되살릴 수 있게 두었지만, 되살려도 이 화면은 그 결과를 쓰지 않는다.
+     */
     public MaterialAnalysisJob enqueueLink(Long userId, Long materialId, Long courseId, String fileHash, int priority) {
+        if (!linkJobsEnabled) {
+            return null;
+        }
         return enqueue(userId, materialId, courseId, AnalysisJobKind.LINK, fileHash, priority);
+    }
+
+    /** 레거시 LINK 경로가 살아 있는가. 분석기·변경안 저장도 이 값을 본다. */
+    public boolean isLinkJobsEnabled() {
+        return linkJobsEnabled;
     }
 
     private MaterialAnalysisJob enqueue(Long userId, Long materialId, Long courseId, AnalysisJobKind kind,
@@ -121,8 +147,14 @@ public class MaterialAnalysisJobService {
         return registered;
     }
 
-    /** CONTENT가 끝난 자료의 프로젝트 연결마다 LINK 작업을 만든다. */
+    /**
+     * (레거시) CONTENT가 끝난 자료의 프로젝트 연결마다 LINK 작업을 만들던 것. 기본적으로 아무것도
+     * 하지 않는다 — 위 {@link #enqueueLink} 설명 참고.
+     */
     public int registerLinkBacklog(int limit) {
+        if (!linkJobsEnabled) {
+            return 0;
+        }
         int registered = 0;
         for (MaterialAnalysisJob content : jobMapper.findContentDoneWithoutLink(ANALYSIS_VERSION, limit)) {
             MaterialAnalysisJob job = MaterialAnalysisJob.builder()
@@ -329,9 +361,15 @@ public class MaterialAnalysisJobService {
         return jobMapper.findById(existing.getJobId());
     }
 
-    /** 특정 (자료, 프로젝트)의 LINK를 다시. 변경안을 다시 만들고 싶을 때. */
+    /**
+     * (레거시) 특정 (자료, 프로젝트)의 LINK를 다시. 기본적으로 아무것도 하지 않는다 —
+     * 다시 만들고 싶은 것은 이제 프로젝트 정리안이고, 그쪽은 사용자가 명시적으로 요청한다.
+     */
     @Transactional
     public MaterialAnalysisJob retryLink(Long userId, Long materialId, Long courseId, String fileHash) {
+        if (!linkJobsEnabled) {
+            return null;
+        }
         MaterialAnalysisJob existing = jobMapper.findByScope(materialId, courseId, AnalysisJobKind.LINK.name(),
                 fileHash, ANALYSIS_VERSION);
         if (existing == null) {

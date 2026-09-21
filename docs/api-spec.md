@@ -336,7 +336,13 @@ entries[{entryId, entryPath, displayName, extension, sizeBytes, supported, skipR
 | GET | `/api/materials/{id}/sections` | 분석된 구간(`unitType`에 `NOTEBOOK_CELL` 추가 — 위치는 "셀 8~12") `[{sectionId, locator, unitStart, unitEnd, unitType, printedPageStart, printedPageEnd, label, title, roles[], roleLabels[], taskText, excerpt, assignmentCue, assignmentQuote, dates[]}]` |
 | GET | `/api/material-sections/{sectionId}` | 구간 단건 |
 
-## Topic Change Proposals (자료 정리 변경안)
+## Topic Change Proposals (자료 정리 변경안) — **2026-09-21 이후 이력 전용**
+
+> 자료 하나마다 만들던 변경안이다. **더 이상 새로 만들지 않는다** — 프로젝트에 연결된 자료를
+> 함께 보고 하나로 만드는 [Project Tidy](#project-tidy-프로젝트-단위-자료-정리--2026-09-21)로 옮겼다.
+> 아래 경로는 남아 있지만 열린(PROPOSED) 행이 없으므로 목록은 비어 있고, 지난 행은
+> `SUPERSEDED`(원래 상태는 `superseded_from`)로 이력에 남는다.
+> 되살리려면 `material.analysis.link-jobs.enabled=true`.
 
 | 메서드 | 경로 | 설명 |
 |---|---|---|
@@ -350,6 +356,89 @@ ops: `LINK(topicId, sectionIds, role)` · `ADD(tempId, parentTopicId|parentTempI
 
 `GET /api/courses/{courseId}/topics` 응답의 각 항목에 `linkedMaterials[{linkId, materialId, filename, materialDeleted, sectionId,
 sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐다.
+
+## Project Tidy (프로젝트 단위 자료 정리) — 2026-09-21
+
+프로젝트에 연결된 **분석 완료 자료 전부**를 함께 보고 학습 구조 정리안 하나를 만든다. 자료별
+변경안을 대신한다 — 같은 개념을 여러 자료가 다른 이름으로 다룰 때 자료별로는 각자 옳은 제안이
+나오고 적용하면 중복만 남기 때문이다. 설계는 `docs/product/15-material-auto-analysis.md §9`.
+
+**정리는 사용자가 누를 때만 시작된다.** 자료 분석이 끝나도 정리안이 생기지 않는다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/courses/{courseId}/tidy` | 지금 상태. 정리안이 없어도 이 모양으로 온다 |
+| POST | `/api/courses/{courseId}/tidy?refresh=false` | [이 프로젝트 자료 정리]. 작업을 만들고 바로 돌아온다(생성은 비동기). `refresh=true`면 새 자료까지 넣어 다시 만든다 — 성공할 때까지 기존 안과 편집은 그대로. 409 `E409_033`(쓸 수 있는 자료 없음) |
+| PUT | `/api/project-tidy/{proposalId}/edits` | 검토 중 고친 것 저장(자동 저장). `{editRevision, edits{changeId:{excluded,title}}}`. **트리는 바뀌지 않는다.** 409 `E409_029`(다른 곳에서 먼저 고침) |
+| POST | `/api/project-tidy/{proposalId}/apply` | `{revision, editRevision, baseTreeVersion, selectedChangeIds[], titleOverrides{}}`. 한 트랜잭션, 전부 아니면 전무 |
+| POST | `/api/courses/{courseId}/tidy/dismiss` | [버리기]. 도는 작업도 무효화한다 — 되살아나지 않는다 |
+| GET | `/api/courses/{courseId}/tidy/history` | 지난 정리안(적용·폐기·대체) |
+
+`GET /api/courses/{id}/tidy` 응답:
+
+```
+{ courseId, proposalId, status(PROPOSED|APPLIED|DISMISSED|SUPERSEDED|EMPTY), revision,
+  baseTreeVersion, currentTreeVersion, treeChanged,
+  job{jobId, status(QUEUED|RUNNING|DONE|FAILED|UNAVAILABLE|CANCELLED), errorCode, message, retryable},
+  summary{headline, link, add, rename, move, merge, split, total, structural,
+          reviewedMaterialCount, excludedMaterialCount},
+  groups[{key, kind(EXISTING|NEW), topicId, title, parentTitle, changeIds[]}],
+  changes[{changeId, op, label, text, reason, titleEditable, title, structural,
+           dependsOn[], caution, sections[{sectionId, materialId, materialFilename, locator,
+           title, roles[], taskText, excerpt}]}],
+  dependsOn{changeId: [changeId]},
+  edits{changeId:{excluded, title, needsConfirm}}, editRevision,
+  scope{treeVersion, topicCount, treeLinesShown, reviewed[{materialId, filename, fileHash,
+        analysisVersion, sectionCount, reviewedCount}], excluded[{materialId, filename, reason,
+        reasonLabel}], truncated, sectionsTotal, sectionsReviewed},
+  newMaterialCount, readyMaterialCount, analyzingMaterialCount, firstTime, legacyProposalCount }
+```
+
+- **변경은 영향을 받는 항목으로 묶인다**(`groups`). 파일별 카드가 아니다.
+- `changeId`는 "무엇을 어떻게 바꾸는가"에서 나온 안정적인 이름이다. 제목을 고쳐도, 정리안이 새 판으로
+  바뀌어도 같은 뜻이면 같다 — 사용자 편집을 새 판으로 옮길 수 있는 이유다. 배열 순번을 쓰지 않는다.
+- `dependsOn`은 함께 골라야 하는 변경이다(새 항목 아래 새 항목). 빠뜨리면 적용이 409 `E409_030`이고
+  무엇을 함께 골라야 하는지 `details`에 이름으로 온다.
+- `scope.truncated`면 입력 한도로 일부만 본 **부분 정리**다. 화면이 그 말을 해야 한다.
+- `newMaterialCount > 0`이면 정리안을 만든 뒤 분석이 끝난 자료가 있다. **섞지 않는다** — 사용자가
+  [새 자료 반영해 다시 정리]를 누를 때만 새 판을 만든다.
+- 적용 오류: 409 `E409_017`(트리가 바뀜) · `E409_028`(이미 처리됨) · `E409_029`(판 불일치) ·
+  `E409_030`(딸린 변경 누락) · `E409_031`(근거 자료가 바뀜). 404 `E404_032`.
+- 구체적인 사유는 응답 `details`에 문장으로 온다("「교재.pdf」이(가) 이 프로젝트에서 연결이 끊겼어요").
+
+## Material Analysis Batches (업로드·분석 묶음) — 2026-09-21
+
+자료 여러 개를 올릴 때 **시작 전에 예상 시간**을 보고, 시작 뒤 진행률을 본다. 진행 상태의 원본은
+서버다 — 탭을 옮기거나 새로고침해도 복원된다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/materials/analysis/estimate` | `{files:[{filename,sizeBytes}]}` → 예상만(저장 없음) |
+| POST | `/api/materials/analysis/batches` | `{courseId?, files:[{filename,sizeBytes}]}` → 묶음 + 자리 목록. **여기서 구성원이 고정된다** |
+| GET | `/api/materials/analysis/batches/{id}` | 진행 상태 |
+| GET | `/api/materials/analysis/batches?courseId=` | 아직 도는 묶음(화면 복원용) |
+
+업로드는 기존 경로에 `batchItemId`만 더 실어 보낸다:
+`POST /api/materials?batchItemId=` · `POST /api/courses/{id}/materials?materialType=..&batchItemId=`.
+
+묶음 응답:
+
+```
+{ batchId, courseId, status(STAGED|UPLOADING|ANALYZING|FINISHED|ABANDONED), itemCount,
+  processedPercent, doneCount, runningCount, waitingCount, failedCount, skippedCount,
+  currentStage, remainingMinSeconds, remainingMaxSeconds, estimateBasis, uploadTimeExcluded,
+  waitingReason(DAILY_LIMIT|PAUSED|SERVICE_UNAVAILABLE), resumesAt,
+  items[{itemId, filename, sizeBytes, extension, materialId, uploadState, stage, stageLabel,
+         totalChunks, completedChunks, estMinSeconds, estMaxSeconds, message, settled, retryable}] }
+```
+
+- **`processedPercent`는 처리 진행률이지 성공률이 아니다.** 실패·본문 없음으로 끝난 자리도 더 할 일이
+  없으므로 센다. 100%는 "처리 종료"이고, 성공/실패/제외는 따로 센다.
+- 산식: 자리 하나가 1, 분석 중인 자리는 청크 진행분만큼(최대 0.95). **분모는 묶음을 만들 때 고정된
+  자리 수**라 분석 중에 다른 파일을 올려도 움직이지 않는다(그때는 새 묶음이 생긴다).
+- 예상 시간은 보장이 아니라 범위다. `estimateBasis`가 `DEFAULT`·`PARTIAL_HISTORY`면 표본이 적다는
+  뜻이고 화면이 "초기 추정"이라고 말한다. **업로드 전송 시간은 포함하지 않는다**(`uploadTimeExcluded`).
+- 산식과 한계는 `AnalysisEstimator` 클래스 주석에 그대로 적혀 있다.
 
 ## Assignments (과제)
 

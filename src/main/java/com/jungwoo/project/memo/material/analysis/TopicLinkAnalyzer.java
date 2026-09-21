@@ -142,6 +142,14 @@ public class TopicLinkAnalyzer {
     }
 
     public AnalysisOutcome analyze(MaterialAnalysisJob job) {
+        /*
+         * 전환 이전에 선점된 작업이 뒤늦게 여기까지 올 수 있다. 실행 입구에서 막는다 — 등록만
+         * 막으면 이미 돌고 있던 worker가 끝나면서 자료별 변경안을 다시 노출한다.
+         * (저장 쪽도 따로 막혀 있다: TopicChangeProposalService.create)
+         */
+        if (!jobService.isLinkJobsEnabled()) {
+            return AnalysisOutcome.cancelled("자료별 연결 분석은 프로젝트 단위 정리로 바뀌었다");
+        }
         Long userId = job.getUserId();
         CourseMaterial material = courseMaterialMapper.findByIdAndUserId(job.getMaterialId(), userId);
         if (material == null) {
@@ -390,7 +398,8 @@ public class TopicLinkAnalyzer {
                 ModelJson.longOf(node, "survivingTopicId"),
                 absorbed.isEmpty() ? null : absorbed,
                 children,
-                ModelJson.textOf(node, "reason"));
+                ModelJson.textOf(node, "reason"),
+                null);
     }
 
     private void record(MaterialAnalysisJob job, Usage usage, UsageResultStatus status, String errorCode, long startedAt) {

@@ -28,6 +28,13 @@
         WHERE course_id = #{courseId} AND user_id = #{userId}
     </select>
 
+    <!-- 검증과 쓰기 사이에 연결이 끊기지 않게 잠근다. -->
+    <select id="findByCourseIdAndUserIdForUpdate" resultMap="materialLinkResultMap">
+        SELECT * FROM material_links
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+        FOR UPDATE
+    </select>
+
     <!--
       전역 자료함(GET /materials/{id})의 연결 목록. 보관(ARCHIVED)된 프로젝트로의 연결은
       제외한다 — material_links 행 자체는 지우지 않고 courses.status로만 걸러서,

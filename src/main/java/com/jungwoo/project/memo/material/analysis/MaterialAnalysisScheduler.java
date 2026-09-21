@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.material.analysis;
 
 import com.jungwoo.project.memo.ai.AiConsultationClient;
+import com.jungwoo.project.memo.assignment.AssignmentProjectAttacher;
+import com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService;
 import com.jungwoo.project.memo.material.domain.MaterialAnalysisJob;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -29,6 +31,8 @@ public class MaterialAnalysisScheduler {
     private final MaterialAnalysisJobRunner runner;
     private final AiConsultationClient aiConsultationClient;
     private final ThreadPoolTaskExecutor executor;
+    private final AssignmentProjectAttacher assignmentAttacher;
+    private final MaterialAnalysisBatchService batchService;
 
     @Value("${material.analysis.worker.enabled:true}")
     private boolean enabled = true;
@@ -47,11 +51,15 @@ public class MaterialAnalysisScheduler {
     public MaterialAnalysisScheduler(MaterialAnalysisJobService jobService,
                                      MaterialAnalysisJobRunner runner,
                                      AiConsultationClient aiConsultationClient,
-                                     @Qualifier("materialAnalysisExecutor") ThreadPoolTaskExecutor executor) {
+                                     @Qualifier("materialAnalysisExecutor") ThreadPoolTaskExecutor executor,
+                                     AssignmentProjectAttacher assignmentAttacher,
+                                     MaterialAnalysisBatchService batchService) {
         this.jobService = jobService;
         this.runner = runner;
         this.aiConsultationClient = aiConsultationClient;
         this.executor = executor;
+        this.assignmentAttacher = assignmentAttacher;
+        this.batchService = batchService;
     }
 
     @Scheduled(fixedDelayString = "${material.analysis.worker.poll-ms:5000}", initialDelayString = "10000")
@@ -63,9 +71,18 @@ public class MaterialAnalysisScheduler {
             // 등록은 모델이 없어도 한다 — 상태 화면이 "대기 중"을 보여줄 수 있어야 하고, 설정이
             // 생기면 바로 이어지기 때문이다.
             jobService.registerBacklog(backlogBatch);
+            // 자료별 LINK 등록은 기본적으로 아무것도 하지 않는다(프로젝트 단위 정리로 옮겼다).
+            // 설정으로 되살렸을 때만 동작하도록 호출은 남겨 둔다.
             jobService.registerLinkBacklog(backlogBatch);
         } catch (Exception e) {
             log.warn("분석 작업 등록 실패: {}", e.getClass().getSimpleName(), e);
+        }
+        try {
+            // 과제 후보에 프로젝트를 잇는다. AI를 부르지 않는 사실 정리라 모델 설정과 무관하게 돈다.
+            assignmentAttacher.attachPending();
+            batchService.abandonStale();
+        } catch (Exception e) {
+            log.warn("분석 뒷정리 실패: {}", e.getClass().getSimpleName(), e);
         }
         if (!aiConsultationClient.isConfigured()) {
             if (!warnedNotConfigured) {

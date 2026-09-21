@@ -267,6 +267,6 @@ public final class TopicChangeOpsValidator {
         String sourceType = "SOURCE".equalsIgnoreCase(op.sourceType()) ? "SOURCE" : "AI_DERIVED";
         return new TopicChangeOp(kind, op.tempId(), op.topicId(), op.parentTopicId(), op.parentTempId(),
                 op.title() == null ? null : op.title().trim(), sourceType, op.locator(), sections, role,
-                op.survivingTopicId(), op.absorbedTopicIds(), children, op.reason());
+                op.survivingTopicId(), op.absorbedTopicIds(), children, op.reason(), op.changeId());
     }
 }

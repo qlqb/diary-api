@@ -31,6 +31,7 @@ public class MaterialAnalysisJobRunner {
     private final MaterialAnalysisJobService jobService;
     private final MaterialContentAnalyzer contentAnalyzer;
     private final TopicLinkAnalyzer linkAnalyzer;
+    private final AnalysisTimingRecorder timingRecorder;
 
     @Value("${material.analysis.auth-cooldown-seconds:1800}")
     private int authCooldownSeconds = 1800;
@@ -41,14 +42,17 @@ public class MaterialAnalysisJobRunner {
 
     public Result run(MaterialAnalysisJob job) {
         long startedAt = System.currentTimeMillis();
+        AnalysisMetrics metrics = new AnalysisMetrics();
         try {
             AnalysisOutcome outcome = job.getJobKind() == AnalysisJobKind.LINK
                     ? linkAnalyzer.analyze(job)
-                    : contentAnalyzer.analyze(job);
+                    : contentAnalyzer.analyze(job, metrics);
             if (outcome.leaseLost()) {
                 return Result.LOST_LEASE;
             }
             jobService.finish(job, outcome.status(), outcome.errorCode(), outcome.message(), outcome.resultRefId());
+            // 끝난 뒤에 남긴다. 이 기록이 다음 번 "예상 3~5분"의 근거다.
+            timingRecorder.record(job, metrics, outcome.status(), System.currentTimeMillis() - startedAt);
             log.info("분석 작업 종료: jobId={}, kind={}, materialId={}, status={}, {}ms",
                     job.getJobId(), job.getJobKind(), job.getMaterialId(), outcome.status(),
                     System.currentTimeMillis() - startedAt);

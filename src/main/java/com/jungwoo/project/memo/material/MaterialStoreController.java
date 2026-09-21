@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.material.dto.MaterialLinkResponse;
 import com.jungwoo.project.memo.material.dto.MaterialLinkTypeUpdateRequest;
 import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import com.jungwoo.project.memo.material.dto.MaterialStoreItemResponse;
+import com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService;
 import com.jungwoo.project.memo.material.linkproposal.MaterialLinkProposalService;
 import com.jungwoo.project.memo.material.linkproposal.ProposalTrigger;
 import jakarta.validation.Valid;
@@ -55,6 +56,7 @@ public class MaterialStoreController {
     private final MaterialService materialService;
     private final MaterialAnalysisService materialAnalysisService;
     private final MaterialLinkProposalService materialLinkProposalService;
+    private final MaterialAnalysisBatchService batchService;
 
     @GetMapping
     public ResponseEntity<List<MaterialStoreItemResponse>> list(
@@ -71,12 +73,14 @@ public class MaterialStoreController {
     @PostMapping(consumes = "multipart/form-data")
     public ResponseEntity<MaterialResponse> upload(
             @AuthenticationPrincipal UserPrincipal principal,
-            @RequestParam("file") MultipartFile file
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "batchItemId", required = false) Long batchItemId
     ) {
-        log.info("POST /api/materials - userId={}, filename={}",
-                principal.getUserId(), file.getOriginalFilename());
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(materialService.upload(principal.getUserId(), null, null, file));
+        log.info("POST /api/materials - userId={}, filename={}, batchItemId={}",
+                principal.getUserId(), file.getOriginalFilename(), batchItemId);
+        return ResponseEntity.status(HttpStatus.CREATED).body(
+                BatchUploadBinding.run(batchService, principal.getUserId(), batchItemId,
+                        () -> materialService.upload(principal.getUserId(), null, null, file)));
     }
 
     @GetMapping("/{materialId}")

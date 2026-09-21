@@ -144,9 +144,19 @@ public class LearningMapService {
             if (nodes.isEmpty()) {
                 continue;
             }
-            CourseMaterial m = materials.get(proposal.getMaterialId());
-            proposed.add(new LearningMapResponse.ProposedGroup(proposal.getProposalId(), proposal.getMaterialId(),
-                    m == null ? null : m.getOriginalFilename(),
+            /*
+             * (2026-09-21) 정리안은 이제 프로젝트 단위라 "이 제안의 자료" 하나가 없다. 근거 자료가
+             * 여럿인 것이 요점이므로, 묶음 머리에는 몇 개를 함께 봤는지를 적는다.
+             */
+            List<Long> evidenceMaterialIds = nodes.stream().flatMap(n -> n.materialIds().stream())
+                    .distinct().toList();
+            String filename = evidenceMaterialIds.size() == 1
+                    ? materials.containsKey(evidenceMaterialIds.get(0))
+                        ? materials.get(evidenceMaterialIds.get(0)).getOriginalFilename() : null
+                    : evidenceMaterialIds.isEmpty() ? null : "자료 " + evidenceMaterialIds.size() + "개";
+            proposed.add(new LearningMapResponse.ProposedGroup(proposal.getProposalId(),
+                    evidenceMaterialIds.size() == 1 ? evidenceMaterialIds.get(0) : null,
+                    filename,
                     nodes.stream().map(n -> new LearningMapResponse.ProposedNode(n.nodeId(), n.title(), n.parentNodeId(),
                             n.parentTopicId(), n.op(), n.reason(),
                             n.sectionIds().stream().map(sectionById::get).filter(java.util.Objects::nonNull)

@@ -59,7 +59,10 @@ public class TopicTreeEditor {
 
     /**
      * @param expectedTreeVersion 변경안을 만들 때 본 버전. null이면 대조하지 않고 올리기만 한다(사용자 직접 편집).
-     * @param sectionsById        이 자료의 구간(위치 문자열을 링크에 적기 위해)
+     * @param materialId          구간을 모르는 작업이 출처로 적을 자료. 자료 하나를 대상으로 하는 호출자가 준다.
+     *                            프로젝트 단위 정리처럼 근거 자료가 여럿이면 null이고, 그때 출처는
+     *                            <b>구간이 정한다</b>
+     * @param sectionsById        근거 구간들(위치 문자열과 소속 자료를 링크에 적기 위해). 자료가 여럿일 수 있다
      */
     @Transactional
     public Applied apply(Long userId, Long courseId, Long materialId, List<TopicChangeOp> ops,
@@ -124,13 +127,22 @@ public class TopicTreeEditor {
         return new Applied(linked, added, renamed, moved, merged, split, created, notes);
     }
 
+    /**
+     * 구간을 항목에 잇는다. 자료는 <b>구간이 정한다</b> — 프로젝트 단위 정리에서는 한 항목에
+     * 서로 다른 자료의 구간이 붙을 수 있다(강의 슬라이드 + 교재 + 실습 안내). 구간을 찾지 못하면
+     * 호출자가 준 자료로 물러난다.
+     */
     private int link(Long userId, Long courseId, Long materialId, Long topicId, List<Long> sectionIds, String role,
                      Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin) {
         int n = 0;
         for (Long sectionId : sectionIds == null ? List.<Long>of() : sectionIds) {
             MaterialSection section = sectionsById.get(sectionId);
+            Long owner = section != null && section.getMaterialId() != null ? section.getMaterialId() : materialId;
+            if (owner == null) {
+                continue;
+            }
             linkMapper.upsert(TopicMaterialLink.builder()
-                    .userId(userId).courseId(courseId).topicId(topicId).materialId(materialId)
+                    .userId(userId).courseId(courseId).topicId(topicId).materialId(owner)
                     .sectionId(sectionId)
                     .role(role != null ? role : firstRole(section))
                     .locator(section == null ? null : section.locator())
@@ -149,11 +161,13 @@ public class TopicTreeEditor {
                 : topicMapper.findMaxChildOrderIndex(courseId, userId, parentId);
         MaterialSection first = op.sectionIds() == null || op.sectionIds().isEmpty() ? null
                 : sectionsById.get(op.sectionIds().get(0));
+        // 최초 출처는 이 항목의 첫 근거 구간이 속한 자료다. 구간이 없으면 호출자가 준 자료.
+        Long sourceMaterialId = first != null && first.getMaterialId() != null ? first.getMaterialId() : materialId;
         CourseTopic topic = CourseTopic.builder()
                 .userId(userId).courseId(courseId).parentTopicId(parentId)
                 .title(op.title()).orderIndex(max == null ? 0 : max + 1)
                 .sourceType("SOURCE".equals(op.sourceType()) ? TopicSourceType.SOURCE : TopicSourceType.AI_DERIVED)
-                .sourceMaterialId(materialId)
+                .sourceMaterialId(sourceMaterialId)
                 .sourceLocator(op.locator() != null ? op.locator() : first == null ? null : first.locator())
                 .status(TopicStatus.ACTIVE)
                 .build();
@@ -165,10 +179,11 @@ public class TopicTreeEditor {
         int count = 1;
         if (op.sectionIds() != null && !op.sectionIds().isEmpty()) {
             link(userId, courseId, materialId, topic.getTopicId(), op.sectionIds(), op.role(), sectionsById, origin);
-        } else {
+        } else if (sourceMaterialId != null) {
             // 구간을 모르는 새 항목도 자료 전체와는 잇는다 — 최초 출처를 남기는 것이 source_material_id와 같은 뜻이다.
+            // 근거 자료가 여럿인 정리에서 어느 자료에서 왔는지조차 모르는 항목은 연결하지 않는다.
             linkMapper.upsert(TopicMaterialLink.builder()
-                    .userId(userId).courseId(courseId).topicId(topic.getTopicId()).materialId(materialId)
+                    .userId(userId).courseId(courseId).topicId(topic.getTopicId()).materialId(sourceMaterialId)
                     .sectionId(TopicMaterialLink.WHOLE_MATERIAL).role("SOURCE").locator(op.locator())
                     .origin(origin).build());
         }

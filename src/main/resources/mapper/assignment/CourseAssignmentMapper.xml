@@ -76,6 +76,18 @@
         ORDER BY assignment_id ASC
     </select>
 
+    <!--
+      프로젝트가 아직 붙지 않은 과제 후보. 자료에서 나왔지만 어느 프로젝트의 것인지 적히지
+      않은 행이다. 사용자가 이미 "과제 아님"으로 정한 것은 붙일 이유가 없다.
+    -->
+    <select id="findUnattachedCandidates" resultMap="assignmentResultMap">
+        SELECT * FROM course_assignments
+         WHERE course_id IS NULL AND material_id IS NOT NULL
+           AND confirm_status IN ('CANDIDATE', 'CONFIRMED', 'LATER')
+         ORDER BY assignment_id ASC
+         LIMIT #{limit}
+    </select>
+
     <update id="refreshCandidate">
         UPDATE course_assignments
            SET source_quote = COALESCE(#{sourceQuote}, source_quote),
