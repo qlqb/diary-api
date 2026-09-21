@@ -368,10 +368,11 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 | 메서드 | 경로 | 설명 |
 |---|---|---|
 | GET | `/api/courses/{courseId}/tidy` | 지금 상태. 정리안이 없어도 이 모양으로 온다 |
-| POST | `/api/courses/{courseId}/tidy?refresh=false` | [이 프로젝트 자료 정리]. 작업을 만들고 바로 돌아온다(생성은 비동기). `refresh=true`면 새 자료까지 넣어 다시 만든다 — 성공할 때까지 기존 안과 편집은 그대로. 409 `E409_033`(쓸 수 있는 자료 없음) |
-| PUT | `/api/project-tidy/{proposalId}/edits` | 검토 중 고친 것 저장(자동 저장). `{editRevision, edits{changeId:{excluded,title}}}`. **트리는 바뀌지 않는다.** 409 `E409_029`(다른 곳에서 먼저 고침) |
-| POST | `/api/project-tidy/{proposalId}/apply` | `{revision, editRevision, baseTreeVersion, selectedChangeIds[], titleOverrides{}}`. 한 트랜잭션, 전부 아니면 전무 |
-| POST | `/api/courses/{courseId}/tidy/dismiss` | [버리기]. 도는 작업도 무효화한다 — 되살아나지 않는다 |
+| POST | `/api/courses/{courseId}/tidy?refresh=false` | [이 프로젝트 자료 정리]. 작업을 만들고 바로 돌아온다(생성은 비동기). **요청 시점의 입력을 스냅샷으로 고정한다**(아래). `refresh=true`면 새 자료까지 넣어 다시 만든다 — 성공할 때까지 기존 안과 편집은 그대로. 409 `E409_033`(쓸 수 있는 자료 없음) |
+| POST | `/api/courses/{courseId}/tidy/retry` | *(2026-09-21 검토 후속)* 실패한 정리를 **요청 때의 입력 그대로** 다시 한다(실패한 작업의 스냅샷을 복사한 새 작업). 그 사이 끝난 자료는 섞지 않는다 — 그건 `refresh=true`. 실패한 작업이 없거나 `needsNewRequest` 실패면 409 `E409_035` |
+| PUT | `/api/project-tidy/{proposalId}/edits` | 검토 중 고친 것 저장(자동 저장). `{editRevision, edits{changeId:{excluded,title}}, resolveCarried?{changeId: KEEP\|DROP}, revision?}`. **트리는 바뀌지 않는다.** `needsConfirm`·`carriedFrom`은 서버가 정한 값이라 요청으로 풀리지 않는다 — 풀려면 `resolveCarried`와 지금 정리안 `revision`을 함께 보낸다(판이 다르면 확인을 받지 않는다). `DROP`은 그 편집을 없앤다(새 제안 그대로). 409 `E409_029`(다른 곳에서 먼저 고침), `E409_028`(이미 끝난 정리안) |
+| POST | `/api/project-tidy/{proposalId}/apply` | `{revision, editRevision, baseTreeVersion, selectedChangeIds[], titleOverrides{}}`. 한 트랜잭션, 전부 아니면 전무. 확인하지 않은 승계 편집이 하나라도 있으면 409 `E409_034`(어떤 항목인지 `details`에 이름으로) |
+| POST | `/api/courses/{courseId}/tidy/dismiss` | [버리기]. 도는 작업도 무효화한다 — 되살아나지 않는다. **적용과 같은 전이 규칙**(행 잠금 + 상태 조건)이라 그 사이 적용이 끝났으면 덮지 않고 `alreadyResolved: true`로 돌려준다 |
 | GET | `/api/courses/{courseId}/tidy/history` | 지난 정리안(적용·폐기·대체) |
 
 `GET /api/courses/{id}/tidy` 응답:
@@ -379,18 +380,21 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 ```
 { courseId, proposalId, status(PROPOSED|APPLIED|DISMISSED|SUPERSEDED|EMPTY), revision,
   baseTreeVersion, currentTreeVersion, treeChanged,
-  job{jobId, status(QUEUED|RUNNING|DONE|FAILED|UNAVAILABLE|CANCELLED), errorCode, message, retryable},
+  alreadyResolved,   // 폐기 응답에서만. 그 사이 이미 처리돼 있었다
+  job{jobId, status(QUEUED|RUNNING|DONE|FAILED|UNAVAILABLE|CANCELLED), errorCode, message, retryable,
+      needsNewRequest},  // STALE_INPUT·SNAPSHOT_INVALID·SNAPSHOT_OUTDATED — 같은 입력으로는 또 멈춘다
   summary{headline, link, add, rename, move, merge, split, total, structural,
           reviewedMaterialCount, excludedMaterialCount},
   groups[{key, kind(EXISTING|NEW), topicId, title, parentTitle, changeIds[]}],
   changes[{changeId, op, label, text, reason, titleEditable, title, structural,
            dependsOn[], caution, sections[{sectionId, materialId, materialFilename, locator,
-           title, roles[], taskText, excerpt}]}],
+           title, roles[], taskText, excerpt,
+           availability(OK|OUTDATED|MATERIAL_DELETED|MISSING), page}]}],
   dependsOn{changeId: [changeId]},
-  edits{changeId:{excluded, title, needsConfirm}}, editRevision,
+  edits{changeId:{excluded, title, needsConfirm, carriedFrom{changeId, text, reason}}}, editRevision,
   scope{treeVersion, topicCount, treeLinesShown, reviewed[{materialId, filename, fileHash,
-        analysisVersion, sectionCount, reviewedCount}], excluded[{materialId, filename, reason,
-        reasonLabel}], truncated, sectionsTotal, sectionsReviewed},
+        analysisVersion, sectionCount, reviewedCount, listedCount}], excluded[{materialId, filename, reason,
+        reasonLabel}], truncated, sectionsTotal, sectionsReviewed, sectionsListed, modelCalls},
   newMaterialCount, readyMaterialCount, analyzingMaterialCount, firstTime, legacyProposalCount }
 ```
 
@@ -399,11 +403,32 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
   바뀌어도 같은 뜻이면 같다 — 사용자 편집을 새 판으로 옮길 수 있는 이유다. 배열 순번을 쓰지 않는다.
 - `dependsOn`은 함께 골라야 하는 변경이다(새 항목 아래 새 항목). 빠뜨리면 적용이 409 `E409_030`이고
   무엇을 함께 골라야 하는지 `details`에 이름으로 온다.
-- `scope.truncated`면 입력 한도로 일부만 본 **부분 정리**다. 화면이 그 말을 해야 한다.
+- **목록으로 본 것과 자세히 읽은 것을 따로 센다**(2026-09-21 검토 후속). 모든 구간이 먼저 목록 수준
+  (`sectionsListed`)으로 판단 호출에 실리고, 그중 모델이 고른 구간만 발췌까지 상세(`sectionsReviewed`)로 실린다.
+  `modelCalls` = 고르기 호출 + 판단 호출 1(기본 최대 4). 자세히 읽은 것이 일부여도 전부 목록으로 봤으면
+  부분 정리가 아니다.
+- `scope.truncated`면 **목록 수준에서도 보지 못한 것**이 있는 부분 정리다(고르기 호출 한도 초과 → 그 자료는
+  `excluded`에 `OVER_BUDGET`). 화면이 그 말을 해야 한다. `sectionsListed`가 0이면 목록/상세를 나눠 세기
+  전(2026-09-21 판)의 정리안이다.
+- `edits[].needsConfirm`: 판이 바뀌며 옮겨 온 편집 중 같은 변경이라고 단정할 수 없는 것. `carriedFrom`에
+  예전 제안과 무엇이 달라졌는지(`reason`: "제안한 이름·근거 구간이(가) 달라졌어요" 등)가 있다.
+  `changeId`가 같아도 내용(이름·근거·위치·분할 구성·합칠 대상)이 다르면 확인 필요로 옮긴다. 후보가 여럿이면
+  옮기지 않는다.
+- `sections[].availability`: `OK`면 지금 파일의 구간이고 PDF 쪽 단위면 `page`가 있다(원본을 그 쪽에서 연다).
+  `OUTDATED`는 발췌가 예전 파일·예전 분석의 것 — 원본을 열면 지금 파일이 열리고 `page`는 없다.
+  `MATERIAL_DELETED`·`MISSING`은 열 수 없다. 원본은 `GET /api/materials/{materialId}/file`(인증 필요).
+- **입력 스냅샷**(요청 시점, `project_tidy_jobs.input_snapshot_json` v2): 트리 판, 대상 자료마다 파일 해시·분석
+  판·근거 구간 id, 요청 때 제외와 사유. 실행할 때 지금 상태가 이것과 다르면 **모델을 부르지 않고** 작업을
+  `FAILED`·`errorCode=STALE_INPUT`으로 끝내고 무엇이 바뀌었는지 `message`에 이름으로 적는다. 스냅샷을 읽지
+  못하면 `SNAPSHOT_INVALID`, 판이 없는 옛 기록이면 `SNAPSHOT_OUTDATED`. 셋 다 `needsNewRequest=true`.
 - `newMaterialCount > 0`이면 정리안을 만든 뒤 분석이 끝난 자료가 있다. **섞지 않는다** — 사용자가
   [새 자료 반영해 다시 정리]를 누를 때만 새 판을 만든다.
 - 적용 오류: 409 `E409_017`(트리가 바뀜) · `E409_028`(이미 처리됨) · `E409_029`(판 불일치) ·
-  `E409_030`(딸린 변경 누락) · `E409_031`(근거 자료가 바뀜). 404 `E404_032`.
+  `E409_030`(딸린 변경 누락) · `E409_031`(근거 자료가 바뀜 — 삭제·연결 해제·파일 해시·**분석 판**·인용 구간) ·
+  `E409_034`(확인하지 않은 승계 편집). 404 `E404_032`.
+- **상태 전이는 한 규칙**: 적용·폐기·교체 모두 정리안 행을 `FOR UPDATE`로 잡고 `status='PROPOSED'` 조건이 붙은
+  UPDATE만 쓴다. 끝난 상태(APPLIED·DISMISSED·SUPERSEDED)를 다른 끝난 상태로 덮지 않는다. 잠금 순서는
+  정리안 → 작업 → 자료.
 - 구체적인 사유는 응답 `details`에 문장으로 온다("「교재.pdf」이(가) 이 프로젝트에서 연결이 끊겼어요").
 
 ## Material Analysis Batches (업로드·분석 묶음) — 2026-09-21
@@ -416,7 +441,8 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 | POST | `/api/materials/analysis/estimate` | `{files:[{filename,sizeBytes}]}` → 예상만(저장 없음) |
 | POST | `/api/materials/analysis/batches` | `{courseId?, files:[{filename,sizeBytes}]}` → 묶음 + 자리 목록. **여기서 구성원이 고정된다** |
 | GET | `/api/materials/analysis/batches/{id}` | 진행 상태 |
-| GET | `/api/materials/analysis/batches?courseId=` | 아직 도는 묶음(화면 복원용) |
+| GET | `/api/materials/analysis/batches/open?courseId=&cursor=&limit=` | *(2026-09-21 검토 후속)* 아직 도는 묶음 한 쪽. `{batches[], nextCursor, totalOpen}`. **`nextCursor`가 null이 될 때까지 넘겨야 전부다.** `limit` 기본 20, 최대 50 |
+| GET | `/api/materials/analysis/batches?courseId=` | **옛 경로 — 최대 5개에서 잘린다.** 옛 화면 호환용. 새 화면은 쓰지 않는다 |
 
 업로드는 기존 경로에 `batchItemId`만 더 실어 보낸다:
 `POST /api/materials?batchItemId=` · `POST /api/courses/{id}/materials?materialType=..&batchItemId=`.
@@ -424,11 +450,12 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 묶음 응답:
 
 ```
-{ batchId, courseId, status(STAGED|UPLOADING|ANALYZING|FINISHED|ABANDONED), itemCount,
+{ batchId, courseId, zipImportId, sourceArchiveName, status(STAGED|UPLOADING|ANALYZING|FINISHED|ABANDONED), itemCount,
   processedPercent, doneCount, runningCount, waitingCount, failedCount, skippedCount,
   currentStage, remainingMinSeconds, remainingMaxSeconds, estimateBasis, uploadTimeExcluded,
   waitingReason(DAILY_LIMIT|PAUSED|SERVICE_UNAVAILABLE), resumesAt,
-  items[{itemId, filename, sizeBytes, extension, materialId, uploadState, stage, stageLabel,
+  finishedAt,
+  items[{itemId, filename, sourcePath, sizeBytes, extension, materialId, uploadState, stage, stageLabel,
          totalChunks, completedChunks, estMinSeconds, estMaxSeconds, message, settled, retryable}] }
 ```
 
@@ -439,6 +466,17 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
 - 예상 시간은 보장이 아니라 범위다. `estimateBasis`가 `DEFAULT`·`PARTIAL_HISTORY`면 표본이 적다는
   뜻이고 화면이 "초기 추정"이라고 말한다. **업로드 전송 시간은 포함하지 않는다**(`uploadTimeExcluded`).
 - 산식과 한계는 `AnalysisEstimator` 클래스 주석에 그대로 적혀 있다.
+- **목록에 없다는 것은 끝났다는 증거가 아니다.** 화면은 열린 목록에서 빠진 묶음을 `GET /batches/{id}`로 하나씩
+  물어 그 답을 쓴다.
+- **상태는 양쪽으로 움직인다**(2026-09-21 검토 후속). 끝난 묶음의 실패 자료를 다시 돌리면(`POST /api/materials/{id}/analysis-status/retry`,
+  본문 재추출 성공) 그 자료가 든 묶음이 `ANALYZING`으로 돌아가고 `finishedAt`이 비워진다. 다시 끝나면 새 종료 시각을 받는다.
+- 올릴 때 본문을 못 읽은 자리(`NO_TEXT`)는 자료의 지금 상태를 따른다 — 재추출에 성공하면 더 이상 제외가 아니다.
+- 파일을 고른 탭이 떠나 30분이 지나도 올라오지 않은 자리는 `ABANDONED`("다시 골라 올려야 해요")로 거둔다.
+  서버가 이미 받은 자료의 분석은 이어진다. 압축 자리는 이 규칙을 받지 않는다(가져오기 작업자가 끝낸다).
+- **압축 가져오기**: `POST /api/materials/zip-imports/{id}/confirm` 순간 확정한 항목으로 묶음이 열린다(`zipImportId`).
+  탐색 중(`PREPARING`)에는 묶음이 없다. 자리는 압축 항목 id로 이어지고 `sourcePath`에 압축 안 경로가 있다 —
+  이름이 같은 파일("과제1/run.sh", "과제2/run.sh")을 구분한다. 같은 압축에서 나중에 더 확정하면 새 묶음이다.
+  항목 다시 가져오기는 자리를 `STAGED`로 되돌리고 묶음을 다시 연다. 가져오기 취소는 남은 자리를 `ABANDONED`로.
 
 ## Assignments (과제)
 

@@ -598,6 +598,40 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 - 적용 시점 실측(2026-09-21, `memo`): 변경안 128행이 `PROPOSED` → `SUPERSEDED`, LINK 작업
   `QUEUED`/`PAUSED` 0행(이미 전부 끝나 있었다). 다른 표의 행 수는 바뀌지 않았다.
 
+## 20. 프로젝트 정리 검토 후속 (2026-09-21)
+
+파일 `docs/sql/2026-09-21-project-tidy-review.sql`. **NULL 허용 열 셋과 색인 하나만 더한다.** 기존 행은
+바뀌지 않는다. `IF NOT EXISTS`라 다시 돌려도 된다(MariaDB 10.4에서 두 번 적용해 확인).
+
+| 표.열 | 내용 |
+|---|---|
+| `material_analysis_batches.zip_import_id` | 압축 가져오기를 확정해 생긴 묶음이면 그 가져오기. 일반 업로드는 NULL |
+| `material_analysis_batch_items.zip_entry_id` | 압축 안의 어느 항목인가. 가져오기 작업자가 이 값으로 자리를 찾는다 — 이름으로 찾으면 "과제1/run.sh"와 "과제2/run.sh"가 엇갈린다 |
+| `material_analysis_batch_items.source_path` | 압축 안 경로. 화면 표시용 |
+| `idx_material_analysis_batch_items_zip` | `(zip_entry_id)` |
+
+**배포 순서**: 이 마이그레이션 → 서버 → 화면. 새 서버는 이 열을 읽고 쓰므로 적용하지 않은 DB에 새 서버를
+띄우면 묶음 조회·생성이 `Unknown column`으로 실패한다(압축뿐 아니라 일반 업로드 묶음도). 옛 서버는 이 열을
+모르므로 적용 뒤에도 그대로 돈다. **사용자 로컬 `memo`에는 적용하지 않았다** — 격리 테스트 DB에만 준비
+스크립트(`scripts/test-db/prepare-memo-test.sh`)가 얹는다. 되돌리는 SQL은 파일 머리에 있다.
+
+스키마 변경 없이 바뀐 저장 내용·규칙:
+
+- `project_tidy_jobs.input_snapshot_json` **v2**: `{version:2, treeVersion, materialIds, materials[{materialId,
+  filename, fileHash, analysisVersion, sectionIds[]}], excludedAtRequest[]}`. 실행할 때 지금 상태가 이것과 다르면
+  모델을 부르지 않고 `error_code=STALE_INPUT`으로 끝낸다. v1(판 없음)은 `SNAPSHOT_OUTDATED`, 읽지 못하면
+  `SNAPSHOT_INVALID`. 예전의 "읽지 못하면 최신 자료 전부" 대체 경로는 없앴다. 문법이 깨진 JSON은
+  `chk_project_tidy_jobs_snapshot`(JSON_VALID)이 애초에 받지 않는다.
+- `project_tidy_edits.edits_json` 값에 `carriedFrom{changeId, text, reason}`이 붙을 수 있다(확인 필요 승계).
+  `needsConfirm`은 편집 저장으로 풀리지 않는다 — `resolveCarried` + 정리안 `revision`이 맞을 때만.
+- `project_tidy_proposals.scope_json`에 `sectionsListed`, `modelCalls`, 자료별 `listedCount`. 옛 행은 0으로 읽힌다.
+- 상태 전이(정리안): 적용·폐기·교체 모두 행 `FOR UPDATE` + `WHERE status='PROPOSED'`. 폐기는 예전에 잠금 없이
+  읽고 조건 없이 썼다 — 적용이 끝난 행을 DISMISSED로 덮을 수 있었다. 교체는 `supersedeProposalIfOpen`.
+- 상태 전이(묶음): `FINISHED ⇄ ANALYZING` 양쪽, 조건부(`transitionStatus`). 재시도·재추출 성공은
+  `reopenFinishedContaining`으로 그 자료가 든 끝난 묶음을 연다. 올리다 만 자리는 30분 뒤 `ABANDONED`(압축 자리 제외).
+- 잠금 순서: 정리 적용·폐기 = 정리안 → 작업 → 자료. 내용 분석의 마지막 단계(옛 구간 내리기) = 분석 작업 →
+  자료(새로 추가). 적용은 분석 작업 행을 잡지 않으므로 순환하지 않는다.
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.
