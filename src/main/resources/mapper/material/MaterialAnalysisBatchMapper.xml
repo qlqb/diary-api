@@ -79,6 +79,51 @@
          LIMIT #{limit}
     </select>
 
+    <select id="findOpenPage" resultMap="batchResultMap">
+        SELECT * FROM material_analysis_batches
+         WHERE user_id = #{userId} AND status IN ('STAGED', 'UPLOADING', 'ANALYZING')
+         <if test="courseId != null">AND course_id = #{courseId}</if>
+         <if test="before != null">AND batch_id &lt; #{before}</if>
+         ORDER BY batch_id DESC
+         LIMIT #{limit}
+    </select>
+
+    <select id="countOpen" resultType="int">
+        SELECT COUNT(*) FROM material_analysis_batches
+         WHERE user_id = #{userId} AND status IN ('STAGED', 'UPLOADING', 'ANALYZING')
+         <if test="courseId != null">AND course_id = #{courseId}</if>
+    </select>
+
+    <update id="transitionStatus">
+        UPDATE material_analysis_batches
+           SET status = #{to}, finished_at = #{finishedAt},
+               started_at = COALESCE(started_at, NOW())
+         WHERE batch_id = #{batchId} AND user_id = #{userId} AND status = #{from}
+    </update>
+
+    <!--
+      다시 열린 묶음은 종료 시각을 비운다. 옛 시각이 남아 있으면 다시 끝났을 때 그 시각을
+      "방금 끝났다"로 보여 주게 된다.
+    -->
+    <update id="reopenFinishedContaining">
+        UPDATE material_analysis_batches b
+          JOIN material_analysis_batch_items i ON i.batch_id = b.batch_id
+           SET b.status = 'ANALYZING', b.finished_at = NULL
+         WHERE b.user_id = #{userId} AND i.user_id = #{userId}
+           AND i.material_id = #{materialId} AND b.status = 'FINISHED'
+    </update>
+
+    <!--
+      material_id가 없는 자리만. 서버가 이미 받은 파일은 여기서 건드리지 않는다 — 그 자료는
+      분석이 이어지고, 결과는 분석 상태가 말한다.
+    -->
+    <update id="abandonOrphanedItems">
+        UPDATE material_analysis_batch_items
+           SET upload_state = 'ABANDONED', message = #{message}
+         WHERE upload_state IN ('STAGED', 'UPLOADING') AND material_id IS NULL
+           AND created_at &lt; #{before}
+    </update>
+
     <select id="findItemsByMaterialIds" resultMap="itemResultMap">
         SELECT * FROM material_analysis_batch_items
          WHERE user_id = #{userId} AND material_id IN

@@ -45,6 +45,8 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MaterialService {
 
+    /** 재추출이 성공하면 이 자료가 든 끝난 묶음을 다시 연다. 묶음 서비스와의 순환을 피해 매퍼를 쓴다. */
+    private final com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchMapper batchMapper;
     private final CourseService courseService;
     private final CourseMapper courseMapper;
     private final CourseMaterialMapper courseMaterialMapper;
@@ -148,6 +150,8 @@ public class MaterialService {
             } catch (Exception e) {
                 log.warn("재추출 후 분석 등록 실패(backlog가 다시 시도): materialId={}", materialId, e);
             }
+            // 본문을 못 읽어 "제외"로 끝났던 묶음이 이제 할 일이 생겼다. 다시 열어 진행을 보이게 한다.
+            batchMapper.reopenFinishedContaining(userId, materialId);
         }
         return getStoreItem(userId, materialId);
     }

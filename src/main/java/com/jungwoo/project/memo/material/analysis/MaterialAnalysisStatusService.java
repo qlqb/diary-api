@@ -51,6 +51,11 @@ public class MaterialAnalysisStatusService {
     private final CourseAssignmentMapper assignmentMapper;
     private final AiConsultationClient aiConsultationClient;
     private final ObjectMapper objectMapper;
+    /*
+     * 매퍼를 직접 쓴다. 묶음 서비스는 이 서비스를 쓰므로(진행 상태를 접을 때) 거꾸로 서비스를
+     * 주입하면 순환이 된다. 여기서 필요한 것은 "이 자료가 든 끝난 묶음을 연다" 한 문장뿐이다.
+     */
+    private final com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchMapper batchMapper;
 
     @Transactional(readOnly = true)
     public MaterialAnalysisOverviewResponse overview(Long userId) {
@@ -255,6 +260,9 @@ public class MaterialAnalysisStatusService {
     public MaterialAnalysisStatusResponse retry(Long userId, Long materialId) {
         CourseMaterial material = materialService.getActiveOwned(userId, materialId);
         jobService.retryContent(material);
+        // 이 자료가 든 끝난 묶음을 다시 연다. 열린 목록은 저장된 상태로 거르므로, 여기서 열지
+        // 않으면 재시도 중인 묶음이 화면에 돌아왔을 때 보이지 않는다.
+        batchMapper.reopenFinishedContaining(userId, materialId);
         return statuses(userId, List.of(courseMaterialMapper.findByIdAndUserId(materialId, userId))).get(0);
     }
 }

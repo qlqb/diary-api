@@ -86,4 +86,20 @@ public class BatchResponse {
         /** 다시 시도할 수 있는가. 실패한 분석만 true다. */
         private boolean retryable;
     }
+
+    /**
+     * 열린 묶음 한 쪽.
+     *
+     * <p>totalOpen을 함께 준다. 화면이 "지금 보이는 것 말고도 더 있다"를 알아야, 목록에 없는
+     * 묶음을 끝난 것으로 추측하지 않는다.
+     */
+    @Getter
+    @Builder
+    public static class Page {
+        private List<BatchResponse> batches;
+        /** 다음 쪽을 부를 때 넘길 값. null이면 마지막 쪽이다. */
+        private Long nextCursor;
+        /** 지금 열린 묶음 전체 수(이 쪽에 실린 것만이 아니다). */
+        private int totalOpen;
+    }
 }
