@@ -21,6 +21,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import reactor.core.publisher.Flux;
@@ -55,8 +56,13 @@ import static org.mockito.Mockito.when;
  *
  * <p>검증 기준: 삭제 뒤에는 늦은 응답으로 결과가 "다시 생기지" 않아야 한다(기존 데이터가 전부 없어야 한다는 뜻이 아니다).
  * 임대 교체에서는 새 worker의 정상 결과만 열린 상태로 남아야 한다. 로컬 memo DB 필요. CI 제외.
+ *
+ * <p>(2026-09-21) LINK 시나리오 둘은 레거시 경로를 켠 채 돈다 — 그 경로는 기본적으로 꺼져 있지만
+ * (프로젝트 단위 정리로 옮겼다) 임대·결과 저장의 경합 불변식은 여기서 계속 지킨다. 같은 불변식을
+ * 새 경로에서 보는 것은 {@code ProjectTidyRaceDbTest}다.
  */
 @SpringBootTest
+@TestPropertySource(properties = "material.analysis.link-jobs.enabled=true")
 class MaterialAnalysisResultRaceDbTest {
 
     private static final long USER = 999_000_304L;

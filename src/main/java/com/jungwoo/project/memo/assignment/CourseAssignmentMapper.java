@@ -27,6 +27,12 @@ public interface CourseAssignmentMapper {
     List<CourseAssignment> findByMaterialId(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
     /**
+     * 프로젝트가 아직 붙지 않은 과제 후보. 자료에서 나왔지만 어느 프로젝트의 것인지 적히지
+     * 않은 행이다(예전에는 자료별 LINK 분석이 붙였다).
+     */
+    List<CourseAssignment> findUnattachedCandidates(@Param("limit") int limit);
+
+    /**
      * 재분석 보강: 사용자가 손대지 않은 CANDIDATE의 원문 인용·추정만 갱신한다.
      * 확정 상태·사용자 편집 제목·마감은 건드리지 않는다.
      */

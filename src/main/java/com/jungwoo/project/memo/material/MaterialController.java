@@ -1,6 +1,7 @@
 package com.jungwoo.project.memo.material;
 
 import com.jungwoo.project.memo.common.security.UserPrincipal;
+import com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService;
 import com.jungwoo.project.memo.material.domain.MaterialType;
 import com.jungwoo.project.memo.material.dto.MaterialResponse;
 import lombok.RequiredArgsConstructor;
@@ -26,18 +27,21 @@ import java.util.List;
 public class MaterialController {
 
     private final MaterialService materialService;
+    private final MaterialAnalysisBatchService batchService;
 
     @PostMapping(consumes = "multipart/form-data")
     public ResponseEntity<MaterialResponse> upload(
             @AuthenticationPrincipal UserPrincipal principal,
             @PathVariable Long courseId,
             @RequestParam MaterialType materialType,
-            @RequestParam("file") MultipartFile file
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(name = "batchItemId", required = false) Long batchItemId
     ) {
-        log.info("POST /api/courses/{}/materials - userId={}, type={}, filename={}",
-                courseId, principal.getUserId(), materialType, file.getOriginalFilename());
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(materialService.upload(principal.getUserId(), courseId, materialType, file));
+        log.info("POST /api/courses/{}/materials - userId={}, type={}, filename={}, batchItemId={}",
+                courseId, principal.getUserId(), materialType, file.getOriginalFilename(), batchItemId);
+        return ResponseEntity.status(HttpStatus.CREATED).body(
+                BatchUploadBinding.run(batchService, principal.getUserId(), batchItemId,
+                        () -> materialService.upload(principal.getUserId(), courseId, materialType, file)));
     }
 
     @GetMapping

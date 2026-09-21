@@ -113,6 +113,8 @@ public enum ErrorCode {
     ZIP_IMPORT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_028", "압축 파일 가져오기를 찾을 수 없습니다"),
     ZIP_IMPORT_ENTRY_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_029", "가져오기 항목을 찾을 수 없습니다"),
     CONTEXT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_030", "기억한 내용을 찾을 수 없습니다"),
+    MATERIAL_ANALYSIS_BATCH_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_031", "분석 묶음을 찾을 수 없습니다"),
+    PROJECT_TIDY_PROPOSAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_032", "프로젝트 정리안을 찾을 수 없습니다"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -150,6 +152,22 @@ public enum ErrorCode {
     ZIP_IMPORT_NOT_READY(HttpStatus.CONFLICT, "E409_024", "지금은 가져올 수 있는 상태가 아닙니다"),
     ZIP_IMPORT_ENTRY_NOT_RETRYABLE(HttpStatus.CONFLICT, "E409_025", "다시 시도할 수 있는 항목이 아닙니다"),
     CONTEXT_ALREADY_CHANGED(HttpStatus.CONFLICT, "E409_027", "이미 고쳤거나 지운 내용이에요. 최신 목록을 다시 불러옵니다."),
+    /** 이미 적용·폐기·대체된 정리안. 화면은 최신 상태를 다시 읽는다. */
+    PROJECT_TIDY_PROPOSAL_RESOLVED(HttpStatus.CONFLICT, "E409_028", "이미 처리된 정리안입니다"),
+    /** 검토한 판과 서버의 판이 다르다. 사용자 편집은 보존하고 최신 정리안을 다시 읽게 한다. */
+    PROJECT_TIDY_REVISION_STALE(HttpStatus.CONFLICT, "E409_029",
+            "정리안이 그 사이 바뀌었어요. 최신 내용을 다시 불러옵니다"),
+    /** 선택한 변경이 서로 딸린 변경을 빼놓았다. 무엇을 함께 빼야 하는지 메시지에 싣는다. */
+    PROJECT_TIDY_SELECTION_INCOMPLETE(HttpStatus.CONFLICT, "E409_030",
+            "함께 처리해야 하는 변경이 빠져 있어요"),
+    /** 검토하는 동안 근거 자료가 바뀌었다(삭제·연결 해제·재분석). 적용하지 않는다. */
+    PROJECT_TIDY_EVIDENCE_CHANGED(HttpStatus.CONFLICT, "E409_031",
+            "근거 자료가 그 사이 바뀌어 이 정리안을 적용할 수 없어요"),
+    /** 이 프로젝트의 정리안을 이미 만드는 중이다. */
+    PROJECT_TIDY_IN_PROGRESS(HttpStatus.CONFLICT, "E409_032", "이 프로젝트의 정리안을 만드는 중입니다"),
+    /** 정리에 쓸 분석 완료 자료가 하나도 없다. */
+    PROJECT_TIDY_NO_MATERIALS(HttpStatus.CONFLICT, "E409_033",
+            "정리에 쓸 수 있는 분석 완료 자료가 없어요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

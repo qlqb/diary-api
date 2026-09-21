@@ -157,6 +157,13 @@ public class MaterialContentAnalyzer {
     }
 
     public AnalysisOutcome analyze(MaterialAnalysisJob job) {
+        return analyze(job, new AnalysisMetrics());
+    }
+
+    /**
+     * @param metrics 이번 실행이 어디에 시간을 썼는지 채워 넣는 그릇. 예상 시간의 근거가 된다
+     */
+    public AnalysisOutcome analyze(MaterialAnalysisJob job, AnalysisMetrics metrics) {
         CourseMaterial material = courseMaterialMapper.findByIdAndUserId(job.getMaterialId(), job.getUserId());
         if (material == null) {
             return AnalysisOutcome.cancelled("자료가 삭제됐다");
@@ -168,12 +175,17 @@ public class MaterialContentAnalyzer {
         if (!unitService.isExtractable(material)) {
             return AnalysisOutcome.failed("NO_TEXT", "텍스트를 추출하지 못한 자료다");
         }
+        long extractStartedAt = System.currentTimeMillis();
         List<MaterialTextUnit> units = unitService.ensureUnits(material);
+        metrics.addExtract(System.currentTimeMillis() - extractStartedAt);
         if (units.isEmpty()) {
             return AnalysisOutcome.failed("NO_TEXT", "읽을 단위가 없다(원문 없음)");
         }
 
         List<MaterialChunker.Chunk> chunks = MaterialChunker.split(units, chunkChars, overlapChars);
+        metrics.describeSource(extensionOf(material.getOriginalFilename()), material.getSizeBytes(),
+                material.getExtractedText() == null ? null : material.getExtractedText().length());
+        metrics.describeWork(units.size(), chunks.size());
         Checkpoint checkpoint = readCheckpoint(job.getCheckpointJson());
         Set<Integer> completed = new LinkedHashSet<>(checkpoint == null || checkpoint.completedChunks() == null
                 ? List.of() : checkpoint.completedChunks());
@@ -199,7 +211,10 @@ public class MaterialContentAnalyzer {
             if (!jobService.renew(job)) {
                 return AnalysisOutcome.lost();
             }
+            long modelStartedAt = System.currentTimeMillis();
             ContentAnalysisPayload payload = callModel(job, material, chunk, units.size());
+            metrics.addModel(System.currentTimeMillis() - modelStartedAt);
+            metrics.countCall();
             calledThisRun++;
             if (payload.docMeta() != null) {
                 if (documentDate == null && isIsoDate(payload.docMeta().documentDate())) {
@@ -215,10 +230,12 @@ public class MaterialContentAnalyzer {
             // 응답을 기다리는 동안 자료가 지워졌거나 임대가 넘어갔을 수 있다. 구간 저장과 진행 기록을 한 트랜잭션에서,
             // 작업 행을 잠근 채 토큰을 대조한 뒤에만 쓴다. 저장된 구간은 INSERT IGNORE라 새 임대가 다시 읽어도 중복되지 않는다.
             int[] saved = {0};
+            long persistStartedAt = System.currentTimeMillis();
             boolean written = resultWriter.writeIfLeased(job, () -> {
                 saved[0] = persistSections(job, material, chunk, payload);
                 jobService.progress(job, chunks.size(), completed.size(), checkpointJson);
             });
+            metrics.addPersist(System.currentTimeMillis() - persistStartedAt);
             if (!written) {
                 return AnalysisOutcome.lost();
             }
@@ -301,6 +318,16 @@ public class MaterialContentAnalyzer {
             sb.append('\n').append(unit.getText()).append('\n');
         }
         return sb.toString();
+    }
+
+    /** 파일 확장자(소문자). 예상 시간 표본을 형식별로 나눠 모으려고 남긴다. */
+    private static String extensionOf(String filename) {
+        if (filename == null) {
+            return null;
+        }
+        int dot = filename.lastIndexOf('.');
+        return dot < 0 || dot == filename.length() - 1 ? null
+                : filename.substring(dot + 1).toLowerCase(Locale.ROOT);
     }
 
     private static String marker(MaterialTextUnit unit) {

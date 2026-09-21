@@ -2,10 +2,11 @@ package com.jungwoo.project.memo.plan.selection;
 
 import com.jungwoo.project.memo.ai.brief.PlanBriefItem;
 import com.jungwoo.project.memo.ai.brief.PlanBriefService;
-import com.jungwoo.project.memo.learning.TopicChangeProposalMapper;
-import com.jungwoo.project.memo.learning.domain.TopicChangeProposal;
-import com.jungwoo.project.memo.learning.domain.TopicChangeProposalStatus;
 import com.jungwoo.project.memo.learning.structure.ProposedTopicIndex;
+import com.jungwoo.project.memo.learning.tidy.ProjectTidyMapper;
+import com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyProposal;
+import com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyProposalMaterial;
+import com.jungwoo.project.memo.learning.tidy.domain.TidyProposalStatus;
 import com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Generated;
 import org.junit.jupiter.api.Test;
 
@@ -35,9 +36,17 @@ class ConsultConditionsFlowTest {
         return "[" + String.join(",", java.util.Arrays.stream(roles).map(r -> "\"" + r + "\"").toList()) + "]";
     }
 
-    private static TopicChangeProposal proposal(long id, long materialId, String hash, String ops) {
-        return TopicChangeProposal.builder().proposalId(id).userId(USER).courseId(1L).materialId(materialId)
-                .fileHash(hash).status(TopicChangeProposalStatus.PROPOSED).opsJson(ops).build();
+    private static ProjectTidyProposal tidyProposal(long id, String ops) {
+        return ProjectTidyProposal.builder().proposalId(id).userId(USER).courseId(1L)
+                .status(TidyProposalStatus.PROPOSED).revision(1L).baseTreeVersion(0L)
+                .opsJson(ops).summaryJson("{}").scopeJson("{}").build();
+    }
+
+    /** 이 정리안이 근거로 삼은 자료. hash가 지금 자료와 다르면 그 구간은 색인에서 빠진다. */
+    private static ProjectTidyProposalMaterial evidence(long proposalId, long materialId, String hash) {
+        return ProjectTidyProposalMaterial.builder().proposalId(proposalId).userId(USER)
+                .materialId(materialId).fileHash(hash).analysisVersion(1)
+                .sectionCount(1).reviewedCount(1).included(true).build();
     }
 
     @Test
@@ -49,14 +58,21 @@ class ConsultConditionsFlowTest {
         f.section(101, 10, "스택의 정의", roles("CONCEPT"), 1, "원문-스택");
         f.section(102, 10, "스택 연습", roles("EXERCISE"), 2, "원문-스택연습");
         f.section(111, 11, "큐의 정의", roles("CONCEPT"), 1, "원문-큐");
-        TopicChangeProposalMapper proposals = mock(TopicChangeProposalMapper.class);
-        when(proposals.findOpenByCourseId(1L, USER)).thenReturn(List.of(
-                proposal(51, 10, "h10", "[{\"op\":\"ADD\",\"tempId\":\"n1\",\"title\":\"스택\",\"sectionIds\":[101,102]}]"),
-                // 자료가 바뀌기 전(옛 해시)의 제안 — 읽지 않는다.
-                proposal(52, 11, "OLD-HASH", "[{\"op\":\"ADD\",\"tempId\":\"n1\",\"title\":\"큐(옛 버전)\",\"sectionIds\":[111]}]"),
-                // 이 프로젝트에 지금 연결되지 않은(삭제된) 자료의 제안 — 읽지 않는다.
-                proposal(53, 99, "h99", "[{\"op\":\"ADD\",\"tempId\":\"n1\",\"title\":\"사라진 자료\",\"sectionIds\":[101]}]")));
-        f.catalogService.setProposedTopicIndex(new ProposedTopicIndex(proposals));
+        /*
+         * (2026-09-21) 색인의 원본이 프로젝트 단위 정리안 하나로 바뀌었다. 정리안은 자료 셋을 함께
+         * 보고 만들어졌지만, 그 사이 ch02.pdf가 다시 분석돼 해시가 달라졌고 99번 자료는 연결이
+         * 끊겼다 — 두 자료의 구간은 색인에서 빠진다.
+         */
+        ProjectTidyMapper tidy = mock(ProjectTidyMapper.class);
+        when(tidy.findOpenProposalByCourse(1L, USER)).thenReturn(tidyProposal(51,
+                "[{\"op\":\"ADD\",\"tempId\":\"n1\",\"changeId\":\"c1\",\"title\":\"스택\",\"sectionIds\":[101,102]},"
+                + "{\"op\":\"ADD\",\"tempId\":\"n2\",\"changeId\":\"c2\",\"title\":\"큐(옛 버전)\",\"sectionIds\":[111]},"
+                + "{\"op\":\"ADD\",\"tempId\":\"n3\",\"changeId\":\"c3\",\"title\":\"사라진 자료\",\"sectionIds\":[901]}]"));
+        when(tidy.findProposalMaterials(51L, USER)).thenReturn(List.of(
+                evidence(51, 10, "h10"),
+                evidence(51, 11, "OLD-HASH"),
+                evidence(51, 99, "h99")));
+        f.catalogService.setProposedTopicIndex(new ProposedTopicIndex(tidy, f.sectionMapper));
         f.selectionAnswer = prompt -> {
             assertThat(prompt).contains("자동 분석 제안(승인 전) · 스택").contains("스택의 정의").contains("스택 연습");
             assertThat(prompt).contains("토픽에 연결되지 않은 자료 · ch02.pdf").doesNotContain("큐(옛 버전)")
@@ -72,33 +88,46 @@ class ConsultConditionsFlowTest {
         // 구조 승인 없이도 계획이 만들어진다. 그리고 제안 저장소에는 읽기 하나만 일어났다(쓰기 없음).
         assertThat(generated.items()).hasSize(1);
         assertThat(generated.items().get(0).topicId()).isNull();
-        verify(proposals).findOpenByCourseId(1L, USER);
-        verifyNoMoreInteractions(proposals);
+        verify(tidy).findOpenProposalByCourse(1L, USER);
+        verify(tidy).findProposalMaterials(51L, USER);
+        verifyNoMoreInteractions(tidy);
     }
 
     @Test
-    void T04_같은_자리의_같은_제목_제안은_한_묶음으로_합치고_부모가_다르면_합치지_않는다() {
-        TopicChangeProposalMapper proposals = mock(TopicChangeProposalMapper.class);
-        when(proposals.findOpenByCourseId(1L, USER)).thenReturn(List.of(
-                proposal(51, 10, "h10", "[{\"op\":\"ADD\",\"tempId\":\"a\",\"title\":\"스택\",\"sectionIds\":[1],"
-                        + "\"children\":[{\"op\":\"ADD\",\"tempId\":\"a1\",\"title\":\"개요\",\"sectionIds\":[2]}]}]"),
-                proposal(52, 11, "h11", "[{\"op\":\"ADD\",\"tempId\":\"b\",\"title\":\" 스택 \",\"sectionIds\":[3]},"
-                        + "{\"op\":\"ADD\",\"tempId\":\"c\",\"title\":\"개요\",\"sectionIds\":[4]}]")));
-        var materials = new java.util.HashMap<Long, com.jungwoo.project.memo.material.domain.CourseMaterial>();
+    void T04_한_노드에_여러_자료의_구간이_함께_붙고_새_항목의_부모도_이어진다() {
+        /*
+         * 예전에는 자료마다 변경안이 따로 있어서, 같은 제목의 제안 둘을 이 색인이 합쳐야 했다.
+         * 이제는 정리안 하나가 자료들을 함께 보고 나오므로 합칠 것이 없다 — 한 노드의 근거 구간이
+         * 애초에 여러 자료에 걸쳐 있다. 이 테스트가 보는 것이 그 차이다.
+         */
         PlanSelectionFixture f = new PlanSelectionFixture();
-        materials.put(10L, f.material(10, "a.pdf", 1L));
-        materials.put(11L, f.material(11, "b.pdf", 1L));
+        f.course(1, "자료구조");
+        f.material(10, "a.pdf", 1L);
+        f.material(11, "b.pdf", 1L);
+        f.section(1, 10, "스택 설명", roles("CONCEPT"), 1, "원문-1");
+        f.section(2, 10, "스택 개요", roles("CONCEPT"), 2, "원문-2");
+        f.section(3, 11, "교재의 스택", roles("CONCEPT"), 1, "원문-3");
 
-        ProposedTopicIndex.Index index = new ProposedTopicIndex(proposals).forCourse(USER, 1L, materials);
+        ProjectTidyMapper tidy = mock(ProjectTidyMapper.class);
+        when(tidy.findOpenProposalByCourse(1L, USER)).thenReturn(tidyProposal(51,
+                "[{\"op\":\"ADD\",\"tempId\":\"a\",\"changeId\":\"c1\",\"title\":\"스택\",\"sectionIds\":[1,3],"
+                + "\"children\":[{\"op\":\"ADD\",\"tempId\":\"a1\",\"title\":\"개요\",\"sectionIds\":[2]}]}]"));
+        when(tidy.findProposalMaterials(51L, USER)).thenReturn(List.of(
+                evidence(51, 10, "h10"), evidence(51, 11, "h11")));
+        var materials = new java.util.HashMap<Long, com.jungwoo.project.memo.material.domain.CourseMaterial>();
+        materials.put(10L, f.materials.get(10L));
+        materials.put(11L, f.materials.get(11L));
 
-        assertThat(index.nodes()).extracting(ProposedTopicIndex.Node::title).containsExactly("스택", "개요", "개요");
+        ProposedTopicIndex.Index index = new ProposedTopicIndex(tidy, f.sectionMapper)
+                .forCourse(USER, 1L, materials);
+
+        assertThat(index.nodes()).extracting(ProposedTopicIndex.Node::title).containsExactly("스택", "개요");
         ProposedTopicIndex.Node stack = index.nodes().get(0);
         assertThat(stack.sectionIds()).containsExactly(1L, 3L);
-        assertThat(stack.proposalIds()).containsExactly(51L, 52L);
-        assertThat(stack.nodeId()).isEqualTo("p51:a");
-        // "개요"는 하나는 스택 아래, 하나는 최상위다 — 제목이 같다고 합치지 않는다.
-        assertThat(index.nodes().get(1).parentNodeId()).isEqualTo("p51:a");
-        assertThat(index.nodes().get(2).parentNodeId()).isNull();
+        // 한 학습 항목에 강의 자료와 교재가 함께 붙는 것 — 프로젝트 단위 정리의 요점이다.
+        assertThat(stack.materialIds()).containsExactly(10L, 11L);
+        assertThat(stack.nodeId()).isEqualTo("p51:c1");
+        assertThat(index.nodes().get(1).parentNodeId()).isEqualTo("p51:c1");
     }
 
     @Test

@@ -555,6 +555,49 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 - 적용 전 dry-run 쿼리, 적용 후 확인 쿼리, 롤백 절차(새 값이 들어간 행이 있으면 먼저 확인 — 자동으로 지우지 않는다)는 각 SQL 파일 머리에 있다.
 - 옛 서버 코드는 새 컬럼을 모른 채 동작한다(전부 NULL 허용이거나 기본값이 있다). 반대 방향(새 서버 + 옛 스키마)은 안 된다.
 
+## 19. 업로드 묶음 · 소요 시간 표본 · 프로젝트 단위 정리안 (2026-09-21)
+
+파일 `docs/sql/2026-09-21-project-tidy.sql`. 전부 추가형이고 재실행할 수 있다.
+**한 곳만 예외로 기존 행을 건드린다**(아래 전환 참고).
+
+| 표 | 내용 |
+|---|---|
+| `material_analysis_batches` / `material_analysis_batch_items` | 한 번의 [분석 시작]이 맡는 자료 묶음과 <고정된> 구성원. 진행률의 원본이 아니다 — 분석 진행은 `material_analysis_jobs`가 안다. 자리에 `material_id`는 업로드가 채운다 |
+| `material_analysis_timings` | 지난 분석이 실제로 걸린 시간(큐 대기·추출·모델·저장을 따로). 예상 시간의 유일한 근거다. 원문·파일명은 남기지 않는다 |
+| `project_tidy_jobs` | "이 프로젝트 자료 정리" 요청 하나. 프로젝트당 열린 작업은 <하나>이고 그것을 DB가 지킨다(`open_guard` 생성 컬럼 + UNIQUE). 선점은 자료 분석과 같은 임대 방식 |
+| `project_tidy_proposals` | 프로젝트 하나의 정리안. 검토 중인 것은 프로젝트당 하나(`open_guard`). `ops_json`의 각 작업에 안정적인 `changeId` |
+| `project_tidy_proposal_materials` | 그 정리안이 근거로 삼은 자료(해시·분석판·검토한 구간 수·제외 사유). 적용 직전 대조에 쓴다 |
+| `project_tidy_edits` | 검토 중 사용자가 고친 것(제목·제외). **트리 변경이 아니다.** `edit_revision`으로 다른 탭의 저장을 덮지 않는다 |
+
+**왜 묶음이 서버에 있어야 하는가**: 진행 상태의 원본이 브라우저에 있으면 탭을 닫는 순간 사라진다.
+그리고 "이번에 올린 5개"를 서버가 알아야 분석 중에 2개를 더 올려도 5개짜리 진행률이 그대로 있는다 —
+분모를 늘리면 80%가 30%로 떨어진다. 추가 업로드는 **새 묶음**이 된다.
+
+**왜 정리안이 프로젝트 단위인가**: 자료마다 변경안을 만들면 같은 개념을 강의 슬라이드·교재·실습
+안내가 다른 이름으로 다룰 때 각자 옳은 제안 셋이 나오고, 적용하면 중복 항목 셋이 남는다. 그리고
+하나를 적용하는 순간 나머지가 옛 트리 기준이 되어 다시 분석되는 되풀이가 생겼다.
+
+동시성 규칙:
+
+- 정리 요청: `uq_project_tidy_jobs_open (course_id, open_guard)` — 중복 클릭·두 탭이 같은 작업을 두 번 만들지 못한다.
+- 결과 저장: 작업 행 FOR UPDATE + `lease_token` 대조를 **같은 트랜잭션에서**. 그 사이 사용자가 버렸으면
+  토큰이 달라져 아무것도 쓰지 않는다 — "버린 안이 되살아나지 않는다"의 근거.
+- 적용: `UPDATE project_tidy_proposals SET status='APPLIED' WHERE status='PROPOSED' AND revision=?`가
+  **트리를 고치기 전에** 1행이어야 한다. 두 탭이 동시에 눌러도 한쪽만 통과한다.
+- 검증과 쓰기 사이: 근거 자료(`course_materials`)와 연결(`material_links`)을 `FOR UPDATE`로 잠근 채
+  확인한다. 같은 순간의 자료 삭제·연결 해제는 기다렸다가 일어나고, 먼저 일어났으면 적용이 거절된다.
+
+전환(기존 행을 건드리는 유일한 곳):
+
+- `topic_change_proposals.status`에 `SUPERSEDED` 추가, `superseded_from` 컬럼 신설.
+  열린(`PROPOSED`) 자료별 변경안을 `SUPERSEDED`로 옮기고 원래 상태를 `superseded_from`에 적는다.
+  **지우지 않는다** — `ops_json`이 그대로라 이력에서 볼 수 있고, `superseded_from`을 `status`로
+  되쓰면 원상 복구된다(롤백 절차는 SQL 파일 맨 아래).
+- 아직 돌지 않은 `LINK` 작업을 `CANCELLED`로. 실행 중이던 것은 건드리지 않되, 서버의 생성·저장
+  경로가 막혀 있어 늦게 끝나도 변경안을 만들지 못한다.
+- 적용 시점 실측(2026-09-21, `memo`): 변경안 128행이 `PROPOSED` → `SUPERSEDED`, LINK 작업
+  `QUEUED`/`PAUSED` 0행(이미 전부 끝나 있었다). 다른 표의 행 수는 바뀌지 않았다.
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

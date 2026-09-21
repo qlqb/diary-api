@@ -4,6 +4,7 @@ import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.learning.tidy.ProjectTidyMapper;
 import com.jungwoo.project.memo.course.dto.CourseCreateRequest;
 import com.jungwoo.project.memo.course.dto.CourseResponse;
 import com.jungwoo.project.memo.course.dto.CourseSummaryCounts;
@@ -30,6 +31,7 @@ import java.util.stream.Collectors;
 public class CourseService {
 
     private final CourseMapper courseMapper;
+    private final ProjectTidyMapper tidyMapper;
 
     @Transactional
     public CourseResponse create(Long userId, CourseCreateRequest request) {
@@ -74,6 +76,12 @@ public class CourseService {
     public void archive(Long userId, Long courseId) {
         getOwned(userId, courseId);
         courseMapper.updateStatus(courseId, userId, CourseStatus.ARCHIVED.name());
+        /*
+         * 도는 정리 작업을 무효화한다. 보관한 프로젝트의 정리안이 뒤늦게 만들어져 있으면
+         * 보관 해제했을 때 "언제 요청했는지 기억나지 않는 안"이 기다리고 있게 된다.
+         * 이미 만들어진 정리안은 그대로 둔다 — 그건 사용자가 검토하던 것이고 이력이다.
+         */
+        tidyMapper.cancelOpenJobs(courseId, userId, "프로젝트를 보관했다");
         log.info("프로젝트 보관: userId={}, courseId={}", userId, courseId);
     }
 

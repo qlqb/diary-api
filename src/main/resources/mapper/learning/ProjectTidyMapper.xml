@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.tidy.ProjectTidyMapper">
+
+    <resultMap id="jobResultMap" type="com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyJob">
+        <id     property="jobId"              column="job_id"/>
+        <result property="userId"             column="user_id"/>
+        <result property="courseId"           column="course_id"/>
+        <result property="generation"         column="generation"/>
+        <result property="status"             column="status"/>
+        <result property="baseTreeVersion"    column="base_tree_version"/>
+        <result property="previousProposalId" column="previous_proposal_id"/>
+        <result property="inputSnapshotJson"  column="input_snapshot_json"/>
+        <result property="attempt"            column="attempt"/>
+        <result property="maxAttempts"        column="max_attempts"/>
+        <result property="nextRunAt"          column="next_run_at"/>
+        <result property="leaseOwner"         column="lease_owner"/>
+        <result property="leaseUntil"         column="lease_until"/>
+        <result property="leaseToken"         column="lease_token"/>
+        <result property="resultProposalId"   column="result_proposal_id"/>
+        <result property="errorCode"          column="error_code"/>
+        <result property="errorMessage"       column="error_message"/>
+        <result property="createdAt"          column="created_at"/>
+        <result property="updatedAt"          column="updated_at"/>
+        <result property="finishedAt"         column="finished_at"/>
+    </resultMap>
+
+    <resultMap id="proposalResultMap" type="com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyProposal">
+        <id     property="proposalId"              column="proposal_id"/>
+        <result property="userId"                  column="user_id"/>
+        <result property="courseId"                column="course_id"/>
+        <result property="jobId"                   column="job_id"/>
+        <result property="generation"              column="generation"/>
+        <result property="revision"                column="revision"/>
+        <result property="baseTreeVersion"         column="base_tree_version"/>
+        <result property="status"                  column="status"/>
+        <result property="summaryJson"             column="summary_json"/>
+        <result property="opsJson"                 column="ops_json"/>
+        <result property="scopeJson"               column="scope_json"/>
+        <result property="appliedResultJson"       column="applied_result_json"/>
+        <result property="previousProposalId"      column="previous_proposal_id"/>
+        <result property="supersededByProposalId"  column="superseded_by_proposal_id"/>
+        <result property="model"                   column="model"/>
+        <result property="createdAt"               column="created_at"/>
+        <result property="updatedAt"               column="updated_at"/>
+        <result property="resolvedAt"              column="resolved_at"/>
+    </resultMap>
+
+    <resultMap id="materialResultMap"
+               type="com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyProposalMaterial">
+        <id     property="id"              column="id"/>
+        <result property="proposalId"      column="proposal_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="materialId"      column="material_id"/>
+        <result property="fileHash"        column="file_hash"/>
+        <result property="analysisVersion" column="analysis_version"/>
+        <result property="sectionCount"    column="section_count"/>
+        <result property="reviewedCount"   column="reviewed_count"/>
+        <result property="included"        column="included"/>
+        <result property="excludeReason"   column="exclude_reason"/>
+    </resultMap>
+
+    <resultMap id="editsResultMap" type="com.jungwoo.project.memo.learning.tidy.domain.ProjectTidyEdits">
+        <id     property="proposalId"   column="proposal_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="editsJson"    column="edits_json"/>
+        <result property="editRevision" column="edit_revision"/>
+        <result property="updatedAt"    column="updated_at"/>
+    </resultMap>
+
+    <!-- ===== 작업 ===== -->
+
+    <!--
+      열린 작업이 이미 있으면 uq_project_tidy_jobs_open에 걸려 DuplicateKeyException이다.
+      서비스가 그것을 "이미 만드는 중"으로 옮긴다 — 중복 클릭이 두 번 돌지 않는다.
+    -->
+    <insert id="insertJob" useGeneratedKeys="true" keyProperty="jobId">
+        INSERT INTO project_tidy_jobs (
+            user_id, course_id, generation, status, base_tree_version, previous_proposal_id,
+            input_snapshot_json, max_attempts, next_run_at
+        ) VALUES (
+            #{userId}, #{courseId}, #{generation}, #{status}, #{baseTreeVersion}, #{previousProposalId},
+            #{inputSnapshotJson}, #{maxAttempts}, #{nextRunAt}
+        )
+    </insert>
+
+    <select id="findJobById" resultMap="jobResultMap">
+        SELECT * FROM project_tidy_jobs WHERE job_id = #{jobId}
+    </select>
+
+    <select id="findJobByIdAndUserId" resultMap="jobResultMap">
+        SELECT * FROM project_tidy_jobs WHERE job_id = #{jobId} AND user_id = #{userId}
+    </select>
+
+    <select id="findOpenJobByCourse" resultMap="jobResultMap">
+        SELECT * FROM project_tidy_jobs
+         WHERE course_id = #{courseId} AND user_id = #{userId} AND status IN ('QUEUED', 'RUNNING')
+         ORDER BY job_id DESC LIMIT 1
+    </select>
+
+    <select id="findLatestJobByCourse" resultMap="jobResultMap">
+        SELECT * FROM project_tidy_jobs
+         WHERE course_id = #{courseId} AND user_id = #{userId}
+         ORDER BY job_id DESC LIMIT 1
+    </select>
+
+    <select id="findMaxGeneration" resultType="java.lang.Long">
+        SELECT MAX(generation) FROM project_tidy_jobs WHERE course_id = #{courseId}
+    </select>
+
+    <select id="findClaimableJobs" resultMap="jobResultMap">
+        SELECT * FROM project_tidy_jobs
+         WHERE (status = 'QUEUED' AND next_run_at &lt;= #{now})
+            OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now})
+         ORDER BY next_run_at ASC, job_id ASC
+         LIMIT #{limit}
+    </select>
+
+    <update id="claimJob">
+        UPDATE project_tidy_jobs
+           SET status = 'RUNNING', lease_owner = #{owner}, lease_until = #{leaseUntil},
+               lease_token = lease_token + 1, attempt = attempt + 1,
+               error_code = NULL, error_message = NULL
+         WHERE job_id = #{jobId}
+           AND ((status = 'QUEUED' AND next_run_at &lt;= #{now})
+                OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now}))
+    </update>
+
+    <update id="renewJobLease">
+        UPDATE project_tidy_jobs SET lease_until = #{leaseUntil}
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="finishJob">
+        UPDATE project_tidy_jobs
+           SET status = #{status}, result_proposal_id = #{resultProposalId},
+               error_code = #{errorCode}, error_message = #{errorMessage},
+               finished_at = #{finishedAt}, lease_owner = NULL, lease_until = NULL
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="rescheduleJob">
+        UPDATE project_tidy_jobs
+           SET status = 'QUEUED', next_run_at = #{nextRunAt}, error_code = #{errorCode},
+               error_message = #{errorMessage}, lease_owner = NULL, lease_until = NULL
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <!--
+      lease_token을 함께 올린다. 지금 돌고 있는 worker가 뒤늦게 결과를 쓰려 해도 토큰이 달라져
+      0행이 된다 — 버린 요청의 결과가 되살아나지 못하는 이유다.
+    -->
+    <update id="cancelOpenJobs">
+        UPDATE project_tidy_jobs
+           SET status = 'CANCELLED', finished_at = NOW(), lease_token = lease_token + 1,
+               lease_owner = NULL, lease_until = NULL, error_code = 'CANCELLED', error_message = #{reason}
+         WHERE course_id = #{courseId} AND user_id = #{userId} AND status IN ('QUEUED', 'RUNNING')
+    </update>
+
+    <select id="lockJobIfLeased" resultType="java.lang.Long">
+        SELECT job_id FROM project_tidy_jobs
+         WHERE job_id = #{jobId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+         FOR UPDATE
+    </select>
+
+    <!-- ===== 정리안 ===== -->
+
+    <insert id="insertProposal" useGeneratedKeys="true" keyProperty="proposalId">
+        INSERT INTO project_tidy_proposals (
+            user_id, course_id, job_id, generation, revision, base_tree_version, status,
+            summary_json, ops_json, scope_json, previous_proposal_id, model
+        ) VALUES (
+            #{userId}, #{courseId}, #{jobId}, #{generation}, #{revision}, #{baseTreeVersion}, #{status},
+            #{summaryJson}, #{opsJson}, #{scopeJson}, #{previousProposalId}, #{model}
+        )
+    </insert>
+
+    <select id="findProposalById" resultMap="proposalResultMap">
+        SELECT * FROM project_tidy_proposals WHERE proposal_id = #{proposalId} AND user_id = #{userId}
+    </select>
+
+    <select id="findProposalByIdForUpdate" resultMap="proposalResultMap">
+        SELECT * FROM project_tidy_proposals
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+    <select id="findOpenProposalByCourse" resultMap="proposalResultMap">
+        SELECT * FROM project_tidy_proposals
+         WHERE course_id = #{courseId} AND user_id = #{userId} AND status = 'PROPOSED'
+         ORDER BY proposal_id DESC LIMIT 1
+    </select>
+
+    <select id="findHistoryByCourse" resultMap="proposalResultMap">
+        SELECT * FROM project_tidy_proposals
+         WHERE course_id = #{courseId} AND user_id = #{userId}
+         ORDER BY proposal_id DESC
+         LIMIT #{limit}
+    </select>
+
+    <update id="updateProposalStatus">
+        UPDATE project_tidy_proposals
+           SET status = #{status},
+               applied_result_json = COALESCE(#{appliedResultJson}, applied_result_json),
+               superseded_by_proposal_id = COALESCE(#{supersededByProposalId}, superseded_by_proposal_id),
+               resolved_at = #{resolvedAt}
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      적용·폐기의 단 하나의 전이 문장. PROPOSED이고 판 번호가 맞을 때만 1행이다.
+      두 탭이 동시에 눌러도 하나만 1행을 받고, 나머지는 0행을 받아 "이미 처리됨"이 된다.
+    -->
+    <update id="resolveProposalIfOpen">
+        UPDATE project_tidy_proposals
+           SET status = #{status}, applied_result_json = #{appliedResultJson}, resolved_at = #{resolvedAt}
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId}
+           AND status = 'PROPOSED' AND revision = #{expectedRevision}
+    </update>
+
+    <!-- ===== 근거 자료 ===== -->
+
+    <insert id="insertProposalMaterial" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO project_tidy_proposal_materials (
+            proposal_id, user_id, material_id, file_hash, analysis_version, section_count, reviewed_count,
+            included, exclude_reason
+        ) VALUES (
+            #{proposalId}, #{userId}, #{materialId}, #{fileHash}, #{analysisVersion}, #{sectionCount},
+            #{reviewedCount}, #{included}, #{excludeReason}
+        )
+    </insert>
+
+    <select id="findProposalMaterials" resultMap="materialResultMap">
+        SELECT * FROM project_tidy_proposal_materials
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId}
+         ORDER BY included DESC, id ASC
+    </select>
+
+    <!-- ===== 사용자 편집 ===== -->
+
+    <select id="findEdits" resultMap="editsResultMap">
+        SELECT * FROM project_tidy_edits WHERE proposal_id = #{proposalId} AND user_id = #{userId}
+    </select>
+
+    <select id="findEditsForUpdate" resultMap="editsResultMap">
+        SELECT * FROM project_tidy_edits WHERE proposal_id = #{proposalId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+    <insert id="insertEditsIgnore">
+        INSERT IGNORE INTO project_tidy_edits (proposal_id, user_id, edits_json, edit_revision)
+        VALUES (#{proposalId}, #{userId}, #{editsJson}, 1)
+    </insert>
+
+    <update id="updateEdits">
+        UPDATE project_tidy_edits
+           SET edits_json = #{editsJson}, edit_revision = edit_revision + 1
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId} AND edit_revision = #{expectedRevision}
+    </update>
+
+</mapper>

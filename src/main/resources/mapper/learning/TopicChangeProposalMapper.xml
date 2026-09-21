@@ -62,6 +62,11 @@
          WHERE proposal_id = #{proposalId} AND user_id = #{userId}
     </update>
 
+    <select id="countSuperseded" resultType="int">
+        SELECT COUNT(*) FROM topic_change_proposals
+         WHERE course_id = #{courseId} AND user_id = #{userId} AND status = 'SUPERSEDED'
+    </select>
+
     <update id="staleOpen">
         UPDATE topic_change_proposals
            SET status = 'STALE', resolved_at = #{resolvedAt}
