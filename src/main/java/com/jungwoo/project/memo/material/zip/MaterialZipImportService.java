@@ -46,6 +46,12 @@ public class MaterialZipImportService {
     private final ZipImportTxService txService;
     private final FileStorageService fileStorageService;
     private final CourseService courseService;
+    /**
+     * 확정한 항목으로 분석 묶음을 연다. 가져오기의 진행(자료가 되는가)과 분석의 진행(자료를
+     * 읽었는가)을 같은 흐름으로 보여 주기 위해서다 — 압축으로 올린 자료만 진행 카드에 없던
+     * 것이 2026-09-21 판의 빈자리였다.
+     */
+    private final com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService batchService;
 
     @Value("${material.zip-import.max-archive-bytes:20971520}")
     private long maxArchiveBytes = 20L * 1024 * 1024;
@@ -173,6 +179,20 @@ public class MaterialZipImportService {
         int queued = entryMapper.queueSelected(importId, userId, entryIds);
         if (queued > 0) {
             importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null);
+            /*
+             * 가져올 파일이 지금 정해졌다. 분석 묶음을 이때 연다 — 분모가 확정 목록으로 고정된다.
+             * 압축을 올린 직후(탐색 중)에는 무엇이 들어 있는지 모르므로 묶음을 만들지 않는다.
+             * 이번 확정으로 대기열에 오른 항목만 넣는다(이미 가져온 것·다른 확정의 것은 제외).
+             */
+            java.util.Set<Long> requested = new java.util.HashSet<>(entryIds);
+            List<com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService.ZipItem> items =
+                    entryMapper.findByImportId(importId, userId).stream()
+                            .filter(e -> requested.contains(e.getEntryId()))
+                            .filter(e -> e.getStatus() == ZipEntryStatus.QUEUED && e.getMaterialId() == null)
+                            .map(e -> new com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService.ZipItem(
+                                    e.getEntryId(), e.getDisplayName(), e.getEntryPath(), e.getSizeBytes()))
+                            .toList();
+            batchService.createForZip(userId, zipImport.getCourseId(), importId, items);
         }
         log.info("압축 가져오기 확정: userId={}, importId={}, 요청={}, 대기열={}",
                 userId, importId, entryIds.size(), queued);
@@ -194,6 +214,8 @@ public class MaterialZipImportService {
         }
         entryMapper.queueSelected(importId, userId, List.of(entryId));
         importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null);
+        // 그 항목의 분석 자리도 대기로 되돌리고, 묶음이 끝나 있었으면 다시 연다.
+        batchService.retryZipEntry(userId, entryId);
         return get(userId, importId);
     }
 
@@ -204,6 +226,8 @@ public class MaterialZipImportService {
             return get(userId, importId);
         }
         importMapper.updateStatus(importId, ZipImportStatus.CANCELLED, null, null);
+        // 아직 가져오지 않은 자리는 거둔다. 이미 가져온 자료의 분석은 그대로 이어진다.
+        batchService.abandonZipImport(userId, importId);
         if (zipImport.getStoragePath() != null) {
             fileStorageService.deleteQuietly(null, zipImport.getStoragePath());
             importMapper.clearStoragePath(importId);

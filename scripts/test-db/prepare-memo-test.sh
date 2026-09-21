@@ -56,6 +56,18 @@ trap 'rm -rf "$WORK"' EXIT
     "DROP DATABASE IF EXISTS \`$TARGET_DB\`; CREATE DATABASE \`$TARGET_DB\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
 "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" < "$WORK/schema.sql"
 
+# 아직 사용자 DB(memo)에 적용하지 않은 마이그레이션을 테스트 DB에만 얹는다. 스키마는 memo에서
+# 떠 오므로, 이 브랜치가 새로 요구하는 열은 여기서 더해야 테스트가 새 코드를 돌릴 수 있다.
+# memo에는 적용하지 않는다 — 사용자 DB의 스키마를 바꾸는 것은 배포 절차의 일이다.
+# 파일마다 IF NOT EXISTS로 짜여 있어 memo에 이미 적용된 것이어도 다시 돌려 안전하다.
+PENDING_MIGRATIONS=(
+    "docs/sql/2026-09-21-project-tidy-review.sql"
+)
+for migration in "${PENDING_MIGRATIONS[@]}"; do
+    "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" < "$migration"
+    echo "적용: $migration"
+done
+
 # 합성 사용자. 이메일은 .invalid 도메인이라 어디로도 가지 않는다. 비밀번호 해시는 로그인이
 # 되지 않는 값이다 — 이 계정으로 들어갈 일은 없고, 테스트가 user_id만 빌린다.
 "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" -e \

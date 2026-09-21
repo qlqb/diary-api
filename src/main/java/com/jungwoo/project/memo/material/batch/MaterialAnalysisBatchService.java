@@ -26,6 +26,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.Map;
 
 /**
@@ -62,6 +63,8 @@ public class MaterialAnalysisBatchService {
     static final String ORPHAN_MESSAGE = "올리기 전에 화면이 닫혔어요. 이 파일은 다시 골라 올려야 해요";
 
     private final MaterialAnalysisBatchMapper batchMapper;
+    /** 압축 이름만 읽는다. 가져오기 서비스는 이 서비스를 쓰므로 거꾸로는 매퍼를 쓴다. */
+    private final com.jungwoo.project.memo.material.zip.ZipImportMapper zipImportMapper;
     private final MaterialAnalysisTimingMapper timingMapper;
     private final AnalysisEstimator estimator;
     private final CourseService courseService;
@@ -132,6 +135,110 @@ public class MaterialAnalysisBatchService {
         log.info("분석 묶음 생성: batchId={}, userId={}, courseId={}, 자리={}",
                 batch.getBatchId(), userId, request.getCourseId(), estimates.size());
         return get(userId, batch.getBatchId());
+    }
+
+    // ===== 압축 가져오기 =====
+
+    /** 압축에서 확정한 항목 하나. 서비스끼리 순환하지 않도록 필요한 값만 받는다. */
+    public record ZipItem(Long entryId, String displayName, String entryPath, Long sizeBytes) {
+    }
+
+    /**
+     * 압축 가져오기를 확정한 순간 묶음을 연다. 가져올 파일이 <이때> 정해지므로 분모도 이때 고정된다.
+     *
+     * <p>왜 확정 때인가: 압축을 올린 직후에는 안에 무엇이 있는지 모른다(탐색 중). 그때 묶음을
+     * 만들면 분모가 없거나, 탐색이 끝나며 분모가 바뀐다 — 진행률이 뒤로 가는 것과 같은 일이다.
+     * 탐색은 가져오기 카드가 "살펴보는 중"으로만 말하고, 분석 진행률은 확정 뒤에 시작한다.
+     *
+     * <p>같은 압축에서 나중에 더 골라 확정하면 <새 묶음>이다. 먼저 확정한 묶음의 분모는 그대로다.
+     * 이미 자리가 있는 항목은 다시 넣지 않는다.
+     *
+     * @return 새로 연 묶음. 넣을 항목이 없으면 null
+     */
+    @Transactional
+    public BatchResponse createForZip(Long userId, Long courseId, Long zipImportId, List<ZipItem> items) {
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        List<Long> ids = items.stream().map(ZipItem::entryId).toList();
+        Set<Long> already = new java.util.HashSet<>(batchMapper.findZipEntryIdsWithItems(userId, ids));
+        List<ZipItem> fresh = items.stream().filter(i -> !already.contains(i.entryId())).toList();
+        if (fresh.isEmpty()) {
+            return null;
+        }
+        List<AnalysisEstimator.FileEstimate> estimates = estimator.estimateFiles(fresh.stream()
+                .map(i -> new AnalysisEstimator.StagedFile(i.displayName(), i.sizeBytes())).toList());
+        AnalysisEstimator.BatchEstimate total = estimator.estimateBatch(estimates, timingMapper.countQueuedAhead());
+
+        MaterialAnalysisBatch batch = MaterialAnalysisBatch.builder()
+                .userId(userId).courseId(courseId).zipImportId(zipImportId).status(BatchStatus.STAGED)
+                .itemCount(estimates.size())
+                .estMinSeconds(total.minSeconds()).estMaxSeconds(total.maxSeconds()).estBasis(total.basis())
+                .build();
+        batchMapper.insert(batch);
+        for (int i = 0; i < fresh.size(); i++) {
+            AnalysisEstimator.FileEstimate estimate = estimates.get(i);
+            ZipItem zip = fresh.get(i);
+            batchMapper.insertItem(MaterialAnalysisBatchItem.builder()
+                    .batchId(batch.getBatchId()).userId(userId).position(i)
+                    .filename(cut(estimate.filename(), 255)).sourcePath(cut(zip.entryPath(), 1024))
+                    .sizeBytes(estimate.sizeBytes()).extension(cut(estimate.extension(), 20))
+                    .zipEntryId(zip.entryId())
+                    // 확정할 수 있는 것은 지원 형식뿐이지만, 판정은 업로드와 같은 규칙을 따른다.
+                    .uploadState(estimate.supported()
+                            ? BatchItemUploadState.STAGED : BatchItemUploadState.UNSUPPORTED)
+                    .estMinSeconds(estimate.minSeconds()).estMaxSeconds(estimate.maxSeconds())
+                    .estBasis(estimate.basis())
+                    .message(cut(estimate.reason(), 300))
+                    .build());
+        }
+        log.info("압축 가져오기 묶음 생성: batchId={}, importId={}, 자리={}", batch.getBatchId(), zipImportId,
+                fresh.size());
+        return get(userId, batch.getBatchId());
+    }
+
+    /**
+     * 가져오기 작업자가 자료를 만들었다. 그 항목의 자리를 채운다. 자리가 없으면(이 기능 전에 확정한
+     * 가져오기) 조용히 지나간다 — 자료 생성 자체는 이미 끝났다.
+     */
+    @Transactional
+    public void bindZipEntry(Long userId, Long zipEntryId, Long materialId) {
+        MaterialAnalysisBatchItem item = batchMapper.findItemByZipEntryForUpdate(zipEntryId, userId);
+        if (item == null) {
+            return;
+        }
+        bindUpload(userId, item.getItemId(), materialId);
+    }
+
+    /** 가져오기 작업자가 이 항목을 가져오지 못했다. 자리는 남기고 이유를 적는다. */
+    @Transactional
+    public void failZipEntry(Long userId, Long zipEntryId, String message) {
+        MaterialAnalysisBatchItem item = batchMapper.findItemByZipEntryForUpdate(zipEntryId, userId);
+        if (item == null || item.getMaterialId() != null) {
+            return;
+        }
+        failUpload(userId, item.getItemId(), message);
+    }
+
+    /** 실패한 항목을 다시 가져온다. 자리를 대기로 되돌리고, 묶음이 끝나 있었으면 다시 연다. */
+    @Transactional
+    public void retryZipEntry(Long userId, Long zipEntryId) {
+        if (batchMapper.resetZipItemForRetry(zipEntryId, userId) > 0) {
+            batchMapper.reopenBatchOfItem(zipEntryId, userId);
+        }
+    }
+
+    /** 가져오기를 취소했다. 아직 자료가 되지 않은 자리를 거둔다(이미 가져온 자료의 분석은 이어진다). */
+    @Transactional
+    public void abandonZipImport(Long userId, Long zipImportId) {
+        batchMapper.abandonZipImportItems(zipImportId, userId, "가져오기를 취소해 이 파일은 가져오지 않았어요");
+    }
+
+    /** 압축 이름. 화면이 "압축에서 가져옴: 과제모음.zip"이라고 말하는 데 쓴다. */
+    private String archiveNameOf(Long userId, MaterialAnalysisBatch batch) {
+        com.jungwoo.project.memo.material.zip.domain.ZipImport zip =
+                zipImportMapper.findByIdAndUserId(batch.getZipImportId(), userId);
+        return zip == null ? null : zip.getOriginalFilename();
     }
 
     // ===== 업로드가 자리를 채운다 =====
@@ -275,7 +382,8 @@ public class MaterialAnalysisBatchService {
                     ? null : statuses.get(item.getMaterialId());
             Stage stage = stageOf(item, materials.get(item.getMaterialId()), status);
             rows.add(BatchResponse.Item.builder()
-                    .itemId(item.getItemId()).filename(item.getFilename()).sizeBytes(item.getSizeBytes())
+                    .itemId(item.getItemId()).filename(item.getFilename()).sourcePath(item.getSourcePath())
+                    .sizeBytes(item.getSizeBytes())
                     .extension(item.getExtension()).materialId(item.getMaterialId())
                     .uploadState(item.getUploadState().name())
                     .stage(stage.name).stageLabel(stage.label)
@@ -340,6 +448,8 @@ public class MaterialAnalysisBatchService {
         MaterialAnalysisJobService.DailyLimitStatus limit = jobService.dailyLimitStatus(userId);
         return BatchResponse.builder()
                 .batchId(batch.getBatchId()).courseId(batch.getCourseId()).status(status.name())
+                .zipImportId(batch.getZipImportId())
+                .sourceArchiveName(batch.getZipImportId() == null ? null : archiveNameOf(userId, batch))
                 .itemCount(items.size())
                 .processedPercent(finished ? 100 : percent)
                 .doneCount(done).runningCount(running).waitingCount(waiting)

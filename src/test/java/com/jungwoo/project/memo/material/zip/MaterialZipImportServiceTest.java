@@ -23,6 +23,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -46,6 +47,7 @@ class MaterialZipImportServiceTest {
     @Mock private ZipImportTxService txService;
     @Mock private FileStorageService fileStorageService;
     @Mock private CourseService courseService;
+    @Mock private com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService batchService;
 
     @InjectMocks
     private MaterialZipImportService service;
@@ -143,6 +145,9 @@ class MaterialZipImportServiceTest {
 
         verify(entryMapper).queueSelected(IMPORT, USER, List.of(9L));
         verify(importMapper).updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null));
+        // 가져올 파일이 정해진 순간 분석 묶음을 연다 — 대기열에 오른 항목만으로.
+        verify(batchService).createForZip(eq(USER), any(), eq(IMPORT), argThat(items -> items.size() == 1
+                && items.get(0).entryId().equals(9L)));
     }
 
     @Test
@@ -189,6 +194,8 @@ class MaterialZipImportServiceTest {
         service.cancel(USER, IMPORT);
 
         verify(importMapper).updateStatus(IMPORT, ZipImportStatus.CANCELLED, null, null);
+        // 아직 가져오지 않은 분석 자리를 거둔다.
+        verify(batchService).abandonZipImport(USER, IMPORT);
         verify(fileStorageService).deleteQuietly(null, "zip-imports/7/a.zip");
         verify(importMapper).clearStoragePath(IMPORT);
         // 자료를 지우는 호출은 어디에도 없다.

@@ -83,4 +83,18 @@ public interface MaterialAnalysisBatchMapper {
      * 브라우저의 File 객체는 새로고침과 함께 사라진다.
      */
     int abandonOrphanedItems(@Param("before") LocalDateTime before, @Param("message") String message);
+
+    // ===== 압축 가져오기 =====
+
+    MaterialAnalysisBatchItem findItemByZipEntryForUpdate(@Param("zipEntryId") Long zipEntryId,
+                                                          @Param("userId") Long userId);
+
+    List<Long> findZipEntryIdsWithItems(@Param("userId") Long userId, @Param("entryIds") List<Long> entryIds);
+
+    int resetZipItemForRetry(@Param("zipEntryId") Long zipEntryId, @Param("userId") Long userId);
+
+    int abandonZipImportItems(@Param("zipImportId") Long zipImportId, @Param("userId") Long userId,
+                              @Param("message") String message);
+
+    int reopenBatchOfItem(@Param("zipEntryId") Long zipEntryId, @Param("userId") Long userId);
 }

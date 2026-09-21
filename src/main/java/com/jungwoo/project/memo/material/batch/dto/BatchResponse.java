@@ -22,6 +22,9 @@ public class BatchResponse {
 
     private Long batchId;
     private Long courseId;
+    /** 압축 가져오기에서 확정된 묶음이면 그 가져오기와 압축 이름. 일반 업로드는 null. */
+    private Long zipImportId;
+    private String sourceArchiveName;
     /** STAGED / UPLOADING / ANALYZING / FINISHED / ABANDONED */
     private String status;
     private int itemCount;
@@ -64,6 +67,8 @@ public class BatchResponse {
     public static class Item {
         private Long itemId;
         private String filename;
+        /** 압축 안의 경로("과제1/main.py"). 이름이 같은 파일을 구분한다. */
+        private String sourcePath;
         private Long sizeBytes;
         private String extension;
         private Long materialId;
