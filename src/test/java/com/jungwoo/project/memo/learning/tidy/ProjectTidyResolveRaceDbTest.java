@@ -141,13 +141,15 @@ class ProjectTidyResolveRaceDbTest {
             }
 
             CountDownLatch applyStarted = new CountDownLatch(1);
+            Thread[] applyThread = new Thread[1];
             Future<String> applying = pool.submit(() -> {
+                applyThread[0] = Thread.currentThread();
                 applyStarted.countDown();
                 return runApply(proposalId, change);
             });
             assertThat(applyStarted.await(WAIT_MS, TimeUnit.MILLISECONDS)).isTrue();
             // 적용이 자료 행 잠금을 <실제로> 기다리기 시작할 때까지 기다린다.
-            awaitLockWait();
+            awaitLockWait(applying, applyThread[0]);
 
             Future<String> dismissing = pool.submit(this::runDismiss);
             // 폐기도 제 차례에서 막히거나(수정 후) 이미 읽고 쓰기를 기다린다(수정 전).
@@ -299,24 +301,48 @@ class ProjectTidyResolveRaceDbTest {
     }
 
     /**
-     * 어떤 트랜잭션이 잠금을 <실제로> 기다리기 시작할 때까지 기다린다.
+     * 적용이 근거 자료 행의 잠금을 <실제로> 기다리기 시작할 때까지 기다린다.
      *
      * <p>sleep으로 "그쯤이면 겹쳤겠지"를 하지 않으려고 둔 것이다. 겹침은 시간이 아니라
-     * 상태이고, InnoDB는 그 상태를 직접 보여준다.
+     * 상태이고, 그 상태는 DB가 직접 보여준다.
+     *
+     * <p><b>왜 innodb_trx가 아니라 processlist인가.</b> 처음에는 innodb_trx에서
+     * trx_state = 'LOCK WAIT'를 셌다. 그런데 MariaDB 10.4는 <b>아직 쓰기를 하지 않은
+     * 트랜잭션을 innodb_trx에 올리지 않는다</b>. 적용은 잠금 읽기(FOR UPDATE)만 한 채 자료
+     * 행에서 멈추므로 거기에 나타나지 않는다. 게다가 전역 COUNT였기 때문에, 다른 연결의
+     * 잠금 대기가 우연히 있으면 "겹쳤다"고 잘못 통과했다 — 한 번 통과한 것이 운이었다.
+     * 이제는 <b>이 적용의 그 문장</b>이 서버에서 실행 중인지를 본다. 잠금이 없으면 즉시
+     * 끝나는 문장이므로, 실행 중으로 보인다는 것은 잠금을 기다린다는 뜻이다.
      */
-    private void awaitLockWait() throws Exception {
+    private void awaitLockWait(Future<?> waiter, Thread thread) throws Exception {
         long deadline = System.currentTimeMillis() + WAIT_MS;
         while (System.currentTimeMillis() < deadline) {
+            if (waiter.isDone()) {
+                // 기다려야 할 쪽이 먼저 끝났다. 무엇으로 끝났는지 그대로 드러낸다.
+                throw new IllegalStateException("잠금을 기다리기 전에 끝났다: " + waiter.get());
+            }
             try (Connection conn = dataSource.getConnection();
                  PreparedStatement ps = conn.prepareStatement(
-                         "SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_state = 'LOCK WAIT'");
-                 ResultSet rs = ps.executeQuery()) {
-                rs.next();
-                if (rs.getInt(1) > 0) return;
+                         "SELECT COUNT(*) FROM information_schema.processlist "
+                                 + "WHERE id <> CONNECTION_ID() AND info LIKE '%course_materials%' "
+                                 + "AND info LIKE '%FOR UPDATE%' AND info LIKE ?")) {
+                ps.setString(1, "%" + MATERIAL + "%");
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    if (rs.getInt(1) > 0) return;
+                }
             }
             Thread.sleep(20);
         }
-        throw new IllegalStateException("잠금 대기가 관찰되지 않았다 — 두 작업이 겹치지 않았다");
+        StringBuilder where = new StringBuilder();
+        if (thread != null) {
+            for (StackTraceElement frame : thread.getStackTrace()) {
+                if (frame.getClassName().contains("jungwoo")) {
+                    where.append(" <- ").append(frame);
+                }
+            }
+        }
+        throw new IllegalStateException("적용이 자료 행 잠금을 기다리는 것이 보이지 않았다. 적용 스레드 위치:" + where);
     }
 
     private long saveProposal(List<TopicChangeOp> ops) {
