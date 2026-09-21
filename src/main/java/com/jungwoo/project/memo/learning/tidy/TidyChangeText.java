@@ -52,6 +52,28 @@ final class TidyChangeText {
     }
 
     /** 학습 기록 승계가 애매할 수 있는 변경에 미리 붙이는 말. 적용 뒤에야 알게 하지 않는다. */
+    /**
+     * 트리·구간을 읽지 않고 쓸 수 있는 짧은 이름. 오류 문구처럼 맥락이 없는 자리에서 쓴다.
+     *
+     * <p>"변경 a1b2c3"이라고 말하면 사용자는 무엇을 확인해야 하는지 알 수 없다.
+     */
+    static String shortName(TopicChangeOp op) {
+        if (op == null) {
+            return "알 수 없는 변경";
+        }
+        String label = switch (op.op() == null ? "" : op.op()) {
+            case TopicChangeOp.LINK -> "자료 연결";
+            case TopicChangeOp.ADD -> "새 항목";
+            case TopicChangeOp.RENAME -> "이름 보완";
+            case TopicChangeOp.MOVE -> "위치 이동";
+            case TopicChangeOp.MERGE -> "병합";
+            case TopicChangeOp.SPLIT -> "분할";
+            default -> "변경";
+        };
+        String title = nullSafe(op.title());
+        return title.isEmpty() ? label : label + " 「" + title + "」";
+    }
+
     static String caution(TopicChangeOp op) {
         return switch (op.op() == null ? "" : op.op()) {
             case TopicChangeOp.MERGE ->

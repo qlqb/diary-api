@@ -30,6 +30,25 @@ public final class ProjectTidyRequests {
         /** changeId → {excluded, title}. 전체를 보낸다(부분 갱신이 아니다). */
         private Map<String, Edit> edits;
 
+        /**
+         * 확인이 필요했던 승계 편집을 사용자가 어떻게 정했는지. changeId → KEEP | DROP.
+         *
+         * <p>왜 edits 안의 boolean으로 받지 않는가: 그러면 "확인했다"가 클라이언트가 보내는
+         * 값이 되어, 화면이 실수로(혹은 오래된 판을 들고) 보내기만 해도 확인 표시가 풀린다.
+         * 확인은 <b>어떤 판의 어떤 변경에 대해</b> 이뤄진 사건이므로 서버가 그 둘을 확인한
+         * 뒤에만 받아들인다. 여기 없는 changeId의 needsConfirm은 그대로 유지된다 — 다른
+         * 제목을 저장했다는 이유로 확인 표시가 사라지지 않는다.
+         */
+        private Map<String, String> resolveCarried;
+
+        /**
+         * resolveCarried를 적용할 정리안의 판. 보낸 판이 지금 판과 다르면 확인을 받지 않는다.
+         *
+         * <p>사용자가 확인한 것은 <그때 본 제안>이다. 그 사이 새 판이 왔다면 같은 changeId라도
+         * 다른 내용일 수 있다.
+         */
+        private Long revision;
+
         @Getter
         @Setter
         @NoArgsConstructor

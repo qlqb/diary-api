@@ -1,8 +1,10 @@
 package com.jungwoo.project.memo.learning.tidy.dto;
 
 import com.jungwoo.project.memo.learning.tidy.ProjectTidyScope;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -157,8 +159,31 @@ public class ProjectTidyResponse {
         private boolean excluded;
         private String title;
         /**
-         * 판이 바뀌면서 이 편집이 옮겨 왔는데 대응이 확실하지 않다. 화면이 "확인 필요"를 붙인다.
+         * 판이 바뀌면서 이 편집이 옮겨 왔는데 대응이 확실하지 않다.
+         *
+         * <p>화면은 "확인 필요"를 붙이고 해결 액션을 주며, 하나라도 남아 있으면 적용을 막는다.
+         * 서버도 같은 것을 막는다(E409_034) — 화면을 거치지 않은 요청도 있기 때문이다.
          */
         private boolean needsConfirm;
+        /** 이 편집이 원래 붙어 있던 제안. needsConfirm일 때만 채운다. */
+        private CarriedFrom carriedFrom;
+    }
+
+    /**
+     * 옮겨 오기 전 제안.
+     *
+     * <p>사용자에게 물어야 하는 것은 "확인했나요"가 아니라 "이것과 저것이 같은 것인가요"다.
+     * 그러려면 이전 제안이 무엇이었고 무엇이 달라졌는지가 화면에 있어야 한다.
+     */
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CarriedFrom {
+        private String changeId;
+        /** 이전 제안을 짧게. "새 항목 「원형 큐」" */
+        private String text;
+        /** 왜 확인이 필요한가. "근거 구간이 달라졌어요" */
+        private String reason;
     }
 }

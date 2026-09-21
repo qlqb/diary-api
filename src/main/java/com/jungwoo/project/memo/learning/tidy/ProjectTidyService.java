@@ -84,7 +84,27 @@ public class ProjectTidyService {
     private final ObjectMapper objectMapper;
 
     /** edits_json의 값. */
-    record EditValue(boolean excluded, String title, boolean needsConfirm) {
+    /**
+     * 검토 중 고친 것 하나.
+     *
+     * @param needsConfirm 판이 바뀌면서 옮겨 왔는데 대응이 확실하지 않다. 사용자가 고르기 전에는
+     *                     적용하지 않는다 — 확인하지 않은 판단으로 트리를 바꾸지 않기 위해서다
+     * @param carriedFrom  어느 제안에 붙어 있던 편집인지. 화면이 "전에는 이랬고 지금은 이렇다"를
+     *                     보여주려면 옛 제안의 말이 남아 있어야 한다
+     */
+    record EditValue(boolean excluded, String title, boolean needsConfirm, CarriedFrom carriedFrom) {
+
+        EditValue(boolean excluded, String title, boolean needsConfirm) {
+            this(excluded, title, needsConfirm, null);
+        }
+
+        EditValue withConfirmed() {
+            return new EditValue(excluded, title, false, carriedFrom);
+        }
+    }
+
+    /** 승계 전 판에서 이 편집이 붙어 있던 제안. */
+    record CarriedFrom(String changeId, String text, String reason) {
     }
 
     /**
@@ -205,13 +225,33 @@ public class ProjectTidyService {
             throw new ConflictException(ErrorCode.PROJECT_TIDY_PROPOSAL_RESOLVED);
         }
         Set<String> known = changeIds(proposal);
+
+        /*
+         * 지금 저장돼 있는 편집을 먼저 읽는다. needsConfirm과 carriedFrom은 <서버가 정한 것>이라
+         * 요청에 실려 오지 않는다. 예전에는 여기서 모두 false로 덮어써서, 사용자가 아무 제목이나
+         * 한 글자 고치기만 해도 "확인 필요"가 소리 없이 사라졌다 — 확인하지 않은 승계 편집이
+         * 확인된 것처럼 되어 그대로 적용될 수 있었다.
+         */
+        Map<String, EditValue> current = readEdits(tidyMapper.findEdits(proposalId, userId));
+        Map<String, String> resolutions = normalizeResolutions(request, proposal);
+
         Map<String, EditValue> edits = new LinkedHashMap<>();
         if (request.getEdits() != null) {
             request.getEdits().forEach((changeId, value) -> {
                 // 모르는 changeId는 버린다. 옛 판의 편집이 새 판에 그대로 들어오면 엉뚱한 것을 가린다.
-                if (known.contains(changeId) && value != null) {
-                    edits.put(changeId, new EditValue(value.isExcluded(), trimToNull(value.getTitle()), false));
+                if (!known.contains(changeId) || value == null) {
+                    return;
                 }
+                EditValue before = current.get(changeId);
+                String resolution = resolutions.get(changeId);
+                if ("DROP".equals(resolution)) {
+                    // 승계된 편집을 버린다 = 이 변경에 대한 내 판단을 없앤다. 새 제안 그대로 간다.
+                    return;
+                }
+                boolean needsConfirm = before != null && before.needsConfirm() && !"KEEP".equals(resolution);
+                CarriedFrom carriedFrom = needsConfirm && before != null ? before.carriedFrom() : null;
+                edits.put(changeId, new EditValue(value.isExcluded(), trimToNull(value.getTitle()),
+                        needsConfirm, carriedFrom));
             });
         }
         String json = writeJson(edits);
@@ -233,6 +273,51 @@ public class ProjectTidyService {
         }
         Course course = courseService.getOwned(userId, proposal.getCourseId());
         return toResponse(userId, course, tidyMapper.findProposalById(proposalId, userId), null);
+    }
+
+    /** 어떤 변경이 확인을 기다리는지 이름으로 말한다. details가 그대로 화면에 나간다. */
+    private String describeUnconfirmed(List<TopicChangeOp> ops, List<String> changeIds) {
+        Map<String, TopicChangeOp> byId = new LinkedHashMap<>();
+        ops.forEach(op -> byId.put(op.changeId(), op));
+        List<String> names = new ArrayList<>();
+        for (String changeId : changeIds) {
+            TopicChangeOp op = byId.get(changeId);
+            names.add(op == null ? changeId : TidyChangeText.shortName(op));
+        }
+        return "이전 판에서 옮겨 온 편집 " + names.size() + "건을 아직 확인하지 않았어요: "
+                + String.join(", ", names);
+    }
+
+    /**
+     * 확인 처리를 받아들일지 정한다. 클라이언트의 말만 믿지 않는다.
+     *
+     * <p>세 가지를 확인한다. (1) 보낸 판이 지금 정리안의 판과 같은가 — 사용자가 확인한 것은
+     * 그때 본 제안이다. (2) 값이 KEEP/DROP인가. (3) 실제로 확인이 필요한 항목인가 — 아닌 것에
+     * 대한 "확인"은 아무 뜻이 없으므로 무시한다.
+     */
+    private Map<String, String> normalizeResolutions(ProjectTidyRequests.SaveEdits request,
+                                                     ProjectTidyProposal proposal) {
+        if (request.getResolveCarried() == null || request.getResolveCarried().isEmpty()) {
+            return Map.of();
+        }
+        if (request.getRevision() == null || !request.getRevision().equals(proposal.getRevision())) {
+            log.info("확인 처리를 받지 않는다 — 판이 다르다: proposalId={}, 보낸 판={}, 지금 판={}",
+                    proposal.getProposalId(), request.getRevision(), proposal.getRevision());
+            return Map.of();
+        }
+        Map<String, EditValue> stored = readEdits(tidyMapper.findEdits(proposal.getProposalId(),
+                proposal.getUserId()));
+        Map<String, String> out = new LinkedHashMap<>();
+        request.getResolveCarried().forEach((changeId, decision) -> {
+            EditValue value = stored.get(changeId);
+            if (value == null || !value.needsConfirm()) {
+                return;
+            }
+            if ("KEEP".equals(decision) || "DROP".equals(decision)) {
+                out.put(changeId, decision);
+            }
+        });
+        return out;
     }
 
     // ===== 적용 =====
@@ -286,11 +371,27 @@ public class ProjectTidyService {
             throw new ConflictException(ErrorCode.PROJECT_TIDY_SELECTION_INCOMPLETE, describeMissing(all, missing));
         }
 
+        /*
+         * 확인하지 않은 승계 편집이 남아 있으면 적용하지 않는다.
+         *
+         * 고른 것만 보지 않고 <전부>를 보는 이유: 승계된 "제외"도 편집이다. 확인하지 않은
+         * 제외가 남아 있으면 새 판의 어떤 작업이 사용자가 보지도 않은 옛 판단 때문에 조용히
+         * 빠진 채 적용된다. 빠진 것은 화면에 나타나지 않으므로 사용자가 알아챌 방법이 없다.
+         */
+        Map<String, EditValue> saved = readEdits(edits);
+        List<String> unconfirmed = saved.entrySet().stream()
+                .filter(e -> e.getValue() != null && e.getValue().needsConfirm())
+                .map(Map.Entry::getKey)
+                .toList();
+        if (!unconfirmed.isEmpty()) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_CARRIED_EDIT_UNCONFIRMED,
+                    describeUnconfirmed(readOps(proposal.getOpsJson()), unconfirmed));
+        }
+
         // 근거가 아직 그대로인가. 잠근 채 확인해 검증과 쓰기 사이에 바뀌지 않게 한다.
         Map<Long, MaterialSection> sections = verifyEvidence(userId, proposal);
 
         List<TopicChangeOp> chosen = new ArrayList<>();
-        Map<String, EditValue> saved = readEdits(edits);
         for (TopicChangeOp op : all) {
             if (!selected.contains(op.changeId())) {
                 continue;
@@ -709,7 +810,13 @@ public class ProjectTidyService {
     private Map<String, ProjectTidyResponse.Edit> toEditResponse(Map<String, EditValue> edits) {
         Map<String, ProjectTidyResponse.Edit> out = new LinkedHashMap<>();
         edits.forEach((changeId, value) -> out.put(changeId, ProjectTidyResponse.Edit.builder()
-                .excluded(value.excluded()).title(value.title()).needsConfirm(value.needsConfirm()).build()));
+                .excluded(value.excluded()).title(value.title()).needsConfirm(value.needsConfirm())
+                .carriedFrom(value.carriedFrom() == null ? null : ProjectTidyResponse.CarriedFrom.builder()
+                        .changeId(value.carriedFrom().changeId())
+                        .text(value.carriedFrom().text())
+                        .reason(value.carriedFrom().reason())
+                        .build())
+                .build()));
         return out;
     }
 

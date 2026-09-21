@@ -215,9 +215,24 @@ public class ProjectTidyWorker {
     /**
      * 앞 판에서 사용자가 고친 것을 새 판으로 옮긴다.
      *
-     * <p>같은 changeId면 뜻이 같은 변경이므로 그대로 승계한다. id가 사라졌지만 같은 항목에 대한
-     * 같은 종류의 변경이 있으면 옮기되 <b>확인 필요</b>로 표시한다 — 근거 구간이 달라졌을 수 있고,
-     * 그것을 사용자가 모른 채 적용하면 안 된다. 어느 쪽에도 맞지 않으면 옮기지 않는다.
+     * <p>세 갈래로 나눈다.
+     * <ol>
+     *   <li><b>확실한 승계</b>: changeId가 같고 <i>내용도</i> 같다. 그대로 옮긴다.</li>
+     *   <li><b>확인 필요</b>: 대응은 찾았지만 같다고 단정할 수 없다. 옮기되 표시하고,
+     *       사용자가 고르기 전에는 적용을 막는다.</li>
+     *   <li><b>옮기지 않음</b>: 대응이 없거나, 후보가 여럿이라 어느 것인지 알 수 없다.</li>
+     * </ol>
+     *
+     * <p><b>왜 changeId만으로는 부족한가.</b> changeId는 "같은 것을 가리키는가"의 이름표라
+     * 일부러 좁다 — RENAME은 대상 항목만, SPLIT은 쪼갤 항목만 보고 만든다. 그래서 같은
+     * 항목을 <i>전혀 다른 이름</i>으로 바꾸자는 새 제안, 자식 구성이 완전히 달라진 분할,
+     * 근거 구간이 바뀐 연결이 모두 앞 판과 같은 이름표를 받는다. 거기에 옛 판단을 말없이
+     * 붙이면, 사용자는 보지도 않은 제안을 자기가 승인한 것으로 적용하게 된다.
+     * {@link TopicChangePlan#contentKey}로 한 번 더 본다.
+     *
+     * <p>느슨한 짝짓기에서 후보가 여럿이면 <b>아무것도 옮기지 않는다</b>. 예전에는 첫 번째
+     * 후보에 붙였는데, 그것은 맞을 확률이 절반인 추측이었다. 옮기지 않으면 사용자가 다시
+     * 고치면 그만이지만, 잘못 붙으면 엉뚱한 변경이 제외된 채 적용된다.
      */
     private void carryOverEdits(Long userId, ProjectTidyProposal previous, ProjectTidyProposal next,
                                 List<TopicChangeOp> nextOps) {
@@ -236,32 +251,42 @@ public class ProjectTidyWorker {
         if (oldEdits == null || oldEdits.isEmpty()) {
             return;
         }
+
         Map<String, TopicChangeOp> byChangeId = new HashMap<>();
-        Map<String, TopicChangeOp> byLooseKey = new HashMap<>();
+        Map<String, List<TopicChangeOp>> byLooseKey = new HashMap<>();
         for (TopicChangeOp op : nextOps) {
             byChangeId.put(op.changeId(), op);
-            byLooseKey.putIfAbsent(looseKey(op), op);
+            byLooseKey.computeIfAbsent(looseKey(op), k -> new ArrayList<>()).add(op);
         }
-        List<TopicChangeOp> previousOps = readOps(previous.getOpsJson());
         Map<String, TopicChangeOp> previousById = new HashMap<>();
-        previousOps.forEach(op -> previousById.put(op.changeId(), op));
+        readOps(previous.getOpsJson()).forEach(op -> previousById.put(op.changeId(), op));
 
         Map<String, ProjectTidyService.EditValue> carried = new LinkedHashMap<>();
         int uncertain = 0;
+        int dropped = 0;
         for (Map.Entry<String, ProjectTidyService.EditValue> entry : oldEdits.entrySet()) {
             ProjectTidyService.EditValue value = entry.getValue();
             if (value == null) {
                 continue;
             }
-            if (byChangeId.containsKey(entry.getKey())) {
-                carried.put(entry.getKey(), value);
+            TopicChangeOp before = previousById.get(entry.getKey());
+            Match match = findMatch(entry.getKey(), before, byChangeId, byLooseKey, carried.keySet());
+            if (match == null) {
+                dropped++;
                 continue;
             }
-            TopicChangeOp before = previousById.get(entry.getKey());
-            TopicChangeOp match = before == null ? null : byLooseKey.get(looseKey(before));
-            if (match != null && !carried.containsKey(match.changeId())) {
-                carried.put(match.changeId(),
-                        new ProjectTidyService.EditValue(value.excluded(), value.title(), true));
+            /*
+             * 앞 판에서 이미 "확인 필요"였던 편집은 확인하지 않은 채 또 옮겨진다. 그때도
+             * 확인 필요로 남긴다 — 판이 두 번 바뀌었다고 저절로 확인되지는 않는다.
+             */
+            boolean needsConfirm = match.uncertain() || value.needsConfirm();
+            ProjectTidyService.CarriedFrom from = needsConfirm
+                    ? new ProjectTidyService.CarriedFrom(entry.getKey(),
+                            TidyChangeText.shortName(before), match.reason())
+                    : null;
+            carried.put(match.op().changeId(),
+                    new ProjectTidyService.EditValue(value.excluded(), value.title(), needsConfirm, from));
+            if (needsConfirm) {
                 uncertain++;
             }
         }
@@ -270,8 +295,88 @@ public class ProjectTidyWorker {
         }
         tidyMapper.insertEditsIgnore(ProjectTidyEdits.builder()
                 .proposalId(next.getProposalId()).userId(userId).editsJson(writeJson(carried)).build());
-        log.info("검토 편집 승계: proposalId={} → {}, {}건(확인 필요 {}건)",
-                previous.getProposalId(), next.getProposalId(), carried.size(), uncertain);
+        log.info("검토 편집 승계: proposalId={} → {}, {}건(확인 필요 {}건, 옮기지 않음 {}건)",
+                previous.getProposalId(), next.getProposalId(), carried.size(), uncertain, dropped);
+    }
+
+    /**
+     * 테스트에서 승계만 따로 부른다. 모델 호출 없이 "판이 바뀌었을 때 편집을 어떻게 옮기는가"만
+     * 보려면 이 단계가 따로 열려 있어야 한다.
+     */
+    void carryOverEditsForTest(Long userId, ProjectTidyProposal previous, ProjectTidyProposal next,
+                               List<TopicChangeOp> nextOps) {
+        carryOverEdits(userId, previous, next, nextOps);
+    }
+
+    /** 승계 대상 하나를 찾은 결과. uncertain이면 사용자 확인이 필요하다. */
+    private record Match(TopicChangeOp op, boolean uncertain, String reason) {
+    }
+
+    private Match findMatch(String oldChangeId, TopicChangeOp before,
+                            Map<String, TopicChangeOp> byChangeId,
+                            Map<String, List<TopicChangeOp>> byLooseKey,
+                            Set<String> alreadyTaken) {
+        TopicChangeOp sameId = byChangeId.get(oldChangeId);
+        if (sameId != null) {
+            if (before != null
+                    && TopicChangePlan.contentKey(before).equals(TopicChangePlan.contentKey(sameId))) {
+                return new Match(sameId, false, null);
+            }
+            // 이름표는 같은데 내용이 달라졌다. 무엇이 달라졌는지 말해 준다.
+            return new Match(sameId, true, changedWhat(before, sameId));
+        }
+        if (before == null) {
+            return null;
+        }
+        List<TopicChangeOp> candidates = byLooseKey.getOrDefault(looseKey(before), List.of()).stream()
+                .filter(op -> !alreadyTaken.contains(op.changeId()))
+                .toList();
+        if (candidates.size() != 1) {
+            // 0이면 대응이 없고, 2 이상이면 어느 것인지 알 수 없다. 둘 다 옮기지 않는다.
+            return null;
+        }
+        return new Match(candidates.get(0), true, "같은 항목에 대한 비슷한 제안으로 옮겼어요");
+    }
+
+    /** 같은 이름표인데 내용이 달라진 이유를 사람 말로. 화면이 "무엇을 확인해야 하나"에 답한다. */
+    private static String changedWhat(TopicChangeOp before, TopicChangeOp after) {
+        if (before == null) {
+            return "이전 제안을 찾을 수 없어요";
+        }
+        List<String> changed = new ArrayList<>();
+        if (!java.util.Objects.equals(nullSafe(before.title()), nullSafe(after.title()))) {
+            changed.add("제안한 이름");
+        }
+        if (!sameIds(before.sectionIds(), after.sectionIds())) {
+            changed.add("근거 구간");
+        }
+        if (!java.util.Objects.equals(before.parentTopicId(), after.parentTopicId())
+                || !java.util.Objects.equals(before.parentTempId(), after.parentTempId())) {
+            changed.add("놓일 위치");
+        }
+        if (childCount(before) != childCount(after)) {
+            changed.add("나눌 구성");
+        }
+        if (!sameIds(before.absorbedTopicIds(), after.absorbedTopicIds())) {
+            changed.add("합칠 대상");
+        }
+        return changed.isEmpty()
+                ? "이전 판의 제안과 같은지 확인해 주세요"
+                : String.join("·", changed) + "이(가) 달라졌어요";
+    }
+
+    private static int childCount(TopicChangeOp op) {
+        return op.children() == null ? 0 : op.children().size();
+    }
+
+    private static boolean sameIds(List<Long> a, List<Long> b) {
+        List<Long> x = a == null ? List.of() : a.stream().filter(java.util.Objects::nonNull).sorted().toList();
+        List<Long> y = b == null ? List.of() : b.stream().filter(java.util.Objects::nonNull).sorted().toList();
+        return x.equals(y);
+    }
+
+    private static String nullSafe(String s) {
+        return s == null ? "" : s.trim();
     }
 
     /** 근거 구간을 뺀 "무엇을 어떻게"만의 키. 정확한 대응이 없을 때의 느슨한 짝짓기에 쓴다. */

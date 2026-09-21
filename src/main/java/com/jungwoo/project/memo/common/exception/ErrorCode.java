@@ -168,6 +168,14 @@ public enum ErrorCode {
     /** 정리에 쓸 분석 완료 자료가 하나도 없다. */
     PROJECT_TIDY_NO_MATERIALS(HttpStatus.CONFLICT, "E409_033",
             "정리에 쓸 수 있는 분석 완료 자료가 없어요"),
+    /**
+     * 이전 판에서 옮겨 온 편집 중 확인하지 않은 것이 남았다.
+     *
+     * <p>확인하지 않은 "제외"는 새 판의 작업을 조용히 가린다. 무엇을 확인해야 하는지
+     * 이름으로 싣는다.
+     */
+    PROJECT_TIDY_CARRIED_EDIT_UNCONFIRMED(HttpStatus.CONFLICT, "E409_034",
+            "이전 판에서 옮겨 온 편집을 먼저 확인해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

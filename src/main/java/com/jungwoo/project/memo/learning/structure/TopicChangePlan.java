@@ -150,6 +150,44 @@ public final class TopicChangePlan {
         };
     }
 
+    /**
+     * 이 변경이 <실제로 무엇을 하는가>의 전부. 판이 바뀔 때 편집을 그대로 옮겨도 되는지 볼 때 쓴다.
+     *
+     * <p>{@link #signature}와 다른 목적이다. signature는 "같은 것을 가리키는가"를 보는 이름표라
+     * 일부러 좁다 — RENAME은 대상 항목만, SPLIT은 쪼갤 항목만 본다. 그래서 <b>같은 changeId인데
+     * 내용이 다를 수 있다</b>: 같은 항목을 전혀 다른 이름으로 바꾸자는 제안, 자식 구성이 완전히
+     * 달라진 분할, 근거가 바뀐 연결이 모두 같은 이름표를 받는다.
+     *
+     * <p>사용자의 편집(제목 고침·제외)은 그 내용에 붙은 판단이다. 이름표만 같다고 옮겨 놓으면
+     * "내가 확인하지 않은 제안"에 내 결정이 붙는다. 그래서 승계할 때는 이 키로 한 번 더 본다.
+     */
+    public static String contentKey(TopicChangeOp op) {
+        if (op == null) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        sb.append(op.op() == null ? "?" : op.op())
+                .append("|t").append(op.topicId())
+                .append("|p").append(op.parentTopicId())
+                .append("|n").append(op.parentTempId())
+                .append("|s").append(op.survivingTopicId())
+                .append("|a").append(sortedIds(op.absorbedTopicIds()))
+                .append("|title=").append(normalizeTitle(op.title()))
+                .append("|src=").append(op.sourceType() == null ? "" : op.sourceType())
+                .append("|role=").append(op.role() == null ? "" : op.role())
+                // 근거가 달라지면 같은 제안이 아니다. 무엇을 보고 한 말인지가 바뀐 것이다.
+                .append("|sec=").append(sortedIds(op.sectionIds()));
+        if (op.children() != null && !op.children().isEmpty()) {
+            // 분할의 자식 구성. 개수만 세지 않는다 — 이름이 바뀌면 다른 분할이다.
+            sb.append("|children=[");
+            for (TopicChangeOp child : op.children()) {
+                sb.append(contentKey(child)).append(';');
+            }
+            sb.append(']');
+        }
+        return sb.toString();
+    }
+
     private static String sortedIds(List<Long> ids) {
         if (ids == null || ids.isEmpty()) {
             return "";
