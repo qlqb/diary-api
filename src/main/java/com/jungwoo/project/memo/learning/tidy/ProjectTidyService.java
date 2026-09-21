@@ -716,7 +716,7 @@ public class ProjectTidyService {
         ProjectTidyEdits edits = tidyMapper.findEdits(proposal.getProposalId(), userId);
         Map<String, EditValue> editValues = readEdits(edits);
         Map<Long, MaterialSection> sections = sectionsOf(userId, proposal);
-        Map<Long, CourseMaterial> materials = materialsOf(userId, scope);
+        Map<Long, CourseMaterial> materials = materialsOf(userId, scope, sections);
         Map<Long, CourseTopic> topics = new HashMap<>();
         for (CourseTopic topic : topicMapper.findByCourseIdAndUserIdIncludingArchived(courseId, userId)) {
             topics.put(topic.getTopicId(), topic);
@@ -866,9 +866,13 @@ public class ProjectTidyService {
         for (Long sectionId : sectionIds) {
             MaterialSection section = sections.get(sectionId);
             if (section == null) {
+                // 기록이 없다. 빼지 않고 "찾을 수 없음"으로 남긴다 — 말없이 빠지면 근거가 줄어든 것을 알 수 없다.
+                briefs.add(ProjectTidyResponse.Section.builder()
+                        .sectionId(sectionId).availability("MISSING").build());
                 continue;
             }
             CourseMaterial material = materials.get(section.getMaterialId());
+            String availability = availabilityOf(section, material);
             briefs.add(ProjectTidyResponse.Section.builder()
                     .sectionId(section.getSectionId())
                     .materialId(section.getMaterialId())
@@ -878,6 +882,10 @@ public class ProjectTidyService {
                     .roles(readStrings(section.getRolesJson()))
                     .taskText(section.getTaskText())
                     .excerpt(section.getExcerpt())
+                    .availability(availability)
+                    .page("OK".equals(availability)
+                            && section.getUnitType() == com.jungwoo.project.memo.material.domain.TextUnitType.PDF_PAGE
+                            ? section.getUnitStart() : null)
                     .build());
         }
         return ProjectTidyResponse.Change.builder()
@@ -907,23 +915,46 @@ public class ProjectTidyService {
         };
     }
 
+    /**
+     * 이 정리안이 인용한 구간. <b>상태와 상관없이</b> id로 읽는다.
+     *
+     * <p>예전에는 지금 살아 있는 구간만 읽었다. 다시 분석되어 물러난 구간은 여기서 사라져, 화면의
+     * 근거 목록에서 말없이 빠졌다. 이제는 읽어 와서 "예전 파일의 발췌"라고 표시한다
+     * ({@link #availabilityOf}).
+     */
     private Map<Long, MaterialSection> sectionsOf(Long userId, ProjectTidyProposal proposal) {
-        List<Long> materialIds = tidyMapper.findProposalMaterials(proposal.getProposalId(), userId).stream()
-                .filter(ProjectTidyProposalMaterial::isIncluded)
-                .map(ProjectTidyProposalMaterial::getMaterialId).toList();
+        Set<Long> cited = new LinkedHashSet<>();
+        collectSectionIds(readOps(proposal.getOpsJson()), cited);
         Map<Long, MaterialSection> out = new HashMap<>();
-        if (materialIds.isEmpty()) {
+        if (cited.isEmpty()) {
             return out;
         }
-        for (MaterialSection section : sectionMapper.findActiveByMaterialIds(materialIds, userId)) {
+        for (MaterialSection section : sectionMapper.findByIdsAndUserId(new ArrayList<>(cited), userId)) {
             out.put(section.getSectionId(), section);
         }
         return out;
     }
 
-    private Map<Long, CourseMaterial> materialsOf(Long userId, ProjectTidyScope scope) {
-        List<Long> ids = new ArrayList<>();
-        scope.reviewed().forEach(m -> ids.add(m.materialId()));
+    /**
+     * 근거 하나를 지금 열 수 있는가. 자료가 지워졌으면 열 것이 없고, 구간이 예전 파일(해시)이나
+     * 물러난 분석의 것이면 발췌와 지금 파일이 다를 수 있다.
+     */
+    static String availabilityOf(MaterialSection section, CourseMaterial material) {
+        if (material == null || material.getStatus() != MaterialStatus.ACTIVE) {
+            return "MATERIAL_DELETED";
+        }
+        boolean sameFile = section.getFileHash() == null || section.getFileHash().equals(material.getFileHash());
+        boolean current = section.getStatus() == null || "ACTIVE".equals(section.getStatus());
+        return sameFile && current ? "OK" : "OUTDATED";
+    }
+
+    private Map<Long, CourseMaterial> materialsOf(Long userId, ProjectTidyScope scope,
+                                                  Map<Long, MaterialSection> sections) {
+        Set<Long> set = new LinkedHashSet<>();
+        scope.reviewed().forEach(m -> set.add(m.materialId()));
+        // 인용한 구간의 자료도 함께 읽는다. 범위에서 빠졌어도 근거로 인용됐다면 그 자료의 지금 상태를 알아야 한다.
+        sections.values().forEach(s -> set.add(s.getMaterialId()));
+        List<Long> ids = new ArrayList<>(set);
         Map<Long, CourseMaterial> out = new HashMap<>();
         if (ids.isEmpty()) {
             return out;

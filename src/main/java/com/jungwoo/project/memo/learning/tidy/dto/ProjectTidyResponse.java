@@ -156,6 +156,24 @@ public class ProjectTidyResponse {
         private List<String> roles;
         private String taskText;
         private String excerpt;
+        /**
+         * 이 근거를 지금 열 수 있는가.
+         * <ul>
+         *   <li>OK — 자료가 있고, 이 구간이 지금 파일에서 나온 것이다.</li>
+         *   <li>OUTDATED — 자료는 있지만 이 발췌는 <b>예전 파일(또는 예전 분석)</b>에서 나왔다.
+         *       원본을 열면 지금 파일이 열린다 — 화면은 둘이 다를 수 있다고 말해야 한다.</li>
+         *   <li>MATERIAL_DELETED — 자료가 지워졌다. 열 파일이 없다.</li>
+         *   <li>MISSING — 구간 기록 자체가 없다.</li>
+         * </ul>
+         * 예전에는 지금 살아 있는 구간만 읽어, 바뀐 근거는 말없이 목록에서 빠졌다.
+         */
+        private String availability;
+        /**
+         * 원본을 열 때 곧바로 갈 PDF 쪽. PDF 쪽 단위 구간이고 지금 파일의 것일 때만 채운다 —
+         * 파일이 바뀌었으면 같은 쪽 번호가 다른 내용을 가리킬 수 있다. 그 밖의 형식은 null이고,
+         * 화면은 위치(locator)를 글로만 보여 준다.
+         */
+        private Integer page;
     }
 
     @Getter
