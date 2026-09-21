@@ -58,7 +58,7 @@ class TestDatabaseIsolationTest {
             rs.next();
             assertThat(rs.getInt(1))
                     .as("격리 스키마의 테이블 수. 0이면 스키마를 만들지 않은 것이다 — "
-                            + "docs/handoff/project-tidy-review-2026-09-22.md의 준비 절차를 보라.")
+                            + "docs/handoff/project-tidy-review-2026-09-21.md의 준비 절차를 보라.")
                     .isGreaterThan(40);
         }
     }

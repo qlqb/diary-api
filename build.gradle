@@ -117,8 +117,12 @@ tasks.named('test') {
       같은 DB를 보는 다른 실행(IDE에 떠 있는 개발 서버)은 통제하지 못한다.
 
       그래서 붙는 DB 자체를 가른다. 스키마만 복제한 memo_test를 쓰고, 사용자 데이터는
-      읽지도 쓰지도 않는다. 만드는 법과 확인 절차는 docs/handoff/project-tidy-review-2026-09-22.md.
-      -PtestDbUrl=... 로 다른 DB를 지정할 수 있다.
+      읽지도 쓰지도 않는다. 만드는 법: bash scripts/test-db/prepare-memo-test.sh
+      (스키마가 바뀌면 다시 돌린다). -PtestDbUrl=... 로 다른 DB를 지정할 수 있다.
+
+      격리하고 나서 알게 된 것: 계획·교재 쪽 DB 테스트 아홉 개는 "users 표의 첫 번째
+      사용자"를 빌려 쓴다. memo에서 그것은 실제 계정(user_id=1)이었다 — 테스트 행이 실제
+      사용자 이름으로 쓰이고 지워지고 있었다. memo_test에는 합성 사용자 하나만 있다.
 
       TestDatabaseIsolationTest가 이 설정이 실제로 먹었는지(붙은 스키마 이름이 memo가
       아닌지) 매 실행마다 확인한다. 설정이 조용히 풀리면 그 테스트가 먼저 깨진다.
