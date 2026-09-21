@@ -122,6 +122,7 @@ class MaterialAnalysisResultRaceDbTest {
     private void clearRows() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM material_analysis_jobs WHERE user_id = ?",
                     "DELETE FROM material_text_units WHERE user_id = ?",
                     "DELETE FROM course_assignments WHERE user_id = ?",

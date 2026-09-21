@@ -52,7 +52,7 @@
 |---|---|
 | diary-api `./gradlew test` (DB 테스트 포함) | **1,232건 · 실패 0 · skip 2** |
 | diary-api `./gradlew test -PexcludeDbTests` | 실패 0 (DB 테스트 32개 제외) |
-| diary-ui `npx vitest run` | **633건 · 실패 0** (§4.5의 주의 참고) |
+| diary-ui `npx vitest run` | **634건 · 실패 0** (§4.5의 주의 참고) |
 | diary-ui `npm run lint` | 0 |
 | diary-ui `npm run build` | 성공 |
 
@@ -70,7 +70,7 @@
   잠긴 행으로 순서를 만든다.
 - `MaterialAnalysisBatchDbTest`(9) — 구성원 고정, 추가 업로드는 새 묶음, 100%가 성공이 아님, 복원.
 - `ProjectTidyLegacyTransitionDbTest`(4) — 위 §3의 세 자물쇠와 이력 보존.
-- UI: `ProjectTidyPanel.test.jsx`(22), `AnalysisBatchCard.test.jsx`(8), `MaterialsViewBatch.test.jsx`(5),
+- UI: `ProjectTidyPanel.test.jsx`(23), `AnalysisBatchCard.test.jsx`(8), `MaterialsViewBatch.test.jsx`(5),
   `analysisBatch.test.js`(14), `tidyLabels.test.js`(10).
 
 고친 기존 테스트:
@@ -150,6 +150,29 @@ cd diary-api && python scripts/ai-baseline/verify-project-tidy-2026-09-21.py --b
   판 교체 시 편집 승계는 **고정 응답·DB 테스트로만** 확인했다.
 - 하루 한도에 닿은 상태의 화면은 실제로 만들지 않았다(단위 테스트의 고정 값으로만 확인).
 - 배포 환경에서 돌려 보지 않았다. 원격 push·PR·배포는 하지 않았다.
+
+### 4.7 작업 중 발견해 고친 것 — 테스트가 `memo`에 남기던 흔적
+
+DB 테스트는 로컬 `memo`에 직접 쓰고 사용자별로 지운다. 그런데 이번에 새로 만든
+`material_analysis_timings`를 지우는 곳이 없어 합성 행 8건이 남았다. 그대로 두면 **예상 시간의
+첫 표본이 1바이트짜리 시험 파일**이 되어 사용자에게 엉뚱한 숫자를 말하게 된다.
+
+- 여섯 DB 테스트의 뒷정리에 `DELETE FROM material_analysis_timings WHERE user_id = ?`를 넣었다.
+- `memo`에 남아 있던 합성 행 8건(user 999000303·304·401·402)을 지웠다. 지금 0건이다.
+
+그 행들이 생긴 경로도 적어 둔다. **개발 중 8080에 떠 있는 사용자 인스턴스**가 devtools로 내 새
+클래스를 올려, `memo`에서 테스트가 만든 합성 자료를 worker가 집어 모델을 불렀다(2026-09-13
+작업에서도 같은 일이 있었다). 확인한 범위:
+
+- 오늘 돈 분석 작업은 **합성 사용자(999000303·401·402)의 것뿐**이다. 실제 사용자(2, 999000670)의
+  자료는 이미 전부 DONE이라 대기열에 없었다.
+- `course_assignments`는 오늘 한 행도 바뀌지 않았다 — 새로 만든 과제-프로젝트 연결 단계가 실제
+  데이터를 건드리지 않았다.
+- `project_tidy_jobs`·`material_analysis_batches`는 `memo`에 0건이다.
+
+재발 방지로 테스트 태스크에 `project.tidy.worker.enabled=false`를 추가했다(자료 분석 worker는
+이미 꺼져 있었다). 다만 **떠 있는 인스턴스가 새 클래스를 집는 것 자체는 막지 못한다** —
+개발 중에는 8080 인스턴스를 내리고 작업하는 편이 안전하다.
 
 ### 4.6 브라우저에서 클릭으로 확인한 흐름
 

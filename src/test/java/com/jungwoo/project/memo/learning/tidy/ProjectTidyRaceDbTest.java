@@ -351,6 +351,7 @@ class ProjectTidyRaceDbTest {
     void cleanUp() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM project_tidy_edits WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposal_materials WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposals WHERE user_id = ?",

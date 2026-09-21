@@ -601,6 +601,8 @@ class ProjectTidyApplyDbTest {
     void cleanUp() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    // 소요 시간 표본까지 지운다 — 남기면 다음 사용자의 예상 시간이 1바이트 시험 파일로 계산된다.
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM project_tidy_edits WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposal_materials WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposals WHERE user_id = ?",

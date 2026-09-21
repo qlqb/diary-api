@@ -107,6 +107,7 @@ class TopicChangeProposalApplyDbTest {
     void cleanUp() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM topic_change_proposals WHERE user_id = ?",
                     "DELETE FROM topic_material_links WHERE user_id = ?",
                     "DELETE FROM topic_progress WHERE user_id = ?",

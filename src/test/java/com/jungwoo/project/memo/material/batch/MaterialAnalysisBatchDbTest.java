@@ -205,6 +205,7 @@ class MaterialAnalysisBatchDbTest {
     void cleanUp() throws Exception {
         try (Connection conn = dataSource.getConnection()) {
             for (String sql : List.of(
+                    "DELETE FROM material_analysis_timings WHERE user_id = ?",
                     "DELETE FROM material_analysis_batch_items WHERE user_id = ?",
                     "DELETE FROM material_analysis_batches WHERE user_id = ?",
                     "DELETE FROM material_analysis_jobs WHERE user_id = ?",
