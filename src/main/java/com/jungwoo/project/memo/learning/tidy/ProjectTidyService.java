@@ -110,11 +110,39 @@ public class ProjectTidyService {
     /**
      * 요청 시점에 고정한 입력. input_snapshot_json으로 저장된다.
      *
-     * <p>왜 id만 두는가: 내용(구간·트리)까지 복사해 두면 실행 시점에 그 복사본이 진짜와 다를 수
-     * 있고, 어느 쪽이 맞는지 정할 근거가 없다. "무엇을 대상으로 삼기로 했는가"만 고정하고
-     * 내용은 실행할 때 읽되, 그 사이 못 쓰게 된 것은 사유와 함께 제외로 남긴다.
+     * <p><b>무엇을 고정하는가</b>: 트리 판, 대상 자료, 자료마다 파일 해시·분석 판·근거 구간 id,
+     * 그리고 그때 빠진 자료와 사유. 구간의 <i>내용</i>은 복사하지 않는다 — 복사본과 진짜가
+     * 어긋나면 어느 쪽이 맞는지 정할 근거가 없다. 대신 실행할 때 지금 상태가 이 기록과
+     * <b>똑같은지 확인하고, 다르면 멈춘다</b>. 바뀐 최신 입력을 몰래 대신 쓰지 않는다.
+     *
+     * <p>예전(판 없음)에는 자료 id만 있었다. 그 기록으로는 "무엇을 봤는가"를 확인할 수 없으므로
+     * 그대로 다시 쓰지 않고 새 요청을 안내한다(SNAPSHOT_OUTDATED).
+     *
+     * @param version    이 모양의 판. {@link #SNAPSHOT_VERSION}
+     * @param materialIds 옛 판과 같은 이름으로 둔다(읽는 쪽이 판을 가리기 쉽게)
      */
-    record InputSnapshot(List<Long> materialIds, List<ProjectTidyScope.Excluded> excludedAtRequest) {
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    record InputSnapshot(Integer version, Long treeVersion, List<Long> materialIds,
+                         List<SnapshotMaterial> materials, List<ProjectTidyScope.Excluded> excludedAtRequest) {
+    }
+
+    /** 요청 때 본 자료 하나. 실행할 때 지금 상태가 이것과 같아야 한다. */
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    record SnapshotMaterial(Long materialId, String filename, String fileHash, Integer analysisVersion,
+                            List<Long> sectionIds) {
+    }
+
+    static final int SNAPSHOT_VERSION = 2;
+
+    /**
+     * 같은 입력으로 다시 해도 같은 이유로 멈추는 실패. 화면은 [다시 시도] 대신 [새로 정리]를 준다.
+     * 다시 시도는 요청 때의 입력을 그대로 쓰기 때문이다.
+     */
+    static final Set<String> NEEDS_NEW_REQUEST = Set.of("STALE_INPUT", "SNAPSHOT_INVALID", "SNAPSHOT_OUTDATED");
+
+    /** Set.of(...)는 null을 물으면 예외를 던진다. 도는 작업은 오류 코드가 없다. */
+    static boolean needsNewRequest(String errorCode) {
+        return errorCode != null && NEEDS_NEW_REQUEST.contains(errorCode);
     }
 
     // ===== 요청 =====
@@ -158,9 +186,7 @@ public class ProjectTidyService {
                 .nextRunAt(LocalDateTime.now())
                 // ★ 입력을 지금 고정한다. 모델이 도는 동안 분석이 더 끝나도 이번 정리에는 들어가지
                 //   않는다 — 사용자가 승인 화면에서 볼 근거와 실제로 쓴 근거를 같게 하기 위해서다.
-                .inputSnapshotJson(writeJson(new InputSnapshot(
-                        preview.ready().stream().map(ProjectTidyInputBuilder.Preview.Ready::materialId).toList(),
-                        preview.excluded())))
+                .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview)))
                 .build();
         try {
             tidyMapper.insertJob(job);
@@ -171,6 +197,84 @@ public class ProjectTidyService {
         }
         log.info("프로젝트 정리 요청: courseId={}, jobId={}, 세대={}, 대상 자료={}, 제외={}",
                 courseId, job.getJobId(), job.getGeneration(), preview.readyCount(), preview.excluded().size());
+        return view(userId, courseId);
+    }
+
+    /**
+     * 지금 상태를 스냅샷으로 남긴다. 자료마다 해시·분석 판·근거 구간 id까지.
+     */
+    private InputSnapshot snapshotOf(Long userId, Course course, ProjectTidyInputBuilder.Preview preview) {
+        List<Long> ids = preview.ready().stream().map(ProjectTidyInputBuilder.Preview.Ready::materialId).toList();
+        Map<Long, CourseMaterial> materials = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (CourseMaterial m : courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(ids, userId)) {
+                materials.put(m.getMaterialId(), m);
+            }
+        }
+        Map<Long, List<MaterialSection>> sections = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (MaterialSection section : sectionMapper.findActiveByMaterialIds(ids, userId)) {
+                sections.computeIfAbsent(section.getMaterialId(), k -> new ArrayList<>()).add(section);
+            }
+        }
+        List<SnapshotMaterial> out = new ArrayList<>();
+        for (Long id : ids) {
+            CourseMaterial material = materials.get(id);
+            List<MaterialSection> own = sections.getOrDefault(id, List.of());
+            out.add(new SnapshotMaterial(id, material == null ? null : material.getOriginalFilename(),
+                    material == null ? null : material.getFileHash(),
+                    own.stream().map(MaterialSection::getAnalysisVersion).filter(java.util.Objects::nonNull)
+                            .max(Integer::compareTo).orElse(null),
+                    own.stream().map(MaterialSection::getSectionId).sorted().toList()));
+        }
+        return new InputSnapshot(SNAPSHOT_VERSION,
+                course.getTopicTreeVersion() == null ? 0 : course.getTopicTreeVersion(),
+                ids, out, preview.excluded());
+    }
+
+    /**
+     * 실패한 정리를 <요청 때의 입력 그대로> 다시 한다.
+     *
+     * <p>예전 화면의 [다시 시도]는 새 요청이었다 — 그 사이 끝난 자료까지 섞여 들어가, 사용자가
+     * 처음 누를 때 본 범위와 다른 정리안이 나왔다. 최신 자료를 반영하는 것은 명시적인 새
+     * 요청이고, 다시 시도는 같은 입력으로 한 번 더 해 보는 것이다.
+     *
+     * <p>입력이 낡아 멈춘 실패(STALE_INPUT 등)는 같은 입력으로 다시 해도 또 멈추므로 받지 않는다.
+     */
+    @Transactional
+    public ProjectTidyResponse retry(Long userId, Long courseId) {
+        courseService.getOwned(userId, courseId);
+        if (tidyMapper.findOpenJobByCourse(courseId, userId) != null) {
+            return view(userId, courseId);
+        }
+        ProjectTidyJob failed = tidyMapper.findLatestJobByCourse(courseId, userId);
+        if (failed == null || (failed.getStatus() != TidyJobStatus.FAILED
+                && failed.getStatus() != TidyJobStatus.UNAVAILABLE)) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_RETRY_NOT_AVAILABLE,
+                    "다시 시도할 실패한 정리가 없어요");
+        }
+        if (needsNewRequest(failed.getErrorCode())) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_RETRY_NOT_AVAILABLE,
+                    "요청한 뒤 자료나 학습 구조가 바뀌어 같은 입력으로는 다시 할 수 없어요. 새로 정리해 주세요");
+        }
+        Long maxGeneration = tidyMapper.findMaxGeneration(courseId);
+        ProjectTidyJob again = ProjectTidyJob.builder()
+                .userId(userId).courseId(courseId)
+                .generation(maxGeneration == null ? 1 : maxGeneration + 1)
+                .status(TidyJobStatus.QUEUED)
+                .baseTreeVersion(failed.getBaseTreeVersion())
+                .previousProposalId(failed.getPreviousProposalId())
+                .maxAttempts(3)
+                .nextRunAt(LocalDateTime.now())
+                .inputSnapshotJson(failed.getInputSnapshotJson())
+                .build();
+        try {
+            tidyMapper.insertJob(again);
+        } catch (DuplicateKeyException e) {
+            return view(userId, courseId);
+        }
+        log.info("프로젝트 정리 다시 시도(같은 입력): courseId={}, 앞 작업={}, 새 작업={}",
+                courseId, failed.getJobId(), again.getJobId());
         return view(userId, courseId);
     }
 
@@ -473,13 +577,33 @@ public class ProjectTidyService {
         for (MaterialSection section : sectionMapper.findActiveByMaterialIds(materialIds, userId)) {
             sections.put(section.getSectionId(), section);
         }
-        // 인용한 구간이 사라졌으면(재분석으로 교체) 적용하지 않는다.
+        /*
+         * 인용한 구간이 사라졌거나(재분석으로 교체) <다른 판의 분석>이 됐으면 적용하지 않는다.
+         *
+         * 분석 판(analysis_version)을 여기서 본다. 예전에는 정리안 자료 표에 저장만 하고 쓰지
+         * 않았다 — 같은 파일이 분석기 판만 올라 다시 분석되면 구간 내용이 바뀌어도 해시가 같아
+         * 그대로 통과했다. 사용자가 본 근거와 적용되는 근거가 달라지는 자리다.
+         */
+        Map<Long, ProjectTidyProposalMaterial> byMaterial = new HashMap<>();
+        members.forEach(m -> byMaterial.put(m.getMaterialId(), m));
         Set<Long> cited = new HashSet<>();
         collectSectionIds(readOps(proposal.getOpsJson()), cited);
         for (Long sectionId : cited) {
-            if (!sections.containsKey(sectionId)) {
+            MaterialSection section = sections.get(sectionId);
+            if (section == null) {
                 throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
                         "근거로 삼은 자료 구간이 다시 분석되어 바뀌었어요. 다시 정리해 주세요");
+            }
+            ProjectTidyProposalMaterial member = byMaterial.get(section.getMaterialId());
+            if (member != null && member.getAnalysisVersion() != null
+                    && !member.getAnalysisVersion().equals(section.getAnalysisVersion())) {
+                throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
+                        "근거로 삼은 자료가 다시 분석되어 내용이 바뀌었을 수 있어요. 다시 정리해 주세요");
+            }
+            if (member != null && member.getFileHash() != null
+                    && !member.getFileHash().equals(section.getFileHash())) {
+                throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
+                        "근거로 삼은 자료 구간이 다른 파일의 것이 됐어요. 다시 정리해 주세요");
             }
         }
         return sections;
@@ -573,7 +697,10 @@ public class ProjectTidyService {
                         .jobId(job.getJobId()).status(job.getStatus().name())
                         .errorCode(job.getErrorCode()).message(job.getErrorMessage())
                         .createdAt(job.getCreatedAt())
-                        .retryable(job.getStatus() == TidyJobStatus.FAILED)
+                        .retryable((job.getStatus() == TidyJobStatus.FAILED
+                                || job.getStatus() == TidyJobStatus.UNAVAILABLE)
+                                && !needsNewRequest(job.getErrorCode()))
+                        .needsNewRequest(needsNewRequest(job.getErrorCode()))
                         .build());
 
         if (proposal == null) {

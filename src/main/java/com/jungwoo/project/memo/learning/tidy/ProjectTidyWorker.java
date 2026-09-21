@@ -17,7 +17,13 @@ import com.jungwoo.project.memo.learning.tidy.domain.TidyJobStatus;
 import com.jungwoo.project.memo.learning.tidy.domain.TidyProposalStatus;
 import com.jungwoo.project.memo.material.analysis.AnalysisFailure;
 import com.jungwoo.project.memo.material.analysis.AnalysisFailureClassifier;
+import com.jungwoo.project.memo.material.CourseMaterialMapper;
+import com.jungwoo.project.memo.material.MaterialLinkMapper;
+import com.jungwoo.project.memo.material.MaterialSectionMapper;
+import com.jungwoo.project.memo.material.domain.CourseMaterial;
+import com.jungwoo.project.memo.material.domain.MaterialLink;
 import com.jungwoo.project.memo.material.domain.MaterialSection;
+import com.jungwoo.project.memo.material.domain.MaterialStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -61,6 +67,9 @@ public class ProjectTidyWorker {
     private final ProjectTidyResultWriter resultWriter;
     private final CourseMapper courseMapper;
     private final ObjectMapper objectMapper;
+    private final CourseMaterialMapper courseMaterialMapper;
+    private final MaterialLinkMapper materialLinkMapper;
+    private final MaterialSectionMapper sectionMapper;
 
     public Result run(ProjectTidyJob job) {
         long startedAt = System.currentTimeMillis();
@@ -85,8 +94,22 @@ public class ProjectTidyWorker {
                     "INVALID_TARGET", "프로젝트가 없거나 보관됐다", LocalDateTime.now());
             return Result.COMPLETED;
         }
-        Set<Long> allowed = allowedMaterials(job);
-        ProjectTidyInputBuilder.Input input = inputBuilder.build(job.getUserId(), course, allowed);
+        /*
+         * 요청 때 고정한 입력을 읽고, 지금 상태가 그것과 같은지 확인한다. 다르면 멈춘다.
+         *
+         * 예전에는 스냅샷을 못 읽으면 null(=제한 없음)을 돌려 프로젝트의 최신 자료 전부를 읽었다.
+         * 실패가 범위 확대로 바뀌는 자리였다. 이제는 읽지 못하면 실패로 끝내고 사유를 남긴다.
+         */
+        SnapshotCheck check = checkSnapshot(job, course);
+        if (check.failure() != null) {
+            tidyMapper.finishJob(job.getJobId(), job.getLeaseToken(), TidyJobStatus.FAILED.name(), null,
+                    check.failure(), check.message(), LocalDateTime.now());
+            log.info("정리 입력이 요청 때와 달라 멈춤: jobId={}, courseId={}, 사유={}",
+                    job.getJobId(), job.getCourseId(), check.failure());
+            return Result.FAILED;
+        }
+        ProjectTidyInputBuilder.Input input = withRequestExclusions(
+                inputBuilder.build(job.getUserId(), course, check.allowed()), check.snapshot());
         if (input.isEmpty()) {
             // 요청 시점에는 쓸 자료가 있었는데 그 사이 전부 사라졌다. 실패가 아니라 "바꿀 것이 없음"이다.
             return save(job, course, input, List.of(), "정리에 쓸 수 있는 자료가 없어요", null);
@@ -385,18 +408,128 @@ public class ProjectTidyWorker {
                 + (op.title() == null ? "" : op.title().trim());
     }
 
-    private Set<Long> allowedMaterials(ProjectTidyJob job) {
-        if (job.getInputSnapshotJson() == null) {
-            return null;
+    /** 스냅샷 확인 결과. failure가 null이면 allowed로 실행한다. */
+    private record SnapshotCheck(ProjectTidyService.InputSnapshot snapshot, Set<Long> allowed,
+                                 String failure, String message) {
+        static SnapshotCheck ok(ProjectTidyService.InputSnapshot snapshot) {
+            return new SnapshotCheck(snapshot, new HashSet<>(snapshot.materialIds()), null, null);
         }
+
+        static SnapshotCheck fail(String code, String message) {
+            return new SnapshotCheck(null, null, code, message);
+        }
+    }
+
+    /**
+     * 요청 때의 입력이 지금도 그대로인가.
+     *
+     * <p>바뀐 것이 있으면 <b>최신 입력으로 대신하지 않고</b> 멈춘다. 사용자가 누를 때 본 범위와
+     * 다른 입력으로 만든 정리안은, 겉보기에 멀쩡해도 사용자가 요청한 것이 아니다. 최신을
+     * 반영하려면 새 요청을 하면 된다 — 화면이 그 버튼을 준다(needsNewRequest).
+     *
+     * <p>보는 것: 트리 판, 자료마다 (아직 있고, 이 프로젝트에 연결돼 있고, 파일 해시가 같고,
+     * 지금 살아 있는 구간 id 집합과 분석 판이 요청 때와 같은가).
+     */
+    private SnapshotCheck checkSnapshot(ProjectTidyJob job, Course course) {
+        ProjectTidyService.InputSnapshot snapshot;
         try {
-            ProjectTidyService.InputSnapshot snapshot =
-                    objectMapper.readValue(job.getInputSnapshotJson(), SNAPSHOT);
-            return snapshot == null || snapshot.materialIds() == null
-                    ? null : new HashSet<>(snapshot.materialIds());
+            snapshot = job.getInputSnapshotJson() == null ? null
+                    : objectMapper.readValue(job.getInputSnapshotJson(), SNAPSHOT);
         } catch (Exception e) {
-            return null;
+            return SnapshotCheck.fail("SNAPSHOT_INVALID", "요청 당시 입력 기록을 읽지 못했어요. 다시 정리를 요청해 주세요");
         }
+        if (snapshot == null) {
+            return SnapshotCheck.fail("SNAPSHOT_INVALID", "요청 당시 입력 기록이 없어요. 다시 정리를 요청해 주세요");
+        }
+        if (snapshot.version() == null || snapshot.version() < ProjectTidyService.SNAPSHOT_VERSION
+                || snapshot.materials() == null || snapshot.materialIds() == null || snapshot.treeVersion() == null) {
+            return SnapshotCheck.fail("SNAPSHOT_OUTDATED",
+                    "예전 방식으로 기록된 요청이라 무엇을 보고 정리할지 확인할 수 없어요. 다시 정리를 요청해 주세요");
+        }
+
+        long treeNow = course.getTopicTreeVersion() == null ? 0 : course.getTopicTreeVersion();
+        if (treeNow != snapshot.treeVersion()) {
+            return SnapshotCheck.fail("STALE_INPUT", "요청한 뒤 학습 구조가 바뀌었어요. 지금 구조로 다시 정리해 주세요");
+        }
+
+        List<Long> ids = snapshot.materials().stream().map(ProjectTidyService.SnapshotMaterial::materialId).toList();
+        if (ids.isEmpty()) {
+            return SnapshotCheck.ok(snapshot);
+        }
+        Map<Long, CourseMaterial> materials = new HashMap<>();
+        for (CourseMaterial m : courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(ids, job.getUserId())) {
+            materials.put(m.getMaterialId(), m);
+        }
+        Set<Long> linked = new HashSet<>();
+        for (MaterialLink link : materialLinkMapper.findByCourseIdAndUserId(job.getCourseId(), job.getUserId())) {
+            linked.add(link.getMaterialId());
+        }
+        Map<Long, List<MaterialSection>> sections = new HashMap<>();
+        for (MaterialSection s : sectionMapper.findActiveByMaterialIds(ids, job.getUserId())) {
+            sections.computeIfAbsent(s.getMaterialId(), k -> new ArrayList<>()).add(s);
+        }
+
+        List<String> changed = new ArrayList<>();
+        for (ProjectTidyService.SnapshotMaterial want : snapshot.materials()) {
+            CourseMaterial now = materials.get(want.materialId());
+            String name = want.filename() != null ? want.filename()
+                    : now != null ? now.getOriginalFilename() : "자료 " + want.materialId();
+            if (now == null || now.getStatus() != MaterialStatus.ACTIVE) {
+                changed.add("「" + name + "」 삭제됨");
+                continue;
+            }
+            if (!linked.contains(want.materialId())) {
+                changed.add("「" + name + "」 연결 해제됨");
+                continue;
+            }
+            if (want.fileHash() != null && !want.fileHash().equals(now.getFileHash())) {
+                changed.add("「" + name + "」 파일이 바뀜");
+                continue;
+            }
+            List<MaterialSection> own = sections.getOrDefault(want.materialId(), List.of());
+            List<Long> idsNow = own.stream().map(MaterialSection::getSectionId).sorted().toList();
+            List<Long> idsThen = want.sectionIds() == null ? List.of()
+                    : want.sectionIds().stream().sorted().toList();
+            Integer versionNow = own.stream().map(MaterialSection::getAnalysisVersion)
+                    .filter(java.util.Objects::nonNull).max(Integer::compareTo).orElse(null);
+            if (!idsNow.equals(idsThen) || !java.util.Objects.equals(versionNow, want.analysisVersion())) {
+                changed.add("「" + name + "」 다시 분석됨");
+            }
+        }
+        if (!changed.isEmpty()) {
+            return SnapshotCheck.fail("STALE_INPUT", "요청한 뒤 자료가 바뀌었어요: " + String.join(", ", changed)
+                    + ". 지금 자료로 다시 정리해 주세요");
+        }
+        return SnapshotCheck.ok(snapshot);
+    }
+
+    /**
+     * 요청 때 빠진 자료와 사유를 최종 범위에 붙인다.
+     *
+     * <p>예전에는 여기서 사라졌다 — 실행 시점 목록은 "요청 때 허용한 자료"로 좁혀지므로, 그때
+     * 분석 중이라 빠진 자료는 제외 목록에도 없었다. 사용자는 정리안이 무엇을 빼고 만든 것인지
+     * 알 수 없었다.
+     */
+    private ProjectTidyInputBuilder.Input withRequestExclusions(ProjectTidyInputBuilder.Input input,
+                                                                ProjectTidyService.InputSnapshot snapshot) {
+        if (snapshot == null || snapshot.excludedAtRequest() == null || snapshot.excludedAtRequest().isEmpty()) {
+            return input;
+        }
+        ProjectTidyScope scope = input.scope();
+        List<ProjectTidyScope.Excluded> excluded = new ArrayList<>(scope.excluded());
+        Set<Long> present = new HashSet<>();
+        excluded.forEach(e -> present.add(e.materialId()));
+        scope.reviewed().forEach(m -> present.add(m.materialId()));
+        for (ProjectTidyScope.Excluded e : snapshot.excludedAtRequest()) {
+            if (e.materialId() == null || present.add(e.materialId())) {
+                excluded.add(e);
+            }
+        }
+        ProjectTidyScope merged = new ProjectTidyScope(scope.courseId(), scope.treeVersion(), scope.topicCount(),
+                scope.treeLinesShown(), scope.reviewed(), excluded, scope.truncated(), scope.sectionsTotal(),
+                scope.sectionsReviewed());
+        return new ProjectTidyInputBuilder.Input(input.course(), input.topics(), input.topicLinks(),
+                input.sections(), input.materialsById(), input.assignments(), merged);
     }
 
     private Result handleFailure(ProjectTidyJob job, AnalysisFailure failure) {

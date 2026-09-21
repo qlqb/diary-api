@@ -84,6 +84,11 @@ public class ProjectTidyResponse {
         private String message;
         private LocalDateTime createdAt;
         private boolean retryable;
+        /**
+         * 같은 입력으로 다시 해도 같은 이유로 멈춘다(요청 뒤 자료·트리가 바뀌었거나 요청 기록이
+         * 낡았다). 화면은 [다시 시도] 대신 [새로 정리]를 준다.
+         */
+        private boolean needsNewRequest;
     }
 
     @Getter

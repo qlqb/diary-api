@@ -176,6 +176,12 @@ public enum ErrorCode {
      */
     PROJECT_TIDY_CARRIED_EDIT_UNCONFIRMED(HttpStatus.CONFLICT, "E409_034",
             "이전 판에서 옮겨 온 편집을 먼저 확인해 주세요"),
+    /**
+     * 같은 입력으로 다시 할 수 없다. 실패한 정리가 없거나, 요청 뒤 입력이 바뀌어 멈춘 실패다.
+     * 화면은 [새로 정리]를 안내한다.
+     */
+    PROJECT_TIDY_RETRY_NOT_AVAILABLE(HttpStatus.CONFLICT, "E409_035",
+            "같은 입력으로 다시 할 수 없어요. 새로 정리해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

@@ -247,6 +247,14 @@ public class MaterialContentAnalyzer {
         int[] candidates = {0};
         String finalDocumentDate = documentDate;
         boolean written = resultWriter.writeIfLeased(job, () -> {
+            /*
+             * 옛 구간을 내리기 전에 자료 행을 잡는다. 프로젝트 정리 적용은 같은 자료 행을
+             * FOR UPDATE로 잡은 채 "근거 구간이 아직 살아 있는가"를 확인하고 트리를 쓴다.
+             * 여기서 잡지 않으면 적용이 확인한 직후, 쓰기 전에 구간이 바뀔 수 있다 — 작업 행
+             * 잠금(writeIfLeased)은 적용과 겹치지 않는다.
+             * 잠금 순서: 분석 작업 → 자료. 적용은 작업 행을 잡지 않으므로 서로 엉키지 않는다.
+             */
+            courseMaterialMapper.findByIdsAndUserIdForUpdate(List.of(material.getMaterialId()), material.getUserId());
             sectionMapper.supersedeOtherHashes(material.getMaterialId(), job.getFileHash());
             candidates[0] = createAssignmentCandidates(job, material, finalDocumentDate);
         });
