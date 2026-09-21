@@ -135,11 +135,19 @@ public class ProjectTidyWorker {
              *
              * 두 번 UPDATE하는 이유: 먼저 상태를 옮겨야 "프로젝트당 열린 정리안 하나" 유일 인덱스가
              * 풀려 새 행이 들어간다. 새 행의 id는 그때 정해지므로 superseded_by는 그 뒤에 적는다.
+             *
+             * 전이는 <조건부>다. 모델이 도는 동안 사용자가 앞 판을 적용했을 수 있고, 그때 조건
+             * 없이 SUPERSEDED로 덮으면 적용 이력이 사라진다 — 트리는 바뀌었는데 "물러난 안"만
+             * 남는다. 0행이면 앞 판은 이미 끝난 것이므로 승계할 편집도 없다.
              */
-            ProjectTidyProposal previous = tidyMapper.findOpenProposalByCourse(job.getCourseId(), job.getUserId());
-            if (previous != null) {
-                tidyMapper.updateProposalStatus(previous.getProposalId(), job.getUserId(),
-                        TidyProposalStatus.SUPERSEDED.name(), null, null, LocalDateTime.now());
+            ProjectTidyProposal previous = lockOpenPrevious(job);
+            boolean supersededPrevious = previous != null
+                    && tidyMapper.supersedeProposalIfOpen(previous.getProposalId(), job.getUserId(),
+                            null, LocalDateTime.now()) == 1;
+            if (previous != null && !supersededPrevious) {
+                log.info("앞 정리안이 그 사이 끝나 승계하지 않는다: proposalId={}, 상태={}",
+                        previous.getProposalId(), previous.getStatus());
+                previous = null;
             }
             tidyMapper.insertProposal(proposal);
             saveMaterials(proposal, input);
@@ -156,6 +164,22 @@ public class ProjectTidyWorker {
             return Result.LOST;
         }
         return Result.COMPLETED;
+    }
+
+    /**
+     * 앞 정리안을 잠근 채 돌려준다. 잠금 순서는 적용·폐기와 같다(정리안 → 작업 → 자료).
+     *
+     * <p>{@code writeIfLeased}가 이미 작업 행을 잡고 있지만, 그것은 "이 작업이 아직 내
+     * 것인가"를 보는 자물쇠이지 정리안 행을 지켜 주지는 않는다. 앞 판의 상태는 따로 잠가야
+     * 읽은 뒤 쓰기 전에 바뀌는 것을 막는다.
+     */
+    private ProjectTidyProposal lockOpenPrevious(ProjectTidyJob job) {
+        ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(job.getCourseId(), job.getUserId());
+        if (open == null) {
+            return null;
+        }
+        ProjectTidyProposal locked = tidyMapper.findProposalByIdForUpdate(open.getProposalId(), job.getUserId());
+        return locked != null && locked.getStatus() == TidyProposalStatus.PROPOSED ? locked : null;
     }
 
     private void saveMaterials(ProjectTidyProposal proposal, ProjectTidyInputBuilder.Input input) {

@@ -531,6 +531,29 @@ class ProjectTidyApplyDbTest {
             ps.setString(5, hash);
             ps.executeUpdate();
         }
+        markContentAnalysisDone(conn, materialId, hash);
+    }
+
+    /**
+     * 내용 분석이 끝난 자료로 만든다.
+     *
+     * <p>이 줄이 없으면 자료의 상태는 NONE(=분석 전)이고, 정리 대상에서 빠진다.
+     * 예전에는 이것 없이도 테스트가 통과했는데, 그건 공유 DB에 <b>지난 실행이 남긴
+     * 작업 행</b>이 있었기 때문이다 — 같은 material_id를 다시 쓰면서 남의 흔적 위에
+     * 서 있었다. 격리된 DB로 옮기자 바로 드러났다. 테스트가 필요로 하는 전제는
+     * 테스트가 직접 만든다.
+     */
+    private void markContentAnalysisDone(Connection conn, long materialId, String hash) throws Exception {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO material_analysis_jobs (user_id, material_id, job_kind, file_hash, "
+                        + "analysis_version, priority, status, attempt, max_attempts, total_chunks, "
+                        + "completed_chunks, next_run_at, finished_at) "
+                        + "VALUES (?, ?, 'CONTENT', ?, 1, 0, 'DONE', 1, 3, 1, 1, NOW(), NOW())")) {
+            ps.setLong(1, USER);
+            ps.setLong(2, materialId);
+            ps.setString(3, hash);
+            ps.executeUpdate();
+        }
     }
 
     private void link(Connection conn, long materialId) throws Exception {
@@ -603,6 +626,7 @@ class ProjectTidyApplyDbTest {
             for (String sql : List.of(
                     // 소요 시간 표본까지 지운다 — 남기면 다음 사용자의 예상 시간이 1바이트 시험 파일로 계산된다.
                     "DELETE FROM material_analysis_timings WHERE user_id = ?",
+                    "DELETE FROM material_analysis_jobs WHERE user_id = ?",
                     "DELETE FROM project_tidy_edits WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposal_materials WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposals WHERE user_id = ?",

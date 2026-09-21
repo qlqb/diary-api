@@ -84,10 +84,30 @@ public interface ProjectTidyMapper {
     List<ProjectTidyProposal> findHistoryByCourse(@Param("courseId") Long courseId, @Param("userId") Long userId,
                                                   @Param("limit") int limit);
 
+    /**
+     * 조건 없는 상태 쓰기. <b>이미 끝난 안에 쓰면 안 되는 자리에서는 쓰지 말라</b> —
+     * {@link #resolveProposalIfOpen}이나 {@link #supersedeProposalIfOpen}을 쓴다.
+     *
+     * <p>남겨 둔 이유는 superseded_by_proposal_id만 뒤늦게 채우는 경우 때문이다(새 정리안의
+     * id는 insert한 뒤에야 정해진다). 그 호출은 바로 앞에서 조건부 전이가 1행을 받은 뒤에만
+     * 이어지므로, 그 시점에는 그 행이 SUPERSEDED임이 이미 확인돼 있다.
+     */
     int updateProposalStatus(@Param("proposalId") Long proposalId, @Param("userId") Long userId,
                              @Param("status") String status, @Param("appliedResultJson") String appliedResultJson,
                              @Param("supersededByProposalId") Long supersededByProposalId,
                              @Param("resolvedAt") LocalDateTime resolvedAt);
+
+    /**
+     * 교체 전이. 아직 PROPOSED일 때만 1행이다.
+     *
+     * <p>생성이 도는 동안 사용자가 적용하거나 버렸을 수 있다. 그때 앞 판을 조건 없이
+     * SUPERSEDED로 덮으면 <b>적용 이력이 사라진다</b> — 트리는 바뀌었는데 "물러난 안"만
+     * 남아, 나중에 이력을 봐도 누가 언제 적용했는지 알 수 없다. 0행이면 그 사이 끝난
+     * 것이므로 새 판을 그대로 활성화하지 않고 호출한 쪽이 판단한다.
+     */
+    int supersedeProposalIfOpen(@Param("proposalId") Long proposalId, @Param("userId") Long userId,
+                                @Param("supersededByProposalId") Long supersededByProposalId,
+                                @Param("resolvedAt") LocalDateTime resolvedAt);
 
     /**
      * 적용·폐기 전이. 아직 PROPOSED이고 판 번호가 기대와 같을 때만 1행이다 — 두 탭이 동시에

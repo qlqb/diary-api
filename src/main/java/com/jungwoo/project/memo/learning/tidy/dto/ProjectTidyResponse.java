@@ -15,7 +15,7 @@ import java.util.Map;
  * 것은 "스택에 강의·교재가 붙고 중복된 큐가 합쳐진다"이지 "3번 파일의 제안"이 아니다.
  */
 @Getter
-@Builder
+@Builder(toBuilder = true)
 public class ProjectTidyResponse {
 
     private Long courseId;
@@ -60,6 +60,14 @@ public class ProjectTidyResponse {
     private boolean firstTime;
     /** 이전 방식(자료별)으로 만들어졌다가 물러난 변경안 수. 전환 안내에 쓴다. */
     private int legacyProposalCount;
+
+    /**
+     * 요청한 일이 <이미> 끝나 있었다. 폐기를 눌렀는데 그 사이 적용이 끝난 경우 등.
+     *
+     * <p>실패가 아니다 — 사용자가 원한 결과(검토할 안이 없다)는 이뤄졌다. 다만 화면이
+     * "방금 내가 버렸다"와 "이미 처리돼 있었다"를 구분해 말할 수 있어야 한다.
+     */
+    private Boolean alreadyResolved;
 
     private LocalDateTime createdAt;
     private LocalDateTime resolvedAt;

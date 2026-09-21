@@ -392,18 +392,61 @@ public class ProjectTidyService {
      * <p>도는 작업이 있으면 함께 무효화한다(임대 토큰을 올린다) — 늦게 끝난 작업이 버린 자리에
      * 정리안을 다시 놓지 못한다. 같은 입력으로 자동 재생성하지도 않는다. 사용자가 다시 누르는
      * 것만 새 정리안을 만든다.
+     *
+     * <p><b>적용과 같은 전이 규칙을 쓴다.</b> 예전에는 여기서 잠그지 않고 읽은 뒤 조건 없는
+     * UPDATE를 했다. 그래서 이 순서가 가능했다 — 폐기가 PROPOSED를 읽는다 → 적용이
+     * 커밋한다(트리가 바뀐다) → 폐기가 APPLIED를 DISMISSED로 덮는다. 트리는 적용됐는데
+     * 이력은 "버림"이 되어, 사용자는 적용한 적 없는 변경을 트리에서 보게 된다.
+     * 이제는 {@code FOR UPDATE}로 잠근 뒤 상태 조건이 붙은 전이만 쓴다. 적용이 먼저면
+     * 0행이 되고, 덮는 대신 "이미 처리됨"으로 돌려준다.
+     *
+     * <p>잠금 순서는 적용과 같다: <b>정리안 → 작업 → 자료</b>. 두 경로가 같은 순서로
+     * 잡으므로 서로 기다리다 엉키지 않는다.
      */
     @Transactional
     public ProjectTidyResponse dismiss(Long userId, Long courseId) {
         Course course = courseService.getOwned(userId, courseId);
-        tidyMapper.cancelOpenJobs(courseId, userId, "사용자가 버렸다");
-        ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(courseId, userId);
-        if (open != null) {
-            tidyMapper.updateProposalStatus(open.getProposalId(), userId, TidyProposalStatus.DISMISSED.name(),
-                    null, null, LocalDateTime.now());
-            log.info("프로젝트 정리안 폐기: courseId={}, proposalId={}", courseId, open.getProposalId());
+        boolean alreadyResolved = false;
+
+        /*
+         * 잠근 뒤에 한 번 더 확인하는 이유: 잠그기 전에 읽은 id가 그 사이 물러나고 새 정리안이
+         * 들어섰을 수 있다. 그러면 옛 것만 버리고 새 것이 남는다. 열린 안이 잠근 것과 같아질
+         * 때까지 다시 본다 — 한 프로젝트에 열린 안은 하나뿐이라 몇 번이면 끝난다.
+         */
+        ProjectTidyProposal locked = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(courseId, userId);
+            if (open == null) {
+                break;
+            }
+            locked = tidyMapper.findProposalByIdForUpdate(open.getProposalId(), userId);
+            if (locked != null && locked.getStatus() == TidyProposalStatus.PROPOSED) {
+                break;
+            }
+            // 잠그고 보니 이미 끝나 있었다. 그 사이 새 안이 생겼는지 다시 본다.
+            alreadyResolved = true;
+            locked = null;
         }
-        return toResponse(userId, course, null, null);
+
+        // 작업 무효화는 정리안을 잠근 뒤에 한다(잠금 순서: 정리안 → 작업).
+        tidyMapper.cancelOpenJobs(courseId, userId, "사용자가 버렸다");
+
+        if (locked != null) {
+            int moved = tidyMapper.resolveProposalIfOpen(locked.getProposalId(), userId, locked.getRevision(),
+                    TidyProposalStatus.DISMISSED.name(), null, LocalDateTime.now());
+            if (moved == 1) {
+                log.info("프로젝트 정리안 폐기: courseId={}, proposalId={}", courseId, locked.getProposalId());
+            } else {
+                // 잠갔는데도 0행이면 판 번호가 그 사이 올라간 것이다. 덮지 않는다.
+                alreadyResolved = true;
+                log.info("폐기 시점에 이미 처리된 정리안: courseId={}, proposalId={}",
+                        courseId, locked.getProposalId());
+            }
+        }
+
+        return toResponse(userId, course, null, null).toBuilder()
+                .alreadyResolved(alreadyResolved ? Boolean.TRUE : null)
+                .build();
     }
 
     /** 프로젝트가 보관되거나 지워질 때. 도는 작업만 무효화하고 정리안 이력은 남긴다. */
