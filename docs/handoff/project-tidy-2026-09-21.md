@@ -182,10 +182,12 @@ cd diary-api && python scripts/ai-baseline/verify-project-tidy-2026-09-21.py --b
     맨 아래에 있다.
   - LINK 작업 `QUEUED`/`PAUSED`: 0행(이미 전부 끝나 있었다).
   - 다른 표의 행 수는 바뀌지 않았다.
-- 검증용으로 만든 것(정리는 사용자 판단):
-  - DB `memo_tidy`(2026-09-21 `memo` 전체 복제 — 마이그레이션 재실행 확인용),
-    `memo_tidy_verify`(스키마만 복제한 빈 DB — 실제 모델 평가용). 지우려면 `DROP DATABASE`.
-  - `memo_tidy_verify`의 합성 계정 `project-tidy-*@example.com`(비밀번호 `tidy-1234`).
+- 검증용으로 만든 것:
+  - DB `memo_tidy`(마이그레이션 재실행 확인용으로 `memo`를 통째로 복제) — **작업이 끝나 지웠다.**
+    실제 일기·상담 원문의 사본을 남겨 둘 이유가 없다.
+  - DB `memo_tidy_verify`(스키마만 복제한 빈 DB, 합성 자료만 들어 있다) — **남겨 두었다.**
+    다시 평가하려면 이 DB를 8081로 띄우면 된다. 지우려면 `DROP DATABASE memo_tidy_verify;`
+  - 그 DB의 합성 계정 `project-tidy-*@example.com`(비밀번호 `tidy-1234`), 프로젝트 3개.
   - 업로드 파일은 저장소 밖 임시 디렉터리에 두었다(`--storage.materials.upload-dir`).
 - 푸시·PR·배포: 하지 않았다.
 
