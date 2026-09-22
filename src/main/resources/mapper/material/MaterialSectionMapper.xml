@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialSectionMapper">
+
+    <resultMap id="sectionResultMap" type="com.jungwoo.project.memo.material.domain.MaterialSection">
+        <id     property="sectionId"          column="section_id"/>
+        <result property="userId"             column="user_id"/>
+        <result property="materialId"         column="material_id"/>
+        <result property="fileHash"           column="file_hash"/>
+        <result property="analysisVersion"    column="analysis_version"/>
+        <result property="chunkIndex"         column="chunk_index"/>
+        <result property="unitType"           column="unit_type"/>
+        <result property="unitStart"          column="unit_start"/>
+        <result property="unitEnd"            column="unit_end"/>
+        <result property="printedPageStart"   column="printed_page_start"/>
+        <result property="printedPageEnd"     column="printed_page_end"/>
+        <result property="sectionLabel"       column="section_label"/>
+        <result property="displayTitle"       column="display_title"/>
+        <result property="rolesJson"          column="roles_json"/>
+        <result property="taskText"           column="task_text"/>
+        <result property="excerpt"            column="excerpt"/>
+        <result property="assignmentCue"      column="assignment_cue"/>
+        <result property="assignmentQuote"    column="assignment_quote"/>
+        <result property="dateCandidatesJson" column="date_candidates_json"/>
+        <result property="dedupeKey"          column="dedupe_key"/>
+        <result property="status"             column="status"/>
+        <result property="createdAt"          column="created_at"/>
+    </resultMap>
+
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="sectionId">
+        INSERT IGNORE INTO material_sections (
+            user_id, material_id, file_hash, analysis_version, chunk_index, unit_type, unit_start, unit_end,
+            printed_page_start, printed_page_end, section_label, display_title, roles_json, task_text, excerpt,
+            assignment_cue, assignment_quote, date_candidates_json, dedupe_key, status
+        ) VALUES (
+            #{userId}, #{materialId}, #{fileHash}, #{analysisVersion}, #{chunkIndex}, #{unitType}, #{unitStart}, #{unitEnd},
+            #{printedPageStart}, #{printedPageEnd}, #{sectionLabel}, #{displayTitle}, #{rolesJson}, #{taskText}, #{excerpt},
+            #{assignmentCue}, #{assignmentQuote}, #{dateCandidatesJson}, #{dedupeKey}, 'ACTIVE'
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="sectionResultMap">
+        SELECT * FROM material_sections WHERE section_id = #{sectionId} AND user_id = #{userId}
+    </select>
+
+    <select id="findActiveByMaterialIdAndHash" resultMap="sectionResultMap">
+        SELECT * FROM material_sections
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash} AND status = 'ACTIVE'
+        ORDER BY unit_start ASC, unit_end ASC, section_id ASC
+    </select>
+
+    <select id="findActiveByMaterialIds" resultMap="sectionResultMap">
+        SELECT * FROM material_sections
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id ASC, unit_start ASC, section_id ASC
+    </select>
+
+    <select id="findByIdsAndUserId" resultMap="sectionResultMap">
+        SELECT * FROM material_sections
+        WHERE user_id = #{userId}
+        AND section_id IN
+        <foreach collection="sectionIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <update id="supersedeOtherHashes">
+        UPDATE material_sections SET status = 'SUPERSEDED'
+         WHERE material_id = #{materialId} AND file_hash &lt;&gt; #{keepHash} AND status = 'ACTIVE'
+    </update>
+
+    <update id="clearTextByMaterialId">
+        UPDATE material_sections SET excerpt = NULL, task_text = NULL, assignment_quote = NULL
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+</mapper>

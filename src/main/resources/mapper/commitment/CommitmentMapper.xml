@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  일회성 약속. 살아 있는 행의 조건은 is_deleted = 0 하나이고, 모든 조회가 그것과 user_id를
+  함께 건다 - FK가 없으므로 소유권은 쿼리 조건이 유일한 방어선이다.
+-->
+<mapper namespace="com.jungwoo.project.memo.commitment.CommitmentMapper">
+
+    <resultMap id="commitmentResultMap" type="com.jungwoo.project.memo.commitment.domain.Commitment">
+        <id     property="commitmentId" column="commitment_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="title"        column="title"/>
+        <result property="startAt"      column="start_at"/>
+        <result property="endAt"        column="end_at"/>
+        <result property="locationText" column="location_text"/>
+        <result property="sourceType"   column="source_type"/>
+        <result property="derivedFromCommitmentId" column="derived_from_commitment_id"/>
+        <result property="derivedRelation"         column="derived_relation"/>
+        <result property="version"      column="version"/>
+        <result property="isDeleted"    column="is_deleted"/>
+        <result property="createdAt"    column="created_at"/>
+        <result property="updatedAt"    column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="commitmentId">
+        INSERT INTO one_off_commitments (
+            user_id, title, start_at, end_at, location_text, source_type,
+            derived_from_commitment_id, derived_relation
+        ) VALUES (
+            #{userId}, #{title}, #{startAt}, #{endAt}, #{locationText}, #{sourceType},
+            #{derivedFromCommitmentId}, #{derivedRelation}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.commitment_id = #{commitmentId}
+           AND c.user_id = #{userId}
+           AND c.is_deleted = 0
+    </select>
+
+    <!--
+      적용 경로 전용. 원본 시각 검사와 이동 INSERT 사이에 원본이 바뀌는 것을 막는다.
+      일반 조회는 잠그지 않는다 - 상담과 목록이 서로를 기다리게 만들 이유가 없다.
+    -->
+    <select id="findByIdAndUserIdForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.commitment_id = #{commitmentId}
+           AND c.user_id = #{userId}
+           AND c.is_deleted = 0
+         FOR UPDATE
+    </select>
+
+    <!--
+      겹침 조회다. start_at BETWEEN을 쓰면 전날 밤에 시작해 오늘 새벽에 끝나는 약속이
+      오늘 조회에서 빠지고, 배치가 그 시간을 비어 있다고 본다.
+      반열린 구간: [rangeStart, rangeEnd)
+    -->
+    <select id="findOverlapping" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.start_at &lt; #{rangeEnd}
+           AND c.end_at   &gt; #{rangeStart}
+         ORDER BY c.start_at, c.commitment_id
+    </select>
+
+    <!--
+      계획 확정 전용 잠금 조회. 미리보기 이후 생긴 약속을 최신 커밋 기준으로 본다.
+      잠금 순서는 commitment_id 오름차순으로 고정한다 - 다른 잠금 조회와 같은 규칙이다.
+    -->
+    <select id="findOverlappingForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.start_at &lt; #{rangeEnd}
+           AND c.end_at   &gt; #{rangeStart}
+         ORDER BY c.commitment_id
+         FOR UPDATE
+    </select>
+
+    <update id="updateWithVersion">
+        UPDATE one_off_commitments
+           SET title         = #{title},
+               start_at      = #{startAt},
+               end_at        = #{endAt},
+               location_text = #{locationText},
+               version       = version + 1
+         WHERE commitment_id = #{commitmentId}
+           AND user_id = #{userId}
+           AND version = #{version}
+           AND is_deleted = 0
+    </update>
+
+    <!--
+      파생 이동이면 원본 참조도 지운다. uk_commitments_derived를 계속 점유하면 사용자가
+      이동 블록을 지우고 같은 근무에 다시 만들 수 없다.
+    -->
+    <update id="softDeleteWithVersion">
+        UPDATE one_off_commitments
+           SET is_deleted = 1,
+               derived_from_commitment_id = NULL,
+               derived_relation           = NULL,
+               version    = version + 1
+         WHERE commitment_id = #{commitmentId}
+           AND user_id = #{userId}
+           AND version = #{version}
+           AND is_deleted = 0
+    </update>
+
+    <!--
+      적용 직전의 중복 확인. FOR UPDATE라 행이 없어도 그 자리를 잠근다 - 두 요청이 동시에
+      "없음"을 보고 둘 다 만드는 것을 조회 후 검사로는 막을 수 없다.
+    -->
+    <select id="findDerivedForUpdate" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.derived_from_commitment_id = #{originCommitmentId}
+           AND c.derived_relation = #{relation}
+           AND c.is_deleted = 0
+         FOR UPDATE
+    </select>
+
+    <!--
+      근무 후보. 겹침이 아니라 "시작 날짜가 기간 안"이다 - findOverlapping과 의미가 다르다.
+      idx_commitments_user_time(user_id, start_at, ...)를 그대로 탄다.
+    -->
+    <select id="findWorkShiftCandidates" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.start_at &gt;= #{rangeStart}
+           AND c.start_at &lt;  #{rangeEnd}
+         ORDER BY c.start_at, c.commitment_id
+    </select>
+
+    <!--
+      기존 이동을 원본 근무 id로 찾는다. 이동의 날짜로 찾으면 자정을 넘어간 것과 사용자가
+      옮긴 것을 놓치고, 그러면 이미 있는 블록을 하나 더 만든다.
+    -->
+    <select id="findDerivedByOrigins" resultMap="commitmentResultMap">
+        SELECT c.* FROM one_off_commitments c
+         WHERE c.user_id = #{userId}
+           AND c.is_deleted = 0
+           AND c.derived_from_commitment_id IN
+        <foreach item="originId" collection="originIds" open="(" separator="," close=")">
+            #{originId}
+        </foreach>
+         ORDER BY c.start_at, c.commitment_id
+    </select>
+</mapper>

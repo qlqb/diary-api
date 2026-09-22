@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.zip.ZipImportEntryMapper">
+
+    <resultMap id="zipImportEntryResultMap" type="com.jungwoo.project.memo.material.zip.domain.ZipImportEntry">
+        <id     property="entryId"      column="entry_id"/>
+        <result property="importId"     column="import_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="entryIndex"   column="entry_index"/>
+        <result property="entryPath"    column="entry_path"/>
+        <result property="displayName"  column="display_name"/>
+        <result property="extension"    column="extension"/>
+        <result property="sizeBytes"    column="size_bytes"/>
+        <result property="supported"    column="supported"/>
+        <result property="skipReason"   column="skip_reason"/>
+        <result property="status"       column="status"/>
+        <result property="materialId"   column="material_id"/>
+        <result property="errorCode"    column="error_code"/>
+        <result property="errorMessage" column="error_message"/>
+        <result property="attempt"      column="attempt"/>
+        <result property="createdAt"    column="created_at"/>
+        <result property="updatedAt"    column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="entryId">
+        INSERT INTO material_zip_import_entries (
+            import_id, user_id, entry_index, entry_path, display_name, extension,
+            size_bytes, supported, skip_reason, status
+        ) VALUES (
+            #{importId}, #{userId}, #{entryIndex}, #{entryPath}, #{displayName}, #{extension},
+            #{sizeBytes}, #{supported}, #{skipReason}, #{status}
+        )
+    </insert>
+
+    <select id="findByImportId" resultMap="zipImportEntryResultMap">
+        SELECT * FROM material_zip_import_entries
+         WHERE import_id = #{importId} AND user_id = #{userId}
+         ORDER BY entry_index ASC
+    </select>
+
+    <select id="findByIdAndUserId" resultMap="zipImportEntryResultMap">
+        SELECT * FROM material_zip_import_entries
+         WHERE entry_id = #{entryId} AND user_id = #{userId}
+    </select>
+
+    <!--
+      확정. DONE·IMPORTING·QUEUED는 건드리지 않는다 — 버튼을 두 번 눌러도, 같은 확정이 두 번 도착해도
+      대기열에 같은 항목이 두 번 들어가지 않는다. 자료가 이미 있는 항목(material_id)은 영원히 제외다.
+    -->
+    <update id="queueSelected">
+        UPDATE material_zip_import_entries
+           SET status = 'QUEUED', error_code = NULL, error_message = NULL
+         WHERE import_id = #{importId} AND user_id = #{userId}
+           AND supported = 1
+           AND material_id IS NULL
+           AND status IN ('PENDING', 'FAILED')
+           AND entry_id IN
+           <foreach collection="entryIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </update>
+
+    <update id="claim">
+        UPDATE material_zip_import_entries
+           SET status = 'IMPORTING', attempt = attempt + 1
+         WHERE entry_id = #{entryId} AND status = 'QUEUED' AND material_id IS NULL
+    </update>
+
+    <select id="findQueued" resultMap="zipImportEntryResultMap">
+        SELECT * FROM material_zip_import_entries
+         WHERE status = 'QUEUED'
+         ORDER BY entry_id ASC
+         LIMIT #{limit}
+    </select>
+
+    <!--
+      서버가 내려가 IMPORTING으로 남은 항목. material_id가 있으면 자료는 이미 만들어졌다는 뜻이라
+      (자료 INSERT와 같은 트랜잭션에서 기록된다) 다시 큐에 넣지 않는다.
+    -->
+    <update id="requeueStale">
+        UPDATE material_zip_import_entries
+           SET status = 'QUEUED'
+         WHERE status = 'IMPORTING' AND material_id IS NULL
+           AND updated_at &lt; #{before} AND attempt &lt; #{maxAttempt}
+    </update>
+
+    <update id="markFailed">
+        UPDATE material_zip_import_entries
+           SET status = 'FAILED', error_code = #{errorCode}, error_message = #{errorMessage}
+         WHERE entry_id = #{entryId} AND material_id IS NULL
+    </update>
+
+    <update id="markDone">
+        UPDATE material_zip_import_entries
+           SET status = 'DONE', material_id = #{materialId}, error_code = NULL, error_message = NULL
+         WHERE entry_id = #{entryId} AND material_id IS NULL
+    </update>
+
+    <select id="countByStatus" resultType="int">
+        SELECT COUNT(*) FROM material_zip_import_entries
+         WHERE import_id = #{importId} AND status = #{status}
+    </select>
+
+    <select id="countRemaining" resultType="int">
+        SELECT COUNT(*) FROM material_zip_import_entries
+         WHERE import_id = #{importId} AND status IN ('QUEUED', 'IMPORTING')
+    </select>
+
+</mapper>

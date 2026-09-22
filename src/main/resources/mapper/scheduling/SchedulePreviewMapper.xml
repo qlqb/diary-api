@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.scheduling.SchedulePreviewMapper">
+
+    <resultMap id="schedulePreviewResultMap"
+               type="com.jungwoo.project.memo.scheduling.domain.AiProposalSchedulePreview">
+        <id     property="schedulePreviewId"    column="schedule_preview_id"/>
+        <result property="proposalId"           column="proposal_id"/>
+        <result property="userId"               column="user_id"/>
+        <result property="horizonStart"         column="horizon_start"/>
+        <result property="horizonEnd"           column="horizon_end"/>
+        <result property="availabilityWindows"  column="availability_windows"/>
+        <result property="userOverrides"        column="user_overrides"/>
+        <result property="placedItems"          column="placed_items"/>
+        <result property="unplacedItems"        column="unplaced_items"/>
+        <result property="computedAt"           column="computed_at"/>
+    </resultMap>
+
+    <select id="findByProposalIdAndUserId" resultMap="schedulePreviewResultMap">
+        SELECT *
+        FROM ai_proposal_schedule_previews
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+    </select>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="schedulePreviewId">
+        INSERT INTO ai_proposal_schedule_previews (
+            proposal_id,
+            user_id,
+            horizon_start,
+            horizon_end,
+            availability_windows,
+            user_overrides,
+            placed_items,
+            unplaced_items,
+            computed_at
+        ) VALUES (
+            #{proposalId},
+            #{userId},
+            #{horizonStart},
+            #{horizonEnd},
+            #{availabilityWindows},
+            #{userOverrides},
+            #{placedItems},
+            #{unplacedItems},
+            #{computedAt}
+        )
+    </insert>
+
+    <update id="update">
+        UPDATE ai_proposal_schedule_previews
+        SET horizon_start         = #{horizonStart},
+            horizon_end           = #{horizonEnd},
+            availability_windows  = #{availabilityWindows},
+            user_overrides        = #{userOverrides},
+            placed_items          = #{placedItems},
+            unplaced_items        = #{unplacedItems},
+            computed_at           = #{computedAt}
+        WHERE proposal_id = #{proposalId}
+          AND user_id     = #{userId}
+    </update>
+
+</mapper>

@@ -1,0 +1,212 @@
+package com.jungwoo.project.memo.learning.tidy.dto;
+
+import com.jungwoo.project.memo.learning.tidy.ProjectTidyScope;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 프로젝트 정리 화면이 필요한 전부. 정리안이 없을 때도 이 모양으로 온다(요청 전/생성 중/실패).
+ *
+ * <p>변경을 <b>영향을 받는 항목</b>으로 묶어 준다(groups). 파일별 카드가 아니다 — 사용자가 보는
+ * 것은 "스택에 강의·교재가 붙고 중복된 큐가 합쳐진다"이지 "3번 파일의 제안"이 아니다.
+ */
+@Getter
+@Builder(toBuilder = true)
+public class ProjectTidyResponse {
+
+    private Long courseId;
+    /** 지금 검토할 정리안이 있으면 그 상태, 없으면 null. */
+    private Long proposalId;
+    /** PROPOSED / APPLIED / DISMISSED / SUPERSEDED / EMPTY */
+    private String status;
+    private Long revision;
+    private Long baseTreeVersion;
+    private Long currentTreeVersion;
+    /**
+     * 이 정리안을 만든 뒤 트리가 바뀌었다. 그대로 적용하지 않고 다시 정리해야 한다.
+     * 화면은 정리안을 숨기지 않고 "갱신 필요"로 표시한다.
+     */
+    private boolean treeChanged;
+
+    /** 만드는 중이거나 실패한 작업. 없으면 null. */
+    private Job job;
+
+    private Summary summary;
+    private List<Group> groups;
+    private List<Change> changes;
+    /** changeId → 함께 골라야 하는 changeId들. 화면이 체크를 연동하는 데 쓴다. */
+    private Map<String, List<String>> dependsOn;
+
+    /** 사용자가 고친 것(제목·제외). 저장된 값 그대로. */
+    private Map<String, Edit> edits;
+    private Long editRevision;
+
+    /** 이번 정리가 실제로 무엇을 보았는가. 부분 정리면 화면이 그 말을 한다. */
+    private ProjectTidyScope scope;
+
+    /**
+     * 이 정리안을 만든 뒤 분석이 끝난 자료 수. 0보다 크면 화면이 "새 자료 N개를 반영할 수 있어요"와
+     * [새 자료 반영해 다시 정리]를 보여준다. 몰래 섞지 않는다.
+     */
+    private int newMaterialCount;
+    /** 지금 정리에 쓸 수 있는 자료 수(요청 전 미리보기와 같은 값). */
+    private int readyMaterialCount;
+    private int analyzingMaterialCount;
+    /** 아직 한 번도 정리하지 않은 프로젝트인가. 화면 문구가 달라진다. */
+    private boolean firstTime;
+    /** 이전 방식(자료별)으로 만들어졌다가 물러난 변경안 수. 전환 안내에 쓴다. */
+    private int legacyProposalCount;
+
+    /**
+     * 요청한 일이 <이미> 끝나 있었다. 폐기를 눌렀는데 그 사이 적용이 끝난 경우 등.
+     *
+     * <p>실패가 아니다 — 사용자가 원한 결과(검토할 안이 없다)는 이뤄졌다. 다만 화면이
+     * "방금 내가 버렸다"와 "이미 처리돼 있었다"를 구분해 말할 수 있어야 한다.
+     */
+    private Boolean alreadyResolved;
+
+    private LocalDateTime createdAt;
+    private LocalDateTime resolvedAt;
+
+    @Getter
+    @Builder
+    public static class Job {
+        private Long jobId;
+        /** QUEUED / RUNNING / DONE / FAILED / UNAVAILABLE / CANCELLED */
+        private String status;
+        private String errorCode;
+        private String message;
+        private LocalDateTime createdAt;
+        private boolean retryable;
+        /**
+         * 같은 입력으로 다시 해도 같은 이유로 멈춘다(요청 뒤 자료·트리가 바뀌었거나 요청 기록이
+         * 낡았다). 화면은 [다시 시도] 대신 [새로 정리]를 준다.
+         */
+        private boolean needsNewRequest;
+    }
+
+    @Getter
+    @Builder
+    public static class Summary {
+        private String headline;
+        private int link;
+        private int add;
+        private int rename;
+        private int move;
+        private int merge;
+        private int split;
+        private int total;
+        /** 이동·병합·분할이 있다. 학습 기록에 영향이 있으므로 접지 않고 보여준다. */
+        private boolean structural;
+        private int reviewedMaterialCount;
+        private int excludedMaterialCount;
+    }
+
+    /** 영향을 받는 항목 하나와 거기 걸린 변경들. */
+    @Getter
+    @Builder
+    public static class Group {
+        private String key;
+        /** EXISTING(기존 항목) / NEW(새로 만드는 항목) */
+        private String kind;
+        private Long topicId;
+        private String title;
+        /** 기존 항목의 부모 제목. 어디에 있는 항목인지 알아야 판단할 수 있다. */
+        private String parentTitle;
+        private List<String> changeIds;
+    }
+
+    @Getter
+    @Builder
+    public static class Change {
+        private String changeId;
+        /** LINK / ADD / RENAME / MOVE / MERGE / SPLIT */
+        private String op;
+        private String label;
+        /** 사람이 읽는 한 줄. "「스택」에 강의 슬라이드 p.3~5, 교재 2장을 연결해요" */
+        private String text;
+        /** 모델이 적은 근거. */
+        private String reason;
+        /** ADD·RENAME만 고칠 수 있다. */
+        private boolean titleEditable;
+        private String title;
+        private boolean structural;
+        /** 이 변경이 기대는 다른 변경. 화면이 체크를 연동한다. */
+        private List<String> dependsOn;
+        /** 학습 기록 승계가 애매할 때 미리 알리는 말. */
+        private String caution;
+        private List<Section> sections;
+    }
+
+    /** 근거 구간. 어느 자료의 어디인지까지 있어야 원문을 열 수 있다. */
+    @Getter
+    @Builder
+    public static class Section {
+        private Long sectionId;
+        private Long materialId;
+        private String materialFilename;
+        private String locator;
+        private String title;
+        private List<String> roles;
+        private String taskText;
+        private String excerpt;
+        /**
+         * 이 근거를 지금 열 수 있는가.
+         * <ul>
+         *   <li>OK — 자료가 있고, 이 구간이 지금 파일에서 나온 것이다.</li>
+         *   <li>OUTDATED — 자료는 있지만 이 발췌는 <b>예전 파일(또는 예전 분석)</b>에서 나왔다.
+         *       원본을 열면 지금 파일이 열린다 — 화면은 둘이 다를 수 있다고 말해야 한다.</li>
+         *   <li>MATERIAL_DELETED — 자료가 지워졌다. 열 파일이 없다.</li>
+         *   <li>MISSING — 구간 기록 자체가 없다.</li>
+         * </ul>
+         * 예전에는 지금 살아 있는 구간만 읽어, 바뀐 근거는 말없이 목록에서 빠졌다.
+         */
+        private String availability;
+        /**
+         * 원본을 열 때 곧바로 갈 PDF 쪽. PDF 쪽 단위 구간이고 지금 파일의 것일 때만 채운다 —
+         * 파일이 바뀌었으면 같은 쪽 번호가 다른 내용을 가리킬 수 있다. 그 밖의 형식은 null이고,
+         * 화면은 위치(locator)를 글로만 보여 준다.
+         */
+        private Integer page;
+    }
+
+    @Getter
+    @Builder
+    public static class Edit {
+        private boolean excluded;
+        private String title;
+        /**
+         * 판이 바뀌면서 이 편집이 옮겨 왔는데 대응이 확실하지 않다.
+         *
+         * <p>화면은 "확인 필요"를 붙이고 해결 액션을 주며, 하나라도 남아 있으면 적용을 막는다.
+         * 서버도 같은 것을 막는다(E409_034) — 화면을 거치지 않은 요청도 있기 때문이다.
+         */
+        private boolean needsConfirm;
+        /** 이 편집이 원래 붙어 있던 제안. needsConfirm일 때만 채운다. */
+        private CarriedFrom carriedFrom;
+    }
+
+    /**
+     * 옮겨 오기 전 제안.
+     *
+     * <p>사용자에게 물어야 하는 것은 "확인했나요"가 아니라 "이것과 저것이 같은 것인가요"다.
+     * 그러려면 이전 제안이 무엇이었고 무엇이 달라졌는지가 화면에 있어야 한다.
+     */
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CarriedFrom {
+        private String changeId;
+        /** 이전 제안을 짧게. "새 항목 「원형 큐」" */
+        private String text;
+        /** 왜 확인이 필요한가. "근거 구간이 달라졌어요" */
+        private String reason;
+    }
+}

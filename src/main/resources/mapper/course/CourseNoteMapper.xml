@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.CourseNoteMapper">
+
+    <resultMap id="courseNoteResultMap" type="com.jungwoo.project.memo.course.domain.CourseNote">
+        <id     property="noteId"           column="note_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="courseId"         column="course_id"/>
+        <result property="category"         column="category"/>
+        <result property="label"            column="label"/>
+        <result property="detail"           column="detail"/>
+        <result property="sourceMaterialId" column="source_material_id"/>
+        <result property="createdAt"        column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="noteId">
+        INSERT INTO course_notes (
+            user_id, course_id, category, label, detail, source_material_id
+        ) VALUES (
+            #{userId}, #{courseId}, #{category}, #{label}, #{detail}, #{sourceMaterialId}
+        )
+    </insert>
+
+    <select id="findByCourseIdAndUserId" resultMap="courseNoteResultMap">
+        SELECT * FROM course_notes
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+        ORDER BY category ASC, note_id ASC
+    </select>
+
+</mapper>
