@@ -24,9 +24,16 @@ public class MaterialAnalysisBatchItem {
     private Long userId;
     private Integer position;
     private String filename;
+    /** 압축 안의 경로. 같은 이름의 파일을 구분해 보여 준다. 일반 업로드는 null. */
+    private String sourcePath;
     private Long sizeBytes;
     private String extension;
     private Long materialId;
+    /**
+     * 압축 안의 어느 항목인가. 가져오기 작업자가 이 값으로 자리를 찾는다 — 파일 이름으로 찾으면
+     * "과제1/main.py"와 "과제2/main.py"가 엇갈린다.
+     */
+    private Long zipEntryId;
     private BatchItemUploadState uploadState;
     private Integer estMinSeconds;
     private Integer estMaxSeconds;

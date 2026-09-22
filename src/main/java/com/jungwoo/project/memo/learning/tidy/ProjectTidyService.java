@@ -84,17 +84,65 @@ public class ProjectTidyService {
     private final ObjectMapper objectMapper;
 
     /** edits_json의 값. */
-    record EditValue(boolean excluded, String title, boolean needsConfirm) {
+    /**
+     * 검토 중 고친 것 하나.
+     *
+     * @param needsConfirm 판이 바뀌면서 옮겨 왔는데 대응이 확실하지 않다. 사용자가 고르기 전에는
+     *                     적용하지 않는다 — 확인하지 않은 판단으로 트리를 바꾸지 않기 위해서다
+     * @param carriedFrom  어느 제안에 붙어 있던 편집인지. 화면이 "전에는 이랬고 지금은 이렇다"를
+     *                     보여주려면 옛 제안의 말이 남아 있어야 한다
+     */
+    record EditValue(boolean excluded, String title, boolean needsConfirm, CarriedFrom carriedFrom) {
+
+        EditValue(boolean excluded, String title, boolean needsConfirm) {
+            this(excluded, title, needsConfirm, null);
+        }
+
+        EditValue withConfirmed() {
+            return new EditValue(excluded, title, false, carriedFrom);
+        }
+    }
+
+    /** 승계 전 판에서 이 편집이 붙어 있던 제안. */
+    record CarriedFrom(String changeId, String text, String reason) {
     }
 
     /**
      * 요청 시점에 고정한 입력. input_snapshot_json으로 저장된다.
      *
-     * <p>왜 id만 두는가: 내용(구간·트리)까지 복사해 두면 실행 시점에 그 복사본이 진짜와 다를 수
-     * 있고, 어느 쪽이 맞는지 정할 근거가 없다. "무엇을 대상으로 삼기로 했는가"만 고정하고
-     * 내용은 실행할 때 읽되, 그 사이 못 쓰게 된 것은 사유와 함께 제외로 남긴다.
+     * <p><b>무엇을 고정하는가</b>: 트리 판, 대상 자료, 자료마다 파일 해시·분석 판·근거 구간 id,
+     * 그리고 그때 빠진 자료와 사유. 구간의 <i>내용</i>은 복사하지 않는다 — 복사본과 진짜가
+     * 어긋나면 어느 쪽이 맞는지 정할 근거가 없다. 대신 실행할 때 지금 상태가 이 기록과
+     * <b>똑같은지 확인하고, 다르면 멈춘다</b>. 바뀐 최신 입력을 몰래 대신 쓰지 않는다.
+     *
+     * <p>예전(판 없음)에는 자료 id만 있었다. 그 기록으로는 "무엇을 봤는가"를 확인할 수 없으므로
+     * 그대로 다시 쓰지 않고 새 요청을 안내한다(SNAPSHOT_OUTDATED).
+     *
+     * @param version    이 모양의 판. {@link #SNAPSHOT_VERSION}
+     * @param materialIds 옛 판과 같은 이름으로 둔다(읽는 쪽이 판을 가리기 쉽게)
      */
-    record InputSnapshot(List<Long> materialIds, List<ProjectTidyScope.Excluded> excludedAtRequest) {
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    record InputSnapshot(Integer version, Long treeVersion, List<Long> materialIds,
+                         List<SnapshotMaterial> materials, List<ProjectTidyScope.Excluded> excludedAtRequest) {
+    }
+
+    /** 요청 때 본 자료 하나. 실행할 때 지금 상태가 이것과 같아야 한다. */
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    record SnapshotMaterial(Long materialId, String filename, String fileHash, Integer analysisVersion,
+                            List<Long> sectionIds) {
+    }
+
+    static final int SNAPSHOT_VERSION = 2;
+
+    /**
+     * 같은 입력으로 다시 해도 같은 이유로 멈추는 실패. 화면은 [다시 시도] 대신 [새로 정리]를 준다.
+     * 다시 시도는 요청 때의 입력을 그대로 쓰기 때문이다.
+     */
+    static final Set<String> NEEDS_NEW_REQUEST = Set.of("STALE_INPUT", "SNAPSHOT_INVALID", "SNAPSHOT_OUTDATED");
+
+    /** Set.of(...)는 null을 물으면 예외를 던진다. 도는 작업은 오류 코드가 없다. */
+    static boolean needsNewRequest(String errorCode) {
+        return errorCode != null && NEEDS_NEW_REQUEST.contains(errorCode);
     }
 
     // ===== 요청 =====
@@ -138,9 +186,7 @@ public class ProjectTidyService {
                 .nextRunAt(LocalDateTime.now())
                 // ★ 입력을 지금 고정한다. 모델이 도는 동안 분석이 더 끝나도 이번 정리에는 들어가지
                 //   않는다 — 사용자가 승인 화면에서 볼 근거와 실제로 쓴 근거를 같게 하기 위해서다.
-                .inputSnapshotJson(writeJson(new InputSnapshot(
-                        preview.ready().stream().map(ProjectTidyInputBuilder.Preview.Ready::materialId).toList(),
-                        preview.excluded())))
+                .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview)))
                 .build();
         try {
             tidyMapper.insertJob(job);
@@ -151,6 +197,84 @@ public class ProjectTidyService {
         }
         log.info("프로젝트 정리 요청: courseId={}, jobId={}, 세대={}, 대상 자료={}, 제외={}",
                 courseId, job.getJobId(), job.getGeneration(), preview.readyCount(), preview.excluded().size());
+        return view(userId, courseId);
+    }
+
+    /**
+     * 지금 상태를 스냅샷으로 남긴다. 자료마다 해시·분석 판·근거 구간 id까지.
+     */
+    private InputSnapshot snapshotOf(Long userId, Course course, ProjectTidyInputBuilder.Preview preview) {
+        List<Long> ids = preview.ready().stream().map(ProjectTidyInputBuilder.Preview.Ready::materialId).toList();
+        Map<Long, CourseMaterial> materials = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (CourseMaterial m : courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(ids, userId)) {
+                materials.put(m.getMaterialId(), m);
+            }
+        }
+        Map<Long, List<MaterialSection>> sections = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (MaterialSection section : sectionMapper.findActiveByMaterialIds(ids, userId)) {
+                sections.computeIfAbsent(section.getMaterialId(), k -> new ArrayList<>()).add(section);
+            }
+        }
+        List<SnapshotMaterial> out = new ArrayList<>();
+        for (Long id : ids) {
+            CourseMaterial material = materials.get(id);
+            List<MaterialSection> own = sections.getOrDefault(id, List.of());
+            out.add(new SnapshotMaterial(id, material == null ? null : material.getOriginalFilename(),
+                    material == null ? null : material.getFileHash(),
+                    own.stream().map(MaterialSection::getAnalysisVersion).filter(java.util.Objects::nonNull)
+                            .max(Integer::compareTo).orElse(null),
+                    own.stream().map(MaterialSection::getSectionId).sorted().toList()));
+        }
+        return new InputSnapshot(SNAPSHOT_VERSION,
+                course.getTopicTreeVersion() == null ? 0 : course.getTopicTreeVersion(),
+                ids, out, preview.excluded());
+    }
+
+    /**
+     * 실패한 정리를 <요청 때의 입력 그대로> 다시 한다.
+     *
+     * <p>예전 화면의 [다시 시도]는 새 요청이었다 — 그 사이 끝난 자료까지 섞여 들어가, 사용자가
+     * 처음 누를 때 본 범위와 다른 정리안이 나왔다. 최신 자료를 반영하는 것은 명시적인 새
+     * 요청이고, 다시 시도는 같은 입력으로 한 번 더 해 보는 것이다.
+     *
+     * <p>입력이 낡아 멈춘 실패(STALE_INPUT 등)는 같은 입력으로 다시 해도 또 멈추므로 받지 않는다.
+     */
+    @Transactional
+    public ProjectTidyResponse retry(Long userId, Long courseId) {
+        courseService.getOwned(userId, courseId);
+        if (tidyMapper.findOpenJobByCourse(courseId, userId) != null) {
+            return view(userId, courseId);
+        }
+        ProjectTidyJob failed = tidyMapper.findLatestJobByCourse(courseId, userId);
+        if (failed == null || (failed.getStatus() != TidyJobStatus.FAILED
+                && failed.getStatus() != TidyJobStatus.UNAVAILABLE)) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_RETRY_NOT_AVAILABLE,
+                    "다시 시도할 실패한 정리가 없어요");
+        }
+        if (needsNewRequest(failed.getErrorCode())) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_RETRY_NOT_AVAILABLE,
+                    "요청한 뒤 자료나 학습 구조가 바뀌어 같은 입력으로는 다시 할 수 없어요. 새로 정리해 주세요");
+        }
+        Long maxGeneration = tidyMapper.findMaxGeneration(courseId);
+        ProjectTidyJob again = ProjectTidyJob.builder()
+                .userId(userId).courseId(courseId)
+                .generation(maxGeneration == null ? 1 : maxGeneration + 1)
+                .status(TidyJobStatus.QUEUED)
+                .baseTreeVersion(failed.getBaseTreeVersion())
+                .previousProposalId(failed.getPreviousProposalId())
+                .maxAttempts(3)
+                .nextRunAt(LocalDateTime.now())
+                .inputSnapshotJson(failed.getInputSnapshotJson())
+                .build();
+        try {
+            tidyMapper.insertJob(again);
+        } catch (DuplicateKeyException e) {
+            return view(userId, courseId);
+        }
+        log.info("프로젝트 정리 다시 시도(같은 입력): courseId={}, 앞 작업={}, 새 작업={}",
+                courseId, failed.getJobId(), again.getJobId());
         return view(userId, courseId);
     }
 
@@ -205,13 +329,33 @@ public class ProjectTidyService {
             throw new ConflictException(ErrorCode.PROJECT_TIDY_PROPOSAL_RESOLVED);
         }
         Set<String> known = changeIds(proposal);
+
+        /*
+         * 지금 저장돼 있는 편집을 먼저 읽는다. needsConfirm과 carriedFrom은 <서버가 정한 것>이라
+         * 요청에 실려 오지 않는다. 예전에는 여기서 모두 false로 덮어써서, 사용자가 아무 제목이나
+         * 한 글자 고치기만 해도 "확인 필요"가 소리 없이 사라졌다 — 확인하지 않은 승계 편집이
+         * 확인된 것처럼 되어 그대로 적용될 수 있었다.
+         */
+        Map<String, EditValue> current = readEdits(tidyMapper.findEdits(proposalId, userId));
+        Map<String, String> resolutions = normalizeResolutions(request, proposal);
+
         Map<String, EditValue> edits = new LinkedHashMap<>();
         if (request.getEdits() != null) {
             request.getEdits().forEach((changeId, value) -> {
                 // 모르는 changeId는 버린다. 옛 판의 편집이 새 판에 그대로 들어오면 엉뚱한 것을 가린다.
-                if (known.contains(changeId) && value != null) {
-                    edits.put(changeId, new EditValue(value.isExcluded(), trimToNull(value.getTitle()), false));
+                if (!known.contains(changeId) || value == null) {
+                    return;
                 }
+                EditValue before = current.get(changeId);
+                String resolution = resolutions.get(changeId);
+                if ("DROP".equals(resolution)) {
+                    // 승계된 편집을 버린다 = 이 변경에 대한 내 판단을 없앤다. 새 제안 그대로 간다.
+                    return;
+                }
+                boolean needsConfirm = before != null && before.needsConfirm() && !"KEEP".equals(resolution);
+                CarriedFrom carriedFrom = needsConfirm && before != null ? before.carriedFrom() : null;
+                edits.put(changeId, new EditValue(value.isExcluded(), trimToNull(value.getTitle()),
+                        needsConfirm, carriedFrom));
             });
         }
         String json = writeJson(edits);
@@ -233,6 +377,51 @@ public class ProjectTidyService {
         }
         Course course = courseService.getOwned(userId, proposal.getCourseId());
         return toResponse(userId, course, tidyMapper.findProposalById(proposalId, userId), null);
+    }
+
+    /** 어떤 변경이 확인을 기다리는지 이름으로 말한다. details가 그대로 화면에 나간다. */
+    private String describeUnconfirmed(List<TopicChangeOp> ops, List<String> changeIds) {
+        Map<String, TopicChangeOp> byId = new LinkedHashMap<>();
+        ops.forEach(op -> byId.put(op.changeId(), op));
+        List<String> names = new ArrayList<>();
+        for (String changeId : changeIds) {
+            TopicChangeOp op = byId.get(changeId);
+            names.add(op == null ? changeId : TidyChangeText.shortName(op));
+        }
+        return "이전 판에서 옮겨 온 편집 " + names.size() + "건을 아직 확인하지 않았어요: "
+                + String.join(", ", names);
+    }
+
+    /**
+     * 확인 처리를 받아들일지 정한다. 클라이언트의 말만 믿지 않는다.
+     *
+     * <p>세 가지를 확인한다. (1) 보낸 판이 지금 정리안의 판과 같은가 — 사용자가 확인한 것은
+     * 그때 본 제안이다. (2) 값이 KEEP/DROP인가. (3) 실제로 확인이 필요한 항목인가 — 아닌 것에
+     * 대한 "확인"은 아무 뜻이 없으므로 무시한다.
+     */
+    private Map<String, String> normalizeResolutions(ProjectTidyRequests.SaveEdits request,
+                                                     ProjectTidyProposal proposal) {
+        if (request.getResolveCarried() == null || request.getResolveCarried().isEmpty()) {
+            return Map.of();
+        }
+        if (request.getRevision() == null || !request.getRevision().equals(proposal.getRevision())) {
+            log.info("확인 처리를 받지 않는다 — 판이 다르다: proposalId={}, 보낸 판={}, 지금 판={}",
+                    proposal.getProposalId(), request.getRevision(), proposal.getRevision());
+            return Map.of();
+        }
+        Map<String, EditValue> stored = readEdits(tidyMapper.findEdits(proposal.getProposalId(),
+                proposal.getUserId()));
+        Map<String, String> out = new LinkedHashMap<>();
+        request.getResolveCarried().forEach((changeId, decision) -> {
+            EditValue value = stored.get(changeId);
+            if (value == null || !value.needsConfirm()) {
+                return;
+            }
+            if ("KEEP".equals(decision) || "DROP".equals(decision)) {
+                out.put(changeId, decision);
+            }
+        });
+        return out;
     }
 
     // ===== 적용 =====
@@ -286,11 +475,27 @@ public class ProjectTidyService {
             throw new ConflictException(ErrorCode.PROJECT_TIDY_SELECTION_INCOMPLETE, describeMissing(all, missing));
         }
 
+        /*
+         * 확인하지 않은 승계 편집이 남아 있으면 적용하지 않는다.
+         *
+         * 고른 것만 보지 않고 <전부>를 보는 이유: 승계된 "제외"도 편집이다. 확인하지 않은
+         * 제외가 남아 있으면 새 판의 어떤 작업이 사용자가 보지도 않은 옛 판단 때문에 조용히
+         * 빠진 채 적용된다. 빠진 것은 화면에 나타나지 않으므로 사용자가 알아챌 방법이 없다.
+         */
+        Map<String, EditValue> saved = readEdits(edits);
+        List<String> unconfirmed = saved.entrySet().stream()
+                .filter(e -> e.getValue() != null && e.getValue().needsConfirm())
+                .map(Map.Entry::getKey)
+                .toList();
+        if (!unconfirmed.isEmpty()) {
+            throw new ConflictException(ErrorCode.PROJECT_TIDY_CARRIED_EDIT_UNCONFIRMED,
+                    describeUnconfirmed(readOps(proposal.getOpsJson()), unconfirmed));
+        }
+
         // 근거가 아직 그대로인가. 잠근 채 확인해 검증과 쓰기 사이에 바뀌지 않게 한다.
         Map<Long, MaterialSection> sections = verifyEvidence(userId, proposal);
 
         List<TopicChangeOp> chosen = new ArrayList<>();
-        Map<String, EditValue> saved = readEdits(edits);
         for (TopicChangeOp op : all) {
             if (!selected.contains(op.changeId())) {
                 continue;
@@ -372,13 +577,33 @@ public class ProjectTidyService {
         for (MaterialSection section : sectionMapper.findActiveByMaterialIds(materialIds, userId)) {
             sections.put(section.getSectionId(), section);
         }
-        // 인용한 구간이 사라졌으면(재분석으로 교체) 적용하지 않는다.
+        /*
+         * 인용한 구간이 사라졌거나(재분석으로 교체) <다른 판의 분석>이 됐으면 적용하지 않는다.
+         *
+         * 분석 판(analysis_version)을 여기서 본다. 예전에는 정리안 자료 표에 저장만 하고 쓰지
+         * 않았다 — 같은 파일이 분석기 판만 올라 다시 분석되면 구간 내용이 바뀌어도 해시가 같아
+         * 그대로 통과했다. 사용자가 본 근거와 적용되는 근거가 달라지는 자리다.
+         */
+        Map<Long, ProjectTidyProposalMaterial> byMaterial = new HashMap<>();
+        members.forEach(m -> byMaterial.put(m.getMaterialId(), m));
         Set<Long> cited = new HashSet<>();
         collectSectionIds(readOps(proposal.getOpsJson()), cited);
         for (Long sectionId : cited) {
-            if (!sections.containsKey(sectionId)) {
+            MaterialSection section = sections.get(sectionId);
+            if (section == null) {
                 throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
                         "근거로 삼은 자료 구간이 다시 분석되어 바뀌었어요. 다시 정리해 주세요");
+            }
+            ProjectTidyProposalMaterial member = byMaterial.get(section.getMaterialId());
+            if (member != null && member.getAnalysisVersion() != null
+                    && !member.getAnalysisVersion().equals(section.getAnalysisVersion())) {
+                throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
+                        "근거로 삼은 자료가 다시 분석되어 내용이 바뀌었을 수 있어요. 다시 정리해 주세요");
+            }
+            if (member != null && member.getFileHash() != null
+                    && !member.getFileHash().equals(section.getFileHash())) {
+                throw new ConflictException(ErrorCode.PROJECT_TIDY_EVIDENCE_CHANGED,
+                        "근거로 삼은 자료 구간이 다른 파일의 것이 됐어요. 다시 정리해 주세요");
             }
         }
         return sections;
@@ -392,18 +617,61 @@ public class ProjectTidyService {
      * <p>도는 작업이 있으면 함께 무효화한다(임대 토큰을 올린다) — 늦게 끝난 작업이 버린 자리에
      * 정리안을 다시 놓지 못한다. 같은 입력으로 자동 재생성하지도 않는다. 사용자가 다시 누르는
      * 것만 새 정리안을 만든다.
+     *
+     * <p><b>적용과 같은 전이 규칙을 쓴다.</b> 예전에는 여기서 잠그지 않고 읽은 뒤 조건 없는
+     * UPDATE를 했다. 그래서 이 순서가 가능했다 — 폐기가 PROPOSED를 읽는다 → 적용이
+     * 커밋한다(트리가 바뀐다) → 폐기가 APPLIED를 DISMISSED로 덮는다. 트리는 적용됐는데
+     * 이력은 "버림"이 되어, 사용자는 적용한 적 없는 변경을 트리에서 보게 된다.
+     * 이제는 {@code FOR UPDATE}로 잠근 뒤 상태 조건이 붙은 전이만 쓴다. 적용이 먼저면
+     * 0행이 되고, 덮는 대신 "이미 처리됨"으로 돌려준다.
+     *
+     * <p>잠금 순서는 적용과 같다: <b>정리안 → 작업 → 자료</b>. 두 경로가 같은 순서로
+     * 잡으므로 서로 기다리다 엉키지 않는다.
      */
     @Transactional
     public ProjectTidyResponse dismiss(Long userId, Long courseId) {
         Course course = courseService.getOwned(userId, courseId);
-        tidyMapper.cancelOpenJobs(courseId, userId, "사용자가 버렸다");
-        ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(courseId, userId);
-        if (open != null) {
-            tidyMapper.updateProposalStatus(open.getProposalId(), userId, TidyProposalStatus.DISMISSED.name(),
-                    null, null, LocalDateTime.now());
-            log.info("프로젝트 정리안 폐기: courseId={}, proposalId={}", courseId, open.getProposalId());
+        boolean alreadyResolved = false;
+
+        /*
+         * 잠근 뒤에 한 번 더 확인하는 이유: 잠그기 전에 읽은 id가 그 사이 물러나고 새 정리안이
+         * 들어섰을 수 있다. 그러면 옛 것만 버리고 새 것이 남는다. 열린 안이 잠근 것과 같아질
+         * 때까지 다시 본다 — 한 프로젝트에 열린 안은 하나뿐이라 몇 번이면 끝난다.
+         */
+        ProjectTidyProposal locked = null;
+        for (int attempt = 0; attempt < 3; attempt++) {
+            ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(courseId, userId);
+            if (open == null) {
+                break;
+            }
+            locked = tidyMapper.findProposalByIdForUpdate(open.getProposalId(), userId);
+            if (locked != null && locked.getStatus() == TidyProposalStatus.PROPOSED) {
+                break;
+            }
+            // 잠그고 보니 이미 끝나 있었다. 그 사이 새 안이 생겼는지 다시 본다.
+            alreadyResolved = true;
+            locked = null;
         }
-        return toResponse(userId, course, null, null);
+
+        // 작업 무효화는 정리안을 잠근 뒤에 한다(잠금 순서: 정리안 → 작업).
+        tidyMapper.cancelOpenJobs(courseId, userId, "사용자가 버렸다");
+
+        if (locked != null) {
+            int moved = tidyMapper.resolveProposalIfOpen(locked.getProposalId(), userId, locked.getRevision(),
+                    TidyProposalStatus.DISMISSED.name(), null, LocalDateTime.now());
+            if (moved == 1) {
+                log.info("프로젝트 정리안 폐기: courseId={}, proposalId={}", courseId, locked.getProposalId());
+            } else {
+                // 잠갔는데도 0행이면 판 번호가 그 사이 올라간 것이다. 덮지 않는다.
+                alreadyResolved = true;
+                log.info("폐기 시점에 이미 처리된 정리안: courseId={}, proposalId={}",
+                        courseId, locked.getProposalId());
+            }
+        }
+
+        return toResponse(userId, course, null, null).toBuilder()
+                .alreadyResolved(alreadyResolved ? Boolean.TRUE : null)
+                .build();
     }
 
     /** 프로젝트가 보관되거나 지워질 때. 도는 작업만 무효화하고 정리안 이력은 남긴다. */
@@ -429,7 +697,10 @@ public class ProjectTidyService {
                         .jobId(job.getJobId()).status(job.getStatus().name())
                         .errorCode(job.getErrorCode()).message(job.getErrorMessage())
                         .createdAt(job.getCreatedAt())
-                        .retryable(job.getStatus() == TidyJobStatus.FAILED)
+                        .retryable((job.getStatus() == TidyJobStatus.FAILED
+                                || job.getStatus() == TidyJobStatus.UNAVAILABLE)
+                                && !needsNewRequest(job.getErrorCode()))
+                        .needsNewRequest(needsNewRequest(job.getErrorCode()))
                         .build());
 
         if (proposal == null) {
@@ -445,7 +716,7 @@ public class ProjectTidyService {
         ProjectTidyEdits edits = tidyMapper.findEdits(proposal.getProposalId(), userId);
         Map<String, EditValue> editValues = readEdits(edits);
         Map<Long, MaterialSection> sections = sectionsOf(userId, proposal);
-        Map<Long, CourseMaterial> materials = materialsOf(userId, scope);
+        Map<Long, CourseMaterial> materials = materialsOf(userId, scope, sections);
         Map<Long, CourseTopic> topics = new HashMap<>();
         for (CourseTopic topic : topicMapper.findByCourseIdAndUserIdIncludingArchived(courseId, userId)) {
             topics.put(topic.getTopicId(), topic);
@@ -595,9 +866,13 @@ public class ProjectTidyService {
         for (Long sectionId : sectionIds) {
             MaterialSection section = sections.get(sectionId);
             if (section == null) {
+                // 기록이 없다. 빼지 않고 "찾을 수 없음"으로 남긴다 — 말없이 빠지면 근거가 줄어든 것을 알 수 없다.
+                briefs.add(ProjectTidyResponse.Section.builder()
+                        .sectionId(sectionId).availability("MISSING").build());
                 continue;
             }
             CourseMaterial material = materials.get(section.getMaterialId());
+            String availability = availabilityOf(section, material);
             briefs.add(ProjectTidyResponse.Section.builder()
                     .sectionId(section.getSectionId())
                     .materialId(section.getMaterialId())
@@ -607,6 +882,10 @@ public class ProjectTidyService {
                     .roles(readStrings(section.getRolesJson()))
                     .taskText(section.getTaskText())
                     .excerpt(section.getExcerpt())
+                    .availability(availability)
+                    .page("OK".equals(availability)
+                            && section.getUnitType() == com.jungwoo.project.memo.material.domain.TextUnitType.PDF_PAGE
+                            ? section.getUnitStart() : null)
                     .build());
         }
         return ProjectTidyResponse.Change.builder()
@@ -636,23 +915,46 @@ public class ProjectTidyService {
         };
     }
 
+    /**
+     * 이 정리안이 인용한 구간. <b>상태와 상관없이</b> id로 읽는다.
+     *
+     * <p>예전에는 지금 살아 있는 구간만 읽었다. 다시 분석되어 물러난 구간은 여기서 사라져, 화면의
+     * 근거 목록에서 말없이 빠졌다. 이제는 읽어 와서 "예전 파일의 발췌"라고 표시한다
+     * ({@link #availabilityOf}).
+     */
     private Map<Long, MaterialSection> sectionsOf(Long userId, ProjectTidyProposal proposal) {
-        List<Long> materialIds = tidyMapper.findProposalMaterials(proposal.getProposalId(), userId).stream()
-                .filter(ProjectTidyProposalMaterial::isIncluded)
-                .map(ProjectTidyProposalMaterial::getMaterialId).toList();
+        Set<Long> cited = new LinkedHashSet<>();
+        collectSectionIds(readOps(proposal.getOpsJson()), cited);
         Map<Long, MaterialSection> out = new HashMap<>();
-        if (materialIds.isEmpty()) {
+        if (cited.isEmpty()) {
             return out;
         }
-        for (MaterialSection section : sectionMapper.findActiveByMaterialIds(materialIds, userId)) {
+        for (MaterialSection section : sectionMapper.findByIdsAndUserId(new ArrayList<>(cited), userId)) {
             out.put(section.getSectionId(), section);
         }
         return out;
     }
 
-    private Map<Long, CourseMaterial> materialsOf(Long userId, ProjectTidyScope scope) {
-        List<Long> ids = new ArrayList<>();
-        scope.reviewed().forEach(m -> ids.add(m.materialId()));
+    /**
+     * 근거 하나를 지금 열 수 있는가. 자료가 지워졌으면 열 것이 없고, 구간이 예전 파일(해시)이나
+     * 물러난 분석의 것이면 발췌와 지금 파일이 다를 수 있다.
+     */
+    static String availabilityOf(MaterialSection section, CourseMaterial material) {
+        if (material == null || material.getStatus() != MaterialStatus.ACTIVE) {
+            return "MATERIAL_DELETED";
+        }
+        boolean sameFile = section.getFileHash() == null || section.getFileHash().equals(material.getFileHash());
+        boolean current = section.getStatus() == null || "ACTIVE".equals(section.getStatus());
+        return sameFile && current ? "OK" : "OUTDATED";
+    }
+
+    private Map<Long, CourseMaterial> materialsOf(Long userId, ProjectTidyScope scope,
+                                                  Map<Long, MaterialSection> sections) {
+        Set<Long> set = new LinkedHashSet<>();
+        scope.reviewed().forEach(m -> set.add(m.materialId()));
+        // 인용한 구간의 자료도 함께 읽는다. 범위에서 빠졌어도 근거로 인용됐다면 그 자료의 지금 상태를 알아야 한다.
+        sections.values().forEach(s -> set.add(s.getMaterialId()));
+        List<Long> ids = new ArrayList<>(set);
         Map<Long, CourseMaterial> out = new HashMap<>();
         if (ids.isEmpty()) {
             return out;
@@ -666,7 +968,13 @@ public class ProjectTidyService {
     private Map<String, ProjectTidyResponse.Edit> toEditResponse(Map<String, EditValue> edits) {
         Map<String, ProjectTidyResponse.Edit> out = new LinkedHashMap<>();
         edits.forEach((changeId, value) -> out.put(changeId, ProjectTidyResponse.Edit.builder()
-                .excluded(value.excluded()).title(value.title()).needsConfirm(value.needsConfirm()).build()));
+                .excluded(value.excluded()).title(value.title()).needsConfirm(value.needsConfirm())
+                .carriedFrom(value.carriedFrom() == null ? null : ProjectTidyResponse.CarriedFrom.builder()
+                        .changeId(value.carriedFrom().changeId())
+                        .text(value.carriedFrom().text())
+                        .reason(value.carriedFrom().reason())
+                        .build())
+                .build()));
         return out;
     }
 

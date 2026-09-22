@@ -60,6 +60,7 @@ class MaterialServiceTest {
     @Mock private MaterialExtractionService materialExtractionService;
     @Mock private com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService analysisJobService;
     @Mock private com.jungwoo.project.memo.learning.structure.TopicChangeProposalService topicChangeProposalService;
+    @Mock private com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchMapper batchMapper;
 
     @InjectMocks
     private MaterialService service;
@@ -324,6 +325,8 @@ class MaterialServiceTest {
 
         verify(materialTxService).replaceExtraction(USER_ID, material, "abc123", outcome);
         verify(analysisJobService).enqueueContent(eq(material), anyInt());
+        // 본문을 못 읽어 끝났던 묶음에 이제 할 일이 생겼다 — 다시 열려야 화면이 진행을 보여 준다.
+        verify(batchMapper).reopenFinishedContaining(USER_ID, material.getMaterialId());
         // 자료를 새로 만들지 않는다 — 같은 materialId 그대로다.
         verify(materialTxService, never()).createWithLink(any(), any(), any(), any());
     }

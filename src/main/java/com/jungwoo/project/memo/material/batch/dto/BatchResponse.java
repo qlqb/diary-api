@@ -22,6 +22,9 @@ public class BatchResponse {
 
     private Long batchId;
     private Long courseId;
+    /** 압축 가져오기에서 확정된 묶음이면 그 가져오기와 압축 이름. 일반 업로드는 null. */
+    private Long zipImportId;
+    private String sourceArchiveName;
     /** STAGED / UPLOADING / ANALYZING / FINISHED / ABANDONED */
     private String status;
     private int itemCount;
@@ -64,6 +67,8 @@ public class BatchResponse {
     public static class Item {
         private Long itemId;
         private String filename;
+        /** 압축 안의 경로("과제1/main.py"). 이름이 같은 파일을 구분한다. */
+        private String sourcePath;
         private Long sizeBytes;
         private String extension;
         private Long materialId;
@@ -85,5 +90,21 @@ public class BatchResponse {
         private boolean settled;
         /** 다시 시도할 수 있는가. 실패한 분석만 true다. */
         private boolean retryable;
+    }
+
+    /**
+     * 열린 묶음 한 쪽.
+     *
+     * <p>totalOpen을 함께 준다. 화면이 "지금 보이는 것 말고도 더 있다"를 알아야, 목록에 없는
+     * 묶음을 끝난 것으로 추측하지 않는다.
+     */
+    @Getter
+    @Builder
+    public static class Page {
+        private List<BatchResponse> batches;
+        /** 다음 쪽을 부를 때 넘길 값. null이면 마지막 쪽이다. */
+        private Long nextCursor;
+        /** 지금 열린 묶음 전체 수(이 쪽에 실린 것만이 아니다). */
+        private int totalOpen;
     }
 }

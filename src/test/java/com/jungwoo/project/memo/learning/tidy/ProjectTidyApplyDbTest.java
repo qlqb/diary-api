@@ -375,6 +375,65 @@ class ProjectTidyApplyDbTest {
         assertThat(before).isNotEqualTo(after);
     }
 
+    // ===== 근거 원문 열기 =====
+
+    /*
+     * 정리안의 근거마다 "지금 열 수 있는가"를 싣는다. 예전에는 지금 살아 있는 구간만 읽어,
+     * 다시 분석되어 물러난 근거는 화면의 근거 목록에서 말없이 빠졌다. 발췌가 예전 파일의 것인데
+     * 원본을 열면 지금 파일이 열리는 경우도 구분하지 않았다.
+     */
+
+    @Test
+    void 근거가_지금_파일의_PDF_쪽이면_그_쪽으로_열_수_있다() {
+        long proposalId = saveProposal(List.of(link(stack, List.of(sectionA))));
+
+        ProjectTidyResponse.Section evidence = onlyEvidence(proposalId);
+
+        assertThat(evidence.getAvailability()).isEqualTo("OK");
+        assertThat(evidence.getPage()).isEqualTo(3);
+        assertThat(evidence.getMaterialFilename()).isEqualTo("강의슬라이드.pdf");
+    }
+
+    @Test
+    void 다시_분석되어_물러난_근거는_빠지지_않고_예전_발췌라고_표시된다() throws Exception {
+        long proposalId = saveProposal(List.of(link(stack, List.of(sectionA))));
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE material_sections SET status = 'SUPERSEDED' WHERE section_id = ?")) {
+            ps.setLong(1, sectionA);
+            ps.executeUpdate();
+        }
+
+        ProjectTidyResponse.Section evidence = onlyEvidence(proposalId);
+
+        assertThat(evidence.getAvailability()).isEqualTo("OUTDATED");
+        // 쪽 번호로 뛰지 않는다 — 지금 파일의 같은 쪽이 다른 내용일 수 있다.
+        assertThat(evidence.getPage()).isNull();
+    }
+
+    @Test
+    void 자료가_지워진_근거는_열_수_없다고_표시된다() throws Exception {
+        long proposalId = saveProposal(List.of(link(stack, List.of(sectionA))));
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(
+                     "UPDATE course_materials SET status = 'DELETED' WHERE material_id = ? AND user_id = ?")) {
+            ps.setLong(1, MATERIAL_A);
+            ps.setLong(2, USER);
+            ps.executeUpdate();
+        }
+
+        ProjectTidyResponse.Section evidence = onlyEvidence(proposalId);
+
+        assertThat(evidence.getAvailability()).isEqualTo("MATERIAL_DELETED");
+        assertThat(evidence.getPage()).isNull();
+    }
+
+    private ProjectTidyResponse.Section onlyEvidence(long proposalId) {
+        ProjectTidyResponse view = tidyService.view(USER, courseId);
+        assertThat(view.getProposalId()).isEqualTo(proposalId);
+        return view.getChanges().get(0).getSections().get(0);
+    }
+
     // ===== 준비 도구 =====
 
     private long insertCourse(String title) throws Exception {
@@ -531,6 +590,29 @@ class ProjectTidyApplyDbTest {
             ps.setString(5, hash);
             ps.executeUpdate();
         }
+        markContentAnalysisDone(conn, materialId, hash);
+    }
+
+    /**
+     * 내용 분석이 끝난 자료로 만든다.
+     *
+     * <p>이 줄이 없으면 자료의 상태는 NONE(=분석 전)이고, 정리 대상에서 빠진다.
+     * 예전에는 이것 없이도 테스트가 통과했는데, 그건 공유 DB에 <b>지난 실행이 남긴
+     * 작업 행</b>이 있었기 때문이다 — 같은 material_id를 다시 쓰면서 남의 흔적 위에
+     * 서 있었다. 격리된 DB로 옮기자 바로 드러났다. 테스트가 필요로 하는 전제는
+     * 테스트가 직접 만든다.
+     */
+    private void markContentAnalysisDone(Connection conn, long materialId, String hash) throws Exception {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "INSERT INTO material_analysis_jobs (user_id, material_id, job_kind, file_hash, "
+                        + "analysis_version, priority, status, attempt, max_attempts, total_chunks, "
+                        + "completed_chunks, next_run_at, finished_at) "
+                        + "VALUES (?, ?, 'CONTENT', ?, 1, 0, 'DONE', 1, 3, 1, 1, NOW(), NOW())")) {
+            ps.setLong(1, USER);
+            ps.setLong(2, materialId);
+            ps.setString(3, hash);
+            ps.executeUpdate();
+        }
     }
 
     private void link(Connection conn, long materialId) throws Exception {
@@ -603,6 +685,7 @@ class ProjectTidyApplyDbTest {
             for (String sql : List.of(
                     // 소요 시간 표본까지 지운다 — 남기면 다음 사용자의 예상 시간이 1바이트 시험 파일로 계산된다.
                     "DELETE FROM material_analysis_timings WHERE user_id = ?",
+                    "DELETE FROM material_analysis_jobs WHERE user_id = ?",
                     "DELETE FROM project_tidy_edits WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposal_materials WHERE user_id = ?",
                     "DELETE FROM project_tidy_proposals WHERE user_id = ?",

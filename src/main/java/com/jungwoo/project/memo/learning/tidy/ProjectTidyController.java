@@ -67,6 +67,15 @@ public class ProjectTidyController {
         return ResponseEntity.ok(tidyService.apply(principal.getUserId(), proposalId, request));
     }
 
+    /**
+     * 실패한 정리를 요청 때의 입력 그대로 다시 한다. 새 자료를 반영하려면 POST /tidy?refresh=true.
+     */
+    @PostMapping("/api/courses/{courseId}/tidy/retry")
+    public ResponseEntity<ProjectTidyResponse> retry(@AuthenticationPrincipal UserPrincipal principal,
+                                                     @PathVariable Long courseId) {
+        return ResponseEntity.ok(tidyService.retry(principal.getUserId(), courseId));
+    }
+
     @PostMapping("/api/courses/{courseId}/tidy/dismiss")
     public ResponseEntity<ProjectTidyResponse> dismiss(@AuthenticationPrincipal UserPrincipal principal,
                                                        @PathVariable Long courseId) {

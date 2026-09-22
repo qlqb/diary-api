@@ -26,6 +26,8 @@ public class MaterialAnalysisBatch {
     private Long userId;
     /** 프로젝트 화면에서 시작했으면 그 프로젝트. 자료함에서 시작했으면 null. */
     private Long courseId;
+    /** 압축 가져오기를 확정해 생긴 묶음이면 그 가져오기. 일반 업로드 묶음은 null. */
+    private Long zipImportId;
     private BatchStatus status;
     private Integer itemCount;
     private Integer estMinSeconds;

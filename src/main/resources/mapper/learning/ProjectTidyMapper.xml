@@ -209,6 +209,18 @@
     </update>
 
     <!--
+      교체 전이. 열려 있을 때만 1행이다. 생성 중에 사용자가 적용·폐기했으면 0행이고,
+      그러면 호출한 쪽이 새 판을 그대로 살리지 않고 다시 판단한다.
+    -->
+    <update id="supersedeProposalIfOpen">
+        UPDATE project_tidy_proposals
+           SET status = 'SUPERSEDED',
+               superseded_by_proposal_id = COALESCE(#{supersededByProposalId}, superseded_by_proposal_id),
+               resolved_at = #{resolvedAt}
+         WHERE proposal_id = #{proposalId} AND user_id = #{userId} AND status = 'PROPOSED'
+    </update>
+
+    <!--
       적용·폐기의 단 하나의 전이 문장. PROPOSED이고 판 번호가 맞을 때만 1행이다.
       두 탭이 동시에 눌러도 하나만 1행을 받고, 나머지는 0행을 받아 "이미 처리됨"이 된다.
     -->

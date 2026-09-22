@@ -1,8 +1,10 @@
 package com.jungwoo.project.memo.learning.tidy.dto;
 
 import com.jungwoo.project.memo.learning.tidy.ProjectTidyScope;
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Getter;
+import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -15,7 +17,7 @@ import java.util.Map;
  * 것은 "스택에 강의·교재가 붙고 중복된 큐가 합쳐진다"이지 "3번 파일의 제안"이 아니다.
  */
 @Getter
-@Builder
+@Builder(toBuilder = true)
 public class ProjectTidyResponse {
 
     private Long courseId;
@@ -61,6 +63,14 @@ public class ProjectTidyResponse {
     /** 이전 방식(자료별)으로 만들어졌다가 물러난 변경안 수. 전환 안내에 쓴다. */
     private int legacyProposalCount;
 
+    /**
+     * 요청한 일이 <이미> 끝나 있었다. 폐기를 눌렀는데 그 사이 적용이 끝난 경우 등.
+     *
+     * <p>실패가 아니다 — 사용자가 원한 결과(검토할 안이 없다)는 이뤄졌다. 다만 화면이
+     * "방금 내가 버렸다"와 "이미 처리돼 있었다"를 구분해 말할 수 있어야 한다.
+     */
+    private Boolean alreadyResolved;
+
     private LocalDateTime createdAt;
     private LocalDateTime resolvedAt;
 
@@ -74,6 +84,11 @@ public class ProjectTidyResponse {
         private String message;
         private LocalDateTime createdAt;
         private boolean retryable;
+        /**
+         * 같은 입력으로 다시 해도 같은 이유로 멈춘다(요청 뒤 자료·트리가 바뀌었거나 요청 기록이
+         * 낡았다). 화면은 [다시 시도] 대신 [새로 정리]를 준다.
+         */
+        private boolean needsNewRequest;
     }
 
     @Getter
@@ -141,6 +156,24 @@ public class ProjectTidyResponse {
         private List<String> roles;
         private String taskText;
         private String excerpt;
+        /**
+         * 이 근거를 지금 열 수 있는가.
+         * <ul>
+         *   <li>OK — 자료가 있고, 이 구간이 지금 파일에서 나온 것이다.</li>
+         *   <li>OUTDATED — 자료는 있지만 이 발췌는 <b>예전 파일(또는 예전 분석)</b>에서 나왔다.
+         *       원본을 열면 지금 파일이 열린다 — 화면은 둘이 다를 수 있다고 말해야 한다.</li>
+         *   <li>MATERIAL_DELETED — 자료가 지워졌다. 열 파일이 없다.</li>
+         *   <li>MISSING — 구간 기록 자체가 없다.</li>
+         * </ul>
+         * 예전에는 지금 살아 있는 구간만 읽어, 바뀐 근거는 말없이 목록에서 빠졌다.
+         */
+        private String availability;
+        /**
+         * 원본을 열 때 곧바로 갈 PDF 쪽. PDF 쪽 단위 구간이고 지금 파일의 것일 때만 채운다 —
+         * 파일이 바뀌었으면 같은 쪽 번호가 다른 내용을 가리킬 수 있다. 그 밖의 형식은 null이고,
+         * 화면은 위치(locator)를 글로만 보여 준다.
+         */
+        private Integer page;
     }
 
     @Getter
@@ -149,8 +182,31 @@ public class ProjectTidyResponse {
         private boolean excluded;
         private String title;
         /**
-         * 판이 바뀌면서 이 편집이 옮겨 왔는데 대응이 확실하지 않다. 화면이 "확인 필요"를 붙인다.
+         * 판이 바뀌면서 이 편집이 옮겨 왔는데 대응이 확실하지 않다.
+         *
+         * <p>화면은 "확인 필요"를 붙이고 해결 액션을 주며, 하나라도 남아 있으면 적용을 막는다.
+         * 서버도 같은 것을 막는다(E409_034) — 화면을 거치지 않은 요청도 있기 때문이다.
          */
         private boolean needsConfirm;
+        /** 이 편집이 원래 붙어 있던 제안. needsConfirm일 때만 채운다. */
+        private CarriedFrom carriedFrom;
+    }
+
+    /**
+     * 옮겨 오기 전 제안.
+     *
+     * <p>사용자에게 물어야 하는 것은 "확인했나요"가 아니라 "이것과 저것이 같은 것인가요"다.
+     * 그러려면 이전 제안이 무엇이었고 무엇이 달라졌는지가 화면에 있어야 한다.
+     */
+    @Getter
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class CarriedFrom {
+        private String changeId;
+        /** 이전 제안을 짧게. "새 항목 「원형 큐」" */
+        private String text;
+        /** 왜 확인이 필요한가. "근거 구간이 달라졌어요" */
+        private String reason;
     }
 }

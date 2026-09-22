@@ -39,6 +39,7 @@ public class MaterialZipImportWorker {
     private final MaterialService materialService;
     private final MaterialZipImportService importService;
     private final MaterialAnalysisJobService analysisJobService;
+    private final com.jungwoo.project.memo.material.batch.MaterialAnalysisBatchService batchService;
 
     /** @return 자료가 만들어졌으면 true */
     public boolean importEntry(ZipImportEntry entry) {
@@ -102,6 +103,7 @@ public class MaterialZipImportWorker {
         log.info("압축에서 자료 생성: userId={}, importId={}, entryId={}, materialId={}, status={}",
                 zipImport.getUserId(), zipImport.getImportId(), entry.getEntryId(),
                 saved.getMaterialId(), result.status());
+        bindBatchItem(entry, saved.getMaterialId());
 
         if (result.success()) {
             // 커밋 뒤라 worker가 바로 집어도 자료 행이 보인다. 실패해도 backlog가 다시 등록한다.
@@ -114,7 +116,25 @@ public class MaterialZipImportWorker {
     }
 
     private void fail(ZipImportEntry entry, String code, String message) {
-        txService.failEntry(entry.getEntryId(), code, message == null ? "가져오지 못했어요" : cut(message));
+        String text = message == null ? "가져오지 못했어요" : cut(message);
+        txService.failEntry(entry.getEntryId(), code, text);
+        try {
+            batchService.failZipEntry(entry.getUserId(), entry.getEntryId(), text);
+        } catch (Exception e) {
+            log.warn("분석 묶음 자리에 실패를 적지 못했다: entryId={}", entry.getEntryId(), e);
+        }
+    }
+
+    /**
+     * 분석 묶음의 자리를 채운다. 자료는 이미 커밋됐다 — 여기서 실패해도 자료 생성을 되돌리지 않고
+     * 로그만 남긴다. 업로드 경로의 묶음 연결(BatchUploadBinding)과 같은 규칙이다.
+     */
+    private void bindBatchItem(ZipImportEntry entry, Long materialId) {
+        try {
+            batchService.bindZipEntry(entry.getUserId(), entry.getEntryId(), materialId);
+        } catch (Exception e) {
+            log.warn("분석 묶음 자리를 채우지 못했다: entryId={}, materialId={}", entry.getEntryId(), materialId, e);
+        }
     }
 
     private static String cut(String value) {
