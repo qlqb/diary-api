@@ -511,6 +511,65 @@ POST 요청 `{items:[{materialId, placement, week}]}` — 화면에 보인 추�
 대조해, 지금도 같고 `bulkApplicable`이고 아직 확인 전인 것만 적용한다. 건너뛴 이유: `ALREADY_PLACED`(이미 확인함),
 `CHANGED`(그 사이 추천이 바뀜), `NOT_BULK`(충돌·약한 추천·추천 없음), `NOT_FOUND`(연결 없음).
 
+## Learning Flow (계획 이해·학습 실행·교재·학습 구조 조정) — 2026-09-29
+
+설계 16번, DB 05번 §22. 아래 조회는 모델을 부르지 않는다. 모델을 부르는 것은 표시한 POST뿐이다.
+
+### 계획·실행
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| (응답 추가) | `POST /api/plans/draft` 등 초안 응답 | 항목에 `startSource{materialId, sectionId, filename, contentType, sectionTitle, locator, task, page, state}` — 인용 첫 구간을 지금 자료와 대조. state AVAILABLE/CHANGED/DELETED, page는 PDF이고 AVAILABLE일 때만. 새로고침한 초안의 `goalSummary`를 전략 목표로 채운다 |
+| (응답 추가) | `GET /api/plans/{planVersionId}` | `strategy`(확정 당시 판단) |
+| GET | `/api/execution-items/{id}/workspace` | `{item, doneCriteria, courseTitle, topicTitle, proposalItemId, leftoverOfId, changedSinceDraft, startSource, guidanceState(CURRENT/STALE/NOT_YET/NO_SOURCE/NO_ORIGIN), guidance, startHelp, records[]}`. 부분 수행으로 남은 조각은 원래 조각의 제안 항목·기록을 잇는다 |
+| POST | `/api/execution-items/{id}/start-help` | **모델 1회.** `{kind: WHERE_TO_START/TOO_BIG/OTHER, text?}` → `{helpId, requestKind, requestText, firstAction, starter{title, minutes, steps[]}\|null, where, scopeChangeRequested, grounded, stale, createdAt}`. 범위·시간 불변 |
+| GET / POST | `/api/plans/drafts/items/{proposalItemId}/start-help` | 초안 항목의 시작 도움(없으면 204) / 만들기(**모델 1회**) |
+| PUT | `/api/plans/items/{executionItemId}/memo`, `/api/plans/drafts/items/{proposalItemId}/memo` | `{userText}` → PlanItemDetailResponse. 안내 단계가 없어도 된다 |
+| (요청 추가) | `POST /api/execution-items/{id}/complete`, `/partial` | `supportLevel?: SOLO/GUIDED`, `stuckStep?: string(300)`. 모르는 값은 버린다 |
+| PATCH | `/api/execution-items/records/{recordId}` | `{supportLevel, stuckStep, blockerKind, note}` 전체 교체. 결과·분량은 그대로 → ExecutionRecordResponse |
+| (응답 추가) | `GET /api/execution-items/records` | `supportLevel`, `stuckStep` |
+
+`PlanItemDetailResponse.available`은 이제 "단계가 있다"이다(메모만 있는 행은 false, `userText`는 채워짐).
+
+### 교재
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/courses/{courseId}/textbook` | `{courseId, current{title, author, publisher, isbn, edition, source, materialId}, candidates[{materialId, filename, materialType, fields[{field, value, unit, quote, current, same}]}], toc{status FOUND/NOT_FOUND, materialId, filename, entryCount, fromUnit, toUnit, entries[{level, number, title, page, unit}]}, state NONE/TITLE_ONLY/TOC_FOUND, nextAction, topicCount, pending}`. 연결 자료 중 아직 안 읽은 파일을 이때 읽는다(규칙 추출) |
+| POST | `/api/courses/{courseId}/textbook/apply` | `{materialId, values{field: 후보값}, expected{field: 화면이 본 지금 값}}` → 교재 확인 응답. 지금 값이 다르면 409 `E409_037`, 후보가 바뀌었으면 409 `E409_038`, 연결 없음 404 `E404_017` |
+| (요청 추가) | `PATCH /api/courses/{courseId}` | `textbookEdition`. 교재 칸이 바뀌었을 때만 출처를 USER로 적는다 |
+| (응답 추가) | `GET /api/courses/{courseId}` | `textbookEdition`, `textbookInfoSource`, `textbookInfoMaterialId` |
+
+### 학습 구조 조정
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/courses/{courseId}/structure/manual` | `{ops[], note?}` 직접 조작 → `{tidy, summary, question, dropped[], added}`. 검증은 엄격(하나라도 나쁘면 400 `E400_…` TOPIC_CHANGE_INVALID) |
+| POST | `/api/courses/{courseId}/structure/requests` | **모델 1회.** `{text, focusTopicIds?}` → 같은 모양. 모호하면 `added=0`·`question`. 근거 없는 분할·병합, 연결 안 된 자료는 `dropped` |
+| GET | `/api/courses/{courseId}/corrections` | `{courseId, classProgress[{topicId, title, classSeq, weekNo}], exclusions[{exclusionId, topicId, title, label}]}` |
+| DELETE | `/api/courses/{courseId}/scope-exclusions/{exclusionId}` | 범위 제외 풀기(즉시) → corrections |
+| (요청 추가) | `POST /api/courses/{courseId}/tidy` | 본문(선택) `{instruction, focusTopicIds}` — 지시가 있으면 refresh로 취급한다 |
+
+두 POST 모두 열린 정리안에 더하거나(판 +1) 새 정리안(origin USER/REQUEST)을 만든다. 열린 안의 기준 트리 판이 지금과 다르면
+409 `E409_039`. 동시에 다른 탭이 판을 올렸으면 409 `E409_029`.
+
+**작업(ops) 추가** — `TopicChangeOp`에 `afterTopicId`·`week`·`materialId`·`label`·`by`:
+- `CLASS {topicId, week?(1~30), afterTopicId?(0=가장 먼저)}` — 실제 수업. 트리 불변
+- `MATERIAL_WEEK {materialId, week}` — 자료 주차 확인과 같은 저장(USER)
+- `SCOPE_EXCLUDE {topicId, label?}` — 시험·계획 범위 제외
+- `MOVE`의 `afterTopicId`(없으면 맨 뒤 — 예전 동작, 0이면 맨 앞, 있으면 그 형제 뒤). `LINK`의 `topicId`가 없고 `tempId`가
+  있으면 같은 정리안의 새 항목에 연결(그 ADD에 딸린다). `ADD.materialId` — 구간 없이 만드는 항목의 출처 자료
+- 실행 순서: 이름 → 이동 → 추가 → 분할 → 연결 → 병합 → 실제 수업 → 자료 주차 → 범위 제외
+
+**정리안 응답 추가** — `origin`, `userRequest`, `tree[{topicId, parentTopicId, title, orderIndex}]`, 변경마다 `by`
+(null/USER/REQUEST/TOC)·`treeOp`·`payload`(작업 원본)·`impact[{topicId, title, openItems, doneItems, contexts, progress}]`.
+적용 결과(applied_result_json)에 `corrections{class, materialWeek, scope}`.
+
+**학습 지도 응답 추가** — 토픽마다 `classWeek`·`classSeq`·`scopeLabel`·`mergedDoneItems`. `weeks[]`에 실제 수업 정정으로만 생긴
+주차(`basis: "CONFIRMED_CLASS"`)가 더해진다.
+
+**계획 후보** — 범위 제외 항목(하위 포함)이 빠지고 `materialSelection.excludedTopics[].reason = "SCOPE:이름"`(이름 없으면 `SCOPE`).
+
 ## Assignments (과제)
 
 | 메서드 | 경로 | 설명 |

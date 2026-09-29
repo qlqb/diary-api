@@ -26,9 +26,16 @@ final class TidyChangeText {
 
     static String describe(TopicChangeOp op, Map<Long, CourseTopic> topics, Map<Long, MaterialSection> sections,
                            Map<Long, CourseMaterial> materials) {
+        return describe(op, topics, sections, materials, Map.of());
+    }
+
+    /** @param newTitles 같은 정리안이 새로 만드는 항목의 tempId → 제목(새 항목에 거는 연결을 이름으로 부르려고) */
+    static String describe(TopicChangeOp op, Map<Long, CourseTopic> topics, Map<Long, MaterialSection> sections,
+                           Map<Long, CourseMaterial> materials, Map<String, String> newTitles) {
         String kind = op.op() == null ? "" : op.op();
         return switch (kind) {
-            case TopicChangeOp.LINK -> "「" + (op.topicId() != null ? titleOf(op.topicId(), topics) : "새로 만드는 항목")
+            case TopicChangeOp.LINK -> "「" + (op.topicId() != null ? titleOf(op.topicId(), topics)
+                    : newTitles.getOrDefault(op.tempId(), "새로 만드는 항목") + "(새 항목)")
                     + "」에 " + evidence(op, sections, materials) + "을(를) 연결해요";
             case TopicChangeOp.ADD -> {
                 String where = op.parentTopicId() != null ? "「" + titleOf(op.parentTopicId(), topics) + "」 아래에 "

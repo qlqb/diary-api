@@ -320,7 +320,8 @@ public class LearningMapService {
                 t.getProgressStatus() == null ? null : t.getProgressStatus().name(),
                 t.getUserMark() == null ? null : t.getUserMark().name(), selfChecks.get(t.getTopicId()), refs, c[0], c[1],
                 children, klass == null ? null : klass.getWeekNo(), klass == null ? null : klass.getClassSeq(),
-                extras.scopeByTopic().get(t.getTopicId()), extras.mergedDone().getOrDefault(t.getTopicId(), 0));
+                extras.scopeByTopic().get(t.getTopicId()), extras.mergedDone().getOrDefault(t.getTopicId(), 0),
+                t.getSourceType() == null ? null : t.getSourceType().name(), t.getSourceLocator());
     }
 
     /**

@@ -769,8 +769,10 @@ public class ProjectTidyService {
         Map<String, List<String>> dependsOn = TopicChangePlan.dependencies(ops);
         addMaterialsNamed(userId, ops, materials);
         Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> records = recordsOf(userId, ops);
+        Map<String, String> newTitles = new HashMap<>();
+        ops.forEach(op -> collectNewTitles(op, newTitles));
         for (TopicChangeOp op : ops) {
-            changes.add(describe(op, topics, sections, materials, dependsOn, records));
+            changes.add(describe(op, topics, sections, materials, dependsOn, records, newTitles));
         }
         TopicChangeOpsValidator.Summary counts = countOf(ops);
 
@@ -847,6 +849,15 @@ public class ProjectTidyService {
             }
         }
         return out;
+    }
+
+    private static void collectNewTitles(TopicChangeOp op, Map<String, String> out) {
+        if (!TopicChangeOp.LINK.equals(op.op()) && op.tempId() != null && op.title() != null) {
+            out.putIfAbsent(op.tempId(), op.title());
+        }
+        if (op.children() != null) {
+            op.children().forEach(child -> collectNewTitles(child, out));
+        }
     }
 
     private static List<Long> impactTopicIds(TopicChangeOp op) {
@@ -979,7 +990,8 @@ public class ProjectTidyService {
                                                 Map<Long, MaterialSection> sections,
                                                 Map<Long, CourseMaterial> materials,
                                                 Map<String, List<String>> dependsOn,
-                                                Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> records) {
+                                                Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> records,
+                                                Map<String, String> newTitles) {
         List<ProjectTidyResponse.Impact> impact = new ArrayList<>();
         for (Long topicId : impactTopicIds(op)) {
             var row = records.get(topicId);
@@ -1025,7 +1037,7 @@ public class ProjectTidyService {
                 .changeId(op.changeId())
                 .op(op.op())
                 .label(labelOf(op.op()))
-                .text(TidyChangeText.describe(op, topics, sections, materials))
+                .text(TidyChangeText.describe(op, topics, sections, materials, newTitles))
                 .reason(op.reason())
                 .titleEditable(titleEditable)
                 .title(op.title())

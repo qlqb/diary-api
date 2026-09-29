@@ -30,17 +30,19 @@ public record LearningMapResponse(Long courseId, String title, Long treeVersion,
      * @param classSeq        사용자가 정정한 실제 수업 순서(없으면 null)
      * @param scopeLabel      시험·계획 범위에서 뺐으면 그 이름("중간고사", 이름 없으면 "")
      * @param mergedDoneItems 이 항목으로 병합된(보관된) 항목에 남아 있는 끝낸 실행 수. 옮겨 오지 않았다 — 상태는 사용자가 정한다
+     * @param sourceType      SOURCE(원문에 그 제목이 있음) / AI_DERIVED. 상세 화면이 출처를 바르게 말하려면 필요하다
+     * @param sourceLocator   원문 위치("교재 p.41")
      */
     public record TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
                             String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
                             List<TopicNode> children, Integer classWeek, Integer classSeq, String scopeLabel,
-                            int mergedDoneItems) {
+                            int mergedDoneItems, String sourceType, String sourceLocator) {
 
         public TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
                          String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
                          List<TopicNode> children) {
             this(topicId, parentTopicId, title, progressStatus, userMark, selfCheck, materials, plannedItems, doneItems,
-                    children, null, null, null, 0);
+                    children, null, null, null, 0, null, null);
         }
     }
 

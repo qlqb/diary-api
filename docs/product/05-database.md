@@ -659,6 +659,67 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 | document_title | PDF·PPTX 파일 속성의 제목. 본문 추출과 따로 보존한다. 없으면 NULL |
 | document_title_read | 0이면 아직 안 읽었다(이 열 전에 올린 자료). 확인 화면을 처음 열 때 파일에서 한 번 읽어 채운다 |
 
+## 22. 계획 이해·학습 실행·교재·실제 수업 정정 (2026-09-29)
+
+마이그레이션 `docs/sql/2026-09-29-learning-flow.sql`(추가형, 다시 돌려도 됨). 설계 16번.
+
+### execution_records 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| support_level | 선택. `SOLO`(혼자 수행) / `GUIDED`(설명·예제를 보고 수행) / NULL(남기지 않음 — "혼자 못 함"이 아니다) |
+| stuck_step | 선택. 막힌 단계(300자). 그 활동 하나의 사실 |
+
+사용자만 쓴다(완료·일부 수행 요청, 기록 고치기 PATCH). 고치기는 결과·분량·시간을 바꾸지 않는다.
+
+### plan_item_start_helps
+
+"어디서 시작할지 모르겠어요"의 결과. 항목의 범위·시간을 바꾸지 않는 안내만 담는다. 열쇠는 그 항목을 만든 제안 항목
+(`proposal_item_id`) — 초안·확정·남은 분량이 같은 도움을 본다. 직접 만든 항목은 `execution_item_id`.
+`evidence_version`은 만들 때의 항목 글·인용 구간 해시(「자세히」와 같은 판)라 바뀌면 화면이 "예전 안내"로 표시한다.
+`help_json` = `{firstAction, starter{title, minutes, steps[]}|null, where|null, scopeChangeRequested, grounded}`.
+
+`plan_item_details`(「자세히」)는 표를 바꾸지 않았다. 단계가 빈 행(`steps_json='[]'`)을 "메모만 먼저 남김"으로 쓰고, 나중에 만든
+단계는 같은 행을 채운다(`fillSteps`, 단계가 비어 있을 때만).
+
+### courses 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| textbook_edition | 판(개정 4판 등). 확인한 값만 |
+| textbook_info_source | `USER`(직접 적거나 고침) / `MATERIAL`(자료에서 찾은 값을 사용자가 적용) / NULL |
+| textbook_info_material_id, textbook_info_updated_at | MATERIAL일 때 그 자료, 마지막으로 바뀐 때 |
+
+사용자 편집 경로는 교재 칸이 실제로 바뀔 때만 `USER`로 적는다. 자료 적용은 행을 잠그고 화면이 본 값과 대조한 뒤 고른 칸만.
+
+### material_textbook_extracts
+
+규칙 추출(모델 없음) 결과. `UNIQUE (material_id, file_hash, extractor_version)` — 재분석·재시도·동시 조회가 행을 늘리지 않는다.
+조회는 지금 파일(해시 일치)·활성 자료의 행만 쓴다. `book_json` = `{필드: {value, unit, quote}}`, `toc_json` =
+`{entries[{level, number, title, page, unit}], fromUnit, toUnit}`, 목차가 3항목 미만이면 NULL.
+
+### topic_class_progress
+
+사용자가 정정한 실제 수업 진행. `UNIQUE (course_id, topic_id)`. `class_seq`(실제로 다룬 순서, 1부터) / `week_no`(1~30).
+교재 위치(course_topics의 부모·순서)와 별개다. 쓰는 길은 사용자가 적용한 정리안의 CLASS 작업뿐이고, 재분석·정리는 쓰지 않는다.
+읽을 때 보관(병합)된 항목의 행은 뺀다.
+
+### course_scope_exclusions
+
+시험·계획 범위 제외. `UNIQUE (course_id, topic_id, label)`, `status` ACTIVE/REMOVED. 학습 완료가 아니다 — 진도·기록은
+그대로이고 계획 후보에서만(하위 포함) 빠진다(사유 `SCOPE:label`). 풀기는 사용자 조작(DELETE)으로 즉시.
+
+### project_tidy_jobs / project_tidy_proposals 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| project_tidy_jobs.user_request_json | 정리에 붙인 사용자 지시 `{text, focusTopicIds}` — 모델에는 데이터로만 |
+| project_tidy_proposals.origin | `AI`(기본) / `REQUEST`(말로 한 요청 해석) / `USER`(직접 조작). REQUEST·USER 정리안은 job_id가 NULL |
+| project_tidy_proposals.user_request_json | 요청 글 |
+
+ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더해졌다(없으면 예전 모양 그대로 읽힌다).
+열린 정리안에 변경을 더할 때는 행을 잠그고 `revision = 화면이 본 값`일 때만 `ops_json`을 바꾸며 판을 올린다.
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.
