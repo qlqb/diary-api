@@ -1,5 +1,8 @@
 package com.jungwoo.project.memo.plan;
 
+import com.jungwoo.project.memo.learning.week.WeekExpressions;
+
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -21,6 +24,9 @@ import java.util.regex.Pattern;
  *
  * <p>여러 개면 가장 이른 주차를 쓴다. 9주차와 12주차에 걸친 내용은 9주차 수업을 들으려면
  * 이미 필요하기 때문이다 — 늦은 쪽을 쓰면 그 항목이 계획 창 밖으로 밀려난다.
+ *
+ * <p>범위("1~3주차")는 펼쳐서 읽는다({@link WeekExpressions#weeksIn}). 예전 정규식은 "3주차"만 잡아 1~3주차에
+ * 걸친 항목을 3주차로 밀었다 — 이 클래스의 "가장 이른 주차" 약속과 어긋났다.
  */
 public final class TopicLocators {
 
@@ -53,6 +59,10 @@ public final class TopicLocators {
             if (earliest == null || week < earliest) {
                 earliest = week;
             }
+        }
+        List<Integer> ranged = WeekExpressions.weeksIn(sourceLocator);
+        if (!ranged.isEmpty() && (earliest == null || ranged.get(0) < earliest)) {
+            earliest = ranged.get(0);
         }
         return earliest;
     }

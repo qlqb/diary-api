@@ -67,6 +67,7 @@ public enum ErrorCode {
     PLAN_ITEM_DETAIL_UNAVAILABLE(HttpStatus.BAD_REQUEST, "E400_032", "이 항목에는 자세한 안내를 만들 근거가 없습니다"),
     PLAN_SCOPE_TOO_LARGE(HttpStatus.BAD_REQUEST, "E400_034",
             "한 번에 계획할 범위가 너무 커서 꼭 필요한 사실만으로도 입력 한도를 넘어요. 기간이나 프로젝트 범위를 좁혀 주세요"),
+    MATERIAL_WEEK_INVALID(HttpStatus.BAD_REQUEST, "E400_035", "자료를 놓을 주차가 올바르지 않아요"),
     PLAN_REQUESTED_MATERIAL_INVALID(HttpStatus.BAD_REQUEST, "E400_033",
             "지정한 자료를 이 계획에 쓸 수 없습니다(삭제됐거나 선택한 프로젝트에 연결돼 있지 않습니다)"),
 
@@ -182,6 +183,8 @@ public enum ErrorCode {
      */
     PROJECT_TIDY_RETRY_NOT_AVAILABLE(HttpStatus.CONFLICT, "E409_035",
             "같은 입력으로 다시 할 수 없어요. 새로 정리해 주세요"),
+    MATERIAL_WEEK_SUGGESTION_CHANGED(HttpStatus.CONFLICT, "E409_036",
+            "그 사이 주차 추천이 바뀌었어요. 목록을 다시 보고 확인해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

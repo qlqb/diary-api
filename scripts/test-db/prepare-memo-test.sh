@@ -62,6 +62,7 @@ trap 'rm -rf "$WORK"' EXIT
 # 파일마다 IF NOT EXISTS로 짜여 있어 memo에 이미 적용된 것이어도 다시 돌려 안전하다.
 PENDING_MIGRATIONS=(
     "docs/sql/2026-09-21-project-tidy-review.sql"
+    "docs/sql/2026-09-22-material-week-assignments.sql"
 )
 for migration in "${PENDING_MIGRATIONS[@]}"; do
     "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" < "$migration"

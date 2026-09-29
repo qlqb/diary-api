@@ -18,6 +18,8 @@
         <result property="extractedText"    column="extracted_text"/>
         <result property="extractionError"  column="extraction_error"/>
         <result property="extractionWarning" column="extraction_warning"/>
+        <result property="documentTitle"    column="document_title"/>
+        <result property="documentTitleRead" column="document_title_read"/>
         <result property="sourceArchiveName" column="source_archive_name"/>
         <result property="sourceEntryPath"  column="source_entry_path"/>
         <result property="status"           column="status"/>
@@ -29,11 +31,11 @@
         INSERT INTO course_materials (
             user_id, original_filename, stored_filename, storage_path,
             content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error,
-            extraction_warning, source_archive_name, source_entry_path
+            extraction_warning, document_title, document_title_read, source_archive_name, source_entry_path
         ) VALUES (
             #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
             #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError},
-            #{extractionWarning}, #{sourceArchiveName}, #{sourceEntryPath}
+            #{extractionWarning}, #{documentTitle}, #{documentTitleRead}, #{sourceArchiveName}, #{sourceEntryPath}
         )
     </insert>
 
@@ -112,8 +114,17 @@
                extracted_text = #{extractedText},
                extraction_error = #{extractionError},
                extraction_warning = #{extractionWarning},
-               page_count = #{pageCount}
+               page_count = #{pageCount},
+               document_title = #{documentTitle},
+               document_title_read = 1
          WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </update>
+
+    <!-- 옛 자료의 속성 제목을 한 번만 채운다. 이미 읽은 행(업로드·재추출이 채운 것)은 덮지 않는다. -->
+    <update id="fillDocumentTitle">
+        UPDATE course_materials
+           SET document_title = #{documentTitle}, document_title_read = 1
+         WHERE material_id = #{materialId} AND user_id = #{userId} AND document_title_read = 0
     </update>
 
     <update id="updatePageCount">

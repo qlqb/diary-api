@@ -632,6 +632,33 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 - 잠금 순서: 정리 적용·폐기 = 정리안 → 작업 → 자료. 내용 분석의 마지막 단계(옛 구간 내리기) = 분석 작업 →
   자료(새로 추가). 적용은 분석 작업 행을 잡지 않으므로 순환하지 않는다.
 
+## 21. 자료 주차 확정 관계 (2026-09-22)
+
+마이그레이션 `docs/sql/2026-09-22-material-week-assignments.sql`. 설계 15번 §14.
+
+### material_week_assignments
+
+사용자가 확인한 "이 프로젝트에서 이 자료는 어디에 놓이는가". 학습 지도의 실제 주차는 이 표만으로 만든다.
+**추천은 여기 저장하지 않는다**(요청마다 계산). 쓰는 길은 주차 확인 API(PUT·apply-suggestions) 하나뿐이다.
+
+| 열 | 뜻 |
+|---|---|
+| user_id, course_id, material_id | 자료는 여러 프로젝트에 연결될 수 있어 (course, material)이 단위다 |
+| placement | `WEEK` / `COURSE_WIDE`(전체 참고자료) / `UNASSIGNED`(사용자가 "주차 없음"으로 확인) |
+| week_no | WEEK일 때 1~30, 그 밖에는 0 (CHECK 제약) |
+| source | `SUGGESTION`(추천을 사용자가 적용 — "확인됨") / `USER`(직접 지정) |
+
+- 한 자료가 여러 주차에 놓일 수 있다(행 여러 개). `material_links.material_type`처럼 자료 하나에 열 하나로 박지 않았다.
+- 유일 키 (course_id, material_id, placement, week_no). 자리를 바꿀 때는 연결 행(`material_links`)을 잠그고 그 자료의 행을 통째로 바꾼다.
+- 읽을 때는 지워진 자료·끊긴 연결의 행을 뺀다. 연결을 끊었다 다시 이으면 예전 확인이 되살아난다.
+
+### course_materials 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| document_title | PDF·PPTX 파일 속성의 제목. 본문 추출과 따로 보존한다. 없으면 NULL |
+| document_title_read | 0이면 아직 안 읽었다(이 열 전에 올린 자료). 확인 화면을 처음 열 때 파일에서 한 번 읽어 채운다 |
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

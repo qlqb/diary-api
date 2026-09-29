@@ -77,7 +77,7 @@ public class MaterialTxService {
     public void replaceExtraction(Long userId, CourseMaterial material, String fileHash,
                                   MaterialExtractionService.Outcome result) {
         courseMaterialMapper.updateExtraction(material.getMaterialId(), userId, result.status(), result.text(),
-                result.error(), result.warning(), result.pageCount());
+                result.error(), result.warning(), result.pageCount(), result.documentTitle());
         materialTextUnitMapper.deleteByMaterialId(material.getMaterialId(), userId);
         for (MaterialTextUnit unit : result.units()) {
             unit.setMaterialId(material.getMaterialId());
@@ -89,6 +89,8 @@ public class MaterialTxService {
         material.setExtractedText(result.text());
         material.setExtractionError(result.error());
         material.setExtractionWarning(result.warning());
+        material.setDocumentTitle(result.documentTitle());
+        material.setDocumentTitleRead(true);
         material.setFileHash(fileHash);
     }
 

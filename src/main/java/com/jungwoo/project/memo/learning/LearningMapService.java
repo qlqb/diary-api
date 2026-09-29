@@ -1,7 +1,5 @@
 package com.jungwoo.project.memo.learning;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.UserContextMapper;
 import com.jungwoo.project.memo.ai.domain.UserContext;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
@@ -14,14 +12,14 @@ import com.jungwoo.project.memo.execution.domain.ExecutionStatus;
 import com.jungwoo.project.memo.learning.dto.LearningMapResponse;
 import com.jungwoo.project.memo.learning.dto.TopicResponse;
 import com.jungwoo.project.memo.learning.structure.ProposedTopicIndex;
+import com.jungwoo.project.memo.learning.week.MaterialWeekAssignment;
+import com.jungwoo.project.memo.learning.week.MaterialWeekAssignmentMapper;
+import com.jungwoo.project.memo.learning.week.WeekSuggestionEngine;
 import com.jungwoo.project.memo.material.CourseMaterialMapper;
 import com.jungwoo.project.memo.material.MaterialSectionMapper;
-import com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService;
 import com.jungwoo.project.memo.material.analysis.MaterialAnalysisStatusResponse;
 import com.jungwoo.project.memo.material.analysis.MaterialAnalysisStatusService;
-import com.jungwoo.project.memo.material.domain.AnalysisJobKind;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
-import com.jungwoo.project.memo.material.domain.MaterialAnalysisJob;
 import com.jungwoo.project.memo.material.domain.MaterialSection;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,8 +33,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 프로젝트 전체 학습 지도(읽기 전용).
@@ -47,15 +43,17 @@ import java.util.regex.Pattern;
  * <p>이 서비스는 아무것도 쓰지 않는다. 지도를 본다고 학습 항목·진도·연결이 생기지 않고, 지도를 정리하는 일은 상담·계획의
  * 선행 조건이 아니다.
  *
- * <p>주차는 <b>자료가 스스로 말한 것</b>만 보여 준다("3주차"라는 표기). 파일 번호를 주차로 읽지 않고, 개강일에서 날짜 계산으로
- * 만들지도 않는다 — 실제 수업 진행·개인 진도와는 다를 수 있어 confirmed=false로만 낸다.
+ * <p>주차는 <b>사용자가 확인한 자료 ↔ 주차 관계</b>(material_week_assignments)만으로 만든다. 학습 항목의 연결을 뒤져
+ * 주차를 역추론하지 않는다 — 예전에는 구간 제목·분석 메타의 "N주차"를 읽어서, 강의계획서의 예정 진도("1~3주차 오리엔테이션")가
+ * 실제 주차 칸을 차지하고 "3주차"라고 적지 않은 실제 강의 자료는 어느 주차에도 들어가지 못했다. 추천(확인 전)도 지도에 넣지
+ * 않는다. 추천은 자료 주차 확인 화면({@link com.jungwoo.project.memo.learning.week.MaterialWeekService})의 몫이다.
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class LearningMapService {
 
-    private static final Pattern WEEK = Pattern.compile("(?<!\\d)(\\d{1,2})\\s*주\\s*차");
+    private static final Set<String> ANALYSIS_IN_PROGRESS = Set.of("QUEUED", "RUNNING");
 
     private final CourseMapper courseMapper;
     private final TopicService topicService;
@@ -63,11 +61,10 @@ public class LearningMapService {
     private final MaterialSectionMapper sectionMapper;
     private final TopicMaterialLinkMapper topicLinkMapper;
     private final MaterialAnalysisStatusService analysisStatusService;
-    private final MaterialAnalysisJobService jobService;
     private final ProposedTopicIndex proposedTopicIndex;
     private final ExecutionItemMapper executionItemMapper;
     private final UserContextMapper userContextMapper;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final MaterialWeekAssignmentMapper weekAssignmentMapper;
 
     @Transactional(readOnly = true)
     public LearningMapResponse map(Long userId, Long courseId) {
@@ -199,10 +196,30 @@ public class LearningMapService {
             }
         }
 
+        // 확인된 자료 ↔ 주차 관계. 추천은 여기 싣지 않는다.
+        List<MaterialWeekAssignment> assignments = weekAssignmentMapper.findActiveByCourse(userId, courseId);
+        Set<Long> placed = new HashSet<>();
+        List<LearningMapResponse.WeekMaterial> courseWide = new ArrayList<>();
+        for (MaterialWeekAssignment a : assignments) {
+            if (materials.containsKey(a.getMaterialId()) && placed.add(a.getMaterialId())
+                    && WeekSuggestionEngine.Placement.COURSE_WIDE.name().equals(a.getPlacement())) {
+                courseWide.add(new LearningMapResponse.WeekMaterial(a.getMaterialId(),
+                        materials.get(a.getMaterialId()).getOriginalFilename()));
+            }
+        }
+        int needsReview = 0;
+        for (CourseMaterial m : materials.values()) {
+            MaterialAnalysisStatusResponse st = status.get(m.getMaterialId());
+            if (!placed.contains(m.getMaterialId()) && (st == null || !ANALYSIS_IN_PROGRESS.contains(st.getState()))) {
+                needsReview++;
+            }
+        }
+
         return new LearningMapResponse(courseId, course.getTitle(), course.getTopicTreeVersion(),
                 new LearningMapResponse.State(materials.size(), pending, failed, linkWaiting, proposed.size(),
                         topicCount[0], hasRecords),
-                topics, proposed, unlinked, weeks(userId, materials, sectionById, tree));
+                topics, proposed, unlinked, weeks(assignments, materials, sectionById, tree),
+                new LearningMapResponse.WeekReview(needsReview, placed.size(), courseWide));
     }
 
     private LearningMapResponse.TopicNode node(TopicResponse t, Map<Long, int[]> counts, Map<Long, String> selfChecks,
@@ -227,84 +244,84 @@ public class LearningMapService {
                 children);
     }
 
-    /** 자료가 스스로 말한 주차: 문서 메타의 weekLabel과 구간 제목의 "N주차" 표기. */
-    private List<LearningMapResponse.Week> weeks(Long userId, Map<Long, CourseMaterial> materials,
-                                                 Map<Long, MaterialSection> sectionById, List<TopicResponse> tree) {
-        Map<Integer, LearningMapResponse.Week> byWeek = new java.util.TreeMap<>();
-        if (!materials.isEmpty()) {
-            Map<Long, MaterialAnalysisJob> latest = new HashMap<>();
-            for (MaterialAnalysisJob job : jobService.findByMaterials(userId, new ArrayList<>(materials.keySet()))) {
-                CourseMaterial m = materials.get(job.getMaterialId());
-                if (job.getJobKind() == AnalysisJobKind.CONTENT && m != null
-                        && java.util.Objects.equals(m.getFileHash(), job.getFileHash())) {
-                    latest.merge(job.getMaterialId(), job, (a, b) -> a.getJobId() > b.getJobId() ? a : b);
-                }
-            }
-            for (MaterialAnalysisJob job : latest.values()) {
-                Integer week = weekOf(weekLabelOf(job.getCheckpointJson()));
-                if (week != null) {
-                    week(byWeek, week).materialIds().add(job.getMaterialId());
-                }
+    /**
+     * 확인된 주차: 주차 → 그 주차에 놓인 자료 → 그 자료의 구간 → 그 자료와 직접 연결된 학습 항목.
+     *
+     * <p>한 항목이 여러 주차의 자료에 나오면 여러 주차에 나타나는 것이 맞다. 다만 상위 항목이라는 이유만으로는
+     * 나타나지 않는다 — 같은 구간이 상위·하위 항목에 함께 연결돼 있으면 더 구체적인 하위 항목만 싣는다. 예전에는
+     * 상위 항목이 하위 항목의 주차마다 되풀이됐다.
+     */
+    static List<LearningMapResponse.Week> weeks(List<MaterialWeekAssignment> assignments,
+                                                Map<Long, CourseMaterial> materials,
+                                                Map<Long, MaterialSection> sectionById, List<TopicResponse> tree) {
+        Map<Integer, Set<Long>> materialsByWeek = new java.util.TreeMap<>();
+        for (MaterialWeekAssignment a : assignments) {
+            if (WeekSuggestionEngine.Placement.WEEK.name().equals(a.getPlacement())
+                    && materials.containsKey(a.getMaterialId())) {
+                materialsByWeek.computeIfAbsent(a.getWeekNo(), k -> new java.util.LinkedHashSet<>()).add(a.getMaterialId());
             }
         }
-        for (MaterialSection s : sectionById.values()) {
-            Integer week = weekOf(s.getDisplayTitle());
-            if (week == null) {
-                week = weekOf(s.getSectionLabel());
-            }
-            if (week != null) {
-                week(byWeek, week).sectionIds().add(s.getSectionId());
-            }
+        List<LearningMapResponse.Week> weeks = new ArrayList<>();
+        for (Map.Entry<Integer, Set<Long>> e : materialsByWeek.entrySet()) {
+            Set<Long> weekMaterials = e.getValue();
+            List<Long> sectionIds = sectionById.values().stream()
+                    .filter(s -> weekMaterials.contains(s.getMaterialId()))
+                    .sorted(java.util.Comparator.comparing(MaterialSection::getMaterialId)
+                            .thenComparing(MaterialSection::getUnitStart, java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                    .map(MaterialSection::getSectionId).toList();
+            List<LearningMapResponse.WeekMaterial> named = weekMaterials.stream()
+                    .map(id -> new LearningMapResponse.WeekMaterial(id, materials.get(id).getOriginalFilename())).toList();
+            weeks.add(new LearningMapResponse.Week(e.getKey() + "주차", "CONFIRMED_MATERIAL", true,
+                    new ArrayList<>(weekMaterials), sectionIds, topicsFor(tree, weekMaterials), e.getKey(), named));
         }
-        if (byWeek.isEmpty()) {
-            return List.of();
-        }
-        // 그 주차의 자료·구간에 연결된 학습 항목.
-        for (LearningMapResponse.Week w : byWeek.values()) {
-            collectTopics(tree, w);
-        }
-        return new ArrayList<>(byWeek.values());
+        return weeks;
     }
 
-    private static void collectTopics(List<TopicResponse> nodes, LearningMapResponse.Week week) {
+    /** 그 주차 자료와 직접 연결된 항목. 근거가 하위 항목에 모두 있으면 상위 항목은 뺀다. */
+    static List<Long> topicsFor(List<TopicResponse> tree, Set<Long> weekMaterials) {
+        Map<Long, Set<String>> evidence = new LinkedHashMap<>();
+        collectEvidence(tree, weekMaterials, evidence);
+        List<Long> out = new ArrayList<>();
+        keepSpecific(tree, evidence, out);
+        return out;
+    }
+
+    private static void collectEvidence(List<TopicResponse> nodes, Set<Long> weekMaterials,
+                                        Map<Long, Set<String>> evidence) {
         for (TopicResponse t : nodes == null ? List.<TopicResponse>of() : nodes) {
-            boolean linked = t.getLinkedMaterials() != null && t.getLinkedMaterials().stream().anyMatch(lm ->
-                    (lm.getSectionId() != null && week.sectionIds().contains(lm.getSectionId()))
-                            || week.materialIds().contains(lm.getMaterialId()));
-            if (linked && !week.topicIds().contains(t.getTopicId())) {
-                week.topicIds().add(t.getTopicId());
+            Set<String> keys = new HashSet<>();
+            for (TopicResponse.LinkedMaterial lm : t.getLinkedMaterials() == null
+                    ? List.<TopicResponse.LinkedMaterial>of() : t.getLinkedMaterials()) {
+                if (lm.isMaterialDeleted() || !weekMaterials.contains(lm.getMaterialId())) {
+                    continue;
+                }
+                boolean whole = lm.getSectionId() == null
+                        || lm.getSectionId() == com.jungwoo.project.memo.learning.domain.TopicMaterialLink.WHOLE_MATERIAL;
+                keys.add(whole ? "m:" + lm.getMaterialId() : "s:" + lm.getSectionId());
             }
-            collectTopics(t.getChildren(), week);
+            if (!keys.isEmpty()) {
+                evidence.put(t.getTopicId(), keys);
+            }
+            collectEvidence(t.getChildren(), weekMaterials, evidence);
         }
     }
 
-    private static LearningMapResponse.Week week(Map<Integer, LearningMapResponse.Week> byWeek, int n) {
-        return byWeek.computeIfAbsent(n, k -> new LearningMapResponse.Week(k + "주차", "MATERIAL_LABEL", false,
-                new ArrayList<>(), new ArrayList<>(), new ArrayList<>()));
-    }
-
-    private String weekLabelOf(String checkpointJson) {
-        if (checkpointJson == null || checkpointJson.isBlank()) {
-            return null;
+    /** 트리 순서대로 돌며, 자기 근거가 하위 항목들의 근거에 다 들어 있지 않은 항목만 남긴다. 하위 근거 합을 돌려준다. */
+    private static Set<String> keepSpecific(List<TopicResponse> nodes, Map<Long, Set<String>> evidence, List<Long> out) {
+        Set<String> subtree = new HashSet<>();
+        for (TopicResponse t : nodes == null ? List.<TopicResponse>of() : nodes) {
+            int at = out.size();
+            Set<String> below = keepSpecific(t.getChildren(), evidence, out);
+            Set<String> own = evidence.get(t.getTopicId());
+            if (own != null && !below.containsAll(own)) {
+                out.add(at, t.getTopicId()); // 부모를 자식보다 앞에 둔다(트리 순서)
+            }
+            subtree.addAll(below);
+            if (own != null) {
+                subtree.addAll(own);
+            }
         }
-        try {
-            JsonNode node = objectMapper.readTree(checkpointJson).get("weekLabel");
-            return node == null || node.isNull() ? null : node.asText();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    static Integer weekOf(String text) {
-        if (text == null) {
-            return null;
-        }
-        Matcher m = WEEK.matcher(text);
-        if (!m.find()) {
-            return null;
-        }
-        int week = Integer.parseInt(m.group(1));
-        return week >= 1 && week <= 30 ? week : null;
+        return subtree;
     }
 
     private static LearningMapResponse.SectionRef sectionRef(MaterialSection s) {

@@ -53,6 +53,15 @@ public class CourseMaterial {
     /** 읽긴 했지만 일부를 못 읽었을 때의 안내(상한 초과 등). 성공 상태에서도 채워진다. */
     private String extractionWarning;
 
+    /**
+     * 파일 속성의 제목(PDF 문서 정보·PPTX 핵심 속성). 본문에 없는 말이 여기 있을 수 있다("… 3주차").
+     * 편집기가 남긴 잡음("슬라이드 1")도 흔하다 — 주차 추천은 이 값에서 명시적인 "N주차"만 읽는다.
+     */
+    private String documentTitle;
+
+    /** 속성 제목을 읽어 봤는가. false면 아직 안 읽었다(이 열이 생기기 전에 올린 자료). */
+    private boolean documentTitleRead;
+
     /** ZIP에서 가져온 자료면 그 압축 파일의 표시 이름. 저장 경로에는 쓰지 않는다. */
     private String sourceArchiveName;
 

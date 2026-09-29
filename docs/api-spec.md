@@ -478,6 +478,39 @@ sectionTitle, locator, role, roleLabel, taskText}]`와 `reviewNote`가 추가됐
   이름이 같은 파일("과제1/run.sh", "과제2/run.sh")을 구분한다. 같은 압축에서 나중에 더 확정하면 새 묶음이다.
   항목 다시 가져오기는 자리를 `STAGED`로 되돌리고 묶음을 다시 연다. 가져오기 취소는 남은 자리를 `ABANDONED`로.
 
+## Material Weeks (자료 주차 추천·확인) — 2026-09-22
+
+설계 15번 §14, DB 05번 §21. **추천은 저장하지 않고 요청마다 계산한다. 확정은 아래 PUT·POST로 사용자가 한 것만 저장된다.**
+재분석·자동 분석·정리는 확정 자리를 바꾸지 않는다.
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/courses/{courseId}/material-weeks` | 확인 화면. 속성 제목을 아직 안 읽은 옛 PDF·PPTX는 이때 한 번 읽어 채운다 |
+| PUT | `/api/courses/{courseId}/material-weeks/{materialId}` | 자료 하나의 자리를 통째로 정한다 → 확인 화면 |
+| POST | `/api/courses/{courseId}/material-weeks/apply-suggestions` | 화면에 보인 추천 일괄 적용 → `{applied, skipped[{materialId, reason}], review}` |
+
+GET 응답 `{courseId, courseTitle, weekCount, needsReview, items[]}`
+- `weekCount`: 기본 15. 확정·추천에 더 뒤 주차가 있으면 거기까지(최대 30).
+- `needsReview`: 아직 어디에도 놓이지 않은 자료 수. 분석이 도는 중(QUEUED·RUNNING)인 자료는 세지 않는다.
+- `items[]`: `{materialId, filename, materialType, analysisState, assignment, suggestion, suggestionDiffers}`
+  - `assignment`: `{placement: WEEK|COURSE_WIDE|UNASSIGNED, weeks[], source: SUGGESTION|USER}` 또는 null.
+    SUGGESTION = 추천을 사용자가 적용함(화면 "확인됨"), USER = 직접 지정. UNASSIGNED = 사용자가 "주차 없음"으로 확인함.
+  - `suggestion`: `{placement: WEEK|COURSE_WIDE|null, week, confidence: HIGH|MEDIUM|LOW|CONFLICT, bulkApplicable, options[{placement, week}], evidence[{kind, detail}]}` 또는 null.
+    CONFLICT면 `placement=null`이고 `options`에서 고른다. `bulkApplicable` = HIGH·MEDIUM.
+    `evidence.kind`: FILENAME_WEEK · DOCUMENT_TITLE_WEEK · CONTENT_WEEK(강함) / FILENAME_NUMBER · FIRST_WEEK_NAME · NEXT_LECTURE · PRACTICE_OF(약함) / COURSE_PLAN(전체 참고).
+    `detail`은 신호 그 자체를 적은 짧은 문장이다(모델의 자유 서술이 아니다).
+  - `suggestionDiffers`: 확정 자리가 있는데 HIGH·MEDIUM·CONFLICT 추천이 다른 곳을 가리킨다. 알리기만 한다.
+
+PUT 요청 `{placement, weeks[], source}`
+- WEEK는 `weeks` 하나 이상(1~30, 여러 주차 가능). COURSE_WIDE·UNASSIGNED는 `weeks`를 비운다. 어기면 400 `E400_035`.
+- `source=SUGGESTION`은 "화면에 보인 추천을 그대로 확인했다"는 뜻이다. 지금 추천(충돌이면 후보 중 하나)과 다르면 409 `E409_036`.
+  `source=USER`(기본)는 대조하지 않는다.
+- 이 프로젝트에 연결되지 않았거나 지워진 자료면 404 `E404_017`. 남의 프로젝트면 404 `E404_011`.
+
+POST 요청 `{items:[{materialId, placement, week}]}` — 화면에 보인 추천 그대로. 서버는 적용을 시작하기 전에 계산한 추천과
+대조해, 지금도 같고 `bulkApplicable`이고 아직 확인 전인 것만 적용한다. 건너뛴 이유: `ALREADY_PLACED`(이미 확인함),
+`CHANGED`(그 사이 추천이 바뀜), `NOT_BULK`(충돌·약한 추천·추천 없음), `NOT_FOUND`(연결 없음).
+
 ## Assignments (과제)
 
 | 메서드 | 경로 | 설명 |
@@ -690,7 +723,9 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 
 ### 학습 지도·점검
 
-- `GET /api/courses/{courseId}/learning-map` → `{courseId, title, treeVersion, state{materials, analysisPending, analysisFailed, linkWaiting, openProposals, topics, hasRecords}, topics[], proposed[], unlinked[], weeks[]}` (15번 §7.3).
+- `GET /api/courses/{courseId}/learning-map` → `{courseId, title, treeVersion, state{materials, analysisPending, analysisFailed, linkWaiting, openProposals, topics, hasRecords}, topics[], proposed[], unlinked[], weeks[], weekReview}` (15번 §7.3).
+  **2026-09-22부터 `weeks`는 사용자가 확인한 자료 ↔ 주차 관계로만 만든다**(15번 §14). 각 주차 `{label, basis:"CONFIRMED_MATERIAL", confirmed:true, weekNo, materialIds[], materials[{materialId, filename}], sectionIds[], topicIds[]}`.
+  구간 제목·분석 메타의 "N주차"로 역추론하지 않고, 확인 전 추천도 싣지 않는다. `weekReview{needsReview, placed, courseWide[{materialId, filename}]}`.
 - `POST /api/courses/{courseId}/self-checks` `{items:[{key,label,topicId,sectionId,level(KNOW|UNSURE|NEW),note}]}` → 204. 자기평가로만 저장.
 
 ### 자료 분석·실행 기록

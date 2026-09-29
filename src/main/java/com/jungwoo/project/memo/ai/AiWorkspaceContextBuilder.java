@@ -43,8 +43,6 @@ import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
 import java.time.Duration;
 import java.util.ArrayList;
 import com.jungwoo.project.memo.course.domain.CourseNoteCategory;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.List;
@@ -278,9 +276,6 @@ public class AiWorkspaceContextBuilder {
     }
 
     // ===== 프로젝트 =====
-
-    /** "2주차", "7주차 (원문에 '힢' 표기)" 어느 쪽에서도 숫자만 뽑는다. */
-    private static final Pattern WEEK_IN_LOCATOR = Pattern.compile("(\\d{1,2})\\s*주차");
 
     /**
      * 한 프로젝트에 실을 학습 항목 줄 수 상한.
@@ -628,12 +623,9 @@ public class AiWorkspaceContextBuilder {
         return (int) (java.time.temporal.ChronoUnit.WEEKS.between(startMonday, today) + 1);
     }
 
+    /** 계획 쪽과 같은 읽기를 쓴다 — "1~3주차"는 1주차부터다(예전 정규식은 3을 읽었다). */
     private Integer weekInLocator(String locator) {
-        if (locator == null) {
-            return null;
-        }
-        Matcher matcher = WEEK_IN_LOCATOR.matcher(locator);
-        return matcher.find() ? Integer.valueOf(matcher.group(1)) : null;
+        return com.jungwoo.project.memo.plan.TopicLocators.weekOf(locator);
     }
 
     /** 아직 끝나지 않은 반복 일정 중 프로젝트에 묶인 것만. 알바·운동은 프로젝트가 없다. */

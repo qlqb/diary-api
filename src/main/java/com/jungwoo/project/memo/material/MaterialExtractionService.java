@@ -33,15 +33,26 @@ public class MaterialExtractionService {
     private final TextExtractionService textExtractionService;
     private final MaterialTextUnitService materialTextUnitService;
     private final DocumentExtractionService documentExtractionService;
+    private final DocumentTitleReader documentTitleReader;
 
     /**
-     * @param warning 성공했지만 일부를 읽지 못한 경우의 안내. 없으면 null.
+     * @param warning       성공했지만 일부를 읽지 못한 경우의 안내. 없으면 null.
+     * @param documentTitle 파일 속성의 제목(PDF·PPTX). 본문과 따로 보존한다. 없으면 null.
      */
     public record Outcome(ExtractionStatus status, String text, String error, String warning,
-                          List<MaterialTextUnit> units, Integer pageCount) {
+                          List<MaterialTextUnit> units, Integer pageCount, String documentTitle) {
+
+        public Outcome(ExtractionStatus status, String text, String error, String warning,
+                       List<MaterialTextUnit> units, Integer pageCount) {
+            this(status, text, error, warning, units, pageCount, null);
+        }
 
         public boolean success() {
             return status == ExtractionStatus.SUCCESS;
+        }
+
+        Outcome withDocumentTitle(String title) {
+            return new Outcome(status, text, error, warning, units, pageCount, title);
         }
     }
 
@@ -54,7 +65,9 @@ public class MaterialExtractionService {
     static final int MAX_STORED_TEXT_BYTES = 800_000;
 
     public Outcome extract(Path file, String extension, Long userId, String fileHash) {
-        return fitForStorage(extractUnbounded(file, extension, userId, fileHash));
+        Outcome outcome = fitForStorage(extractUnbounded(file, extension, userId, fileHash));
+        // 속성 제목은 본문과 무관하게 읽는다. 못 읽어도 추출 결과는 그대로다.
+        return outcome.withDocumentTitle(documentTitleReader.read(file, extension));
     }
 
     private Outcome extractUnbounded(Path file, String extension, Long userId, String fileHash) {
@@ -121,7 +134,8 @@ public class MaterialExtractionService {
         String notice = "본문 사본이 저장 한도를 넘어 앞부분만 보관했어요(자동 분석은 전체를 읽어요)";
         String warning = outcome.warning() == null ? notice : outcome.warning() + " · " + notice;
         return new Outcome(outcome.status(), text.substring(0, end), outcome.error(),
-                warning.length() > 500 ? warning.substring(0, 500) : warning, outcome.units(), outcome.pageCount());
+                warning.length() > 500 ? warning.substring(0, 500) : warning, outcome.units(), outcome.pageCount(),
+                outcome.documentTitle());
     }
 
     private static String warning(ExtractedDocument document) {

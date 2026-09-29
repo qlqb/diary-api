@@ -117,6 +117,8 @@ public class MaterialService {
                 .extractedText(result.text())
                 .extractionError(result.error())
                 .extractionWarning(result.warning())
+                .documentTitle(result.documentTitle())
+                .documentTitleRead(true)
                 .status(MaterialStatus.ACTIVE)
                 .build();
     }

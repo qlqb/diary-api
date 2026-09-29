@@ -53,13 +53,20 @@ public interface CourseMaterialMapper {
     /** soft delete. 파일 원문은 이 호출 이후 서비스가 별도로 디스크에서 지운다. */
     void markDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
-    /** 재추출 결과(상태·본문·오류·경고·쪽수)를 덮어쓴다. 다른 열은 건드리지 않는다. */
+    /** 재추출 결과(상태·본문·오류·경고·쪽수·속성 제목)를 덮어쓴다. 다른 열은 건드리지 않는다. */
     int updateExtraction(@Param("materialId") Long materialId, @Param("userId") Long userId,
                          @Param("extractionStatus") com.jungwoo.project.memo.material.domain.ExtractionStatus extractionStatus,
                          @Param("extractedText") String extractedText,
                          @Param("extractionError") String extractionError,
                          @Param("extractionWarning") String extractionWarning,
-                         @Param("pageCount") Integer pageCount);
+                         @Param("pageCount") Integer pageCount,
+                         @Param("documentTitle") String documentTitle);
+
+    /**
+     * 속성 제목을 아직 안 읽은 옛 자료에 한 번 채운다. 이미 읽었으면 0행이다 — 두 요청이 겹쳐도 한 번만 쓴다.
+     */
+    int fillDocumentTitle(@Param("materialId") Long materialId, @Param("userId") Long userId,
+                          @Param("documentTitle") String documentTitle);
 
     int updatePageCount(@Param("materialId") Long materialId, @Param("userId") Long userId,
                         @Param("pageCount") Integer pageCount);

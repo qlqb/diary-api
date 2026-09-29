@@ -10,10 +10,12 @@ import java.util.List;
  *
  * @param treeVersion 학습 구조의 판. 구조 제안을 적용할 때의 낙관적 잠금 기준과 같다
  * @param proposed    승인 전 자동 분석 제안(읽기 전용). 학습 항목이 아니다 — 진도를 표시하지 않는다
- * @param weeks       자료가 스스로 말한 주차. 없으면 빈 목록(주차 보기를 숨긴다)
+ * @param weeks       사용자가 확인한 자료의 실제 주차(자료 ↔ 주차 관계). 없으면 빈 목록(주차 보기를 숨긴다)
+ * @param weekReview  자료 주차 확인 요약. 추천은 여기 없다 — 확인 화면(material-weeks)에서만 본다
  */
 public record LearningMapResponse(Long courseId, String title, Long treeVersion, State state, List<TopicNode> topics,
-                                  List<ProposedGroup> proposed, List<UnlinkedMaterial> unlinked, List<Week> weeks) {
+                                  List<ProposedGroup> proposed, List<UnlinkedMaterial> unlinked, List<Week> weeks,
+                                  WeekReview weekReview) {
 
     public record State(int materials, int analysisPending, int analysisFailed, int linkWaiting, int openProposals,
                         int topics, boolean hasRecords) {
@@ -51,10 +53,26 @@ public record LearningMapResponse(Long courseId, String title, Long treeVersion,
     }
 
     /**
-     * @param basis     MATERIAL_LABEL — 자료에 적힌 주차 표기
-     * @param confirmed 항상 false다. 실제 수업 진행·개인 진도와 다를 수 있다
+     * 확인된 주차 하나. 주차는 학습 항목이 아니라 <b>자료</b>의 속성이다 — 그 주차에 놓인 자료, 그 자료의 구간,
+     * 그 자료와 직접 연결된 학습 항목 순으로 따라간다. 상위 항목이라는 이유만으로 하위 항목의 주차에 복제하지 않는다.
+     *
+     * @param basis     CONFIRMED_MATERIAL — 사용자가 확인한 자료 ↔ 주차 관계
+     * @param confirmed 항상 true. 추천(확인 전)은 지도에 넣지 않는다
+     * @param topicIds  그 주차 자료와 직접 연결된 항목. 같은 근거를 하위 항목이 이미 갖고 있으면 상위 항목은 뺀다
+     * @param materials materialIds와 같은 자료의 이름. 항목에 연결되지 않은 자료도 이름이 보여야 한다
      */
     public record Week(String label, String basis, boolean confirmed, List<Long> materialIds, List<Long> sectionIds,
-                       List<Long> topicIds) {
+                       List<Long> topicIds, int weekNo, List<WeekMaterial> materials) {
+    }
+
+    public record WeekMaterial(Long materialId, String filename) {
+    }
+
+    /**
+     * @param needsReview           아직 어디에도 놓이지 않은 자료 수(분석이 도는 중인 자료는 빼고 센다)
+     * @param placed                확인된 자리가 있는 자료 수
+     * @param courseWide  전체 참고자료로 확인된 자료(강의계획서 등). 특정 주차에 넣지 않는다
+     */
+    public record WeekReview(int needsReview, int placed, List<WeekMaterial> courseWide) {
     }
 }

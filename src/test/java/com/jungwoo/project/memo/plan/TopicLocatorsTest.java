@@ -48,6 +48,14 @@ class TopicLocatorsTest {
     }
 
     @Test
+    @DisplayName("범위는 펼쳐 읽는다 — 1~3주차는 1주차부터다(끝 숫자 3으로 밀지 않는다)")
+    void rangeStartsAtItsFirstWeek() {
+        assertThat(TopicLocators.weekOf("1~3주차")).isEqualTo(1);
+        assertThat(TopicLocators.weekOf("9~12주차")).isEqualTo(9);
+        assertThat(TopicLocators.weekOf("14-15주차")).isEqualTo(14);
+    }
+
+    @Test
     @DisplayName("원문 표기가 섞인 값도 읽는다")
     void weekWithTrailingNote() {
         assertThat(TopicLocators.weekOf("7주차 (원문에 '힢' 표기)")).isEqualTo(7);
