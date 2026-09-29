@@ -231,10 +231,34 @@ public class ExecutionEvidenceService {
         if (h.leftoverOfId() != null) {
             sb.append(" · #").append(h.leftoverOfId()).append("의 남은 분량");
         }
+        String how = supportText(h.latestRecord());
+        if (how != null) {
+            sb.append(" · ").append(how);
+        }
         if (h.userNote() != null) {
             sb.append(" · 사용자 메모: \"").append(cut(h.userNote(), 120)).append('"');
         }
         return sb.toString();
+    }
+
+    /**
+     * 사용자가 남긴 "어떻게 했나". 이 활동 하나에 대한 사용자 진술이다 — 단원·과목 전체의 숙달·미숙달이 아니다.
+     * 남기지 않았으면 아무것도 쓰지 않는다("혼자 못 함"으로 읽히지 않게).
+     */
+    static String supportText(ExecutionRecord record) {
+        if (record == null) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        if ("SOLO".equals(record.getSupportLevel())) {
+            parts.add("사용자 진술: 이 활동을 혼자 수행함");
+        } else if ("GUIDED".equals(record.getSupportLevel())) {
+            parts.add("사용자 진술: 설명·예제를 보고 수행함(이 활동에 지원이 필요했음)");
+        }
+        if (record.getStuckStep() != null && !record.getStuckStep().isBlank()) {
+            parts.add("막힌 단계: \"" + cut(record.getStuckStep().strip(), 100) + "\"");
+        }
+        return parts.isEmpty() ? null : String.join(" · ", parts);
     }
 
     static String blockerLabel(String kind) {

@@ -247,7 +247,9 @@ public class AiWorkspaceContextBuilder {
                 return "";
             }
             StringBuilder sb = new StringBuilder("[실행 기록] ").append(evidence.from()).append(" ~ ").append(evidence.to())
-                    .append(" (관찰 사실이다. 원인은 사용자에게 확인한다. \"실제 시간 미기록\"은 0분이 아니다)\n");
+                    .append(" (관찰 사실이다. 원인은 사용자에게 확인한다. \"실제 시간 미기록\"은 0분이 아니다. ")
+                    .append("\"설명·예제를 보고 수행함\"·\"혼자 수행함\"·\"막힌 단계\"는 그 활동 하나에 대한 사용자 진술이다 — ")
+                    .append("과목 전체의 숙달·미숙달로 일반화하지 않고, 완료는 단원 이해의 확정이 아니다. 조정은 그 범위의 설명·보충·분량으로 제안한다)\n");
             Map<Long, String> titles = courseService.list(userId, CourseStatus.ACTIVE).stream()
                     .collect(Collectors.toMap(c -> c.getCourseId(), c -> c.getTitle(), (a, b) -> a));
             for (com.jungwoo.project.memo.plan.evidence.ExecutionEvidence.CourseSummary summary : evidence.byCourse().values()) {

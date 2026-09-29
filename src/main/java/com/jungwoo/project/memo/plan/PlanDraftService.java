@@ -668,6 +668,9 @@ public class PlanDraftService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.AiMessageMapper aiMessageMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StartSourceResolver startSourceResolver;
+
     /**
      * 항목 카드가 첫 화면에서 보여야 하는 근거 두 가지(선정 이유·출처 유형)를 항목 응답에 붙인다. 근거 원본은
      * evidence_json 하나다 — 저장 직후·재조회·다시 만들기 어느 경로로 와도 같은 값이 보이게 여기 한곳에서 읽는다.
@@ -678,6 +681,8 @@ public class PlanDraftService {
             return response;
         }
         try {
+            AiProposal proposalRow = aiProposalMapper.findByIdAndUserId(response.getProposalId(), userId);
+            PlanProvenance provenance = proposalRow == null ? null : provenanceCodec.fromJson(proposalRow.getPlanProvenanceJson());
             java.util.Map<Long, com.jungwoo.project.memo.plan.provenance.PlanItemEvidence> byItem = new java.util.HashMap<>();
             for (var row : aiProposalItemMapper.findByProposalIdAndUserId(response.getProposalId(), userId)) {
                 var evidence = provenanceCodec.evidenceFromJson(row.getEvidenceJson());
@@ -690,6 +695,9 @@ public class PlanDraftService {
                 if (evidence != null) {
                     item.setSelectionReason(evidence.reason());
                     item.setOrigin(evidence.origin());
+                    if (startSourceResolver != null) {
+                        item.setStartSource(startSourceResolver.resolve(userId, evidence, provenance));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -752,6 +760,9 @@ public class PlanDraftService {
                         : spec.start().getMonthValue() + "월 " + spec.start().getDayOfMonth() + "일 ~ "
                         + spec.end().getMonthValue() + "월 " + spec.end().getDayOfMonth() + "일 계획")
                 .proposal(response)
+                // AI가 쓴 goalSummary는 따로 저장되지 않는다. 정규화가 전략의 goal을 goalSummary로 채우므로(없을 때) 같은 값을
+                // 되살린다 — 새로고침한 초안을 확정해도 계획의 목표 문장이 비지 않게.
+                .goalSummary(goalOf(proposal))
                 .strategy(PlanStrategyResponse.from(strategyCodec.fromJson(proposal.getPlanStrategyJson())))
                 .pendingMaterials(pendingMaterials(userId, spec))
                 .materialSelection(selection)
@@ -765,6 +776,15 @@ public class PlanDraftService {
                 .reviewState(readReviewState(proposal.getReviewStateJson()))
                 .freshness(freshnessOf(userId, proposal, context, provenance))
                 .build());
+    }
+
+    private String goalOf(AiProposal proposal) {
+        try {
+            var strategy = strategyCodec.fromJson(proposal.getPlanStrategyJson());
+            return strategy == null ? null : strategy.goal();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private static PlanDraftResponse.GenerationView generationView(GenerationBudget.Summary s, boolean reused) {

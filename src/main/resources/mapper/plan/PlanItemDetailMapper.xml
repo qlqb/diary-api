@@ -43,6 +43,12 @@
            AND evidence_version &lt;&gt; #{keepVersion} AND status = 'CURRENT'
     </update>
 
+    <!-- 메모만 있던 행(단계 없음)에 처음 만든 단계를 채운다. 이미 단계가 있으면 바꾸지 않는다(동시 생성은 먼저 쓴 쪽). -->
+    <update id="fillSteps">
+        UPDATE plan_item_details SET steps_json = #{stepsJson}, model = #{model}
+         WHERE detail_id = #{detailId} AND user_id = #{userId} AND JSON_LENGTH(steps_json) = 0
+    </update>
+
     <update id="updateUserText">
         UPDATE plan_item_details SET user_text = #{userText}
          WHERE detail_id = #{detailId} AND user_id = #{userId}

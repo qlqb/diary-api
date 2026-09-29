@@ -199,4 +199,64 @@ class PlanItemDetailServiceTest {
         verify(aiClient, never()).streamTurn(any(), any(), anyInt());
         verify(detailMapper, never()).insertIgnore(any());
     }
+
+    @Test
+    void 메모만_먼저_남기면_단계_없는_행이_생기고_나중에_만든_단계가_같은_행을_채운다() {
+        // 메모 저장: 지금 근거판의 행이 없으므로 단계가 빈 행을 만든다.
+        when(detailMapper.findByItemAndVersion(eq(ITEM), any(), eq(USER))).thenReturn(null);
+        when(detailMapper.findByItem(ITEM, USER)).thenReturn(List.of());
+
+        service.saveMemoForProposalItem(USER, ITEM, "  3번에서 포인터가 헷갈림 ");
+
+        ArgumentCaptor<PlanItemDetail> saved = ArgumentCaptor.forClass(PlanItemDetail.class);
+        verify(detailMapper).insertIgnore(saved.capture());
+        assertThat(saved.getValue().getStepsJson()).isEqualTo("[]");
+        assertThat(saved.getValue().getUserText()).isEqualTo("3번에서 포인터가 헷갈림");
+        verify(aiClient, never()).streamTurn(any(), any(), anyInt());
+
+        // 그 행이 있는 상태에서 GET: 안내는 아직 없고(available=false) 만들 수 있으며, 메모는 보인다.
+        PlanItemDetail memoOnly = PlanItemDetail.builder().detailId(9L).userId(USER).proposalItemId(ITEM)
+                .evidenceVersion(saved.getValue().getEvidenceVersion()).stepsJson("[]").status("CURRENT")
+                .userText("3번에서 포인터가 헷갈림").build();
+        when(detailMapper.findByItemAndVersion(eq(ITEM), any(), eq(USER))).thenReturn(memoOnly);
+        PlanItemDetailResponse before = service.forProposalItem(USER, ITEM, false);
+        assertThat(before.isAvailable()).isFalse();
+        assertThat(before.isCanGenerate()).isTrue();
+        assertThat(before.isStale()).isFalse();
+        assertThat(before.getUserText()).isEqualTo("3번에서 포인터가 헷갈림");
+
+        // POST: 새 행을 만들지 않고 같은 행에 단계를 채운다 — 메모와 안내가 한 자리에 남는다.
+        givenModelSteps();
+        when(detailMapper.findByIdAndUserId(9L, USER)).thenReturn(PlanItemDetail.builder().detailId(9L).userId(USER)
+                .proposalItemId(ITEM).evidenceVersion(memoOnly.getEvidenceVersion()).status("CURRENT")
+                .stepsJson("[{\"text\":\"새 원문의 실습 3을 푼다\",\"refIds\":[\"s3\"],\"sectionIds\":[40]}]")
+                .userText("3번에서 포인터가 헷갈림").build());
+        PlanItemDetailResponse after = service.forProposalItem(USER, ITEM, true);
+
+        verify(detailMapper).fillSteps(eq(9L), eq(USER), any(), eq("test-model"));
+        verify(detailMapper, org.mockito.Mockito.times(1)).insertIgnore(any());
+        assertThat(after.isAvailable()).isTrue();
+        assertThat(after.getUserText()).isEqualTo("3번에서 포인터가 헷갈림");
+    }
+
+    @Test
+    void 부분_수행으로_남은_조각은_원래_조각을_거슬러_같은_제안_항목의_안내를_본다() {
+        com.jungwoo.project.memo.execution.ExecutionItemMapper executionItemMapper =
+                org.mockito.Mockito.mock(com.jungwoo.project.memo.execution.ExecutionItemMapper.class);
+        ReflectionTestUtils.setField(service, "executionItemMapper", executionItemMapper);
+        AiProposalItem origin = itemMapper.findByIdAndUserId(ITEM, USER);
+        // 원래 조각 100은 제안 항목 ITEM으로 만들어졌다. 남은 조각 200은 제안 원본이 없고 100에서 나왔다.
+        when(itemMapper.findByCreatedItemIdAndUserId(200L, USER)).thenReturn(List.of());
+        when(itemMapper.findByCreatedItemIdAndUserId(100L, USER)).thenReturn(List.of(origin));
+        when(executionItemMapper.findByIdAndUserIdIncludingDeleted(200L, USER)).thenReturn(
+                com.jungwoo.project.memo.execution.domain.ExecutionItem.builder().executionItemId(200L)
+                        .sourceExecutionItemId(100L).build());
+
+        assertThat(service.originOf(USER, 200L)).isSameAs(origin);
+        // 직접 만든 항목(원본도 출처도 없음)은 null — 없는 안내를 지어내지 않는다.
+        when(itemMapper.findByCreatedItemIdAndUserId(300L, USER)).thenReturn(List.of());
+        when(executionItemMapper.findByIdAndUserIdIncludingDeleted(300L, USER)).thenReturn(
+                com.jungwoo.project.memo.execution.domain.ExecutionItem.builder().executionItemId(300L).build());
+        assertThat(service.originOf(USER, 300L)).isNull();
+    }
 }

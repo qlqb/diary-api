@@ -34,6 +34,16 @@ public class ExecutionItemActionController {
 
     private final ExecutionItemService executionItemService;
 
+    /** 기록의 "어떻게 했나"(혼자/도움·막힌 단계·걸린 점·메모)만 고친다. 결과·분량·항목 상태는 그대로다. */
+    @PatchMapping("/records/{executionRecordId}")
+    public ResponseEntity<com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse> updateRecordReflection(
+            @AuthenticationPrincipal UserPrincipal principal,
+            @PathVariable Long executionRecordId,
+            @RequestBody com.jungwoo.project.memo.execution.dto.ExecutionRecordReflectionRequest request
+    ) {
+        return ResponseEntity.ok(executionItemService.updateReflection(principal.getUserId(), executionRecordId, request));
+    }
+
     @PostMapping("/{executionItemId}/complete")
     public ResponseEntity<ExecutionItemResponse> complete(
             @AuthenticationPrincipal UserPrincipal principal,

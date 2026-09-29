@@ -13,6 +13,12 @@ public interface ExecutionRecordMapper {
 
     void insert(ExecutionRecord record);
 
+    ExecutionRecord findByIdAndUserId(@Param("executionRecordId") Long executionRecordId, @Param("userId") Long userId);
+
+    int updateReflection(@Param("executionRecordId") Long executionRecordId, @Param("userId") Long userId,
+                         @Param("supportLevel") String supportLevel, @Param("stuckStep") String stuckStep,
+                         @Param("blockerKind") String blockerKind, @Param("note") String note);
+
     /**
      * 기록 화면용 조회. 기록 자체에는 제목이 없으므로(무엇을 했는지는 실행 조각이 안다)
      * execution_items를 조인해 제목·날짜·프로젝트를 함께 내려준다. 계획 밖 결과

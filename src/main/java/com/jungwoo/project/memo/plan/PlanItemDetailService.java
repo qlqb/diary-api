@@ -75,6 +75,9 @@ public class PlanItemDetailService {
     private final AiUsageLimitService aiUsageLimitService;
     private final ObjectMapper objectMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.execution.ExecutionItemMapper executionItemMapper;
+
     @Value("${spring.ai.openai.chat.model:gpt-5.6-luna}")
     private String modelName = "gpt-5.6-luna";
 
@@ -118,19 +121,80 @@ public class PlanItemDetailService {
     /** 확정된 실행 조각. 그 조각을 만든 제안 항목(CREATE 원본)의 안내를 돌려준다. */
     @Transactional
     public PlanItemDetailResponse forExecutionItem(Long userId, Long executionItemId, boolean generate) {
-        AiProposalItem origin = null;
-        for (AiProposalItem row : aiProposalItemMapper.findByCreatedItemIdAndUserId(executionItemId, userId)) {
-            if (row.getTargetItemId() != null) {
-                continue;
-            }
-            if (origin == null || row.getProposalItemId() < origin.getProposalItemId()) {
-                origin = row;
-            }
-        }
+        AiProposalItem origin = originOf(userId, executionItemId);
         if (origin == null) {
             throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
         }
         return resolve(userId, origin, generate);
+    }
+
+    /**
+     * 실행 조각을 만든 제안 항목. 부분 수행으로 남은 조각은 원래 조각(source_execution_item_id)을 거슬러 올라가
+     * 찾는다 — 남은 분량도 같은 활동이라 같은 안내·메모를 본다. 직접 만든 항목이면 null.
+     */
+    public AiProposalItem originOf(Long userId, Long executionItemId) {
+        Long current = executionItemId;
+        Set<Long> seen = new LinkedHashSet<>();
+        while (current != null && seen.add(current) && seen.size() <= 20) {
+            AiProposalItem origin = null;
+            for (AiProposalItem row : aiProposalItemMapper.findByCreatedItemIdAndUserId(current, userId)) {
+                if (row.getTargetItemId() != null) {
+                    continue;
+                }
+                if (origin == null || row.getProposalItemId() < origin.getProposalItemId()) {
+                    origin = row;
+                }
+            }
+            if (origin != null) {
+                return origin;
+            }
+            com.jungwoo.project.memo.execution.domain.ExecutionItem item = executionItemMapper == null ? null
+                    : executionItemMapper.findByIdAndUserIdIncludingDeleted(current, userId);
+            current = item == null ? null : item.getSourceExecutionItemId();
+        }
+        return null;
+    }
+
+    /** 초안 항목에 메모만 남긴다. 단계가 아직 없어도 된다 — 나중에 단계를 만들면 같은 행에 채운다. */
+    @Transactional
+    public PlanItemDetailResponse saveMemoForProposalItem(Long userId, Long proposalItemId, String userText) {
+        AiProposalItem item = aiProposalItemMapper.findByIdAndUserId(proposalItemId, userId);
+        if (item == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        return saveMemo(userId, item, userText);
+    }
+
+    /** 확정된 조각에 메모. 그 조각을 만든 제안 항목의 행에 남긴다 — 초안에서 남긴 메모와 같은 자리다. */
+    @Transactional
+    public PlanItemDetailResponse saveMemoForExecutionItem(Long userId, Long executionItemId, String userText) {
+        AiProposalItem origin = originOf(userId, executionItemId);
+        if (origin == null) {
+            throw new NotFoundException(ErrorCode.AI_PROPOSAL_NOT_FOUND);
+        }
+        return saveMemo(userId, origin, userText);
+    }
+
+    private PlanItemDetailResponse saveMemo(Long userId, AiProposalItem item, String userText) {
+        String text = userText == null || userText.isBlank() ? null : userText.trim();
+        if (text != null && text.length() > 2000) {
+            text = text.substring(0, 2000);
+        }
+        Grounding grounding = groundingOf(userId, item);
+        PlanItemDetail row = detailMapper.findByItemAndVersion(item.getProposalItemId(), grounding.version(), userId);
+        if (row == null) {
+            PlanItemDetail memoOnly = PlanItemDetail.builder()
+                    .userId(userId).proposalItemId(item.getProposalItemId()).evidenceVersion(grounding.version())
+                    .stepsJson("[]").status("CURRENT").userText(text).build();
+            if (detailMapper.insertIgnore(memoOnly) == 0) {
+                row = detailMapper.findByItemAndVersion(item.getProposalItemId(), grounding.version(), userId);
+            } else {
+                row = memoOnly;
+                detailMapper.staleOthers(item.getProposalItemId(), grounding.version(), userId);
+            }
+        }
+        detailMapper.updateUserText(row.getDetailId(), userId, text);
+        return resolve(userId, item, false);
     }
 
     /** 사용자가 고친 안내. 모델 결과(steps)는 그대로 두고 userText만 바뀐다 — 둘을 같이 보여준다. */
@@ -152,15 +216,21 @@ public class PlanItemDetailService {
         String version = grounding.version();
         PlanItemDetail existing = detailMapper.findByItemAndVersion(item.getProposalItemId(), version, userId);
         List<PlanItemDetail> history = detailMapper.findByItem(item.getProposalItemId(), userId);
-        if (existing != null) {
+        if (existing != null && (hasSteps(existing) || !generate)) {
             return toResponse(existing, grounding.sections(), false);
         }
-        PlanItemDetail previous = history.isEmpty() ? null : history.get(0);
+        PlanItemDetail previous = history.stream().filter(d -> !version.equals(d.getEvidenceVersion()))
+                .findFirst().orElse(null);
         if (!generate) {
-            // 만들지 않는다. 이전 판이 있으면 "오래됨"으로 보여 준다.
-            return previous == null ? PlanItemDetailResponse.none(item.getProposalItemId(), version,
-                    !grounding.sections().isEmpty())
-                    : toResponse(previous, grounding.sections(), true).withVersion(version);
+            // 만들지 않는다. 이전 판에 단계가 있으면 "오래됨"으로 보여 준다. 메모만 있던 판이면 메모만 이어 보인다.
+            if (previous == null) {
+                return PlanItemDetailResponse.none(item.getProposalItemId(), version, !grounding.sections().isEmpty());
+            }
+            if (!hasSteps(previous)) {
+                return PlanItemDetailResponse.none(item.getProposalItemId(), version, !grounding.sections().isEmpty(),
+                        previous.getUserText(), sectionRefs(grounding.sections()));
+            }
+            return toResponse(previous, grounding.sections(), true).withVersion(version);
         }
         if (grounding.sections().isEmpty()) {
             throw new BadRequestException(ErrorCode.PLAN_ITEM_DETAIL_UNAVAILABLE);
@@ -170,6 +240,12 @@ public class PlanItemDetailService {
         }
         aiUsageLimitService.checkLimit(userId);
         List<PlanItemDetailResponse.Step> steps = callModel(userId, grounding);
+        if (existing != null) {
+            // 메모만 먼저 남긴 행이다. 같은 행에 단계를 채운다 — 메모와 안내가 한 자리에 남는다.
+            detailMapper.fillSteps(existing.getDetailId(), userId, writeJson(steps), modelName);
+            detailMapper.staleOthers(item.getProposalItemId(), version, userId);
+            return toResponse(detailMapper.findByIdAndUserId(existing.getDetailId(), userId), grounding.sections(), false);
+        }
         PlanItemDetail detail = PlanItemDetail.builder()
                 .userId(userId).proposalItemId(item.getProposalItemId()).evidenceVersion(version)
                 .stepsJson(writeJson(steps)).status("CURRENT").model(modelName)
@@ -183,6 +259,21 @@ public class PlanItemDetailService {
         log.info("계획 항목 자세히 생성: proposalItemId={}, sections={}, steps={}",
                 item.getProposalItemId(), grounding.sections().size(), steps.size());
         return toResponse(detail, grounding.sections(), false);
+    }
+
+    private static boolean hasSteps(PlanItemDetail detail) {
+        String json = detail.getStepsJson();
+        return json != null && !json.replaceAll("\\s", "").equals("[]") && !json.isBlank();
+    }
+
+    /** 이 항목의 근거판(항목 글 + 인용 구간 해시). 시작 도움도 같은 판으로 "예전 안내"를 가른다. */
+    public String evidenceVersionOf(Long userId, AiProposalItem item) {
+        return groundingOf(userId, item).version();
+    }
+
+    /** 이 항목이 인용한 구간(최대 4개). 시작 도움이 같은 근거로만 말하게 한다. */
+    public List<MaterialSection> citedSectionsOf(Long userId, AiProposalItem item) {
+        return groundingOf(userId, item).sections();
     }
 
     record Grounding(String title, String description, String reason, List<MaterialSection> sections,
@@ -329,26 +420,31 @@ public class PlanItemDetailService {
         } catch (Exception e) {
             steps = List.of();
         }
-        List<PlanItemDetailResponse.SectionRef> refs = new ArrayList<>();
-        for (MaterialSection section : sections) {
-            refs.add(new PlanItemDetailResponse.SectionRef(section.getSectionId(), section.getMaterialId(),
-                    section.getDisplayTitle(), section.locator()));
-        }
+        List<PlanItemDetailResponse.SectionRef> refs = sectionRefs(sections);
         return PlanItemDetailResponse.builder()
                 .detailId(detail.getDetailId())
                 .proposalItemId(detail.getProposalItemId())
                 .evidenceVersion(detail.getEvidenceVersion())
                 .steps(steps)
                 .userText(detail.getUserText())
-                .stale(stale || "STALE".equals(detail.getStatus()))
-                .available(true)
+                .stale(!steps.isEmpty() && (stale || "STALE".equals(detail.getStatus())))
+                .available(!steps.isEmpty())
                 .canGenerate(!sections.isEmpty())
                 .sections(refs)
                 .createdAt(detail.getCreatedAt())
                 .build();
     }
 
-    private Map<String, Object> readPayload(AiProposalItem item) {
+    private List<PlanItemDetailResponse.SectionRef> sectionRefs(List<MaterialSection> sections) {
+        List<PlanItemDetailResponse.SectionRef> refs = new ArrayList<>();
+        for (MaterialSection section : sections) {
+            refs.add(new PlanItemDetailResponse.SectionRef(section.getSectionId(), section.getMaterialId(),
+                    section.getDisplayTitle(), section.locator()));
+        }
+        return refs;
+    }
+
+    Map<String, Object> readPayload(AiProposalItem item) {
         String json = item.getEditedPayload() != null ? item.getEditedPayload() : item.getOriginalPayload();
         try {
             return objectMapper.readValue(json, new TypeReference<Map<String, Object>>() {

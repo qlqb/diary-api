@@ -43,6 +43,12 @@ public class PlanResponse {
 
     private LocalDateTime confirmedAt;
 
+    /** 확정 당시 초안의 판단(목표·범위·가정·미룬 범위). 확정 요청이 바꾸지 못하는 값이라 사용자가 본 판단 그대로다. */
+    private PlanStrategyResponse strategy;
+
+    private static final com.jungwoo.project.memo.plan.PlanStrategyCodec STRATEGY_CODEC =
+            new com.jungwoo.project.memo.plan.PlanStrategyCodec();
+
     public static PlanResponse from(PlanVersion plan) {
         return PlanResponse.builder()
                 .planVersionId(plan.getPlanVersionId())
@@ -55,6 +61,7 @@ public class PlanResponse {
                 .intensity(plan.getIntensity())
                 .targetMinutes(plan.getTargetMinutes())
                 .confirmedAt(plan.getConfirmedAt())
+                .strategy(PlanStrategyResponse.from(STRATEGY_CODEC.fromJson(plan.getStrategyJson())))
                 .build();
     }
 }

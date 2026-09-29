@@ -63,6 +63,7 @@ trap 'rm -rf "$WORK"' EXIT
 PENDING_MIGRATIONS=(
     "docs/sql/2026-09-21-project-tidy-review.sql"
     "docs/sql/2026-09-22-material-week-assignments.sql"
+    "docs/sql/2026-09-29-learning-flow.sql"
 )
 for migration in "${PENDING_MIGRATIONS[@]}"; do
     "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" < "$migration"

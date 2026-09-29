@@ -16,6 +16,8 @@
         <result property="completionPercent"        column="completion_percent"/>
         <result property="note"                     column="note"/>
         <result property="blockerKind"              column="blocker_kind"/>
+        <result property="supportLevel"             column="support_level"/>
+        <result property="stuckStep"                column="stuck_step"/>
         <result property="remainingExecutionItemId" column="remaining_execution_item_id"/>
         <result property="recordedAt"               column="recorded_at"/>
         <result property="createdAt"                column="created_at"/>
@@ -32,6 +34,8 @@
             completion_percent,
             note,
             blocker_kind,
+            support_level,
+            stuck_step,
             remaining_execution_item_id
         ) VALUES (
             #{userId},
@@ -43,6 +47,8 @@
             #{completionPercent},
             #{note},
             #{blockerKind},
+            #{supportLevel},
+            #{stuckStep},
             #{remainingExecutionItemId}
         )
     </insert>
@@ -59,6 +65,8 @@
             r.completion_percent  AS completionPercent,
             r.note                AS note,
             r.blocker_kind        AS blockerKind,
+            r.support_level       AS supportLevel,
+            r.stuck_step          AS stuckStep,
             r.recorded_at         AS recordedAt
         FROM execution_records r
         LEFT JOIN execution_items i
@@ -75,6 +83,22 @@
       항목)이라 SQL에서 윈도우 함수로 1건만 뽑는 복잡도를 들일 이유가 없고, "몇 건이었는지"도
       응답에 실어야 하므로 어차피 전량이 필요하다.
     -->
+    <!-- 기록 하나. 사용자가 남긴 "어떻게 했나"를 고칠 때만 쓴다. -->
+    <select id="findByIdAndUserId" resultMap="executionRecordResultMap">
+        SELECT * FROM execution_records
+        WHERE execution_record_id = #{executionRecordId} AND user_id = #{userId}
+    </select>
+
+    <!-- 사용자가 자기 기록의 "어떻게 했나"를 고친다. 결과(완료·부분)·시간·분량은 여기서 바꾸지 않는다. -->
+    <update id="updateReflection">
+        UPDATE execution_records
+        SET support_level = #{supportLevel},
+            stuck_step    = #{stuckStep},
+            blocker_kind  = #{blockerKind},
+            note          = #{note}
+        WHERE execution_record_id = #{executionRecordId} AND user_id = #{userId}
+    </update>
+
     <select id="findByExecutionItemIds" resultMap="executionRecordResultMap">
         SELECT *
         FROM execution_records

@@ -135,7 +135,8 @@ public final class PlanPromptBlocks {
         items.sort(Comparator.comparingInt((ExecutionEvidence.ItemHistory h) -> interest(h)).reversed());
         ExecutionEvidence.CourseSummary summary = evidence.byCourse().get(courseId);
         sb.append(indent).append("[관련 실행 기록 — ").append(evidence.from()).append("~").append(evidence.to())
-                .append("] (관찰 사실이다. \"옮김 3회\"를 \"어려워서 피함\"으로 단정하지 않는다. 기록이 없는 날은 실패가 아니다)\n");
+                .append("] (관찰 사실이다. \"옮김 3회\"를 \"어려워서 피함\"으로 단정하지 않는다. 기록이 없는 날은 실패가 아니다. ")
+                .append("\"사용자 진술\"은 그 활동 하나에 대한 것이고 과목 전체의 숙달·미숙달이 아니다)\n");
         if (summary != null) {
             sb.append(indent).append("- ").append(ExecutionEvidenceService.summaryLine(summary)).append('\n');
         }
@@ -154,7 +155,9 @@ public final class PlanPromptBlocks {
                             "unmeasured", h.unmeasured() ? Boolean.TRUE : null,
                             "movedCount", h.movedCount(), "reducedCount", h.reducedCount(),
                             "held", h.held() ? Boolean.TRUE : null, "reopened", h.reopened() ? Boolean.TRUE : null,
-                            "note", h.userNote(), "leftoverOf", h.leftoverOfId()),
+                            "note", h.userNote(), "leftoverOf", h.leftoverOfId(),
+                            "supportLevel", h.latestRecord() == null ? null : h.latestRecord().getSupportLevel(),
+                            "stuckStep", h.latestRecord() == null ? null : h.latestRecord().getStuckStep()),
                     ExecutionEvidenceService.describe(h), h.topicId(), null).text()).append('\n');
             shown++;
         }

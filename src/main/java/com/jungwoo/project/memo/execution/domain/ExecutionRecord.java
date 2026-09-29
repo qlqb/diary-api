@@ -43,6 +43,12 @@ public class ExecutionRecord {
      */
     private String blockerKind;
 
+    /** 어떻게 해냈는가(선택): SOLO(혼자) / GUIDED(설명·예제를 보고). null은 "남기지 않음"이지 "혼자 못 함"이 아니다. */
+    private String supportLevel;
+
+    /** 막힌 단계(선택). 그 활동 하나의 사실이다. */
+    private String stuckStep;
+
     /** outcome이 PARTIAL일 때만 값이 있다. 남은 분량을 담은 새 조각. */
     private Long remainingExecutionItemId;
 

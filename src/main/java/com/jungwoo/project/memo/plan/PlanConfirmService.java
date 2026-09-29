@@ -211,7 +211,9 @@ public class PlanConfirmService {
                 .endDate(proposal.getPlanEndDate())
                 .title(request.getTitle() != null && !request.getTitle().isBlank()
                         ? request.getTitle() : defaultTitle(proposal))
-                .goalSummary(request.getGoalSummary())
+                // 화면이 목표 문장을 보내지 않았으면(새로고침한 초안 등) 초안 판단의 목표를 쓴다. 사용자가 고친 문장이 우선이다.
+                .goalSummary(request.getGoalSummary() != null && !request.getGoalSummary().isBlank()
+                        ? request.getGoalSummary() : strategy == null ? null : strategy.goal())
                 .intensity(proposal.getPlanIntensity())
                 .targetMinutes(proposal.getPlanTargetMinutes())
                 .itemsSnapshot(snapshotCodec.toJson(snapshotItems))

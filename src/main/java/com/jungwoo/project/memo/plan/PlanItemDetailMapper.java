@@ -24,6 +24,9 @@ public interface PlanItemDetailMapper {
     int staleOthers(@Param("proposalItemId") Long proposalItemId, @Param("keepVersion") String keepVersion,
                     @Param("userId") Long userId);
 
+    int fillSteps(@Param("detailId") Long detailId, @Param("userId") Long userId,
+                  @Param("stepsJson") String stepsJson, @Param("model") String model);
+
     int updateUserText(@Param("detailId") Long detailId, @Param("userId") Long userId,
                        @Param("userText") String userText);
 }

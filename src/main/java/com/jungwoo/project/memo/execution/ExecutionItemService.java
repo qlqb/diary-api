@@ -166,7 +166,6 @@ public class ExecutionItemService {
 
     // ===== 완료 =====
 
-    @Transactional
     /** 모르는 값은 버린다(null). DB CHECK와 같은 집합이다. */
     static String blockerKindOf(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -176,6 +175,54 @@ public class ExecutionItemService {
         return java.util.Set.of("TIME", "CONCEPT", "ENERGY", "OTHER").contains(kind) ? kind : null;
     }
 
+    /** SOLO / GUIDED 외에는 버린다(null = 남기지 않음). DB CHECK와 같은 집합이다. */
+    static String supportLevelOf(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String level = raw.trim().toUpperCase(java.util.Locale.ROOT);
+        return java.util.Set.of("SOLO", "GUIDED").contains(level) ? level : null;
+    }
+
+    /** 막힌 단계. 공백이면 없음, 300자까지. */
+    static String stuckStepOf(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String text = raw.trim();
+        return text.length() > 300 ? text.substring(0, 300) : text;
+    }
+
+    /**
+     * 사용자가 자기 기록의 "어떻게 했나"(혼자/도움·막힌 단계·걸린 점·메모)를 고친다. 결과·분량·시간·항목 상태는 바꾸지
+     * 않는다 — 수행 여부를 고치려면 재열기가 따로 있다. 이 기록은 사용자 진술이므로 사용자만 고친다.
+     */
+    @Transactional
+    public com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse updateReflection(
+            Long userId, Long executionRecordId, com.jungwoo.project.memo.execution.dto.ExecutionRecordReflectionRequest request) {
+        ExecutionRecord record = executionRecordMapper.findByIdAndUserId(executionRecordId, userId);
+        if (record == null) {
+            throw new com.jungwoo.project.memo.common.exception.NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
+        }
+        String note = request.getNote() == null || request.getNote().isBlank() ? null : request.getNote().trim();
+        executionRecordMapper.updateReflection(executionRecordId, userId, supportLevelOf(request.getSupportLevel()),
+                stuckStepOf(request.getStuckStep()), blockerKindOf(request.getBlockerKind()), note);
+        ExecutionRecord updated = executionRecordMapper.findByIdAndUserId(executionRecordId, userId);
+        return com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse.builder()
+                .executionRecordId(updated.getExecutionRecordId())
+                .executionItemId(updated.getExecutionItemId())
+                .outcome(updated.getOutcome() == null ? null : updated.getOutcome().name())
+                .actualMinutes(updated.getActualMinutes())
+                .completionPercent(updated.getCompletionPercent())
+                .note(updated.getNote())
+                .blockerKind(updated.getBlockerKind())
+                .supportLevel(updated.getSupportLevel())
+                .stuckStep(updated.getStuckStep())
+                .recordedAt(updated.getRecordedAt())
+                .build();
+    }
+
+    @Transactional
     public ExecutionItemResponse complete(Long executionItemId, Long userId, ExecutionItemCompleteRequest request) {
         ExecutionItem item = findOwnedOrThrow(executionItemId, userId);
         requireVersion(item, request.getVersion());
@@ -196,6 +243,8 @@ public class ExecutionItemService {
                 .completionPercent(100)
                 .note(request.getNote())
                 .blockerKind(blockerKindOf(request.getBlockerKind()))
+                .supportLevel(supportLevelOf(request.getSupportLevel()))
+                .stuckStep(stuckStepOf(request.getStuckStep()))
                 .build();
         executionRecordMapper.insert(record);
 
@@ -793,6 +842,8 @@ public class ExecutionItemService {
                 .completionPercent(percent)
                 .note(request.getNote())
                 .blockerKind(blockerKindOf(request.getBlockerKind()))
+                .supportLevel(supportLevelOf(request.getSupportLevel()))
+                .stuckStep(stuckStepOf(request.getStuckStep()))
                 .remainingExecutionItemId(remaining.getExecutionItemId())
                 .build());
 

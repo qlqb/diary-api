@@ -34,9 +34,16 @@ public class PlanItemDetailResponse {
     }
 
     public static PlanItemDetailResponse none(Long proposalItemId, String version, boolean canGenerate) {
+        return none(proposalItemId, version, canGenerate, null, List.of());
+    }
+
+    /** 단계는 아직 없지만 메모가 있을 수 있다(메모만 먼저 남긴 항목). */
+    public static PlanItemDetailResponse none(Long proposalItemId, String version, boolean canGenerate, String userText,
+                                              List<SectionRef> sections) {
         return PlanItemDetailResponse.builder()
                 .proposalItemId(proposalItemId).evidenceVersion(version)
-                .steps(List.of()).stale(false).available(false).canGenerate(canGenerate).sections(List.of())
+                .steps(List.of()).userText(userText).stale(false).available(false).canGenerate(canGenerate)
+                .sections(sections == null ? List.of() : sections)
                 .build();
     }
 
