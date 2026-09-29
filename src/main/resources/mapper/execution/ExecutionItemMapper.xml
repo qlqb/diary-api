@@ -290,7 +290,11 @@
         WHERE user_id    = #{userId}
           AND is_deleted = 0
           AND course_id  = #{courseId}
-          AND (scheduled_date IS NULL OR scheduled_date BETWEEN #{startDate} AND #{endDate})
+          <!-- 범위가 null이면 그쪽 끝은 열려 있다. 학습 지도는 null로 불러 전체를 센다 — 예전에는 BETWEEN NULL AND NULL이
+               날짜 있는 항목을 전부 빼 날짜 미정 항목만 셌다. -->
+          AND (scheduled_date IS NULL
+               OR ((#{startDate} IS NULL OR scheduled_date &gt;= #{startDate})
+                   AND (#{endDate} IS NULL OR scheduled_date &lt;= #{endDate})))
         ORDER BY scheduled_date ASC, scheduled_start_at ASC, execution_item_id ASC
     </select>
 

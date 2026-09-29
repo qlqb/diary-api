@@ -28,8 +28,8 @@ final class TidyChangeText {
                            Map<Long, CourseMaterial> materials) {
         String kind = op.op() == null ? "" : op.op();
         return switch (kind) {
-            case TopicChangeOp.LINK -> "「" + titleOf(op.topicId(), topics) + "」에 "
-                    + evidence(op, sections, materials) + "을(를) 연결해요";
+            case TopicChangeOp.LINK -> "「" + (op.topicId() != null ? titleOf(op.topicId(), topics) : "새로 만드는 항목")
+                    + "」에 " + evidence(op, sections, materials) + "을(를) 연결해요";
             case TopicChangeOp.ADD -> {
                 String where = op.parentTopicId() != null ? "「" + titleOf(op.parentTopicId(), topics) + "」 아래에 "
                         : op.parentTempId() != null ? "새로 만드는 항목 아래에 " : "맨 위에 ";
@@ -41,8 +41,18 @@ final class TidyChangeText {
             case TopicChangeOp.RENAME -> "「" + titleOf(op.topicId(), topics) + "」의 이름을 「"
                     + nullSafe(op.title()) + "」으(로) 바꿔요";
             case TopicChangeOp.MOVE -> "「" + titleOf(op.topicId(), topics) + "」을(를) "
-                    + (op.parentTopicId() == null ? "맨 위로" : "「" + titleOf(op.parentTopicId(), topics) + "」 아래로")
-                    + " 옮겨요";
+                    + (op.parentTopicId() == null ? "맨 위 단계" : "「" + titleOf(op.parentTopicId(), topics) + "」 아래")
+                    + (op.afterTopicId() == null ? "(맨 뒤)" : op.afterTopicId() == 0L ? "의 맨 앞"
+                    : "의 「" + titleOf(op.afterTopicId(), topics) + "」 다음") + "로 옮겨요";
+            case TopicChangeOp.CLASS -> "실제 수업에서 「" + titleOf(op.topicId(), topics) + "」을(를) "
+                    + (op.week() != null ? op.week() + "주차에 " : "")
+                    + (op.afterTopicId() == null ? "" : op.afterTopicId() == 0L ? "가장 먼저 "
+                    : "「" + titleOf(op.afterTopicId(), topics) + "」 다음에 ")
+                    + "다룬 것으로 기록해요 (교재 구조는 그대로)";
+            case TopicChangeOp.MATERIAL_WEEK -> "「" + materialName(op.materialId(), materials) + "」을(를) 실제 "
+                    + op.week() + "주차 자료로 정해요";
+            case TopicChangeOp.SCOPE_EXCLUDE -> "「" + titleOf(op.topicId(), topics) + "」을(를) "
+                    + (op.label() == null || op.label().isBlank() ? "이번 계획" : op.label()) + " 범위에서 빼요";
             case TopicChangeOp.MERGE -> mergeText(op, topics);
             case TopicChangeOp.SPLIT -> "「" + titleOf(op.topicId(), topics) + "」을(를) "
                     + (op.children() == null ? 0 : op.children().size()) + "개로 나눠요"
@@ -68,6 +78,9 @@ final class TidyChangeText {
             case TopicChangeOp.MOVE -> "위치 이동";
             case TopicChangeOp.MERGE -> "병합";
             case TopicChangeOp.SPLIT -> "분할";
+            case TopicChangeOp.CLASS -> "실제 수업 진행";
+            case TopicChangeOp.MATERIAL_WEEK -> "자료 주차";
+            case TopicChangeOp.SCOPE_EXCLUDE -> "범위 제외";
             default -> "변경";
         };
         String title = nullSafe(op.title());
@@ -82,8 +95,17 @@ final class TidyChangeText {
                     "기존 학습 기록은 원래 항목에 남고, 나눈 하위 항목은 새로 시작이에요";
             case TopicChangeOp.MOVE ->
                     "위치만 바뀌고 학습 기록·진도는 그대로 따라가요";
+            case TopicChangeOp.CLASS ->
+                    "교재상의 위치·학습 구조는 바뀌지 않아요. 다음 계획이 실제 수업 순서를 참고해요";
+            case TopicChangeOp.SCOPE_EXCLUDE ->
+                    "학습 완료로 보지 않고 구조에서 지우지도 않아요. 이미 확정한 계획은 그대로예요";
             default -> null;
         };
+    }
+
+    private static String materialName(Long materialId, Map<Long, CourseMaterial> materials) {
+        CourseMaterial material = materialId == null ? null : materials.get(materialId);
+        return material == null ? "자료 #" + materialId : material.getOriginalFilename();
     }
 
     private static String mergeText(TopicChangeOp op, Map<Long, CourseTopic> topics) {

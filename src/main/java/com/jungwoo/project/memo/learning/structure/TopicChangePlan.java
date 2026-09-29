@@ -53,7 +53,11 @@ public final class TopicChangePlan {
             TopicChangeOp.ADD, 2,
             TopicChangeOp.SPLIT, 3,
             TopicChangeOp.LINK, 4,
-            TopicChangeOp.MERGE, 5);
+            TopicChangeOp.MERGE, 5,
+            // 트리를 다 바꾼 뒤에 실제 수업·범위를 적는다. 병합으로 사라진 항목은 검증이 막는다.
+            TopicChangeOp.CLASS, 6,
+            TopicChangeOp.MATERIAL_WEEK, 7,
+            TopicChangeOp.SCOPE_EXCLUDE, 8);
 
     /**
      * 순서를 세우고 id를 붙인 결과.
@@ -138,12 +142,17 @@ public final class TopicChangePlan {
     static String signature(TopicChangeOp op) {
         String kind = op.op() == null ? "?" : op.op();
         return switch (kind) {
-            case TopicChangeOp.LINK -> "LINK|" + op.topicId() + "|" + sortedIds(op.sectionIds());
+            case TopicChangeOp.LINK -> "LINK|" + (op.topicId() != null ? op.topicId() : "n" + op.tempId())
+                    + "|" + sortedIds(op.sectionIds());
             case TopicChangeOp.ADD -> "ADD|" + (op.parentTopicId() != null ? "t" + op.parentTopicId()
                     : op.parentTempId() != null ? "n" + op.parentTempId() : "root")
                     + "|" + normalizeTitle(op.title());
             case TopicChangeOp.RENAME -> "RENAME|" + op.topicId();
-            case TopicChangeOp.MOVE -> "MOVE|" + op.topicId() + "|" + op.parentTopicId();
+            case TopicChangeOp.MOVE -> "MOVE|" + op.topicId() + "|" + op.parentTopicId()
+                    + (op.afterTopicId() == null ? "" : "|a" + op.afterTopicId());
+            case TopicChangeOp.CLASS -> "CLASS|" + op.topicId() + "|w" + op.week() + "|a" + op.afterTopicId();
+            case TopicChangeOp.MATERIAL_WEEK -> "MWEEK|" + op.materialId() + "|w" + op.week();
+            case TopicChangeOp.SCOPE_EXCLUDE -> "SCOPE|" + op.topicId() + "|" + normalizeTitle(op.label());
             case TopicChangeOp.MERGE -> "MERGE|" + op.survivingTopicId() + "|" + sortedIds(op.absorbedTopicIds());
             case TopicChangeOp.SPLIT -> "SPLIT|" + op.topicId();
             default -> kind + "|" + op.topicId() + "|" + normalizeTitle(op.title());
@@ -176,7 +185,12 @@ public final class TopicChangePlan {
                 .append("|src=").append(op.sourceType() == null ? "" : op.sourceType())
                 .append("|role=").append(op.role() == null ? "" : op.role())
                 // 근거가 달라지면 같은 제안이 아니다. 무엇을 보고 한 말인지가 바뀐 것이다.
-                .append("|sec=").append(sortedIds(op.sectionIds()));
+                .append("|sec=").append(sortedIds(op.sectionIds()))
+                .append("|after=").append(op.afterTopicId())
+                .append("|week=").append(op.week())
+                .append("|m=").append(op.materialId())
+                .append("|label=").append(normalizeTitle(op.label()))
+                .append("|temp=").append(TopicChangeOp.LINK.equals(op.op()) ? op.tempId() : "");
         if (op.children() != null && !op.children().isEmpty()) {
             // 분할의 자식 구성. 개수만 세지 않는다 — 이름이 바뀌면 다른 분할이다.
             sb.append("|children=[");
@@ -234,10 +248,13 @@ public final class TopicChangePlan {
         }
         Map<String, List<String>> out = new LinkedHashMap<>();
         for (TopicChangeOp op : ops) {
-            if (op.parentTempId() == null) {
+            // 새 항목에 거는 연결은 그 항목이 만들어져야 뜻이 있다.
+            String ref = op.parentTempId() != null ? op.parentTempId()
+                    : TopicChangeOp.LINK.equals(op.op()) && op.topicId() == null ? op.tempId() : null;
+            if (ref == null) {
                 continue;
             }
-            String owner = ownerOfTempId.get(op.parentTempId());
+            String owner = ownerOfTempId.get(ref);
             if (owner != null && !owner.equals(op.changeId())) {
                 out.computeIfAbsent(op.changeId(), k -> new ArrayList<>()).add(owner);
             }
@@ -246,6 +263,9 @@ public final class TopicChangePlan {
     }
 
     private static void collectTempIdOwners(TopicChangeOp op, String changeId, Map<String, String> out) {
+        if (TopicChangeOp.LINK.equals(op.op())) {
+            return; // LINK의 tempId는 가리키는 쪽이지 만드는 쪽이 아니다.
+        }
         if (op.tempId() != null) {
             out.putIfAbsent(op.tempId(), changeId);
         }

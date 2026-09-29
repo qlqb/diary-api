@@ -58,6 +58,13 @@ public interface CourseTopicMapper {
     int updateReviewNote(@Param("topicId") Long topicId, @Param("userId") Long userId,
                          @Param("reviewNote") String reviewNote);
 
+    int shiftSiblings(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                      @Param("parentTopicId") Long parentTopicId, @Param("fromIndex") int fromIndex,
+                      @Param("exceptTopicId") Long exceptTopicId);
+
+    Integer findMinOrderIndex(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                              @Param("parentTopicId") Long parentTopicId);
+
     Integer findMaxChildOrderIndex(@Param("courseId") Long courseId, @Param("userId") Long userId,
                                    @Param("parentTopicId") Long parentTopicId);
 }

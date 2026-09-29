@@ -31,6 +31,8 @@ public class ProjectTidyJob {
     /** 이 요청이 갈아치우려는 기존 정리안. [새 자료 반영해 다시 정리]에서만 값이 있다. */
     private Long previousProposalId;
     private String inputSnapshotJson;
+    /** 정리 요청에 붙인 사용자 지시 {text, focusTopicIds}. 없으면 null. 모델에는 데이터로만 준다. */
+    private String userRequestJson;
     private Integer attempt;
     private Integer maxAttempts;
     private LocalDateTime nextRunAt;

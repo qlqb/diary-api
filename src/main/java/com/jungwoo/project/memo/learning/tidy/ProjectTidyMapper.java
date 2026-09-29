@@ -48,6 +48,12 @@ public interface ProjectTidyMapper {
     int claimJob(@Param("jobId") Long jobId, @Param("owner") String owner, @Param("now") LocalDateTime now,
                  @Param("leaseUntil") LocalDateTime leaseUntil);
 
+    int appendProposalOps(@org.apache.ibatis.annotations.Param("proposalId") Long proposalId,
+                          @org.apache.ibatis.annotations.Param("userId") Long userId,
+                          @org.apache.ibatis.annotations.Param("revision") Long revision,
+                          @org.apache.ibatis.annotations.Param("opsJson") String opsJson,
+                          @org.apache.ibatis.annotations.Param("userRequestJson") String userRequestJson);
+
     int renewJobLease(@Param("jobId") Long jobId, @Param("leaseToken") Long leaseToken,
                       @Param("leaseUntil") LocalDateTime leaseUntil);
 

@@ -13,6 +13,10 @@
         <result property="textbookAuthor"    column="textbook_author"/>
         <result property="textbookPublisher" column="textbook_publisher"/>
         <result property="textbookIsbn"      column="textbook_isbn"/>
+        <result property="textbookEdition"   column="textbook_edition"/>
+        <result property="textbookInfoSource" column="textbook_info_source"/>
+        <result property="textbookInfoMaterialId" column="textbook_info_material_id"/>
+        <result property="textbookInfoUpdatedAt" column="textbook_info_updated_at"/>
         <result property="status"            column="status"/>
         <result property="topicTreeVersion"  column="topic_tree_version"/>
         <result property="createdAt"         column="created_at"/>
@@ -102,7 +106,29 @@
         SET textbook_title     = #{textbookTitle},
             textbook_author    = #{textbookAuthor},
             textbook_publisher = #{textbookPublisher},
-            textbook_isbn      = #{textbookIsbn}
+            textbook_isbn      = #{textbookIsbn},
+            textbook_edition   = #{textbookEdition},
+            textbook_info_source = 'USER',
+            textbook_info_material_id = NULL,
+            textbook_info_updated_at = NOW()
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      자료에서 찾은 교재 값을 사용자가 고른 칸에만 적용한다. 호출하는 쪽(TextbookService)이 행을 잠그고
+      "화면이 본 지금 값"과 대조한 뒤에만 부른다 — 그 사이 사용자가 고친 값을 덮지 않는다.
+      null인 인자는 그 칸을 건드리지 않는다는 뜻이다(고르지 않은 칸).
+    -->
+    <update id="applyTextbookFromMaterial">
+        UPDATE courses
+        SET textbook_title     = COALESCE(#{textbookTitle}, textbook_title),
+            textbook_author    = COALESCE(#{textbookAuthor}, textbook_author),
+            textbook_publisher = COALESCE(#{textbookPublisher}, textbook_publisher),
+            textbook_isbn      = COALESCE(#{textbookIsbn}, textbook_isbn),
+            textbook_edition   = COALESCE(#{textbookEdition}, textbook_edition),
+            textbook_info_source = 'MATERIAL',
+            textbook_info_material_id = #{materialId},
+            textbook_info_updated_at = NOW()
         WHERE course_id = #{courseId} AND user_id = #{userId}
     </update>
 

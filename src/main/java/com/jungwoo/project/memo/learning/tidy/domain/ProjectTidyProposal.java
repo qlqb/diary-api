@@ -40,6 +40,10 @@ public class ProjectTidyProposal {
     private Long previousProposalId;
     private Long supersededByProposalId;
     private String model;
+    /** AI(자료 정리) / REQUEST(자연어 요청 해석) / USER(직접 조작). */
+    private String origin;
+    /** 사용자 요청 {text, focusTopicIds}. 없으면 null. */
+    private String userRequestJson;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime resolvedAt;

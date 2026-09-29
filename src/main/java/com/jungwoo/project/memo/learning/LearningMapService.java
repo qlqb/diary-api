@@ -66,6 +66,12 @@ public class LearningMapService {
     private final UserContextMapper userContextMapper;
     private final MaterialWeekAssignmentMapper weekAssignmentMapper;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private CourseTopicMapper topicMapper;
+
     @Transactional(readOnly = true)
     public LearningMapResponse map(Long userId, Long courseId) {
         List<Course> owned = courseMapper.findByIdsAndUserId(List.of(courseId), userId);
@@ -122,9 +128,40 @@ public class LearningMapService {
                 wholeLinkedMaterials.add(link.getMaterialId());
             }
         }
+        // 사용자가 정정한 실제 수업 진행·범위 제외, 그리고 병합으로 보관된 항목에 남은 기록(옮기지 않고 알리기만 한다).
+        Map<Long, com.jungwoo.project.memo.learning.correction.TopicClassProgress> classByTopic = new HashMap<>();
+        Map<Long, String> scopeByTopic = new HashMap<>();
+        if (correctionMapper != null) {
+            for (var row : correctionMapper.findClassProgress(courseId, userId)) {
+                classByTopic.put(row.getTopicId(), row);
+            }
+            for (var row : correctionMapper.findActiveExclusions(courseId, userId)) {
+                scopeByTopic.putIfAbsent(row.getTopicId(), row.getLabel() == null ? "" : row.getLabel());
+            }
+        }
+        Map<Long, Integer> mergedDone = new HashMap<>();
+        Map<Long, Long> mergedInto = new HashMap<>();
+        for (var t : topicMapper == null ? List.<com.jungwoo.project.memo.learning.domain.CourseTopic>of()
+                : topicMapper.findByCourseIdAndUserIdIncludingArchived(courseId, userId)) {
+            if (t.getMergedIntoTopicId() != null) {
+                mergedInto.put(t.getTopicId(), t.getMergedIntoTopicId());
+            }
+        }
+        for (Map.Entry<Long, Long> e : mergedInto.entrySet()) {
+            Long target = e.getValue();
+            int guard = 0;
+            while (mergedInto.containsKey(target) && guard++ < 20) {
+                target = mergedInto.get(target);
+            }
+            int[] c = itemCounts.get(e.getKey());
+            if (c != null && c[1] > 0) {
+                mergedDone.merge(target, c[1], Integer::sum);
+            }
+        }
+        Extras extras = new Extras(classByTopic, scopeByTopic, mergedDone);
         List<LearningMapResponse.TopicNode> topics = new ArrayList<>();
         for (TopicResponse root : tree) {
-            topics.add(node(root, itemCounts, selfCheckByTopic, topicCount));
+            topics.add(node(root, itemCounts, selfCheckByTopic, topicCount, extras));
         }
 
         // 승인 전 제안(읽기 전용)
@@ -218,12 +255,52 @@ public class LearningMapService {
         return new LearningMapResponse(courseId, course.getTitle(), course.getTopicTreeVersion(),
                 new LearningMapResponse.State(materials.size(), pending, failed, linkWaiting, proposed.size(),
                         topicCount[0], hasRecords),
-                topics, proposed, unlinked, weeks(assignments, materials, sectionById, tree),
+                topics, proposed, unlinked, withClassWeeks(weeks(assignments, materials, sectionById, tree), classByTopic),
                 new LearningMapResponse.WeekReview(needsReview, placed.size(), courseWide));
+    }
+
+    record Extras(Map<Long, com.jungwoo.project.memo.learning.correction.TopicClassProgress> classByTopic,
+                  Map<Long, String> scopeByTopic, Map<Long, Integer> mergedDone) {
+        static final Extras NONE = new Extras(Map.of(), Map.of(), Map.of());
+    }
+
+    /**
+     * 사용자가 실제 수업 주차를 정정한 항목을 그 주차에 싣는다. 자료로 정해진 주차와 합치고, 자료 없이 정정만 있는 주차도
+     * 만든다(근거: CONFIRMED_CLASS). 교재 위치는 바꾸지 않는다.
+     */
+    static List<LearningMapResponse.Week> withClassWeeks(List<LearningMapResponse.Week> weeks,
+                                                         Map<Long, com.jungwoo.project.memo.learning.correction.TopicClassProgress> classByTopic) {
+        if (classByTopic.isEmpty()) {
+            return weeks;
+        }
+        Map<Integer, LearningMapResponse.Week> byWeek = new java.util.TreeMap<>();
+        weeks.forEach(w -> byWeek.put(w.weekNo(), w));
+        for (var row : classByTopic.values()) {
+            if (row.getWeekNo() == null) {
+                continue;
+            }
+            LearningMapResponse.Week w = byWeek.get(row.getWeekNo());
+            if (w == null) {
+                byWeek.put(row.getWeekNo(), new LearningMapResponse.Week(row.getWeekNo() + "주차", "CONFIRMED_CLASS", true,
+                        new ArrayList<>(), new ArrayList<>(), new ArrayList<>(List.of(row.getTopicId())), row.getWeekNo(),
+                        new ArrayList<>()));
+            } else if (!w.topicIds().contains(row.getTopicId())) {
+                List<Long> ids = new ArrayList<>(w.topicIds());
+                ids.add(row.getTopicId());
+                byWeek.put(row.getWeekNo(), new LearningMapResponse.Week(w.label(), w.basis(), w.confirmed(),
+                        w.materialIds(), w.sectionIds(), ids, w.weekNo(), w.materials()));
+            }
+        }
+        return new ArrayList<>(byWeek.values());
     }
 
     private LearningMapResponse.TopicNode node(TopicResponse t, Map<Long, int[]> counts, Map<Long, String> selfChecks,
                                                int[] topicCount) {
+        return node(t, counts, selfChecks, topicCount, Extras.NONE);
+    }
+
+    private LearningMapResponse.TopicNode node(TopicResponse t, Map<Long, int[]> counts, Map<Long, String> selfChecks,
+                                               int[] topicCount, Extras extras) {
         topicCount[0]++;
         int[] c = counts.getOrDefault(t.getTopicId(), new int[2]);
         List<LearningMapResponse.MaterialRef> refs = new ArrayList<>();
@@ -236,12 +313,14 @@ public class LearningMapService {
         }
         List<LearningMapResponse.TopicNode> children = new ArrayList<>();
         for (TopicResponse child : t.getChildren() == null ? List.<TopicResponse>of() : t.getChildren()) {
-            children.add(node(child, counts, selfChecks, topicCount));
+            children.add(node(child, counts, selfChecks, topicCount, extras));
         }
+        var klass = extras.classByTopic().get(t.getTopicId());
         return new LearningMapResponse.TopicNode(t.getTopicId(), t.getParentTopicId(), t.getTitle(),
                 t.getProgressStatus() == null ? null : t.getProgressStatus().name(),
                 t.getUserMark() == null ? null : t.getUserMark().name(), selfChecks.get(t.getTopicId()), refs, c[0], c[1],
-                children);
+                children, klass == null ? null : klass.getWeekNo(), klass == null ? null : klass.getClassSeq(),
+                extras.scopeByTopic().get(t.getTopicId()), extras.mergedDone().getOrDefault(t.getTopicId(), 0));
     }
 
     /**

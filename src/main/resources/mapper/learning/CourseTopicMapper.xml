@@ -94,6 +94,22 @@
          WHERE topic_id = #{topicId} AND user_id = #{userId}
     </update>
 
+    <!-- 한 부모 아래에서 fromIndex 이상인 형제를 한 칸씩 민다(자리 끼워 넣기). 옮기는 항목은 빼고. -->
+    <update id="shiftSiblings">
+        UPDATE course_topics SET order_index = order_index + 1
+         WHERE course_id = #{courseId} AND user_id = #{userId}
+           AND <choose><when test="parentTopicId == null">parent_topic_id IS NULL</when>
+                       <otherwise>parent_topic_id = #{parentTopicId}</otherwise></choose>
+           AND order_index &gt;= #{fromIndex} AND topic_id &lt;&gt; #{exceptTopicId}
+    </update>
+
+    <select id="findMinOrderIndex" resultType="java.lang.Integer">
+        SELECT MIN(order_index) FROM course_topics
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND status = 'ACTIVE'
+          AND <choose><when test="parentTopicId == null">parent_topic_id IS NULL</when>
+                      <otherwise>parent_topic_id = #{parentTopicId}</otherwise></choose>
+    </select>
+
     <update id="archiveMerged">
         UPDATE course_topics
            SET status = 'ARCHIVED', merged_into_topic_id = #{survivingTopicId}

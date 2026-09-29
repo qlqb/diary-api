@@ -47,7 +47,16 @@ public interface CourseMapper {
                               @Param("textbookTitle") String textbookTitle,
                               @Param("textbookAuthor") String textbookAuthor,
                               @Param("textbookPublisher") String textbookPublisher,
-                              @Param("textbookIsbn") String textbookIsbn);
+                              @Param("textbookIsbn") String textbookIsbn,
+                              @Param("textbookEdition") String textbookEdition);
+
+    int applyTextbookFromMaterial(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                                  @Param("materialId") Long materialId,
+                                  @Param("textbookTitle") String textbookTitle,
+                                  @Param("textbookAuthor") String textbookAuthor,
+                                  @Param("textbookPublisher") String textbookPublisher,
+                                  @Param("textbookIsbn") String textbookIsbn,
+                                  @Param("textbookEdition") String textbookEdition);
 
     /** 제목/분류 수정. groupLabel은 COALESCE하지 않는다 — null을 보내면 "분류 없음"으로 지운다. */
     void updateBasics(@Param("courseId") Long courseId,

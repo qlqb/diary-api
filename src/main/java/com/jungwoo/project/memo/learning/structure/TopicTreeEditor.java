@@ -94,9 +94,14 @@ public class TopicTreeEditor {
         int linked = 0, added = 0, renamed = 0, moved = 0, merged = 0, split = 0;
 
         for (TopicChangeOp op : checked.ops()) {
+            if (!op.isTreeOp()) {
+                continue; // 실제 수업·범위 정정은 트리를 바꾸지 않는다(StructureCorrectionApplier가 적는다).
+            }
             switch (op.op()) {
-                case TopicChangeOp.LINK -> linked += link(userId, courseId, materialId, op.topicId(), op.sectionIds(),
-                        op.role(), sectionsById, origin);
+                case TopicChangeOp.LINK -> {
+                    Long target = op.topicId() != null ? op.topicId() : tempIds.get(op.tempId());
+                    linked += link(userId, courseId, materialId, target, op.sectionIds(), op.role(), sectionsById, origin);
+                }
                 case TopicChangeOp.ADD -> {
                     Long parent = op.parentTopicId() != null ? op.parentTopicId()
                             : op.parentTempId() != null ? tempIds.get(op.parentTempId()) : null;
@@ -107,10 +112,8 @@ public class TopicTreeEditor {
                     renamed++;
                 }
                 case TopicChangeOp.MOVE -> {
-                    Integer max = op.parentTopicId() == null
-                            ? topicMapper.findMaxRootOrderIndex(courseId, userId)
-                            : topicMapper.findMaxChildOrderIndex(courseId, userId, op.parentTopicId());
-                    topicMapper.updateParent(op.topicId(), userId, op.parentTopicId(), max == null ? 0 : max + 1);
+                    topicMapper.updateParent(op.topicId(), userId, op.parentTopicId(),
+                            positionFor(userId, courseId, op));
                     moved++;
                 }
                 case TopicChangeOp.MERGE -> {
@@ -125,6 +128,30 @@ public class TopicTreeEditor {
         log.info("학습 구조 변경 적용: userId={}, courseId={}, materialId={}, link={}, add={}, rename={}, move={}, merge={}, split={}",
                 userId, courseId, materialId, linked, added, renamed, moved, merged, split);
         return new Applied(linked, added, renamed, moved, merged, split, created, notes);
+    }
+
+    /**
+     * 옮길 자리. afterTopicId가 없으면 새 부모의 맨 뒤(예전 동작), 0이면 맨 앞, 있으면 그 형제 바로 뒤.
+     * 끼워 넣을 때는 뒤 형제들을 한 칸씩 민다 — 다른 항목의 id·기록은 그대로다.
+     */
+    private int positionFor(Long userId, Long courseId, TopicChangeOp op) {
+        Long parent = op.parentTopicId();
+        Long after = op.afterTopicId();
+        if (after == null) {
+            Integer max = parent == null ? topicMapper.findMaxRootOrderIndex(courseId, userId)
+                    : topicMapper.findMaxChildOrderIndex(courseId, userId, parent);
+            return max == null ? 0 : max + 1;
+        }
+        int target;
+        if (after == 0L) {
+            Integer min = topicMapper.findMinOrderIndex(courseId, userId, parent);
+            target = min == null ? 0 : min;
+        } else {
+            CourseTopic anchor = topicMapper.findByIdAndUserId(after, userId);
+            target = anchor == null || anchor.getOrderIndex() == null ? 0 : anchor.getOrderIndex() + 1;
+        }
+        topicMapper.shiftSiblings(courseId, userId, parent, target, op.topicId());
+        return target;
     }
 
     /**
@@ -161,8 +188,9 @@ public class TopicTreeEditor {
                 : topicMapper.findMaxChildOrderIndex(courseId, userId, parentId);
         MaterialSection first = op.sectionIds() == null || op.sectionIds().isEmpty() ? null
                 : sectionsById.get(op.sectionIds().get(0));
-        // 최초 출처는 이 항목의 첫 근거 구간이 속한 자료다. 구간이 없으면 호출자가 준 자료.
-        Long sourceMaterialId = first != null && first.getMaterialId() != null ? first.getMaterialId() : materialId;
+        // 최초 출처는 이 항목의 첫 근거 구간이 속한 자료다. 구간이 없으면 작업이 밝힌 자료(목차 골격 등), 그다음 호출자가 준 자료.
+        Long sourceMaterialId = first != null && first.getMaterialId() != null ? first.getMaterialId()
+                : op.materialId() != null ? op.materialId() : materialId;
         CourseTopic topic = CourseTopic.builder()
                 .userId(userId).courseId(courseId).parentTopicId(parentId)
                 .title(op.title()).orderIndex(max == null ? 0 : max + 1)

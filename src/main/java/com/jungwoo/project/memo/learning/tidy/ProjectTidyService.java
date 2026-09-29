@@ -81,6 +81,8 @@ public class ProjectTidyService {
     private final MaterialSectionMapper sectionMapper;
     private final TopicChangeProposalMapper legacyProposalMapper;
     private final TopicTreeEditor treeEditor;
+    private final com.jungwoo.project.memo.learning.correction.CourseCorrectionService correctionService;
+    private final com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
     private final ObjectMapper objectMapper;
 
     /** edits_json의 값. */
@@ -158,6 +160,21 @@ public class ProjectTidyService {
      */
     @Transactional
     public ProjectTidyResponse request(Long userId, Long courseId, boolean refresh) {
+        return request(userId, courseId, refresh, null, null);
+    }
+
+    /**
+     * @param instruction 사용자 지시(선택). 있으면 검토 중인 안이 있어도 새로 만든다(지시가 반영돼야 하므로) — 새 안이
+     *                    성공할 때까지 기존 안과 편집은 남는다
+     */
+    @Transactional
+    public ProjectTidyResponse request(Long userId, Long courseId, boolean refresh, String instruction,
+                                       List<Long> focusTopicIds) {
+        String text = instruction == null || instruction.isBlank() ? null : instruction.trim();
+        if (text != null && text.length() > 1000) {
+            throw new com.jungwoo.project.memo.common.exception.BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        refresh = refresh || text != null;
         Course course = courseService.getOwned(userId, courseId);
         ProjectTidyJob running = tidyMapper.findOpenJobByCourse(courseId, userId);
         if (running != null) {
@@ -187,6 +204,7 @@ public class ProjectTidyService {
                 // ★ 입력을 지금 고정한다. 모델이 도는 동안 분석이 더 끝나도 이번 정리에는 들어가지
                 //   않는다 — 사용자가 승인 화면에서 볼 근거와 실제로 쓴 근거를 같게 하기 위해서다.
                 .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview)))
+                .userRequestJson(text == null ? null : writeJson(userRequest(text, focusTopicIds)))
                 .build();
         try {
             tidyMapper.insertJob(job);
@@ -198,6 +216,13 @@ public class ProjectTidyService {
         log.info("프로젝트 정리 요청: courseId={}, jobId={}, 세대={}, 대상 자료={}, 제외={}",
                 courseId, job.getJobId(), job.getGeneration(), preview.readyCount(), preview.excluded().size());
         return view(userId, courseId);
+    }
+
+    private static Map<String, Object> userRequest(String text, List<Long> focusTopicIds) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("text", text);
+        out.put("focusTopicIds", focusTopicIds == null ? List.of() : focusTopicIds);
+        return out;
     }
 
     /**
@@ -506,11 +531,25 @@ public class ProjectTidyService {
 
         // 고른 것이 없으면 트리 판을 올리지 않는다. 아무것도 바뀌지 않았는데 다른 정리안이
         // 어긋나게 만들 이유가 없다.
+        // 실제 수업·범위 정정(CLASS·MATERIAL_WEEK·SCOPE_EXCLUDE)은 트리를 바꾸지 않는다 — 그것만 골랐으면 트리 판도 그대로다.
         TopicTreeEditor.Applied applied = null;
-        if (!chosen.isEmpty()) {
+        boolean anyTree = chosen.stream().anyMatch(TopicChangeOp::isTreeOp);
+        List<TopicChangeOp> corrections = chosen.stream().filter(op -> !op.isTreeOp()).toList();
+        if (anyTree) {
             applied = treeEditor.apply(userId, proposal.getCourseId(), null, chosen,
                     proposal.getBaseTreeVersion(), sections, TopicLinkOrigin.PROPOSAL_APPLIED);
+        } else if (!corrections.isEmpty()) {
+            com.jungwoo.project.memo.learning.structure.TopicChangeOpsValidator.Result checked =
+                    com.jungwoo.project.memo.learning.structure.TopicChangeOpsValidator.validate(corrections,
+                            topicMapper.findActiveByCourseIdAndUserId(proposal.getCourseId(), userId),
+                            sections.keySet(), true);
+            if (!checked.rejected().isEmpty()) {
+                throw new com.jungwoo.project.memo.common.exception.BadRequestException(
+                        ErrorCode.TOPIC_CHANGE_INVALID, String.join("; ", checked.rejected()));
+            }
         }
+        com.jungwoo.project.memo.learning.correction.CourseCorrectionService.Applied corrected = corrections.isEmpty()
+                ? null : correctionService.apply(userId, proposal.getCourseId(), corrections);
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("selectedChangeIds", new ArrayList<>(selected));
         result.put("appliedCount", chosen.size());
@@ -520,6 +559,10 @@ public class ProjectTidyService {
             result.put("counts", Map.of("link", applied.linked(), "add", applied.added(),
                     "rename", applied.renamed(), "move", applied.moved(),
                     "merge", applied.merged(), "split", applied.split()));
+        }
+        if (corrected != null) {
+            result.put("corrections", Map.of("class", corrected.classChanges(),
+                    "materialWeek", corrected.materialWeeks(), "scope", corrected.scopeExclusions()));
         }
         // 둘째 자물쇠. 0행이면 그 사이 누가 끝낸 것이고, 예외로 이 트랜잭션(트리 수정 포함)을 되돌린다.
         if (tidyMapper.resolveProposalIfOpen(proposalId, userId, proposal.getRevision(),
@@ -724,8 +767,10 @@ public class ProjectTidyService {
 
         List<ProjectTidyResponse.Change> changes = new ArrayList<>();
         Map<String, List<String>> dependsOn = TopicChangePlan.dependencies(ops);
+        addMaterialsNamed(userId, ops, materials);
+        Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> records = recordsOf(userId, ops);
         for (TopicChangeOp op : ops) {
-            changes.add(describe(op, topics, sections, materials, dependsOn));
+            changes.add(describe(op, topics, sections, materials, dependsOn, records));
         }
         TopicChangeOpsValidator.Summary counts = countOf(ops);
 
@@ -748,7 +793,76 @@ public class ProjectTidyService {
                 .firstTime(false)
                 .createdAt(proposal.getCreatedAt())
                 .resolvedAt(proposal.getResolvedAt())
+                .origin(proposal.getOrigin() == null ? "AI" : proposal.getOrigin())
+                .userRequest(requestTextOf(proposal.getUserRequestJson()))
+                .tree(treeOf(topics))
                 .build();
+    }
+
+    private String requestTextOf(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            Object text = objectMapper.readValue(json, Map.class).get("text");
+            return text == null ? null : String.valueOf(text);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static List<ProjectTidyResponse.TreeNode> treeOf(Map<Long, CourseTopic> topics) {
+        return topics.values().stream()
+                .filter(t -> t.getStatus() == null || "ACTIVE".equals(t.getStatus().name()))
+                .sorted(java.util.Comparator.comparing(CourseTopic::getOrderIndex,
+                        java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())))
+                .map(t -> ProjectTidyResponse.TreeNode.builder().topicId(t.getTopicId())
+                        .parentTopicId(t.getParentTopicId()).title(t.getTitle()).orderIndex(t.getOrderIndex()).build())
+                .toList();
+    }
+
+    /** 자료 주차 변경이 가리키는 자료 이름(정리안 근거 자료가 아닐 수 있다). */
+    private void addMaterialsNamed(Long userId, List<TopicChangeOp> ops, Map<Long, CourseMaterial> materials) {
+        List<Long> missing = ops.stream().filter(op -> TopicChangeOp.MATERIAL_WEEK.equals(op.op()))
+                .map(TopicChangeOp::materialId).filter(java.util.Objects::nonNull)
+                .filter(id -> !materials.containsKey(id)).distinct().toList();
+        if (!missing.isEmpty()) {
+            for (CourseMaterial m : courseMaterialMapper.findByIdsAndUserIdIncludingDeleted(missing, userId)) {
+                materials.put(m.getMaterialId(), m);
+            }
+        }
+    }
+
+    /** 병합·분할·이동·범위 제외가 닿는 항목의 기록 수. 한 번에 읽는다. */
+    private Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> recordsOf(
+            Long userId, List<TopicChangeOp> ops) {
+        Set<Long> ids = new LinkedHashSet<>();
+        for (TopicChangeOp op : ops) {
+            ids.addAll(impactTopicIds(op));
+        }
+        Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> out = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (var row : correctionMapper.countTopicRecords(new ArrayList<>(ids), userId)) {
+                out.put(row.getTopicId(), row);
+            }
+        }
+        return out;
+    }
+
+    private static List<Long> impactTopicIds(TopicChangeOp op) {
+        String kind = op.op() == null ? "" : op.op();
+        if (TopicChangeOp.MERGE.equals(kind)) {
+            List<Long> ids = new ArrayList<>();
+            ids.add(op.survivingTopicId());
+            if (op.absorbedTopicIds() != null) {
+                ids.addAll(op.absorbedTopicIds());
+            }
+            return ids;
+        }
+        if (TopicChangeOp.SPLIT.equals(kind) || TopicChangeOp.MOVE.equals(kind) || TopicChangeOp.SCOPE_EXCLUDE.equals(kind)) {
+            return op.topicId() == null ? List.of() : List.of(op.topicId());
+        }
+        return List.of();
     }
 
     /** 정리안을 만든 뒤 분석이 끝나 이제 쓸 수 있게 된 자료 수. 몰래 섞지 않고 세기만 한다. */
@@ -786,12 +900,16 @@ public class ProjectTidyService {
         if (counts.split() > 0) {
             parts.add("분할 " + counts.split() + "건");
         }
+        long corrections = readOps(proposal.getOpsJson()).stream().filter(op -> !op.isTreeOp()).count();
+        if (corrections > 0) {
+            parts.add("실제 수업·범위 정정 " + corrections + "건");
+        }
         String headline = parts.isEmpty() ? "바꿀 것이 없었어요" : String.join(" · ", parts);
         return ProjectTidyResponse.Summary.builder()
                 .headline(headline)
                 .link(counts.link()).add(counts.add()).rename(counts.rename())
                 .move(counts.move()).merge(counts.merge()).split(counts.split())
-                .total(counts.total()).structural(counts.structural())
+                .total(counts.total() + (int) corrections).structural(counts.structural())
                 .reviewedMaterialCount(scope.reviewed().size())
                 .excludedMaterialCount(scope.excluded().size())
                 .build();
@@ -824,17 +942,19 @@ public class ProjectTidyService {
         Map<String, List<String>> members = new LinkedHashMap<>();
         for (TopicChangeOp op : ops) {
             Long topicId = groupTopicId(op);
-            String key = topicId != null ? "t" + topicId : "n" + op.changeId();
+            String key = topicId != null ? "t" + topicId
+                    : TopicChangeOp.MATERIAL_WEEK.equals(op.op()) ? "materials" : "n" + op.changeId();
             builders.computeIfAbsent(key, k -> {
                 CourseTopic topic = topicId == null ? null : topics.get(topicId);
                 CourseTopic parent = topic == null || topic.getParentTopicId() == null
                         ? null : topics.get(topic.getParentTopicId());
+                boolean materialWeek = TopicChangeOp.MATERIAL_WEEK.equals(op.op());
                 return ProjectTidyResponse.Group.builder()
                         .key(k)
-                        .kind(topic != null ? "EXISTING" : "NEW")
+                        .kind(topic != null ? "EXISTING" : materialWeek ? "MATERIAL" : "NEW")
                         .topicId(topic == null ? null : topic.getTopicId())
                         .title(topic != null ? topic.getTitle()
-                                : op.title() != null ? op.title() : "새 항목")
+                                : materialWeek ? "자료 주차" : op.title() != null ? op.title() : "새 항목")
                         .parentTitle(parent == null ? null : parent.getTitle());
             });
             members.computeIfAbsent(key, k -> new ArrayList<>()).add(op.changeId());
@@ -858,7 +978,20 @@ public class ProjectTidyService {
     private ProjectTidyResponse.Change describe(TopicChangeOp op, Map<Long, CourseTopic> topics,
                                                 Map<Long, MaterialSection> sections,
                                                 Map<Long, CourseMaterial> materials,
-                                                Map<String, List<String>> dependsOn) {
+                                                Map<String, List<String>> dependsOn,
+                                                Map<Long, com.jungwoo.project.memo.learning.correction.TopicRecordCount> records) {
+        List<ProjectTidyResponse.Impact> impact = new ArrayList<>();
+        for (Long topicId : impactTopicIds(op)) {
+            var row = records.get(topicId);
+            CourseTopic topic = topics.get(topicId);
+            if (row == null) {
+                continue;
+            }
+            impact.add(ProjectTidyResponse.Impact.builder().topicId(topicId)
+                    .title(topic == null ? null : topic.getTitle())
+                    .openItems(row.getOpenItems()).doneItems(row.getDoneItems()).contexts(row.getContexts())
+                    .progress(row.getProgress()).build());
+        }
         boolean titleEditable = TopicChangeOp.ADD.equals(op.op()) || TopicChangeOp.RENAME.equals(op.op());
         List<ProjectTidyResponse.Section> briefs = new ArrayList<>();
         Set<Long> sectionIds = new LinkedHashSet<>();
@@ -900,6 +1033,10 @@ public class ProjectTidyService {
                 .dependsOn(dependsOn.getOrDefault(op.changeId(), List.of()))
                 .caution(TidyChangeText.caution(op))
                 .sections(briefs)
+                .by(op.by())
+                .treeOp(op.isTreeOp())
+                .payload(op)
+                .impact(impact)
                 .build();
     }
 
@@ -911,6 +1048,9 @@ public class ProjectTidyService {
             case TopicChangeOp.MOVE -> "위치 이동";
             case TopicChangeOp.MERGE -> "병합";
             case TopicChangeOp.SPLIT -> "분할";
+            case TopicChangeOp.CLASS -> "실제 수업 진행";
+            case TopicChangeOp.MATERIAL_WEEK -> "자료 주차";
+            case TopicChangeOp.SCOPE_EXCLUDE -> "범위 제외";
             default -> "변경";
         };
     }

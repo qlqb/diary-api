@@ -104,7 +104,7 @@ class CourseTextbookMapperTest {
 
         // 사용자가 저자를 바로잡는다.
         courseMapper.updateTextbookByUser(courseId, userId(),
-                "전처리와 시각화", "오경선, 양숙희, 장은실", "길벗", null);
+                "전처리와 시각화", "오경선, 양숙희, 장은실", "길벗", null, null);
 
         // 나중에 다른 자료를 분석해 적용한다.
         courseMapper.updateTextbookInfo(courseId, userId(), "전처리와 시각화", "오경선", "길벗", null);
@@ -119,7 +119,7 @@ class CourseTextbookMapperTest {
         courseMapper.updateTextbookInfo(courseId, userId(), "전처리와 시각화", "오경선", "길벗", "978");
 
         // 사람이 화면에서 지운 것은 "모른다"는 뜻이다. COALESCE로 되살리면 지울 방법이 없어진다.
-        courseMapper.updateTextbookByUser(courseId, userId(), "전처리와 시각화", null, null, null);
+        courseMapper.updateTextbookByUser(courseId, userId(), "전처리와 시각화", null, null, null, null);
 
         Course after = reload(courseId);
         assertThat(after.getTextbookTitle()).isEqualTo("전처리와 시각화");

@@ -33,4 +33,7 @@ public class CourseUpdateRequest {
 
     @Size(max = 30)
     private String textbookIsbn;
+
+    @Size(max = 100)
+    private String textbookEdition;
 }

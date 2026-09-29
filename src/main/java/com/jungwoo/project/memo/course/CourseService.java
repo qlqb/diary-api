@@ -55,14 +55,24 @@ public class CourseService {
      */
     @Transactional
     public CourseResponse update(Long userId, Long courseId, CourseUpdateRequest request) {
-        getOwned(userId, courseId);
+        Course before = getOwned(userId, courseId);
         courseMapper.updateBasics(courseId, userId, blankToNull(request.getTitle()),
                 blankToNull(request.getGroupLabel()));
-        courseMapper.updateTextbookByUser(courseId, userId,
-                blankToNull(request.getTextbookTitle()),
-                blankToNull(request.getTextbookAuthor()),
-                blankToNull(request.getTextbookPublisher()),
-                blankToNull(request.getTextbookIsbn()));
+        String title = blankToNull(request.getTextbookTitle());
+        String author = blankToNull(request.getTextbookAuthor());
+        String publisher = blankToNull(request.getTextbookPublisher());
+        String isbn = blankToNull(request.getTextbookIsbn());
+        String edition = blankToNull(request.getTextbookEdition());
+        // 교재 칸이 실제로 바뀌었을 때만 "사용자가 적은 값"으로 기록한다. 이름만 고친 저장이 자료에서 찾아 적용한 값의
+        // 출처를 사용자로 바꾸지 않게.
+        boolean changed = !java.util.Objects.equals(title, before.getTextbookTitle())
+                || !java.util.Objects.equals(author, before.getTextbookAuthor())
+                || !java.util.Objects.equals(publisher, before.getTextbookPublisher())
+                || !java.util.Objects.equals(isbn, before.getTextbookIsbn())
+                || !java.util.Objects.equals(edition, before.getTextbookEdition());
+        if (changed) {
+            courseMapper.updateTextbookByUser(courseId, userId, title, author, publisher, isbn, edition);
+        }
         return get(userId, courseId);
     }
 

@@ -13,6 +13,7 @@
         <result property="baseTreeVersion"    column="base_tree_version"/>
         <result property="previousProposalId" column="previous_proposal_id"/>
         <result property="inputSnapshotJson"  column="input_snapshot_json"/>
+        <result property="userRequestJson"    column="user_request_json"/>
         <result property="attempt"            column="attempt"/>
         <result property="maxAttempts"        column="max_attempts"/>
         <result property="nextRunAt"          column="next_run_at"/>
@@ -43,6 +44,8 @@
         <result property="previousProposalId"      column="previous_proposal_id"/>
         <result property="supersededByProposalId"  column="superseded_by_proposal_id"/>
         <result property="model"                   column="model"/>
+        <result property="origin"                  column="origin"/>
+        <result property="userRequestJson"         column="user_request_json"/>
         <result property="createdAt"               column="created_at"/>
         <result property="updatedAt"               column="updated_at"/>
         <result property="resolvedAt"              column="resolved_at"/>
@@ -79,10 +82,10 @@
     <insert id="insertJob" useGeneratedKeys="true" keyProperty="jobId">
         INSERT INTO project_tidy_jobs (
             user_id, course_id, generation, status, base_tree_version, previous_proposal_id,
-            input_snapshot_json, max_attempts, next_run_at
+            input_snapshot_json, max_attempts, next_run_at, user_request_json
         ) VALUES (
             #{userId}, #{courseId}, #{generation}, #{status}, #{baseTreeVersion}, #{previousProposalId},
-            #{inputSnapshotJson}, #{maxAttempts}, #{nextRunAt}
+            #{inputSnapshotJson}, #{maxAttempts}, #{nextRunAt}, #{userRequestJson}
         )
     </insert>
 
@@ -170,12 +173,24 @@
     <insert id="insertProposal" useGeneratedKeys="true" keyProperty="proposalId">
         INSERT INTO project_tidy_proposals (
             user_id, course_id, job_id, generation, revision, base_tree_version, status,
-            summary_json, ops_json, scope_json, previous_proposal_id, model
+            summary_json, ops_json, scope_json, previous_proposal_id, model, origin, user_request_json
         ) VALUES (
             #{userId}, #{courseId}, #{jobId}, #{generation}, #{revision}, #{baseTreeVersion}, #{status},
-            #{summaryJson}, #{opsJson}, #{scopeJson}, #{previousProposalId}, #{model}
+            #{summaryJson}, #{opsJson}, #{scopeJson}, #{previousProposalId}, #{model},
+            COALESCE(#{origin}, 'AI'), #{userRequestJson}
         )
     </insert>
+
+    <!--
+      열린 정리안에 사용자가 직접 만든(또는 요청으로 해석한) 변경을 더한다. 판(revision)을 올려 화면이 들고 있던
+      옛 판으로 적용하지 못하게 한다. 편집(edits)은 changeId로 붙어 있어 그대로 남는다.
+    -->
+    <update id="appendProposalOps">
+        UPDATE project_tidy_proposals
+        SET ops_json = #{opsJson}, revision = revision + 1,
+            user_request_json = COALESCE(#{userRequestJson}, user_request_json)
+        WHERE proposal_id = #{proposalId} AND user_id = #{userId} AND status = 'PROPOSED' AND revision = #{revision}
+    </update>
 
     <select id="findProposalById" resultMap="proposalResultMap">
         SELECT * FROM project_tidy_proposals WHERE proposal_id = #{proposalId} AND user_id = #{userId}

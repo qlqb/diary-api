@@ -217,6 +217,10 @@ public class PlanMaterialContextService {
      * @param requestedMaterialIds  이번 요청에서 지정한 자료(검증된 것만). 프로젝트에 연결돼 있지 않아도 구간은 후보가 된다
      * @param requestedSectionIds   이번 요청에서 지정한 구간
      */
+    /** 사용자가 정정한 시험·계획 범위 제외. 없는 환경(단위 테스트)에서는 쓰지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
+
     @Transactional(readOnly = true)
     public CourseCatalog build(Long userId, Long courseId, String courseTitle, Set<Long> excludeTopicIds,
                                Collection<Long> requestedMaterialIds, Collection<Long> requestedSectionIds) {
@@ -267,7 +271,27 @@ public class PlanMaterialContextService {
         List<TopicLine> candidates = new ArrayList<>();
         List<ExcludedTopic> excluded = new ArrayList<>();
         boolean firstMarked = false;
+        /*
+         * 사용자가 정정한 범위 제외("이번 시험에는 이 단원이 빠져"). 그 항목과 하위 항목을 후보에서 뺀다 — 학습 완료로 보지
+         * 않고(진도는 그대로), 트리에서 지우지도 않는다. 사유에 어느 시험·계획의 범위인지 남긴다. 화면에서 풀 수 있다.
+         */
+        Map<Long, String> scope = new HashMap<>();
+        if (correctionMapper != null) {
+            for (var row : correctionMapper.findActiveExclusions(courseId, userId)) {
+                scope.put(row.getTopicId(), row.getLabel() == null ? "" : row.getLabel());
+            }
+        }
         for (TopicLine line : all) {
+            String scopeLabel = scope.get(line.topicId());
+            if (scopeLabel == null && line.parentTopicId() != null) {
+                scopeLabel = scope.get(line.parentTopicId());
+            }
+            if (scopeLabel != null) {
+                scope.putIfAbsent(line.topicId(), scopeLabel);
+                excluded.add(new ExcludedTopic(line.topicId(), line.title(),
+                        scopeLabel.isBlank() ? "SCOPE" : "SCOPE:" + scopeLabel));
+                continue;
+            }
             if (line.mark() == TopicUserMark.KNOWN || line.mark() == TopicUserMark.DEFER) {
                 excluded.add(new ExcludedTopic(line.topicId(), line.title(), line.mark().name()));
                 continue;

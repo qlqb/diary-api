@@ -35,6 +35,10 @@ public class ProjectTidyController {
 
     private final ProjectTidyService tidyService;
 
+    /** 정리에 붙이는 사용자 지시(선택). "3장은 실습 위주로 나눠줘"처럼. 모델에는 데이터로만 간다. */
+    public record TidyInstruction(String instruction, java.util.List<Long> focusTopicIds) {
+    }
+
     @GetMapping("/api/courses/{courseId}/tidy")
     public ResponseEntity<ProjectTidyResponse> view(@AuthenticationPrincipal UserPrincipal principal,
                                                     @PathVariable Long courseId) {
@@ -45,9 +49,12 @@ public class ProjectTidyController {
     public ResponseEntity<ProjectTidyResponse> request(@AuthenticationPrincipal UserPrincipal principal,
                                                        @PathVariable Long courseId,
                                                        @RequestParam(name = "refresh", defaultValue = "false")
-                                                       boolean refresh) {
-        log.info("POST /api/courses/{}/tidy - userId={}, refresh={}", courseId, principal.getUserId(), refresh);
-        return ResponseEntity.ok(tidyService.request(principal.getUserId(), courseId, refresh));
+                                                       boolean refresh,
+                                                       @RequestBody(required = false) TidyInstruction body) {
+        log.info("POST /api/courses/{}/tidy - userId={}, refresh={}, 지시={}", courseId, principal.getUserId(), refresh,
+                body != null && body.instruction() != null);
+        return ResponseEntity.ok(tidyService.request(principal.getUserId(), courseId, refresh,
+                body == null ? null : body.instruction(), body == null ? null : body.focusTopicIds()));
     }
 
     @PutMapping("/api/project-tidy/{proposalId}/edits")

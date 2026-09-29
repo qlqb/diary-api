@@ -74,6 +74,12 @@ public class ProjectTidyResponse {
     private LocalDateTime createdAt;
     private LocalDateTime resolvedAt;
 
+    /** AI(자료 정리) / REQUEST(말로 한 요청) / USER(직접 조작). */
+    private String origin;
+    /** 사용자가 적은 요청·지시. 없으면 null. */
+    private String userRequest;
+    private List<TreeNode> tree;
+
     @Getter
     @Builder
     public static class Job {
@@ -142,6 +148,35 @@ public class ProjectTidyResponse {
         /** 학습 기록 승계가 애매할 때 미리 알리는 말. */
         private String caution;
         private List<Section> sections;
+        /** 누가 낸 변경인가: null(AI 정리) · USER(직접 조작) · REQUEST(말로 한 요청) · TOC(교재 목차 골격). */
+        private String by;
+        /** 트리에 닿는가. false면 실제 수업·범위 정정이다(교재 구조는 그대로). */
+        private boolean treeOp;
+        /** 변경 원본(부모·기준 항목·tempId·주차 등). 화면이 "바꾼 뒤 구조"를 미리 그릴 때 쓴다. */
+        private com.jungwoo.project.memo.learning.structure.TopicChangeOp payload;
+        /** 이 변경이 닿는 학습 항목의 기록. 기록을 옮기거나 바꾸지 않는다 — 무엇이 걸려 있는지 미리 보여 줄 뿐이다. */
+        private List<Impact> impact;
+    }
+
+    @Getter
+    @Builder
+    public static class Impact {
+        private Long topicId;
+        private String title;
+        private int openItems;
+        private int doneItems;
+        private int contexts;
+        private String progress;
+    }
+
+    /** 지금 학습 구조(활성 항목). 화면이 변경 전·후를 나란히 그린다. */
+    @Getter
+    @Builder
+    public static class TreeNode {
+        private Long topicId;
+        private Long parentTopicId;
+        private String title;
+        private Integer orderIndex;
     }
 
     /** 근거 구간. 어느 자료의 어디인지까지 있어야 원문을 열 수 있다. */

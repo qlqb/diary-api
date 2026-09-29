@@ -40,6 +40,16 @@ public class Course {
 
     private String textbookIsbn;
 
+    /** 판 정보(개정 4판 등). 확인한 값만. */
+    private String textbookEdition;
+
+    /** USER(사용자가 적거나 고침) / MATERIAL(자료에서 찾은 값을 사용자가 적용) / null(모름·예전 값). */
+    private String textbookInfoSource;
+
+    private Long textbookInfoMaterialId;
+
+    private java.time.LocalDateTime textbookInfoUpdatedAt;
+
     private CourseStatus status;
 
     /** 학습 구조(course_topics)를 바꾸는 쓰기마다 1 오른다. 변경안 적용의 낙관적 잠금 기준. */

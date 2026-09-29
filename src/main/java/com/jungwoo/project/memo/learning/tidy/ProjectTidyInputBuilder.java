@@ -72,11 +72,39 @@ public class ProjectTidyInputBuilder {
     /** 고정된 입력 한 벌. */
     public record Input(Course course, List<CourseTopic> topics, List<TopicMaterialLink> topicLinks,
                         List<MaterialSection> sections, Map<Long, CourseMaterial> materialsById,
-                        List<CourseAssignment> assignments, ProjectTidyScope scope) {
+                        List<CourseAssignment> assignments, ProjectTidyScope scope, Guidance guidance) {
+
+        public Input(Course course, List<CourseTopic> topics, List<TopicMaterialLink> topicLinks,
+                     List<MaterialSection> sections, Map<Long, CourseMaterial> materialsById,
+                     List<CourseAssignment> assignments, ProjectTidyScope scope) {
+            this(course, topics, topicLinks, sections, materialsById, assignments, scope, Guidance.NONE);
+        }
 
         public boolean isEmpty() {
-            return sections.isEmpty();
+            return sections.isEmpty() && (guidance == null || guidance.skeleton().isEmpty());
         }
+
+        public Input withGuidance(Guidance next) {
+            return new Input(course, topics, topicLinks, sections, materialsById, assignments, scope, next);
+        }
+
+        public Input withScope(ProjectTidyScope next) {
+            return new Input(course, topics, topicLinks, sections, materialsById, assignments, next, guidance);
+        }
+    }
+
+    /**
+     * 자료 구간 밖에서 정리에 더해지는 것.
+     *
+     * @param request  사용자 지시(없으면 null). 모델에는 데이터로만 간다
+     * @param focus    지시가 짚은 항목
+     * @param toc      이 프로젝트에서 확보한 교재 목차(없으면 null — 만들어 내지 않는다)
+     * @param skeleton 트리가 비어 있을 때 서버가 목차로 만든 골격 ADD들(tempId t1…). 모델은 이것을 다시 만들지 않는다
+     */
+    public record Guidance(String request, List<Long> focus,
+                           com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
+                           List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton) {
+        public static final Guidance NONE = new Guidance(null, List.of(), null, List.of());
     }
 
     /** 요청 화면이 미리 보여 줄 범위(모델을 부르지 않는다). */
@@ -211,8 +239,7 @@ public class ProjectTidyInputBuilder {
                 review.partial() || review.listedSectionIds().size() < input.sections().size(),
                 input.sections().size(), review.detailSectionIds().size(), review.listedSectionIds().size(),
                 review.modelCalls());
-        return new Input(input.course(), input.topics(), input.topicLinks(), input.sections(),
-                input.materialsById(), input.assignments(), finalScope);
+        return input.withScope(finalScope);
     }
 
     private static Integer first(List<MaterialSection> sections, Long materialId) {

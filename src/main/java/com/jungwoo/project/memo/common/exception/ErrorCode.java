@@ -185,6 +185,12 @@ public enum ErrorCode {
             "같은 입력으로 다시 할 수 없어요. 새로 정리해 주세요"),
     MATERIAL_WEEK_SUGGESTION_CHANGED(HttpStatus.CONFLICT, "E409_036",
             "그 사이 주차 추천이 바뀌었어요. 목록을 다시 보고 확인해 주세요"),
+    TEXTBOOK_INFO_CHANGED(HttpStatus.CONFLICT, "E409_037",
+            "그 사이 교재 정보가 바뀌었어요. 지금 값을 다시 보고 골라 주세요"),
+    TEXTBOOK_CANDIDATE_CHANGED(HttpStatus.CONFLICT, "E409_038",
+            "자료에서 찾은 교재 정보가 그 사이 바뀌었어요. 다시 확인해 주세요"),
+    STRUCTURE_OPEN_PROPOSAL_EXISTS(HttpStatus.CONFLICT, "E409_039",
+            "검토 중인 정리안이 있어요. 그 안을 적용하거나 버린 뒤 다시 요청해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

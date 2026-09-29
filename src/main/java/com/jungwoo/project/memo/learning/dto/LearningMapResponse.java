@@ -25,9 +25,23 @@ public record LearningMapResponse(Long courseId, String title, Long treeVersion,
      * @param selfCheck    사용자의 자기평가(KNOW/UNSURE/NEW). 숙달·완료가 아니다
      * @param plannedItems 이 항목에 걸린 실행 항목 수(취소 제외)
      */
+    /**
+     * @param classWeek       사용자가 정정한 실제 수업 주차(없으면 null). 교재 위치와 별개다
+     * @param classSeq        사용자가 정정한 실제 수업 순서(없으면 null)
+     * @param scopeLabel      시험·계획 범위에서 뺐으면 그 이름("중간고사", 이름 없으면 "")
+     * @param mergedDoneItems 이 항목으로 병합된(보관된) 항목에 남아 있는 끝낸 실행 수. 옮겨 오지 않았다 — 상태는 사용자가 정한다
+     */
     public record TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
                             String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
-                            List<TopicNode> children) {
+                            List<TopicNode> children, Integer classWeek, Integer classSeq, String scopeLabel,
+                            int mergedDoneItems) {
+
+        public TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
+                         String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
+                         List<TopicNode> children) {
+            this(topicId, parentTopicId, title, progressStatus, userMark, selfCheck, materials, plannedItems, doneItems,
+                    children, null, null, null, 0);
+        }
     }
 
     public record MaterialRef(Long materialId, String filename, Long sectionId, String sectionTitle, String locator) {

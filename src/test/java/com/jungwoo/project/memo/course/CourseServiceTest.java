@@ -67,8 +67,24 @@ class CourseServiceTest {
 
         // AI 경로(updateTextbookInfo)는 비어 있는 칸만 채우므로 사용자 편집에 쓸 수 없다.
         verify(courseMapper).updateTextbookByUser(COURSE_ID, USER_ID,
-                "전처리와 시각화", "오경선 외", null, null);
+                "전처리와 시각화", "오경선 외", null, null, null);
         verify(courseMapper, never()).updateTextbookInfo(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void update_leavesTextbookAndItsSourceAlone_whenOnlyTheProjectNameChanges() {
+        // 자료에서 찾아 적용한 교재 값이 이름만 바꾼 저장으로 "사용자가 적은 값"이 되지 않는다.
+        when(courseMapper.findByIdAndUserId(COURSE_ID, USER_ID)).thenReturn(Course.builder().courseId(COURSE_ID)
+                .status(CourseStatus.ACTIVE).textbookTitle("쉬운 자료구조").textbookInfoSource("MATERIAL").build());
+        when(courseMapper.findSummaryCounts(USER_ID, COURSE_ID)).thenReturn(List.of());
+
+        CourseUpdateRequest request = new CourseUpdateRequest();
+        org.springframework.test.util.ReflectionTestUtils.setField(request, "title", "자료구조(월)");
+        org.springframework.test.util.ReflectionTestUtils.setField(request, "textbookTitle", "쉬운 자료구조");
+
+        service.update(USER_ID, COURSE_ID, request);
+
+        verify(courseMapper, never()).updateTextbookByUser(any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

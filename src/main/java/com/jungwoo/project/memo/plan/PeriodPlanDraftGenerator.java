@@ -1955,6 +1955,7 @@ public class PeriodPlanDraftGenerator {
         appendMoreEvidenceList(sb, courseId, catalog, selection, inputs, moreLines);
 
         PlanPromptBlocks.appendHistory(sb, inputs.facts().history(), courseId, collector, "  ");
+        appendClassProgress(sb, userId, courseId, catalog);
 
         if (course != null) {
             List<ScheduleLine> scheduleLines = courseScheduleLines(userId, course.getCourseId(), catalog);
@@ -2263,6 +2264,54 @@ public class PeriodPlanDraftGenerator {
             return contexts == null ? List.of() : contexts;
         } catch (Exception e) {
             return List.of();
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.CourseTopicMapper classTopicMapper;
+
+    /**
+     * 사용자가 정정한 실제 수업 진행. 교재상의 위치(학습 항목의 순서)와 다를 수 있고, 강의계획서의 예정 진도와도 다를 수 있다 —
+     * 그럴 때 이것이 실제다. 범위 제외는 이미 후보에서 빠졌고, 여기서는 제외 사실만 알린다(완료로 보지 않게).
+     */
+    private void appendClassProgress(StringBuilder sb, Long userId, Long courseId, PlanMaterialContextService.CourseCatalog catalog) {
+        if (correctionMapper == null || courseId == null) {
+            return;
+        }
+        List<com.jungwoo.project.memo.learning.correction.TopicClassProgress> rows;
+        try {
+            rows = correctionMapper.findClassProgress(courseId, userId);
+        } catch (Exception e) {
+            return;
+        }
+        if (!rows.isEmpty()) {
+            Map<Long, String> titles = new HashMap<>();
+            if (classTopicMapper != null) {
+                classTopicMapper.findActiveByCourseIdAndUserId(courseId, userId)
+                        .forEach(t -> titles.put(t.getTopicId(), t.getTitle()));
+            }
+            sb.append("  [실제 수업 진행 — 사용자가 정정한 것] (교재 순서·강의계획서의 예정 진도와 다르면 이것이 실제다. ")
+                    .append("수업 따라잡기면 이 순서를 기준으로, 시험 준비면 시험 범위를, 교재 독학이면 교재 순서를 기준으로 하되 ")
+                    .append("앞 단원의 선수 개념은 챙긴다. 순서가 달랐다는 것만으로 내용을 다시 만들지 않는다)\n");
+            int n = 1;
+            for (var row : rows) {
+                sb.append("    ").append(row.getClassSeq() != null ? (n++) + ". " : "· ")
+                        .append('#').append(row.getTopicId()).append(' ')
+                        .append(titles.getOrDefault(row.getTopicId(), "학습 항목"))
+                        .append(row.getWeekNo() == null ? "" : " (" + row.getWeekNo() + "주차에 다룸)").append('\n');
+            }
+        }
+        List<PlanMaterialContextService.ExcludedTopic> scoped = catalog == null ? List.of() : catalog.excluded().stream()
+                .filter(e -> e.reason() != null && e.reason().startsWith("SCOPE")).toList();
+        if (!scoped.isEmpty()) {
+            sb.append("  [범위에서 뺀 항목 — 사용자가 정정] (계획에 넣지 않는다. 학습을 마쳤다는 뜻이 아니다)\n");
+            for (var e : scoped) {
+                String label = e.reason().startsWith("SCOPE:") ? e.reason().substring(6) : "이번 계획";
+                sb.append("    · ").append(e.title()).append(" (").append(label).append(")\n");
+            }
         }
     }
 

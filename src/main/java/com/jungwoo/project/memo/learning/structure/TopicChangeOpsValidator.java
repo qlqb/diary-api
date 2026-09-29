@@ -103,8 +103,9 @@ public final class TopicChangeOpsValidator {
         String kind = op.op().trim().toUpperCase(Locale.ROOT);
         switch (kind) {
             case TopicChangeOp.LINK -> {
-                if (!isLive(op.topicId(), topics, absorbed)) {
-                    return "LINK: 없는 항목 " + op.topicId();
+                boolean toNew = op.topicId() == null && op.tempId() != null && tempIds.contains(op.tempId());
+                if (!toNew && !isLive(op.topicId(), topics, absorbed)) {
+                    return "LINK: 없는 항목 " + (op.topicId() != null ? op.topicId() : op.tempId());
                 }
                 if (op.sectionIds() == null || op.sectionIds().isEmpty()) {
                     return "LINK: 구간 없음";
@@ -148,6 +149,49 @@ public final class TopicChangeOpsValidator {
                         }
                         cursor = parentOf.get(cursor);
                     }
+                }
+                Long after = op.afterTopicId();
+                if (after != null && after != 0L) {
+                    if (!isLive(after, topics, absorbed) || after.equals(op.topicId())) {
+                        return "MOVE: 없는 기준 항목 " + after;
+                    }
+                    if (!java.util.Objects.equals(parentOf.get(after), newParent)) {
+                        return "MOVE: 기준 항목이 새 부모의 하위가 아님 " + after;
+                    }
+                }
+                return null;
+            }
+            case TopicChangeOp.CLASS -> {
+                if (!isLive(op.topicId(), topics, absorbed)) {
+                    return "CLASS: 없는 항목 " + op.topicId();
+                }
+                if (op.week() == null && op.afterTopicId() == null) {
+                    return "CLASS: 주차도 순서도 없음";
+                }
+                if (op.week() != null && (op.week() < 1 || op.week() > 30)) {
+                    return "CLASS: 주차 범위 밖 " + op.week();
+                }
+                Long after = op.afterTopicId();
+                if (after != null && after != 0L && (!isLive(after, topics, absorbed) || after.equals(op.topicId()))) {
+                    return "CLASS: 없는 기준 항목 " + after;
+                }
+                return null;
+            }
+            case TopicChangeOp.MATERIAL_WEEK -> {
+                if (op.materialId() == null) {
+                    return "MATERIAL_WEEK: 자료 없음";
+                }
+                if (op.week() == null || op.week() < 1 || op.week() > 30) {
+                    return "MATERIAL_WEEK: 주차 범위 밖 " + op.week();
+                }
+                return null;
+            }
+            case TopicChangeOp.SCOPE_EXCLUDE -> {
+                if (!isLive(op.topicId(), topics, absorbed)) {
+                    return "SCOPE_EXCLUDE: 없는 항목 " + op.topicId();
+                }
+                if (op.label() != null && op.label().length() > 60) {
+                    return "SCOPE_EXCLUDE: 이름이 너무 김";
                 }
                 return null;
             }
@@ -267,6 +311,8 @@ public final class TopicChangeOpsValidator {
         String sourceType = "SOURCE".equalsIgnoreCase(op.sourceType()) ? "SOURCE" : "AI_DERIVED";
         return new TopicChangeOp(kind, op.tempId(), op.topicId(), op.parentTopicId(), op.parentTempId(),
                 op.title() == null ? null : op.title().trim(), sourceType, op.locator(), sections, role,
-                op.survivingTopicId(), op.absorbedTopicIds(), children, op.reason(), op.changeId());
+                op.survivingTopicId(), op.absorbedTopicIds(), children, op.reason(), op.changeId(),
+                op.afterTopicId(), op.week(), op.materialId(),
+                op.label() == null || op.label().isBlank() ? null : op.label().trim(), op.by());
     }
 }

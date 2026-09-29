@@ -70,6 +70,7 @@ public class ProjectTidyWorker {
     private final CourseMaterialMapper courseMaterialMapper;
     private final MaterialLinkMapper materialLinkMapper;
     private final MaterialSectionMapper sectionMapper;
+    private final com.jungwoo.project.memo.course.textbook.TextbookService textbookService;
 
     public Result run(ProjectTidyJob job) {
         long startedAt = System.currentTimeMillis();
@@ -110,6 +111,7 @@ public class ProjectTidyWorker {
         }
         ProjectTidyInputBuilder.Input input = withRequestExclusions(
                 inputBuilder.build(job.getUserId(), course, check.allowed()), check.snapshot());
+        input = input.withGuidance(guidanceOf(job, input));
         if (input.isEmpty()) {
             // 요청 시점에는 쓸 자료가 있었는데 그 사이 전부 사라졌다. 실패가 아니라 "바꿀 것이 없음"이다.
             return save(job, course, input, List.of(), "정리에 쓸 수 있는 자료가 없어요", null);
@@ -118,20 +120,120 @@ public class ProjectTidyWorker {
                 LocalDateTime.now().plusSeconds(LEASE_RENEW_SECONDS)) != 1) {
             return Result.LOST;
         }
-        ProjectTidyAnalyzer.Draft draft = analyzer.analyze(job.getUserId(), input);
+        List<TopicChangeOp> skeleton = input.guidance().skeleton();
+        ProjectTidyAnalyzer.Draft draft = input.sections().isEmpty()
+                // 읽을 구간은 없고 목차 골격만 있다. 모델을 부르지 않는다.
+                ? new ProjectTidyAnalyzer.Draft(List.of(), "교재 목차로 학습 구조의 첫 골격을 만들었어요", null)
+                : analyzer.analyze(job.getUserId(), input);
         // 무엇을 목록으로 보고 무엇을 자세히 읽었는지로 범위를 채운다. 정리안에 그대로 저장된다.
-        input = inputBuilder.finalizeScope(input, draft.review());
+        if (draft.review() != null) {
+            input = inputBuilder.finalizeScope(input, draft.review());
+        }
 
         Set<Long> sectionIds = input.sections().stream()
                 .map(MaterialSection::getSectionId).collect(Collectors.toSet());
+        List<TopicChangeOp> raw = new ArrayList<>(skeleton);
+        raw.addAll(withoutSkeletonDuplicates(draft.ops(), skeleton));
+        raw.addAll(carriedUserOps(job));
         TopicChangeOpsValidator.Result validated = TopicChangeOpsValidator.validate(
-                TopicChangePlan.order(draft.ops()), input.topics(), sectionIds, false);
+                TopicChangePlan.order(raw), input.topics(), sectionIds, false);
         if (!validated.rejected().isEmpty()) {
             log.info("정리안 검증에서 버린 작업 {}건: jobId={}, 사유={}",
                     validated.rejected().size(), job.getJobId(), validated.rejected());
         }
         TopicChangePlan.Plan plan = TopicChangePlan.of(validated.ops());
         return save(job, course, input, plan.ops(), draft.summary(), draft.model());
+    }
+
+    /**
+     * 사용자 지시와 교재 목차. 목차는 규칙으로 읽은 것이고(없으면 없음), 트리가 비어 있을 때만 서버가 골격을 만든다.
+     */
+    private ProjectTidyInputBuilder.Guidance guidanceOf(ProjectTidyJob job, ProjectTidyInputBuilder.Input input) {
+        String request = null;
+        List<Long> focus = List.of();
+        if (job.getUserRequestJson() != null) {
+            try {
+                Map<String, Object> raw = objectMapper.readValue(job.getUserRequestJson(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {
+                        });
+                request = raw.get("text") == null ? null : String.valueOf(raw.get("text"));
+                if (raw.get("focusTopicIds") instanceof List<?> list) {
+                    focus = list.stream().filter(java.util.Objects::nonNull)
+                            .map(v -> Long.valueOf(String.valueOf(v))).toList();
+                }
+            } catch (Exception e) {
+                log.debug("정리 요청의 사용자 지시를 읽지 못했다: jobId={}", job.getJobId());
+            }
+        }
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc = null;
+        try {
+            toc = textbookService.tocOf(job.getUserId(), job.getCourseId());
+        } catch (Exception e) {
+            // 목차를 못 읽어도 정리는 된다. 없는 목차를 있다고 하지 않을 뿐이다.
+            log.warn("정리 입력의 교재 목차를 읽지 못했다: courseId={}, {}", job.getCourseId(), e.getClass().getSimpleName());
+        }
+        List<TopicChangeOp> skeleton = input.topics().isEmpty() ? TocSkeleton.build(toc) : List.of();
+        return new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton);
+    }
+
+    /** 모델이 골격과 같은 장을 또 만들었으면 뺀다(서버 골격이 먼저다). */
+    private static List<TopicChangeOp> withoutSkeletonDuplicates(List<TopicChangeOp> ops, List<TopicChangeOp> skeleton) {
+        if (skeleton.isEmpty()) {
+            return ops;
+        }
+        Set<String> titles = new java.util.HashSet<>();
+        for (TopicChangeOp op : skeleton) {
+            collectTitles(op, titles);
+        }
+        List<TopicChangeOp> out = new ArrayList<>();
+        for (TopicChangeOp op : ops) {
+            if (TopicChangeOp.ADD.equalsIgnoreCase(op.op()) && op.parentTempId() == null && op.parentTopicId() == null
+                    && titles.contains(bare(op.title()))) {
+                continue;
+            }
+            out.add(op);
+        }
+        return out;
+    }
+
+    private static void collectTitles(TopicChangeOp op, Set<String> out) {
+        out.add(bare(op.title()));
+        if (op.children() != null) {
+            op.children().forEach(child -> collectTitles(child, out));
+        }
+    }
+
+    /** 번호·기호·공백을 뺀 제목. "CHAPTER 02 배열"과 "배열"이 같다. */
+    static String bare(String title) {
+        if (title == null) {
+            return "";
+        }
+        return title.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("^(제\\s*\\d+\\s*[부편장]|chapter\\s*\\d+|part\\s*\\d+|\\d+(\\.\\d+)*\\s*장?)", "")
+                .replaceAll("[^\\p{L}\\p{N}]", "");
+    }
+
+    /**
+     * 앞 판에 사용자가 직접 넣은(또는 요청으로 해석된) 변경. 새 AI 판으로 갈아탈 때 버리지 않고 옮긴다 — 검증은 새 트리로
+     * 다시 한다(그 사이 사라진 항목을 가리키면 여기서 빠진다).
+     */
+    private List<TopicChangeOp> carriedUserOps(ProjectTidyJob job) {
+        if (job.getPreviousProposalId() == null) {
+            return List.of();
+        }
+        ProjectTidyProposal previous = tidyMapper.findProposalById(job.getPreviousProposalId(), job.getUserId());
+        if (previous == null || previous.getOpsJson() == null) {
+            return List.of();
+        }
+        try {
+            List<TopicChangeOp> ops = objectMapper.readValue(previous.getOpsJson(),
+                    new com.fasterxml.jackson.core.type.TypeReference<List<TopicChangeOp>>() {
+                    });
+            return ops.stream().filter(op -> "USER".equals(op.by()) || "REQUEST".equals(op.by()))
+                    .map(TopicChangeOp::withoutChangeId).toList();
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     /**
@@ -152,6 +254,8 @@ public class ProjectTidyWorker {
                     .scopeJson(writeJson(input.scope()))
                     .previousProposalId(job.getPreviousProposalId())
                     .model(model)
+                    .origin("AI")
+                    .userRequestJson(job.getUserRequestJson())
                     .build();
 
             /*
@@ -530,8 +634,7 @@ public class ProjectTidyWorker {
         ProjectTidyScope merged = new ProjectTidyScope(scope.courseId(), scope.treeVersion(), scope.topicCount(),
                 scope.treeLinesShown(), scope.reviewed(), excluded, scope.truncated(), scope.sectionsTotal(),
                 scope.sectionsReviewed());
-        return new ProjectTidyInputBuilder.Input(input.course(), input.topics(), input.topicLinks(),
-                input.sections(), input.materialsById(), input.assignments(), merged);
+        return input.withScope(merged);
     }
 
     private Result handleFailure(ProjectTidyJob job, AnalysisFailure failure) {

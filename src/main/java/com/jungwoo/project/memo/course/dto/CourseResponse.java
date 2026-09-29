@@ -27,6 +27,10 @@ public class CourseResponse {
     private String textbookAuthor;
     private String textbookPublisher;
     private String textbookIsbn;
+    private String textbookEdition;
+    /** USER / MATERIAL / null. 화면이 "직접 적음"과 "자료에서 찾아 적용함"을 구분해 보인다. */
+    private String textbookInfoSource;
+    private Long textbookInfoMaterialId;
     private CourseStatus status;
     private int topicCount;
     private int learnedTopicCount;
@@ -44,6 +48,9 @@ public class CourseResponse {
                 .textbookAuthor(course.getTextbookAuthor())
                 .textbookPublisher(course.getTextbookPublisher())
                 .textbookIsbn(course.getTextbookIsbn())
+                .textbookEdition(course.getTextbookEdition())
+                .textbookInfoSource(course.getTextbookInfoSource())
+                .textbookInfoMaterialId(course.getTextbookInfoMaterialId())
                 .status(course.getStatus())
                 .topicCount(counts != null ? counts.getTopicCount() : 0)
                 .learnedTopicCount(counts != null ? counts.getLearnedTopicCount() : 0)
