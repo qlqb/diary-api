@@ -761,6 +761,27 @@ briefId, briefVersion            // 그때 읽은 상담 합의
   ```
 - 기간 계획 OFFER는 강도 없이도 나온다(`intensity`=NORMAL 가정, 답변 끝에 가정이라고 말한다). 강도 되묻기 고정 문구는 더 나오지 않는다.
 
+#### 자료 근거 (2026-10-03, 추가형 — 예전 클라이언트는 새 칸을 무시하면 된다)
+
+- 요청 `answer.lookup`(선택, 기본 false): "내 자료에서 찾아봐". 서버가 자료 확인을 넓히고 발화를 "이 질문에 필요한 내용은 내
+  자료에서 찾아서 확인해 줘."로 남긴다. `answer`에 선택지가 있으면 `message`가 있어도 **저장된 질문의 선택지**로 발화를 다시 만든다.
+- 선택지 `choices[].kind`: 없음(=답) / `INPUT`(입력 안내 — 이 선택지 id로 보내면 400 `E400_001`) / `LOOKUP`(자료 찾기).
+- SSE `evidence.reading {label}`: 첫 응답이 자료를 더 읽기로 해서 서버가 읽는 중이다. 화면은 그때까지 흘러온 글을 지우고
+  label을 보여 준다. 최종 답은 이어지는 `message.delta`다. 한 턴의 모델 호출은 최대 2회(추가 읽기 1회).
+- `consult.evidence`(자료를 확인한 턴만, `GET …/messages`에도 같은 값):
+  ```json
+  { "summary": "자료 4개 중 읽을 수 있는 3개를 검색 · 원문 4곳 확인 · 답변에 3곳 사용 · 확인하지 못한 범위 2건",
+    "sources": [ { "ref": "E1", "kind": "MATERIAL_TEXT|MATERIAL_SECTION|APP_FACT", "title": "자료구조_강의계획서.pdf",
+                   "courseTitle": "자료구조", "origin": null, "materialId": 11, "locator": "p.4", "page": 4,
+                   "readState": "FULL|PARTIAL|EXCERPT_ONLY|METADATA", "used": true, "round": 1 } ],
+    "gaps": [ { "label": "대학영어 · 영어_계획서_스캔.pdf",
+                "reason": "NOT_FOUND|NO_TEXT|EXTRACTION_FAILED|EXTRACTING|NOT_READ_LIMIT|CHANGED|NO_MATERIAL|UNKNOWN_REF|LOOKUP_FAILED",
+                "detail": "…" } ],
+    "rounds": 1 }
+  ```
+  `page`는 PDF 쪽으로 열 수 있을 때만 있다(한글 문서의 "구간 N"·슬라이드는 locator만). `used`는 모델이 밝힌 번호 중 그 턴에
+  실제로 실은 것만. 재생(같은 idempotencyKey)도 `consult`를 그대로 돌려준다.
+
 ### `POST /api/ai/proposals/{proposalId}/dismiss`
 
 이 제안을 버린다 → 204. 상태를 `DISMISSED`로만 바꾸고 내용은 지우지 않는다(다음 상담의 근거다).
