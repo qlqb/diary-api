@@ -313,6 +313,6 @@ public final class TopicChangeOpsValidator {
                 op.title() == null ? null : op.title().trim(), sourceType, op.locator(), sections, role,
                 op.survivingTopicId(), op.absorbedTopicIds(), children, op.reason(), op.changeId(),
                 op.afterTopicId(), op.week(), op.materialId(),
-                op.label() == null || op.label().isBlank() ? null : op.label().trim(), op.by());
+                op.label() == null || op.label().isBlank() ? null : op.label().trim(), op.by(), op.tocLine());
     }
 }

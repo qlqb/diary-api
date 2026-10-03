@@ -497,7 +497,8 @@ public class StructureRequestService {
         String reason = note == null || note.isBlank() ? "직접 조정" : note.trim();
         return new TopicChangeOp(op.op(), op.tempId(), op.topicId(), op.parentTopicId(), op.parentTempId(), op.title(),
                 op.sourceType(), op.locator(), op.sectionIds(), op.role(), op.survivingTopicId(), op.absorbedTopicIds(),
-                op.children(), reason, op.changeId(), op.afterTopicId(), op.week(), op.materialId(), op.label(), op.by());
+                op.children(), reason, op.changeId(), op.afterTopicId(), op.week(), op.materialId(), op.label(), op.by(),
+                op.tocLine());
     }
 
     private List<TopicChangeOp> readOps(String json) {

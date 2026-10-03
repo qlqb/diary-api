@@ -17,6 +17,12 @@
         <result property="textbookInfoSource" column="textbook_info_source"/>
         <result property="textbookInfoMaterialId" column="textbook_info_material_id"/>
         <result property="textbookInfoUpdatedAt" column="textbook_info_updated_at"/>
+        <result property="textbookVersion"   column="textbook_version"/>
+        <result property="textbookWebRevisionId" column="textbook_web_revision_id"/>
+        <result property="textbookTocMaterialId" column="textbook_toc_material_id"/>
+        <result property="textbookTocFileHash" column="textbook_toc_file_hash"/>
+        <result property="textbookTocBookKey" column="textbook_toc_book_key"/>
+        <result property="textbookWebLookupEnabled" column="textbook_web_lookup_enabled"/>
         <result property="status"            column="status"/>
         <result property="topicTreeVersion"  column="topic_tree_version"/>
         <result property="createdAt"         column="created_at"/>
@@ -74,61 +80,51 @@
     </select>
 
     <!--
-      AI 분석 적용 경로. 비어 있는 칸만 채운다.
-
-      COALESCE의 인자 순서가 핵심이다. 기존 값을 먼저 놓으면 "이미 있는 값은 건드리지
-      않는다"가 된다 — 자료 분석은 한 프로젝트에서 여러 번 일어나는데(강의계획서 한 번,
-      나중에 교수 자료로 또 한 번), 그때마다 덮어쓰면 사용자가 고쳐 놓은 값이 조용히
-      되돌아간다. DB는 그 값이 사람이 고친 것인지 AI가 넣은 것인지 구분할 수 없으므로,
-      한 번 채워진 칸은 사람 것으로 보고 손대지 않는다.
-
-      AI가 더 나은 값을 찾아도 반영되지 않는다는 뜻이지만, 사용자가 프로젝트 화면에서
-      직접 고칠 수 있으므로(updateTextbookByUser) 그쪽이 낫다. 사람이 고친 것을 말없이
-      뒤집는 쪽이 훨씬 비싸다.
+      교재 칸의 유일한 쓰기(CourseTextbookWriter). 호출하는 쪽이 행을 잠그고(findByIdAndUserIdForUpdate) 판을 대조한 뒤
+      다섯 칸의 최종 값을 정해 부른다 — 여기서는 받은 값을 그대로 쓰고 판을 1 올린다.
+      clearTocLink가 참이면 사용자가 이었던 목차 자료 연결을 푼다(교재 식별이 바뀌었다 — 다른 책의 목차를 쓰지 않게).
     -->
-    <update id="updateTextbookInfo">
-        UPDATE courses
-        SET textbook_title     = COALESCE(textbook_title, #{textbookTitle}),
-            textbook_author    = COALESCE(textbook_author, #{textbookAuthor}),
-            textbook_publisher = COALESCE(textbook_publisher, #{textbookPublisher}),
-            textbook_isbn      = COALESCE(textbook_isbn, #{textbookIsbn})
-        WHERE course_id = #{courseId} AND user_id = #{userId}
-    </update>
-
-    <!--
-      사용자 편집 경로. 받은 값을 그대로 쓴다 — 비우면 비워진다.
-
-      위와 반대인 것이 의도다. 사람이 화면에서 지운 것은 "모른다"는 뜻이고, 그걸
-      COALESCE로 되살리면 지울 방법이 없어진다. group_label을 다루는 방식과 같다.
-    -->
-    <update id="updateTextbookByUser">
+    <update id="writeTextbook">
         UPDATE courses
         SET textbook_title     = #{textbookTitle},
             textbook_author    = #{textbookAuthor},
             textbook_publisher = #{textbookPublisher},
             textbook_isbn      = #{textbookIsbn},
             textbook_edition   = #{textbookEdition},
-            textbook_info_source = 'USER',
-            textbook_info_material_id = NULL,
-            textbook_info_updated_at = NOW()
-        WHERE course_id = #{courseId} AND user_id = #{userId}
+            textbook_info_source = #{source},
+            textbook_info_material_id = #{materialId},
+            textbook_web_revision_id = #{webRevisionId},
+            textbook_info_updated_at = NOW(),
+            <if test="clearTocLink">
+            textbook_toc_material_id = NULL,
+            textbook_toc_file_hash = NULL,
+            textbook_toc_book_key = NULL,
+            </if>
+            <if test="!clearTocLink">
+            <!-- 같은 책이면 이어 둔 목차는 그대로이고, 책 열쇠만 보강된 식별(예: ISBN 추가)로 옮긴다 -->
+            textbook_toc_book_key = CASE WHEN textbook_toc_material_id IS NULL THEN NULL ELSE #{bookKey} END,
+            </if>
+            textbook_version = textbook_version + 1
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_version = #{currentVersion}
     </update>
 
-    <!--
-      자료에서 찾은 교재 값을 사용자가 고른 칸에만 적용한다. 호출하는 쪽(TextbookService)이 행을 잠그고
-      "화면이 본 지금 값"과 대조한 뒤에만 부른다 — 그 사이 사용자가 고친 값을 덮지 않는다.
-      null인 인자는 그 칸을 건드리지 않는다는 뜻이다(고르지 않은 칸).
-    -->
-    <update id="applyTextbookFromMaterial">
+    <!-- "이 목차가 지금 교재의 것"이라는 사용자 연결. 판을 올린다(목차 근거가 바뀌었다). -->
+    <update id="writeTextbookTocLink">
         UPDATE courses
-        SET textbook_title     = COALESCE(#{textbookTitle}, textbook_title),
-            textbook_author    = COALESCE(#{textbookAuthor}, textbook_author),
-            textbook_publisher = COALESCE(#{textbookPublisher}, textbook_publisher),
-            textbook_isbn      = COALESCE(#{textbookIsbn}, textbook_isbn),
-            textbook_edition   = COALESCE(#{textbookEdition}, textbook_edition),
-            textbook_info_source = 'MATERIAL',
-            textbook_info_material_id = #{materialId},
-            textbook_info_updated_at = NOW()
+        SET textbook_toc_material_id = #{materialId},
+            textbook_toc_file_hash = #{fileHash},
+            textbook_toc_book_key = #{bookKey},
+            textbook_version = textbook_version + 1
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_version = #{currentVersion}
+    </update>
+
+    <update id="moveTextbookWebRevision">
+        UPDATE courses SET textbook_web_revision_id = #{revisionId}
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_web_revision_id = #{expected}
+    </update>
+
+    <update id="updateTextbookWebLookupEnabled">
+        UPDATE courses SET textbook_web_lookup_enabled = #{enabled}
         WHERE course_id = #{courseId} AND user_id = #{userId}
     </update>
 

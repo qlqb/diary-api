@@ -80,8 +80,9 @@ public class ProjectTidyInputBuilder {
             this(course, topics, topicLinks, sections, materialsById, assignments, scope, Guidance.NONE);
         }
 
+        /** 읽을 구간도, 목차 골격도, 비교할 교재 목차도 없다. */
         public boolean isEmpty() {
-            return sections.isEmpty() && (guidance == null || guidance.skeleton().isEmpty());
+            return sections.isEmpty() && (guidance == null || guidance.skeleton().isEmpty() && guidance.toc() == null);
         }
 
         public Input withGuidance(Guidance next) {
@@ -103,8 +104,16 @@ public class ProjectTidyInputBuilder {
      */
     public record Guidance(String request, List<Long> focus,
                            com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
-                           List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton) {
-        public static final Guidance NONE = new Guidance(null, List.of(), null, List.of());
+                           List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton,
+                           /* 트리에 이전 교재의 목차 항목이 있으면 그 책 열쇠(교재가 바뀌었다). 없으면 null */
+                           String switchedFrom) {
+        public static final Guidance NONE = new Guidance(null, List.of(), null, List.of(), null);
+
+        public Guidance(String request, List<Long> focus,
+                        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
+                        List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton) {
+            this(request, focus, toc, skeleton, null);
+        }
     }
 
     /** 요청 화면이 미리 보여 줄 범위(모델을 부르지 않는다). */

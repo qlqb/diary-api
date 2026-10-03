@@ -75,4 +75,11 @@ public class PlanDraftRequest {
      * 중복 클릭·재시도·늦은 응답이 초안을 두 개 만들지 않게 한다. 진행 상태 조회(/api/plans/draft/progress)의 열쇠이기도 하다.
      */
     private String requestKey;
+
+    /**
+     * (2026-10-04) 이번 계획의 목적(선택): REVIEW(복습·수업 따라잡기) · PREVIEW(예습) · EXAM(시험 준비) · SELF_STUDY(독학·훑기).
+     * 목적마다 범위의 근거가 다르다({@link com.jungwoo.project.memo.plan.PlanPurpose}). 없으면 상담 합의(PURPOSE)를 보고, 그것도
+     * 없으면 "말하지 않음"이다.
+     */
+    private String purpose;
 }

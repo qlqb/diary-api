@@ -47,6 +47,18 @@ public class ProjectTidyResponse {
     private Map<String, Edit> edits;
     private Long editRevision;
 
+    /**
+     * (2026-10-04) 이 안이 쓴 교재 목차의 출처 한 줄(「목차.pdf」 목차 / 웹 목차(예스24 · 10/4 조회 · 페이지에 실린 목차 전체)).
+     * 목차를 쓰지 않은 안이면 null.
+     */
+    private String tocLabel;
+    /** 이 안을 만든 뒤 교재·목차 근거가 바뀌었다 — 목차에서 온 변경은 적용되지 않는다(다시 정리). */
+    private boolean tocStale;
+    /** 이 안이 쓰지 않은 새 교재 목차가 있다 — [새 목차로 다시 정리]로 반영할 수 있다(편집은 승계). */
+    private boolean newTocAvailable;
+    /** 목차에서 온 변경을 적용하면 비어 있던 교재 칸에 이 책이 기록된다(웹에서 찾은 판). 해당 없으면 null. */
+    private String recordsTextbook;
+
     /** 이번 정리가 실제로 무엇을 보았는가. 부분 정리면 화면이 그 말을 한다. */
     private ProjectTidyScope scope;
 

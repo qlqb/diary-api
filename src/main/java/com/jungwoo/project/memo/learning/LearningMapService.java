@@ -158,7 +158,8 @@ public class LearningMapService {
                 mergedDone.merge(target, c[1], Integer::sum);
             }
         }
-        Extras extras = new Extras(classByTopic, scopeByTopic, mergedDone);
+        Extras extras = new Extras(classByTopic, scopeByTopic, mergedDone,
+                com.jungwoo.project.memo.course.textbook.BookKey.of(course));
         List<LearningMapResponse.TopicNode> topics = new ArrayList<>();
         for (TopicResponse root : tree) {
             topics.add(node(root, itemCounts, selfCheckByTopic, topicCount, extras));
@@ -256,12 +257,15 @@ public class LearningMapService {
                 new LearningMapResponse.State(materials.size(), pending, failed, linkWaiting, proposed.size(),
                         topicCount[0], hasRecords),
                 topics, proposed, unlinked, withClassWeeks(weeks(assignments, materials, sectionById, tree), classByTopic),
-                new LearningMapResponse.WeekReview(needsReview, placed.size(), courseWide));
+                new LearningMapResponse.WeekReview(needsReview, placed.size(), courseWide),
+                com.jungwoo.project.memo.course.textbook.TextbookFacts.identity(course.getTextbookTitle(),
+                        course.getTextbookIsbn(), course.getTextbookEdition(), course.getTextbookPublisher(),
+                        course.getTextbookAuthor(), course.getTextbookInfoSource()));
     }
 
     record Extras(Map<Long, com.jungwoo.project.memo.learning.correction.TopicClassProgress> classByTopic,
-                  Map<Long, String> scopeByTopic, Map<Long, Integer> mergedDone) {
-        static final Extras NONE = new Extras(Map.of(), Map.of(), Map.of());
+                  Map<Long, String> scopeByTopic, Map<Long, Integer> mergedDone, String currentBookKey) {
+        static final Extras NONE = new Extras(Map.of(), Map.of(), Map.of(), null);
     }
 
     /**
@@ -321,7 +325,15 @@ public class LearningMapService {
                 t.getUserMark() == null ? null : t.getUserMark().name(), selfChecks.get(t.getTopicId()), refs, c[0], c[1],
                 children, klass == null ? null : klass.getWeekNo(), klass == null ? null : klass.getClassSeq(),
                 extras.scopeByTopic().get(t.getTopicId()), extras.mergedDone().getOrDefault(t.getTopicId(), 0),
-                t.getSourceType() == null ? null : t.getSourceType().name(), t.getSourceLocator());
+                t.getSourceType() == null ? null : t.getSourceType().name(), t.getSourceLocator(),
+                t.getSourceWebRevisionId() != null ? "WEB"
+                        : t.getSourceTextbookKey() != null || isTocLocator(t.getSourceLocator()) ? "MATERIAL" : null,
+                extras.currentBookKey() != null && t.getSourceTextbookKey() != null
+                        && !extras.currentBookKey().equals(t.getSourceTextbookKey()));
+    }
+
+    private static boolean isTocLocator(String locator) {
+        return locator != null && (locator.startsWith("교재 p.") || locator.equals("교재 목차"));
     }
 
     /**

@@ -10,6 +10,10 @@ import java.util.List;
 @Mapper
 public interface CourseTopicMapper {
 
+    /** (2026-10-04) 같은 책의 식별을 보강했을 때 그 책의 목차 항목 열쇠를 옮긴다. */
+    int updateSourceTextbookKey(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                                @Param("oldKey") String oldKey, @Param("newKey") String newKey);
+
     void insert(CourseTopic topic);
 
     CourseTopic findByIdAndUserId(@Param("topicId") Long topicId, @Param("userId") Long userId);

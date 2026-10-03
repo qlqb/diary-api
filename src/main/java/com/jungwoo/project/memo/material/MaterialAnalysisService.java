@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
 import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.textbook.CourseTextbookWriter;
 import com.jungwoo.project.memo.course.dto.CourseNoteDraft;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
@@ -58,6 +59,7 @@ public class MaterialAnalysisService {
     private final CourseNoteService courseNoteService;
     private final CourseMaterialAnalysisMapper analysisMapper;
     private final com.jungwoo.project.memo.course.CourseMapper courseMapper;
+    private final CourseTextbookWriter textbookWriter;
     private final AiConsultationClient aiConsultationClient;
     private final AiUsageLimitService aiUsageLimitService;
     private final ObjectMapper objectMapper;
@@ -353,8 +355,17 @@ public class MaterialAnalysisService {
             MaterialAnalysisPayload.CourseFields fields = payload.courseFields();
             if (fields.textbookTitle() != null || fields.textbookAuthor() != null
                     || fields.textbookPublisher() != null || fields.textbookIsbn() != null) {
-                courseMapper.updateTextbookInfo(course.getCourseId(), userId,
-                        fields.textbookTitle(), fields.textbookAuthor(), fields.textbookPublisher(), fields.textbookIsbn());
+                // 옛 분석 초안의 교재 값은 교재 칸이 완전히 비어 있고 누구도 정한 적이 없을 때만 쓴다. 이미 사용자·자료·웹으로
+                // 정한 교재가 있으면(빈 칸이 있어도) 다른 책의 값이 섞이지 않게 쓰지 않는다 — 교재 구역의 후보로 남는다.
+                Course locked = textbookWriter.lock(userId, course.getCourseId());
+                boolean untouched = locked.getTextbookInfoSource() == null
+                        && (locked.getTextbookVersion() == null || locked.getTextbookVersion() == 0)
+                        && CourseTextbookWriter.Values.of(locked).isEmpty();
+                if (untouched) {
+                    textbookWriter.write(locked, null, new CourseTextbookWriter.Values(fields.textbookTitle(),
+                                    fields.textbookAuthor(), fields.textbookPublisher(), fields.textbookIsbn(), null),
+                            CourseTextbookWriter.SOURCE_MATERIAL, analysis.getMaterialId(), null);
+                }
             }
         }
 

@@ -68,6 +68,9 @@ public enum ErrorCode {
     PLAN_SCOPE_TOO_LARGE(HttpStatus.BAD_REQUEST, "E400_034",
             "한 번에 계획할 범위가 너무 커서 꼭 필요한 사실만으로도 입력 한도를 넘어요. 기간이나 프로젝트 범위를 좁혀 주세요"),
     MATERIAL_WEEK_INVALID(HttpStatus.BAD_REQUEST, "E400_035", "자료를 놓을 주차가 올바르지 않아요"),
+    TEXTBOOK_VERSION_REQUIRED(HttpStatus.BAD_REQUEST, "E400_036",
+            "교재를 고칠 때는 화면이 본 교재 판(expectedTextbookVersion)을 함께 보내야 해요. 화면을 새로고침해 주세요"),
+    TEXTBOOK_LINK_INVALID(HttpStatus.BAD_REQUEST, "E400_037", "받을 수 없는 링크예요(http/https 공개 주소만)"),
     PLAN_REQUESTED_MATERIAL_INVALID(HttpStatus.BAD_REQUEST, "E400_033",
             "지정한 자료를 이 계획에 쓸 수 없습니다(삭제됐거나 선택한 프로젝트에 연결돼 있지 않습니다)"),
 
@@ -116,6 +119,7 @@ public enum ErrorCode {
     CONTEXT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_030", "기억한 내용을 찾을 수 없습니다"),
     MATERIAL_ANALYSIS_BATCH_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_031", "분석 묶음을 찾을 수 없습니다"),
     PROJECT_TIDY_PROPOSAL_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_032", "프로젝트 정리안을 찾을 수 없습니다"),
+    TEXTBOOK_LOOKUP_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_033", "교재 조회 결과를 찾을 수 없어요"),
 
     // ===== 409 Conflict =====
     DUPLICATE_RESOURCE(HttpStatus.CONFLICT, "E409_001", "이미 존재하는 리소스입니다"),
@@ -191,6 +195,14 @@ public enum ErrorCode {
             "자료에서 찾은 교재 정보가 그 사이 바뀌었어요. 다시 확인해 주세요"),
     STRUCTURE_OPEN_PROPOSAL_EXISTS(HttpStatus.CONFLICT, "E409_039",
             "검토 중인 정리안이 있어요. 그 안을 적용하거나 버린 뒤 다시 요청해 주세요"),
+    TEXTBOOK_VERSION_CHANGED(HttpStatus.CONFLICT, "E409_040",
+            "그 사이 교재 정보가 바뀌었어요. 지금 교재를 다시 확인한 뒤 골라 주세요"),
+    TEXTBOOK_TOC_CHANGED(HttpStatus.CONFLICT, "E409_041",
+            "이 정리안을 만든 뒤 교재나 목차 근거가 바뀌었어요. 목차에서 온 변경은 빼고 적용하거나, 지금 교재로 다시 정리해 주세요"),
+    TEXTBOOK_WEB_DISABLED(HttpStatus.CONFLICT, "E409_043",
+            "이 프로젝트는 교재 웹 검색을 꺼 두었어요. 켠 뒤 링크로 찾아 주세요"),
+    TEXTBOOK_CANDIDATE_NOT_ALLOWED(HttpStatus.CONFLICT, "E409_042",
+            "이 조회의 후보가 아니거나 이미 지난 조회예요. 교재 구역을 새로고침해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
 

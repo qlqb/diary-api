@@ -101,6 +101,25 @@ public class AiWorkspaceContextBuilder {
     private final com.jungwoo.project.memo.plan.PlanStrategyCodec planStrategyCodec;
     private final com.jungwoo.project.memo.ai.AiProposalMapper aiProposalMapper;
 
+    /** 교재 조회 상태(읽기만). 없는 환경(단위 테스트)에서는 싣지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.course.textbook.web.TextbookLookupMapper textbookLookupMapper;
+
+    /**
+     * 학습 항목의 기록 상태를 말로. "기록 없음"은 모른다는 뜻이지 안 배웠다는 뜻이 아니다(실제 수업 진도도 아니다).
+     */
+    static String progressLabel(com.jungwoo.project.memo.learning.domain.TopicProgressStatus status) {
+        if (status == null) {
+            return "기록 없음";
+        }
+        return switch (status) {
+            case NOT_STARTED -> "기록 없음";
+            case IN_PROGRESS -> "진행 중";
+            case LEARNED -> "학습 완료 표시";
+            default -> status.name();
+        };
+    }
+
     /** [실행 기록] 블록의 글자 상한. 화면 상태 상한과 따로 둔다 — 상태가 길다고 기록이 통째로 잘리지 않게. */
     @Value("${ai.workspace.max-history-chars:1800}")
     private int maxHistoryChars = 1800;
@@ -517,8 +536,11 @@ public class AiWorkspaceContextBuilder {
     private String courseHeadLine(CourseResponse course, List<RoutineResponse> routines,
                                   LocalDate semesterStart, Integer currentWeek) {
         List<String> parts = new ArrayList<>();
-        if (course.getTextbookTitle() != null) {
-            parts.add("교재 " + course.getTextbookTitle());
+        String textbook = com.jungwoo.project.memo.course.textbook.TextbookFacts.identity(course.getTextbookTitle(),
+                course.getTextbookIsbn(), course.getTextbookEdition(), course.getTextbookPublisher(), null,
+                course.getTextbookInfoSource());
+        if (textbook != null) {
+            parts.add("교재 " + textbook);
         }
         for (RoutineResponse routine : routines) {
             parts.add("수업 " + renderWeekdays(routine.daysOfWeek()) + ' '
@@ -683,10 +705,14 @@ public class AiWorkspaceContextBuilder {
         if (course.getGroupLabel() != null) {
             sb.append(" (분류: ").append(course.getGroupLabel()).append(")");
         }
-        if (course.getTextbookTitle() != null) {
-            sb.append(" · 교재: ").append(course.getTextbookTitle());
+        String textbook = com.jungwoo.project.memo.course.textbook.TextbookFacts.identity(course.getTextbookTitle(),
+                course.getTextbookIsbn(), course.getTextbookEdition(), course.getTextbookPublisher(),
+                course.getTextbookAuthor(), course.getTextbookInfoSource());
+        if (textbook != null) {
+            sb.append(" · 교재: ").append(textbook);
         }
         sb.append('\n');
+        appendTextbookState(sb, course);
 
         List<CourseMaterial> materials = courseMaterialMapper.findByCourseIdAndUserId(courseId, userId);
         if (materials.isEmpty()) {
@@ -736,9 +762,56 @@ public class AiWorkspaceContextBuilder {
         sb.append('\n');
     }
 
+    /**
+     * 교재가 정해졌는지·찾는 중인지. 정해진 교재는 다시 묻지 않게, 정해지지 않았으면 강의계획서의 교재가 후보일 뿐임을 알린다.
+     * 상담은 교재 칸을 직접 바꾸지 않는다 — 사용자가 "실제로는 다른 책"이라고 하면 교재 구역에서 바꾸도록 안내한다.
+     */
+    private void appendTextbookState(StringBuilder sb, Course course) {
+        boolean decided = course.getTextbookInfoSource() != null
+                && (course.getTextbookTitle() != null || course.getTextbookIsbn() != null);
+        if (decided) {
+            sb.append("교재 확인: 지금 쓰는 교재가 정해져 있다(다시 묻지 않는다). 사용자가 실제로는 다른 책이라고 하면 프로젝트 화면의 ")
+                    .append("교재 구역 [실제 교재가 달라요]에서 바꿀 수 있다고 안내한다(대화로 교재를 바꾸지 않는다)\n");
+            return;
+        }
+        if (textbookLookupMapper == null) {
+            return;
+        }
+        com.jungwoo.project.memo.course.textbook.web.TextbookLookup lookup =
+                textbookLookupMapper.findLatestByCourse(course.getCourseId(), course.getUserId());
+        if (lookup == null || "SUPERSEDED".equals(lookup.getStatus()) || "CANCELLED".equals(lookup.getStatus())
+                || lookup.getQueryJson() == null) {
+            return;
+        }
+        String title = null;
+        try {
+            title = new com.fasterxml.jackson.databind.ObjectMapper().readTree(lookup.getQueryJson()).path("title").asText(null);
+        } catch (Exception ignored) {
+            // 읽지 못하면 싣지 않는다
+        }
+        if (title == null) {
+            return;
+        }
+        String state = switch (lookup.getStatus()) {
+            case "QUEUED", "RUNNING" -> "웹에서 목차를 찾는 중";
+            case "FOUND" -> "책·목차를 찾음(사용자가 아직 지금 교재로 정하지 않음)";
+            case "NEEDS_CHOICE" -> "같은 제목의 판이 여럿이라 사용자 확인 필요";
+            case "BOOK_NO_TOC" -> "책은 찾았지만 목차 없음";
+            default -> "목차를 아직 확보하지 못함";
+        };
+        sb.append("교재 후보: 강의계획서에 적힌 「").append(title.replace('\n', ' '))
+                .append("」 — 아직 지금 교재로 정하지 않은 후보다(").append(state)
+                .append("). 이 교재를 기준으로 범위를 단정하지 않는다\n");
+    }
+
     private void appendTopicNode(StringBuilder sb, TopicResponse node, int depth) {
         sb.append("  ".repeat(depth)).append("- #").append(node.getTopicId()).append(' ')
-                .append(node.getTitle()).append(" [").append(node.getProgressStatus()).append("]\n");
+                .append(node.getTitle()).append(" [").append(progressLabel(node.getProgressStatus())).append("]");
+        if (node.getSourceLocator() != null && (node.getSourceLocator().startsWith("교재 p.")
+                || node.getSourceLocator().equals("교재 목차"))) {
+            sb.append(" (").append(node.getSourceLocator()).append(" — 목차 제목만 확인)");
+        }
+        sb.append("\n");
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
                 appendTopicNode(sb, child, depth + 1);

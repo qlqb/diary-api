@@ -44,6 +44,9 @@ public final class PlanCatalogText {
         if (topic.firstUnlearned()) {
             sb.append(" · ← 첫 미학습");
         }
+        if (topic.priorTextbook()) {
+            sb.append(" · 이전 교재 목차의 항목(지금 교재의 범위 아님)");
+        }
         if (topic.assignmentLinked()) {
             sb.append(" · 미완료 과제의 항목");
             if (topic.assignmentDue() != null) {
@@ -150,6 +153,10 @@ public final class PlanCatalogText {
         List<ExcludedTopic> known = excluded.stream().filter(e -> "KNOWN".equals(e.reason())).toList();
         List<ExcludedTopic> defer = excluded.stream().filter(e -> "DEFER".equals(e.reason())).toList();
         List<ExcludedTopic> thisTime = excluded.stream().filter(e -> "THIS_TIME".equals(e.reason())).toList();
+        if (known.isEmpty() && defer.isEmpty() && thisTime.isEmpty()) {
+            // 범위 제외(SCOPE)만 있으면 이 줄은 비어 있다 — 범위 제외는 [범위에서 뺀 항목]이 따로 말한다.
+            return null;
+        }
         StringBuilder sb = new StringBuilder("사용자 수정으로 후보에서 뺀 항목 — ");
         boolean any = false;
         if (!known.isEmpty()) {

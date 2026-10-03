@@ -67,6 +67,20 @@ public class TopicTreeEditor {
     @Transactional
     public Applied apply(Long userId, Long courseId, Long materialId, List<TopicChangeOp> ops,
                          Long expectedTreeVersion, Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin) {
+        return apply(userId, courseId, materialId, ops, expectedTreeVersion, sectionsById, origin, null);
+    }
+
+    /**
+     * 목차에서 온 항목의 출처. 웹 목차면 리비전, 업로드 목차면 null(자료 출처는 op.materialId가 정한다). bookKey는 그 목차가
+     * 어느 책의 것인지 — 교재가 바뀐 뒤 이전 교재 항목을 구분한다.
+     */
+    public record TocProvenance(Long webRevisionId, String bookKey) {
+    }
+
+    @Transactional
+    public Applied apply(Long userId, Long courseId, Long materialId, List<TopicChangeOp> ops,
+                         Long expectedTreeVersion, Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin,
+                         TocProvenance toc) {
         Course course = courseMapper.findByIdAndUserIdForUpdate(courseId, userId);
         if (course == null) {
             throw new BadRequestException(ErrorCode.COURSE_NOT_FOUND);
@@ -105,7 +119,8 @@ public class TopicTreeEditor {
                 case TopicChangeOp.ADD -> {
                     Long parent = op.parentTopicId() != null ? op.parentTopicId()
                             : op.parentTempId() != null ? tempIds.get(op.parentTempId()) : null;
-                    added += insertTree(userId, courseId, materialId, parent, op, tempIds, created, sectionsById, origin);
+                    added += insertTree(userId, courseId, materialId, parent, op, tempIds, created, sectionsById, origin,
+                            toc, false);
                 }
                 case TopicChangeOp.RENAME -> {
                     topicMapper.updateTitle(op.topicId(), userId, op.title());
@@ -180,9 +195,15 @@ public class TopicTreeEditor {
         return n;
     }
 
+    /**
+     * @param toc           이번 적용의 목차 출처(없으면 null)
+     * @param parentFromToc 부모가 목차에서 왔다(골격의 자식은 표시가 없다 — 부모를 따른다)
+     */
     private int insertTree(Long userId, Long courseId, Long materialId, Long parentId, TopicChangeOp op,
                            Map<String, Long> tempIds, List<Long> created, Map<Long, MaterialSection> sectionsById,
-                           TopicLinkOrigin origin) {
+                           TopicLinkOrigin origin, TocProvenance toc, boolean parentFromToc) {
+        boolean fromToc = parentFromToc || op.isFromToc();
+        TocProvenance mine = fromToc ? toc : null;
         Integer max = parentId == null
                 ? topicMapper.findMaxRootOrderIndex(courseId, userId)
                 : topicMapper.findMaxChildOrderIndex(courseId, userId, parentId);
@@ -197,6 +218,8 @@ public class TopicTreeEditor {
                 .sourceType("SOURCE".equals(op.sourceType()) ? TopicSourceType.SOURCE : TopicSourceType.AI_DERIVED)
                 .sourceMaterialId(sourceMaterialId)
                 .sourceLocator(op.locator() != null ? op.locator() : first == null ? null : first.locator())
+                .sourceWebRevisionId(mine == null ? null : mine.webRevisionId())
+                .sourceTextbookKey(mine == null ? null : mine.bookKey())
                 .status(TopicStatus.ACTIVE)
                 .build();
         topicMapper.insert(topic);
@@ -217,7 +240,7 @@ public class TopicTreeEditor {
         }
         for (TopicChangeOp child : op.children() == null ? List.<TopicChangeOp>of() : op.children()) {
             count += insertTree(userId, courseId, materialId, topic.getTopicId(), child, tempIds, created,
-                    sectionsById, origin);
+                    sectionsById, origin, toc, fromToc);
         }
         return count;
     }
@@ -253,7 +276,7 @@ public class TopicTreeEditor {
                            List<String> notes) {
         int n = 0;
         for (TopicChangeOp child : op.children()) {
-            n += insertTree(userId, courseId, materialId, op.topicId(), child, tempIds, created, sectionsById, origin);
+            n += insertTree(userId, courseId, materialId, op.topicId(), child, tempIds, created, sectionsById, origin, null, false);
         }
         TopicProgress progress = progressMapper.findByUserIdAndTopicId(userId, op.topicId());
         if (progress != null && progress.getStatus() != TopicProgressStatus.NOT_STARTED) {

@@ -48,9 +48,23 @@ public record PlanRequestContext(
         Integer briefVersion,
         Long previousProposalId,
         EvidenceSnapshot evidence,
-        Long flowRootProposalId
+        Long flowRootProposalId,
+        /** (2026-10-04) 화면에서 고른 계획 목적. 다시 만들 때 그대로 쓴다. */
+        String purpose
 ) {
     public static final int VERSION = 2;
+
+    /** 목적 칸이 생기기 전 모양. */
+    public PlanRequestContext(int version, String source, LocalDate startDate, LocalDate endDate, PlanIntensity intensity,
+                              String title, String instruction, List<Long> courseIds, List<Long> excludeTopicIds,
+                              List<Long> requestedMaterialIds, List<Long> requestedSectionIds,
+                              FamiliarityAnswer familiarityAnswer, List<Long> familiarityTopicIds, Long conversationId,
+                              String requestKey, Long briefId, Integer briefVersion, Long previousProposalId,
+                              EvidenceSnapshot evidence, Long flowRootProposalId) {
+        this(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
+                requestedMaterialIds, requestedSectionIds, familiarityAnswer, familiarityTopicIds, conversationId,
+                requestKey, briefId, briefVersion, previousProposalId, evidence, flowRootProposalId, null);
+    }
 
     /** 1판 생성자(테스트·예전 호출부). */
     public PlanRequestContext(int version, String source, LocalDate startDate, LocalDate endDate, PlanIntensity intensity,
@@ -59,7 +73,7 @@ public record PlanRequestContext(
                               FamiliarityAnswer familiarityAnswer, List<Long> familiarityTopicIds, Long conversationId) {
         this(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
                 requestedMaterialIds, requestedSectionIds, familiarityAnswer, familiarityTopicIds, conversationId,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     /**

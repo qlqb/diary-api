@@ -37,6 +37,12 @@ public class CourseTopic {
 
     private String sourceLocator;
 
+    /** (2026-10-04) 웹 목차에서 온 항목이면 그 웹 리비전. 업로드 자료 출처(sourceMaterialId)와 섞지 않는다. */
+    private Long sourceWebRevisionId;
+
+    /** 목차에서 온 항목이 어느 책의 것인가(BookKey). 교재가 바뀐 뒤 이전 교재 항목을 새 교재 범위로 세지 않기 위해. */
+    private String sourceTextbookKey;
+
     private TopicStatus status;
 
     /**

@@ -125,7 +125,7 @@ class LearningStructureFlowDbTest {
 
         // 고른 칸(ISBN·판)만. 화면이 본 지금 값(비어 있음)을 함께 보낸다.
         textbookService.apply(USER, courseId, TOC_MATERIAL,
-                Map.of("isbn", "9791156645672", "edition", "개정 4판"), mapOfNulls("isbn", "edition"));
+                Map.of("isbn", "9791156645672", "edition", "개정 4판"), mapOfNulls("isbn", "edition"), null);
         TextbookReview after = textbookService.review(USER, courseId);
         assertThat(after.current().isbn()).isEqualTo("9791156645672");
         assertThat(after.current().source()).isEqualTo("MATERIAL");
@@ -133,12 +133,13 @@ class LearningStructureFlowDbTest {
 
         // 사용자가 판을 직접 고친다 → 자료 후보가 다시 적용되려면 지금 값을 보고 골라야 한다.
         CourseUpdateRequest edit = new CourseUpdateRequest();
-        org.springframework.test.util.ReflectionTestUtils.setField(edit, "title", "자료구조");
-        org.springframework.test.util.ReflectionTestUtils.setField(edit, "textbookIsbn", "9791156645672");
-        org.springframework.test.util.ReflectionTestUtils.setField(edit, "textbookEdition", "개정 5판");
+        edit.setTitle("자료구조");
+        edit.setTextbookIsbn("9791156645672");
+        edit.setTextbookEdition("개정 5판");
+        edit.setExpectedTextbookVersion(after.current().version());
         courseService.update(USER, courseId, edit);
         assertThatThrownBy(() -> textbookService.apply(USER, courseId, TOC_MATERIAL,
-                Map.of("edition", "개정 4판"), Map.of("edition", "개정 4판")))
+                Map.of("edition", "개정 4판"), Map.of("edition", "개정 4판"), null))
                 .isInstanceOfSatisfying(ConflictException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.TEXTBOOK_INFO_CHANGED));
         TextbookReview edited = textbookService.review(USER, courseId);
@@ -154,8 +155,9 @@ class LearningStructureFlowDbTest {
     @Test
     void 책_이름만_있으면_목차를_만들지_않고_미확보와_다음_행동을_말한다() throws Exception {
         CourseUpdateRequest edit = new CourseUpdateRequest();
-        org.springframework.test.util.ReflectionTestUtils.setField(edit, "title", "자료구조");
-        org.springframework.test.util.ReflectionTestUtils.setField(edit, "textbookTitle", "C로 배우는 쉬운 자료구조");
+        edit.setTitle("자료구조");
+        edit.setTextbookTitle("C로 배우는 쉬운 자료구조");
+        edit.setExpectedTextbookVersion(0);
         courseService.update(USER, courseId, edit);
         insertMaterial(SYLLABUS, "강의계획서.pdf", HASH_SYLLABUS);
         link(courseId, SYLLABUS, "SYLLABUS");
@@ -166,7 +168,12 @@ class LearningStructureFlowDbTest {
         assertThat(review.state()).isEqualTo("TITLE_ONLY");
         assertThat(review.toc().status()).isEqualTo("NOT_FOUND");
         assertThat(review.toc().entries()).isEmpty();
-        assertThat(review.nextAction()).contains("목차를 아직 확보하지 못했어요").contains("계획과 학습은 그대로");
+        // (2026-10-04) 책 이름만 있으면 서버가 웹에서 목차를 찾는 조회를 등록한다(외부 호출은 worker — 테스트에서는 꺼져 있다).
+        // 찾기 전에는 목차를 만들지 않고, 계획·학습은 그대로라고 말한다.
+        assertThat(review.lookup()).isNotNull();
+        assertThat(review.lookup().status()).isEqualTo("QUEUED");
+        assertThat(review.lookup().query().title()).isEqualTo("C로 배우는 쉬운 자료구조");
+        assertThat(review.nextAction()).contains("찾는 중").contains("계획과 학습은 그대로");
         assertThat(textbookService.tocOf(USER, courseId)).isNull();
     }
 
@@ -499,7 +506,8 @@ class LearningStructureFlowDbTest {
     void cleanUp() throws Exception {
         exec("DELETE FROM project_tidy_edits WHERE proposal_id IN (SELECT proposal_id FROM project_tidy_proposals WHERE user_id = ?)", USER);
         for (String table : List.of("project_tidy_proposal_materials", "project_tidy_proposals", "project_tidy_jobs",
-                "topic_class_progress", "course_scope_exclusions", "material_textbook_extracts",
+                "topic_class_progress", "course_scope_exclusions", "material_textbook_extracts", "textbook_lookups",
+                "textbook_lookup_usage",
                 "execution_items", "topic_material_links", "course_topics", "material_analysis_jobs",
                 "material_sections", "material_text_units", "material_week_assignments", "material_links",
                 "course_materials", "courses", "users")) {

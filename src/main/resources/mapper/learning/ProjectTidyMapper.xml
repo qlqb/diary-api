@@ -46,6 +46,7 @@
         <result property="model"                   column="model"/>
         <result property="origin"                  column="origin"/>
         <result property="userRequestJson"         column="user_request_json"/>
+        <result property="tocBasisJson"            column="toc_basis_json"/>
         <result property="createdAt"               column="created_at"/>
         <result property="updatedAt"               column="updated_at"/>
         <result property="resolvedAt"              column="resolved_at"/>
@@ -173,11 +174,11 @@
     <insert id="insertProposal" useGeneratedKeys="true" keyProperty="proposalId">
         INSERT INTO project_tidy_proposals (
             user_id, course_id, job_id, generation, revision, base_tree_version, status,
-            summary_json, ops_json, scope_json, previous_proposal_id, model, origin, user_request_json
+            summary_json, ops_json, scope_json, previous_proposal_id, model, origin, user_request_json, toc_basis_json
         ) VALUES (
             #{userId}, #{courseId}, #{jobId}, #{generation}, #{revision}, #{baseTreeVersion}, #{status},
             #{summaryJson}, #{opsJson}, #{scopeJson}, #{previousProposalId}, #{model},
-            COALESCE(#{origin}, 'AI'), #{userRequestJson}
+            COALESCE(#{origin}, 'AI'), #{userRequestJson}, #{tocBasisJson}
         )
     </insert>
 

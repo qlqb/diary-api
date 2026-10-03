@@ -15,7 +15,15 @@ import java.util.List;
  */
 public record LearningMapResponse(Long courseId, String title, Long treeVersion, State state, List<TopicNode> topics,
                                   List<ProposedGroup> proposed, List<UnlinkedMaterial> unlinked, List<Week> weeks,
-                                  WeekReview weekReview) {
+                                  WeekReview weekReview,
+                                  /** (2026-10-04) 지금 쓰는 교재 한 줄(없으면 null). 지도가 어느 책 기준인지 보인다 */
+                                  String textbook) {
+
+    public LearningMapResponse(Long courseId, String title, Long treeVersion, State state, List<TopicNode> topics,
+                               List<ProposedGroup> proposed, List<UnlinkedMaterial> unlinked, List<Week> weeks,
+                               WeekReview weekReview) {
+        this(courseId, title, treeVersion, state, topics, proposed, unlinked, weeks, weekReview, null);
+    }
 
     public record State(int materials, int analysisPending, int analysisFailed, int linkWaiting, int openProposals,
                         int topics, boolean hasRecords) {
@@ -32,11 +40,22 @@ public record LearningMapResponse(Long courseId, String title, Long treeVersion,
      * @param mergedDoneItems 이 항목으로 병합된(보관된) 항목에 남아 있는 끝낸 실행 수. 옮겨 오지 않았다 — 상태는 사용자가 정한다
      * @param sourceType      SOURCE(원문에 그 제목이 있음) / AI_DERIVED. 상세 화면이 출처를 바르게 말하려면 필요하다
      * @param sourceLocator   원문 위치("교재 p.41")
+     * @param tocOrigin       목차에서 온 항목이면 WEB(웹 목차) · MATERIAL(올린 목차), 아니면 null
+     * @param priorTextbook   지금 교재가 아닌 이전 교재의 목차에서 온 항목(기록은 그대로, 지금 교재 범위로 세지 않는다)
      */
     public record TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
                             String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
                             List<TopicNode> children, Integer classWeek, Integer classSeq, String scopeLabel,
-                            int mergedDoneItems, String sourceType, String sourceLocator) {
+                            int mergedDoneItems, String sourceType, String sourceLocator, String tocOrigin,
+                            boolean priorTextbook) {
+
+        public TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
+                         String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,
+                         List<TopicNode> children, Integer classWeek, Integer classSeq, String scopeLabel,
+                         int mergedDoneItems, String sourceType, String sourceLocator) {
+            this(topicId, parentTopicId, title, progressStatus, userMark, selfCheck, materials, plannedItems, doneItems,
+                    children, classWeek, classSeq, scopeLabel, mergedDoneItems, sourceType, sourceLocator, null, false);
+        }
 
         public TopicNode(Long topicId, Long parentTopicId, String title, String progressStatus, String userMark,
                          String selfCheck, List<MaterialRef> materials, int plannedItems, int doneItems,

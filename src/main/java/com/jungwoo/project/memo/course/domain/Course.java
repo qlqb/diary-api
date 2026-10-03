@@ -43,12 +43,31 @@ public class Course {
     /** 판 정보(개정 4판 등). 확인한 값만. */
     private String textbookEdition;
 
-    /** USER(사용자가 적거나 고침) / MATERIAL(자료에서 찾은 값을 사용자가 적용) / null(모름·예전 값). */
+    /**
+     * USER(사용자가 적거나 고침) / MATERIAL(자료에서 찾은 값을 사용자가 적용) / WEB(웹에서 찾은 판을 사용자가 정했거나
+     * 검토한 목차 변경과 함께 적용) / null(모름·예전 값).
+     */
     private String textbookInfoSource;
 
     private Long textbookInfoMaterialId;
 
     private java.time.LocalDateTime textbookInfoUpdatedAt;
+
+    /** 교재 칸이 바뀔 때마다 1 오른다. 화면은 본 판을 함께 보내고, 다르면 409(조용히 덮지 않는다). */
+    private Integer textbookVersion;
+
+    /** WEB일 때 그 판의 웹 리비전(textbook_web_revisions). */
+    private Long textbookWebRevisionId;
+
+    /** 사용자가 "이 교재의 목차"로 이은 업로드 자료와 그때의 파일 해시·교재 식별 키. 교재 식별이 바뀌면 풀린다. */
+    private Long textbookTocMaterialId;
+
+    private String textbookTocFileHash;
+
+    private String textbookTocBookKey;
+
+    /** false면 교재 단서를 외부(웹 검색·서점 페이지)로 보내지 않는다. */
+    private Boolean textbookWebLookupEnabled;
 
     private CourseStatus status;
 

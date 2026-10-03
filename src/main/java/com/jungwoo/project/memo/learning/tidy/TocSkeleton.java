@@ -28,11 +28,14 @@ final class TocSkeleton {
     }
 
     static List<TopicChangeOp> build(TextbookService.TocSnapshot toc) {
-        if (toc == null || toc.entries() == null || toc.entries().size() < 3) {
+        // 업로드 목차는 규칙상 3항목 이상만 목차로 본다. 웹 목차는 페이지가 목차 칸에 실은 것이라 짧아도(1~2개) 그대로 쓴다.
+        int min = toc == null || !toc.isWeb() ? 3 : 1;
+        if (toc == null || toc.entries() == null || toc.entries().size() < min) {
             return List.of();
         }
         int minLevel = toc.entries().stream().mapToInt(TextbookExtractor.TocEntry::level).min().orElse(0);
-        String where = toc.filename() == null ? "교재 목차" : "「" + toc.filename() + "」 목차";
+        String where = toc.label() != null ? toc.label()
+                : toc.filename() == null ? "교재 목차" : "「" + toc.filename() + "」 목차";
         String reason = where + (toc.fromUnit() == null ? "" : "(p." + toc.fromUnit()
                 + (toc.toUnit() != null && !toc.toUnit().equals(toc.fromUnit()) ? "~" + toc.toUnit() : "") + ")")
                 + "에 있는 장·절이에요. 교재가 다루는 범위의 골격이고, 수업에서 다뤘는지는 따로 정해요";

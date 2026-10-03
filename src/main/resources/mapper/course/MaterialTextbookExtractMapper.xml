@@ -13,13 +13,15 @@
         <result property="bookJson"         column="book_json"/>
         <result property="tocJson"          column="toc_json"/>
         <result property="tocEntryCount"    column="toc_entry_count"/>
+        <result property="clueJson"         column="clue_json"/>
         <result property="createdAt"        column="created_at"/>
     </resultMap>
 
     <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="extractId">
         INSERT IGNORE INTO material_textbook_extracts
-            (user_id, material_id, file_hash, extractor_version, book_json, toc_json, toc_entry_count)
-        VALUES (#{userId}, #{materialId}, #{fileHash}, #{extractorVersion}, #{bookJson}, #{tocJson}, #{tocEntryCount})
+            (user_id, material_id, file_hash, extractor_version, book_json, toc_json, toc_entry_count, clue_json)
+        VALUES (#{userId}, #{materialId}, #{fileHash}, #{extractorVersion}, #{bookJson}, #{tocJson}, #{tocEntryCount},
+                #{clueJson})
     </insert>
 
     <select id="find" resultMap="extractResultMap">
@@ -37,4 +39,11 @@
           AND e.material_id IN
         <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
     </select>
+
+    <!-- 모델 보조 단서는 한 번만 쓴다(같은 파일·판). 규칙이 머리만 본 자리(SIGNAL)만 채운다 — 이미 읽은 값은 덮지 않는다. -->
+    <update id="updateClueJsonIfEmpty">
+        UPDATE material_textbook_extracts SET clue_json = #{clueJson}
+         WHERE extract_id = #{extractId} AND user_id = #{userId}
+           AND (clue_json IS NULL OR JSON_VALUE(clue_json, '$.source') = 'SIGNAL')
+    </update>
 </mapper>

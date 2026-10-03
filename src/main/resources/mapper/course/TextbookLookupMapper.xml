@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.textbook.web.TextbookLookupMapper">
+
+    <resultMap id="lookupMap" type="com.jungwoo.project.memo.course.textbook.web.TextbookLookup">
+        <id     property="lookupId"             column="lookup_id"/>
+        <result property="userId"               column="user_id"/>
+        <result property="courseId"             column="course_id"/>
+        <result property="basisKey"             column="basis_key"/>
+        <result property="queryKey"             column="query_key"/>
+        <result property="queryJson"            column="query_json"/>
+        <result property="clueOrigin"           column="clue_origin"/>
+        <result property="clueMaterialId"       column="clue_material_id"/>
+        <result property="clueFileHash"         column="clue_file_hash"/>
+        <result property="clueExtractorVersion" column="clue_extractor_version"/>
+        <result property="textbookVersion"      column="textbook_version"/>
+        <result property="forceRefresh"         column="force_refresh"/>
+        <result property="status"               column="status"/>
+        <result property="attempt"              column="attempt"/>
+        <result property="maxAttempts"          column="max_attempts"/>
+        <result property="nextRunAt"            column="next_run_at"/>
+        <result property="leaseOwner"           column="lease_owner"/>
+        <result property="leaseUntil"           column="lease_until"/>
+        <result property="leaseToken"           column="lease_token"/>
+        <result property="resultJson"           column="result_json"/>
+        <result property="chosenRevisionId"     column="chosen_revision_id"/>
+        <result property="reusedFromLookupId"   column="reused_from_lookup_id"/>
+        <result property="autoTidyState"        column="auto_tidy_state"/>
+        <result property="tidyJobId"            column="tidy_job_id"/>
+        <result property="autoTidyNextAt"       column="auto_tidy_next_at"/>
+        <result property="errorCode"            column="error_code"/>
+        <result property="errorMessage"         column="error_message"/>
+        <result property="createdAt"            column="created_at"/>
+        <result property="updatedAt"            column="updated_at"/>
+        <result property="finishedAt"           column="finished_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="lookupId">
+        INSERT INTO textbook_lookups
+            (user_id, course_id, basis_key, query_key, query_json, clue_origin, clue_material_id, clue_file_hash,
+             clue_extractor_version, textbook_version, force_refresh, status, max_attempts, next_run_at, result_json,
+             reused_from_lookup_id, auto_tidy_state, error_code, error_message, finished_at)
+        VALUES (#{userId}, #{courseId}, #{basisKey}, #{queryKey}, #{queryJson}, #{clueOrigin}, #{clueMaterialId},
+                #{clueFileHash}, #{clueExtractorVersion}, #{textbookVersion}, #{forceRefresh}, #{status},
+                COALESCE(#{maxAttempts}, 3), COALESCE(#{nextRunAt}, NOW()), #{resultJson}, #{reusedFromLookupId},
+                COALESCE(#{autoTidyState}, 'NONE'), #{errorCode}, #{errorMessage}, #{finishedAt})
+    </insert>
+
+    <select id="findById" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups WHERE lookup_id = #{lookupId}
+    </select>
+
+    <select id="findByIdAndUserId" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups WHERE lookup_id = #{lookupId} AND user_id = #{userId}
+    </select>
+
+    <select id="findLatestByCourse" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups WHERE course_id = #{courseId} AND user_id = #{userId}
+         ORDER BY lookup_id DESC LIMIT 1
+    </select>
+
+    <select id="findLatestByCourseForUpdate" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups WHERE course_id = #{courseId} AND user_id = #{userId}
+         ORDER BY lookup_id DESC LIMIT 1 FOR UPDATE
+    </select>
+
+    <!--
+      재사용: 찾은 것(FOUND·판 선택 필요·목차 없음)은 오래(longSince 이후), 못 찾은 것은 짧게(shortSince 이후)만.
+      접근 실패·처리 실패는 재사용하지 않는다 — 다시 해 볼 가치가 있다.
+    -->
+    <select id="findReusable" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups
+         WHERE user_id = #{userId} AND query_key = #{queryKey}
+           AND ((status IN ('FOUND', 'NEEDS_CHOICE', 'BOOK_NO_TOC') AND finished_at &gt;= #{longSince})
+             OR (status = 'NOT_FOUND' AND finished_at &gt;= #{shortSince}))
+         ORDER BY lookup_id DESC LIMIT 1
+    </select>
+
+    <update id="supersedeOpen">
+        UPDATE textbook_lookups
+           SET status = 'SUPERSEDED', finished_at = NOW(), lease_token = lease_token + 1,
+               lease_owner = NULL, lease_until = NULL, error_code = 'SUPERSEDED', error_message = #{reason}
+         WHERE course_id = #{courseId} AND user_id = #{userId} AND status IN ('QUEUED', 'RUNNING')
+    </update>
+
+    <update id="markSuperseded">
+        UPDATE textbook_lookups
+           SET status = 'SUPERSEDED', finished_at = COALESCE(finished_at, NOW()), lease_token = lease_token + 1,
+               lease_owner = NULL, lease_until = NULL
+         WHERE lookup_id = #{lookupId}
+    </update>
+
+    <select id="findClaimable" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups
+         WHERE (status = 'QUEUED' AND next_run_at &lt;= #{now})
+            OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now})
+         ORDER BY next_run_at ASC, lookup_id ASC
+         LIMIT #{limit}
+    </select>
+
+    <update id="claim">
+        UPDATE textbook_lookups
+           SET status = 'RUNNING', lease_owner = #{owner}, lease_until = #{leaseUntil},
+               lease_token = lease_token + 1, attempt = attempt + 1
+         WHERE lookup_id = #{lookupId}
+           AND ((status = 'QUEUED' AND next_run_at &lt;= #{now})
+                OR (status = 'RUNNING' AND lease_until IS NOT NULL AND lease_until &lt; #{now}))
+    </update>
+
+    <update id="renewLease">
+        UPDATE textbook_lookups SET lease_until = #{leaseUntil}
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <select id="lockIfLeased" resultType="java.lang.Long">
+        SELECT lookup_id FROM textbook_lookups
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+         FOR UPDATE
+    </select>
+
+    <update id="finish">
+        UPDATE textbook_lookups
+           SET status = #{status}, result_json = #{resultJson},
+               query_json = COALESCE(#{queryJson}, query_json),
+               error_code = #{errorCode}, error_message = #{errorMessage},
+               auto_tidy_state = COALESCE(#{autoTidyState}, auto_tidy_state),
+               finished_at = NOW(), lease_owner = NULL, lease_until = NULL
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="reschedule">
+        UPDATE textbook_lookups
+           SET status = 'QUEUED', next_run_at = #{nextRunAt}, error_code = #{errorCode},
+               error_message = #{errorMessage}, lease_owner = NULL, lease_until = NULL
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <!-- 모델 보조로 단서를 찾은 뒤 같은 작업이 새 근거(그 단서의 책)로 이어 간다. 임대가 그대로일 때만. -->
+    <update id="rebase">
+        UPDATE textbook_lookups
+           SET basis_key = #{basisKey}, query_key = #{queryKey}, query_json = #{queryJson},
+               clue_material_id = #{clueMaterialId}, clue_file_hash = #{clueFileHash},
+               clue_extractor_version = #{clueExtractorVersion}, textbook_version = #{textbookVersion}
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="updateQueryJson">
+        UPDATE textbook_lookups SET query_json = #{queryJson}
+         WHERE lookup_id = #{lookupId} AND lease_token = #{leaseToken} AND status = 'RUNNING'
+    </update>
+
+    <update id="setChosen">
+        UPDATE textbook_lookups SET chosen_revision_id = #{revisionId} WHERE lookup_id = #{lookupId}
+    </update>
+
+    <!-- 다음 평가 시각이 된 것만, 오래 기다린 것부터. 기다리는 행이 앞을 막아 뒤의 행이 밀리지 않게 평가마다 시각을 미룬다. -->
+    <select id="findAutoTidyCandidates" resultMap="lookupMap">
+        SELECT * FROM textbook_lookups
+         WHERE auto_tidy_state IN ('PENDING', 'WAITING_OPEN_PROPOSAL')
+           AND status IN ('FOUND', 'NEEDS_CHOICE')
+           AND (auto_tidy_next_at IS NULL OR auto_tidy_next_at &lt;= #{now})
+         ORDER BY COALESCE(auto_tidy_next_at, created_at) ASC, lookup_id ASC
+         LIMIT #{limit}
+    </select>
+
+    <update id="updateAutoTidy">
+        UPDATE textbook_lookups SET auto_tidy_state = #{to}, tidy_job_id = COALESCE(#{tidyJobId}, tidy_job_id),
+               auto_tidy_next_at = #{nextAt}
+         WHERE lookup_id = #{lookupId} AND auto_tidy_state = #{from}
+    </update>
+
+    <insert id="ensureUsageRow">
+        INSERT IGNORE INTO textbook_lookup_usage (user_id, usage_date, calls) VALUES (#{userId}, #{date}, 0)
+    </insert>
+
+    <update id="reserveUsage">
+        UPDATE textbook_lookup_usage SET calls = calls + #{n}
+         WHERE user_id = #{userId} AND usage_date = #{date} AND calls + #{n} &lt;= #{limit}
+    </update>
+
+    <select id="findUsage" resultType="java.lang.Integer">
+        SELECT calls FROM textbook_lookup_usage WHERE user_id = #{userId} AND usage_date = #{date}
+    </select>
+</mapper>
