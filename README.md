@@ -122,6 +122,7 @@ Authorization: Bearer {token}
 | [07-ideas.md](docs/product/07-ideas.md) | 아직 확정되지 않은 아이디어 주차장 |
 | [08-today-execution-loop.md](docs/product/08-today-execution-loop.md) | 오늘과 실행 화면의 경계 및 당일 조정 흐름 |
 | [16-learning-flow.md](docs/product/16-learning-flow.md) | 계획 이해·학습 실행 작업 공간·수행 기록 반영·교재·실제 수업 정정 |
+| [17-textbook-web-toc.md](docs/product/17-textbook-web-toc.md) | 교재 목차 자동 검색(웹)·지금 교재 정정·목차 근거의 변경안·계획 목적 |
 | [99-changelog.md](docs/product/99-changelog.md) | 확정 변경 이력과 현재 기준 |
 
 `docs/product` Markdown이 제품 설계의 진실의 원천입니다. `자기관리앱_기획서_v2.1.docx`는 2026-07-05 시점의 과거 스냅샷이며, 충돌 시 2026-08-03 Markdown 기준을 따릅니다.
