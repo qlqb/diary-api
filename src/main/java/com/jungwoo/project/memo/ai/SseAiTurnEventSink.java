@@ -94,6 +94,11 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     }
 
     @Override
+    public void onEvidenceReading(String label) {
+        send("evidence.reading", Map.of("label", label == null ? "자료 확인 중" : label));
+    }
+
+    @Override
     public void onCompleted(AiTurnCompletedPayload payload) {
         if (!markTerminatedOnce()) {
             return;

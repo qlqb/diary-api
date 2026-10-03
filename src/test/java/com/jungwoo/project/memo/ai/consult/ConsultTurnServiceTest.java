@@ -18,6 +18,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -51,7 +52,8 @@ class ConsultTurnServiceTest {
                 List.of(older, fromThisTurn), null));
         ConsultOut out = new ConsultOut(
                 new ConsultOut.QuestionOut("첫 코드를 못 시작하는 쪽이야, 오류가 나면 막히는 쪽이야?", "연습 형태가 달라져",
-                        "blocker", List.of("첫 코드를 못 시작해", "오류가 나면 막혀", "첫 코드를 못 시작해"), true),
+                        "blocker", List.of(ConsultOut.ChoiceOut.of("첫 코드를 못 시작해"), ConsultOut.ChoiceOut.of("오류가 나면 막혀"),
+                                ConsultOut.ChoiceOut.of("첫 코드를 못 시작해")), true),
                 new ConsultOut.DirectionOut("전체 문법 복습", "예제 일부를 가리고 직접 시작해 보는 연습", "혼자 시작이 어렵다고 함", true),
                 List.of(new ConsultOut.MemoryOut("실습을 따라 했지만 혼자서는 시작하지 못한다", "SELF_REPORT", 1L, null, null,
                         "혼자 못 해")), null);
@@ -105,5 +107,53 @@ class ConsultTurnServiceTest {
         assertThat(service.composeAnswer(USER, CONVERSATION, "q-77", List.of("c1"), false)).isNull();
         assertThat(service.composeAnswer(USER, CONVERSATION, "abc", List.of("c1"), false)).isNull();
         assertThat(service.composeAnswer(USER, CONVERSATION, "q-11", List.of(), true)).isEqualTo("이 질문은 건너뛸게요.");
+    }
+
+    @Test
+    void 답하는_방법을_안내하는_선택지는_입력_안내가_되고_답으로_받지_않는다() throws Exception {
+        when(briefs.load(USER, CONVERSATION)).thenReturn(null);
+        // 2026-10-03 재현: 모델이 "가장 빠른 시험부터 말하기"를 답 선택지로 냈고, 누르면 그 글이 답으로 가서 같은 질문이 반복됐다.
+        String modelJson = "{\"question\":{\"text\":\"과목별 시험 날짜가 어떻게 되나요?\",\"topic\":\"OTHER\","
+                + "\"choices\":[\"가장 빠른 시험부터 말하기\",\"과목명과 날짜 말하기\",{\"label\":\"시험 날짜 적기\",\"kind\":\"INPUT\"},"
+                + "{\"label\":\"강의계획서에서 찾아봐\",\"kind\":\"LOOKUP\"},\"아직 몰라\"],\"multiSelect\":true}}";
+        ConsultOut out = new com.fasterxml.jackson.databind.ObjectMapper().readValue(modelJson, ConsultOut.class);
+
+        ConsultView view = service.finish(USER, CONVERSATION, 20L, 21L, "무슨 과목부터 할까", out);
+
+        assertThat(view.question().choices()).extracting(ConsultView.Choice::label, ConsultView.Choice::kind).containsExactly(
+                org.assertj.core.groups.Tuple.tuple("가장 빠른 시험부터 말하기", "INPUT"),
+                org.assertj.core.groups.Tuple.tuple("과목명과 날짜 말하기", "INPUT"),
+                org.assertj.core.groups.Tuple.tuple("시험 날짜 적기", "INPUT"),
+                org.assertj.core.groups.Tuple.tuple("강의계획서에서 찾아봐", "LOOKUP"),
+                org.assertj.core.groups.Tuple.tuple("아직 몰라", null));
+        // 답 선택지가 하나뿐이면 여러 개 고르기가 아니다.
+        assertThat(view.question().multiSelect()).isFalse();
+
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(view);
+        when(messages.findByIdAndUserId(21L, USER)).thenReturn(AiMessage.builder().messageId(21L)
+                .conversationId(CONVERSATION).userId(USER).consultJson(json).build());
+        assertThat(service.compose(USER, CONVERSATION, "q-21", List.of("c1"), false, false)).isNull();
+        assertThat(service.compose(USER, CONVERSATION, "q-21", List.of("c4"), false, false))
+                .isEqualTo(new ConsultTurnService.Composed("강의계획서에서 찾아봐", true));
+        assertThat(service.compose(USER, CONVERSATION, "q-21", List.of("c5"), false, false))
+                .isEqualTo(new ConsultTurnService.Composed("아직 몰라", false));
+        assertThat(service.compose(USER, CONVERSATION, "q-21", List.of(), false, true))
+                .isEqualTo(new ConsultTurnService.Composed(ConsultTurnService.LOOKUP_MESSAGE, true));
+    }
+
+    @Test
+    void 확인한_자료는_질문이_없어도_저장되고_예전_선택지_모양도_읽힌다() throws Exception {
+        when(briefs.load(USER, CONVERSATION)).thenReturn(null);
+        ConsultView.Evidence evidence = new ConsultView.Evidence("원문 1곳 확인", List.of(new ConsultView.Source("E1",
+                "MATERIAL_TEXT", "자료구조_강의계획서.pdf", "자료구조", null, 5L, "p.5", 5, "PARTIAL", true, 1)), List.of(), 1);
+
+        ConsultView view = service.finish(USER, CONVERSATION, 30L, 31L, "시험 언제야", null, evidence);
+
+        assertThat(view.evidence()).isEqualTo(evidence);
+        verify(messages).updateConsultJson(eq(31L), eq(USER), contains("\"evidence\""));
+        ConsultView legacy = service.read("{\"question\":{\"id\":\"q-1\",\"text\":\"어느 쪽?\",\"choices\":[{\"id\":\"c1\","
+                + "\"label\":\"첫 코드\"}],\"multiSelect\":false}}");
+        assertThat(legacy.question().choices().get(0).kind()).isNull();
+        assertThat(legacy.evidence()).isNull();
     }
 }

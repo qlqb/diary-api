@@ -333,6 +333,10 @@ public class AiConversationService {
         return aiTurnLifecycleService.prepareTurn(conversationId, userId, request);
     }
 
+    /** 상담 근거(자료 원문·앱 사실) 조회. 단위 테스트처럼 없을 수 있다 — 없으면 예전처럼 화면 상태 블록만 싣는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.evidence.ConsultEvidenceService consultEvidenceService;
+
     /** 상담 턴의 질문·해석·방향. 단위 테스트처럼 없을 수 있다 — 없으면 부가 정보 없이 답변만 간다. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.consult.ConsultTurnService consultTurnService;
@@ -347,6 +351,8 @@ public class AiConversationService {
      * 계획으로 넘어가겠다는 말도 대화 기록에 그대로 남고 같은 AUTO 턴으로 처리된다.
      */
     private void normalizeConsultRequest(Long conversationId, Long userId, AiMessageRequest request) {
+        // 자료 확인을 넓힐지는 서버가 저장된 선택지로 정한다. 본문에 같은 이름이 와도 믿지 않는다.
+        request.setEvidenceLookup(false);
         boolean noText = request.getMessage() == null || request.getMessage().isBlank();
         if (request.getRequestedAction() == RequestedAction.PLAN_NOW) {
             request.setRequestedAction(RequestedAction.AUTO);
@@ -356,16 +362,30 @@ public class AiConversationService {
             return;
         }
         AiMessageRequest.Answer answer = request.getAnswer();
-        if (answer == null || !noText || request.getRequestedAction() != RequestedAction.AUTO) {
+        if (answer == null || request.getRequestedAction() != RequestedAction.AUTO) {
             return;
         }
-        String composed = consultTurnService == null ? null : consultTurnService.composeAnswer(userId, conversationId,
-                answer.getQuestionId(), answer.getChoiceIds(), answer.isSkipped());
+        boolean hasChoice = answer.getChoiceIds() != null && !answer.getChoiceIds().isEmpty();
+        if (!hasChoice && !answer.isSkipped() && !answer.lookupRequested()) {
+            // "둘 다 아님"·"잘 모르겠어"처럼 선택지가 아닌 답. 사용자가 쓴(화면이 보낸) 문장이 곧 답이다.
+            if (noText) {
+                throw new com.jungwoo.project.memo.common.exception.BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+            }
+            return;
+        }
+        /*
+         * 선택지 답은 저장된 질문에서 다시 만든다 — 화면이 보낸 라벨을 믿지 않고, 선택지의 의미(답·입력 안내·자료 찾기)를
+         * 서버가 정한다. 입력 안내("과목명과 날짜 말하기")를 답으로 보내면 정보 없는 답이 되어 같은 질문이 되풀이되므로 받지 않는다.
+         */
+        com.jungwoo.project.memo.ai.consult.ConsultTurnService.Composed composed = consultTurnService == null ? null
+                : consultTurnService.compose(userId, conversationId, answer.getQuestionId(), answer.getChoiceIds(),
+                answer.isSkipped(), answer.lookupRequested());
         if (composed == null) {
-            // 저장된 질문의 선택지가 아니다. 클라이언트가 보낸 라벨을 대신 믿지 않는다.
+            // 저장된 질문의 선택지가 아니거나 입력 안내다. 클라이언트가 보낸 라벨을 대신 믿지 않는다.
             throw new com.jungwoo.project.memo.common.exception.BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
-        request.setMessage(composed);
+        request.setMessage(composed.message());
+        request.setEvidenceLookup(composed.lookup());
     }
 
     /** idempotency 재생: 새로 스트리밍하지 않고 저장된 결과를 그대로 재생한다. AI를 다시 부르지 않는다. */
@@ -424,9 +444,12 @@ public class AiConversationService {
             sink.onScheduleSuggestionsReady(scheduleSuggestions);
         }
 
+        // 질문 카드·이해한 것·확인한 자료(출처)도 저장된 그대로 재생한다 — 재시도·재접속에서 답변만 남고 출처가 사라지지 않게.
+        com.jungwoo.project.memo.ai.consult.ConsultView consult = consultTurnService == null ? null
+                : consultTurnService.read(assistantReply.getConsultJson());
         sink.onCompleted(new AiTurnCompletedPayload(
                 assistantReply.getResponseType(), assistantReply.getContent(), proposalId,
-                items, offerAction, requestMessage.getMessageId(), assistantReply.getMessageId()));
+                items, offerAction, requestMessage.getMessageId(), assistantReply.getMessageId(), null, List.of(), consult));
     }
 
     /**
@@ -456,9 +479,20 @@ public class AiConversationService {
         int maxChars = maxInputTokens * 4;
         int currentMessageChars = request.getMessage() != null ? request.getMessage().length() : 0;
 
+        /*
+         * 질문에 필요한 저장 정보와 자료 원문(일반 상담 AUTO 턴). 대화의 프로젝트 연결과 무관하게 사용자의 활성 자료 전체에서
+         * 찾는다. 이 블록이 있으면 화면 상태 블록의 "앞부분 발췌"는 싣지 않는다 — 같은 자료를 두 방식으로 실어 예산을 나눠 쓰지
+         * 않는다. 버튼 턴(CREATE_PROPOSAL)은 지금까지처럼 화면 상태 블록만 쓴다.
+         */
+        boolean useEvidence = request.getRequestedAction() == RequestedAction.AUTO && consultEvidenceService != null;
+
         // 지금 화면의 실제 상태(오늘 실행/이번 주 일정/프로젝트 자료)를 가장 먼저 확보하고 그
         // 길이만큼 예산에서 뺀다 — 이 블록이 없으면 "오늘 줄여줘" 같은 요청의 근거 자체가 없다.
-        String workspaceBlock = aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(), request.getRequestedAction());
+        String workspaceBlock = useEvidence
+                ? aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(),
+                        request.getRequestedAction(), false)
+                : aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(),
+                        request.getRequestedAction());
 
         /*
          * 진행 중 요청(draft). 일반 상담 턴(AUTO)에서만 다룬다 — 버튼 턴(CREATE_PROPOSAL)은 이미
@@ -481,8 +515,18 @@ public class AiConversationService {
          */
         String briefBlock = autoTurn ? buildBriefBlock(conversationId, userId) : "";
         int draftReserveChars = draftBlock.isEmpty() ? 0 : DraftPromptBuilder.MAX_CHARS;
-        int contextBudgetChars = Math.max(0,
-                maxChars - currentMessageChars - workspaceBlock.length() - draftReserveChars - briefBlock.length());
+        /*
+         * 자료 근거는 대화 기록보다 먼저 예산을 갖는다(관련 근거가 다른 정보에 밀려 빠지지 않게). 대신 대화 기록이 0이 되면
+         * "자료에 있는데" 같은 후속 말의 대상을 잃으므로 최소 몫은 남겨 두고, 근거 블록은 그 나머지 안에서 만든다 — 전체 입력
+         * 상한을 넘기지 않는다.
+         */
+        int fixedChars = currentMessageChars + workspaceBlock.length() + draftReserveChars + briefBlock.length();
+        EvidenceTurn evidenceTurn = useEvidence
+                ? gatherEvidence(conversation, userId, requestMessageId, request,
+                        Math.max(0, maxChars - fixedChars - MIN_CONTEXT_CHARS_WITH_EVIDENCE))
+                : null;
+        String evidenceBlock = evidenceTurn == null ? "" : evidenceTurn.gathered().block();
+        int contextBudgetChars = Math.max(0, maxChars - fixedChars - evidenceBlock.length());
         /*
          * 요청 기간이 기본 조회 기간(오늘~+14일) 밖일 수 있다. 그 기간은 모델 응답의 dateRange를
          * 읽어야 알 수 있으므로, 판정 단계에서 필요하면 다시 조회할 수 있는 조회기를 넘긴다.
@@ -497,8 +541,10 @@ public class AiConversationService {
         // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
         String contextBlock = contextSnapshotService.buildContextBlock(
                 conversationId, userId, conversation.getSummary(), contextBudgetChars, requestMessageId);
-        String userPrompt = buildUserPrompt(request, draftBlock + briefBlock, workspaceBlock, contextBlock,
-                requestMoment.toLocalDate());
+        String fixedBlocks = draftBlock + briefBlock;
+        java.util.function.Function<String, String> promptWith = extra -> buildUserPrompt(request, fixedBlocks,
+                workspaceBlock, evidenceBlock + extra, contextBlock, requestMoment.toLocalDate());
+        String userPrompt = promptWith.apply("");
         // draft 규칙은 AUTO 턴에 항상 붙는다 — 첫 턴(OPEN draft 없음)에도 모델이 create를 낼 수 있어야 한다.
         String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT
                 + (autoTurn ? DraftPromptBuilder.SYSTEM_RULES : "")
@@ -519,55 +565,439 @@ public class AiConversationService {
             return Disposables.disposed();
         }
 
+        /*
+         * 한 턴의 모델 호출은 기본 1회다. 첫 응답이 자료를 더 읽어야 한다고 하면(evidence.readMore) 서버가 이 턴의 장부 번호로만
+         * 검증·조회해 한 번 더 부른다 — 최대 2회이고 두 번째 응답의 추가 요청은 읽지 않는다. 두 호출은 한 턴의 시간 상한
+         * (ai.request.timeout-seconds)을 나눠 쓴다 — 대화방 잠금의 stale 판정(시간 상한 + 여유)이 그대로 맞는다.
+         */
+        TurnRun run = new TurnRun(conversation, request, sink, requestMoment.toLocalDate(), draftContext, systemPrompt,
+                promptWith, evidenceTurn, System.nanoTime() + Duration.ofSeconds(requestTimeoutSeconds).toNanos());
+        run.requestMessageId = requestMessageId;
+        run.contextRebuilder = budget -> contextSnapshotService.buildContextBlock(
+                conversationId, userId, conversation.getSummary(), budget, requestMessageId);
+        run.contextBudgetChars = contextBudgetChars;
+        run.promptWithContext = (extra, ctx) -> buildUserPrompt(request, fixedBlocks, workspaceBlock, evidenceBlock + extra,
+                ctx, requestMoment.toLocalDate());
+        /*
+         * 두 호출의 구독을 한 묶음(Composite)에 담는다. 연결이 끊기면 묶음 전체를 취소한다 — 두 번째 호출이 첫 호출의 완료
+         * 콜백에서 생겨도(같은 스레드든 다른 스레드든) 묶음에 들어가므로 순서 경합으로 빠지지 않는다.
+         */
+        Disposable first = streamRound(run, 1, userPrompt, Duration.ofSeconds(requestTimeoutSeconds));
+        if (!run.subscriptions.add(first)) {
+            first.dispose();
+        }
+        return run.subscriptions;
+    }
+
+    /** 추가 읽기를 하려면 남아 있어야 하는 시간. 이보다 적으면 읽지 않고 그 사실을 답변과 출처에 남긴다. */
+    static final int MIN_READ_MORE_SECONDS = 20;
+
+    /** 추가 읽기에 쓸 수 있는 글자가 이보다 적으면 두 번째 호출을 하지 않는다(읽지 못한 범위로 남긴다). */
+    static final int MIN_READ_MORE_CHARS = 800;
+
+    /**
+     * 추가 읽기 블록(머리말·원문·거절 목록) 전체에 쓸 수 있는 글자. 첫 호출의 대화 기록 몫에서 최소 몫과 지시문을 뺀 것이다.
+     */
+    static int readMoreBudget(TurnRun run) {
+        return Math.max(0, run.contextBudgetChars - MIN_CONTEXT_CHARS_WITH_EVIDENCE - READ_MORE_INSTRUCTION.length());
+    }
+
+    /** 근거 블록이 있을 때 대화 기록에 남겨 두는 최소 글자 수. */
+    static final int MIN_CONTEXT_CHARS_WITH_EVIDENCE = 3000;
+
+    /** 추가 읽기 호출의 사용량 기록 이름. 상담 한도(AI_CONSULTATION)에는 세지 않는다 — 한 턴은 한 번이다. */
+    static final String READ_MORE_FEATURE = "AI_CONSULTATION_READ_MORE";
+
+    static final String READ_MORE_SKIPPED_NOTE =
+            "\n\n(더 확인하려던 자료를 이번 응답의 시간·분량 한도 안에서 읽지 못했어요. 다시 물어봐 주시면 이어서 확인할게요.)";
+
+    /** 이 턴의 근거 조회 결과. 자료를 보지 않는 턴은 null. */
+    record EvidenceTurn(com.jungwoo.project.memo.ai.evidence.ConsultEvidenceService.Gathered gathered) {
+        com.jungwoo.project.memo.ai.evidence.EvidenceLedger ledger() {
+            return gathered.ledger();
+        }
+    }
+
+    /** 한 턴의 실행 상태. 두 번째 호출이 생기면 swap이 그 구독으로 바뀌어 연결 종료가 두 번째 호출까지 취소한다. */
+    private final class TurnRun {
+        final AiConversation conversation;
+        final AiMessageRequest request;
+        final AiTurnEventSink sink;
+        final LocalDate today;
+        final DraftTurnContext draftContext;
+        final String systemPrompt;
+        final java.util.function.Function<String, String> promptWith;
+        final EvidenceTurn evidence;
+        final long deadlineNanos;
+        Long requestMessageId;
+        /** 이 턴의 모든 모델 호출 구독. 연결 종료 시 함께 취소된다. */
+        final Disposable.Composite subscriptions = Disposables.composite();
+        /** 첫 호출의 대화 기록 예산과 그 예산으로 대화 기록을 다시 만드는 함수(두 번째 호출이 추가 원문만큼 줄여 쓴다). */
+        int contextBudgetChars;
+        java.util.function.IntFunction<String> contextRebuilder;
+        java.util.function.BiFunction<String, String, String> promptWithContext;
+
+        TurnRun(AiConversation conversation, AiMessageRequest request, AiTurnEventSink sink, LocalDate today,
+                DraftTurnContext draftContext, String systemPrompt, java.util.function.Function<String, String> promptWith,
+                EvidenceTurn evidence, long deadlineNanos) {
+            this.conversation = conversation;
+            this.request = request;
+            this.sink = sink;
+            this.today = today;
+            this.draftContext = draftContext;
+            this.systemPrompt = systemPrompt;
+            this.promptWith = promptWith;
+            this.evidence = evidence;
+            this.deadlineNanos = deadlineNanos;
+        }
+
+        Long conversationId() {
+            return conversation.getConversationId();
+        }
+
+        Long userId() {
+            return conversation.getUserId();
+        }
+
+        long remainingSeconds() {
+            return Math.max(0, (deadlineNanos - System.nanoTime()) / 1_000_000_000L);
+        }
+    }
+
+    private Disposable streamRound(TurnRun run, int round, String userPrompt, Duration timeout) {
+        // 무응답 시간(timeout)과 턴 전체의 절대 마감을 함께 건다 — 조각이 계속 와도 마감을 넘기지 않는다.
+        return subscribeRound(run, round, withDeadline(aiConsultationClient.streamTurn(run.systemPrompt, userPrompt, null,
+                resolveConsultationModel()).timeout(timeout), run.deadlineNanos));
+    }
+
+    private Disposable subscribeRound(TurnRun run, int round, reactor.core.publisher.Flux<ChatResponse> stream) {
+        Long conversationId = run.conversationId();
+        Long userId = run.userId();
+        Long requestMessageId = run.requestMessageId;
         AiStreamParser parser = new AiStreamParser();
         AtomicReference<Usage> lastUsage = new AtomicReference<>();
         AtomicReference<String> lastFinishReason = new AtomicReference<>();
-
-        return aiConsultationClient.streamTurn(systemPrompt, userPrompt, null, resolveConsultationModel())
-                .timeout(Duration.ofSeconds(requestTimeoutSeconds))
-                .subscribe(
-                        chatResponse -> {
-                            String textPart = extractText(chatResponse);
-                            String safeToEmit = parser.onChunk(textPart);
-                            if (!safeToEmit.isEmpty()) {
-                                sink.onDelta(safeToEmit);
-                            }
-                            Usage usage = extractUsage(chatResponse);
-                            if (usage != null) {
-                                lastUsage.set(usage);
-                            }
-                            String finishReason = AiChatResponseUtils.extractFinishReason(chatResponse);
-                            if (finishReason != null) {
-                                lastFinishReason.set(finishReason);
-                            }
-                        },
-                        error -> {
-                            ErrorCode errorCode = AiErrorClassifier.classify(error);
-                            sink.onError(errorCode);
-                            aiTurnLifecycleService.completeTurnFailure(conversationId, userId, requestMessageId);
-                            recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
-                                    AiErrorClassifier.classifyUsageStatus(error), errorCode.getCode());
-                        },
-                        () -> {
-                            AiStreamParser.Result result = parser.finish();
-                            if (!result.unemittedTail().isEmpty()) {
-                                sink.onDelta(result.unemittedTail());
-                            }
-                            try {
-                                completeTurnSuccessfully(conversation, requestMessageId, result, sink,
-                                        requestMoment.toLocalDate(), request,
-                                        lastFinishReason.get(), lastUsage.get(), draftContext);
+        String feature = round == 1 ? null : READ_MORE_FEATURE;
+        return stream.subscribe(
+                chatResponse -> {
+                    String textPart = extractText(chatResponse);
+                    String safeToEmit = parser.onChunk(textPart);
+                    if (!safeToEmit.isEmpty()) {
+                        run.sink.onDelta(safeToEmit);
+                    }
+                    Usage usage = extractUsage(chatResponse);
+                    if (usage != null) {
+                        lastUsage.set(usage);
+                    }
+                    String finishReason = AiChatResponseUtils.extractFinishReason(chatResponse);
+                    if (finishReason != null) {
+                        lastFinishReason.set(finishReason);
+                    }
+                },
+                error -> {
+                    ErrorCode errorCode = AiErrorClassifier.classify(error);
+                    run.sink.onError(errorCode);
+                    aiTurnLifecycleService.completeTurnFailure(conversationId, userId, requestMessageId);
+                    recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
+                            AiErrorClassifier.classifyUsageStatus(error), errorCode.getCode(), feature);
+                },
+                () -> {
+                    AiStreamParser.Result result = parser.finish();
+                    if (!result.unemittedTail().isEmpty()) {
+                        run.sink.onDelta(result.unemittedTail());
+                    }
+                    try {
+                        AiTurnStructured structured = parseStructured(result.structuredJson());
+                        List<com.jungwoo.project.memo.ai.evidence.EvidenceOut.ReadRequest> readMore = structured != null
+                                && structured.evidence() != null && structured.evidence().readMore() != null
+                                ? structured.evidence().readMore().stream().filter(java.util.Objects::nonNull).toList()
+                                : List.of();
+                        List<com.jungwoo.project.memo.ai.consult.ConsultView.Gap> extraGaps = new ArrayList<>();
+                        if (!readMore.isEmpty() && run.evidence != null && run.evidence.ledger() != null) {
+                            if (round == 1 && run.remainingSeconds() >= MIN_READ_MORE_SECONDS
+                                    && readMoreBudget(run) >= MIN_READ_MORE_CHARS) {
                                 recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
-                                        UsageResultStatus.SUCCESS, null);
-                            } catch (Exception e) {
-                                log.warn("AI 턴 마무리 처리 실패", e);
-                                sink.onError(ErrorCode.AI_GENERATION_FAILED);
-                                aiTurnLifecycleService.completeTurnFailure(conversationId, userId, requestMessageId);
-                                recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
-                                        UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode());
+                                        UsageResultStatus.SUCCESS, null, feature);
+                                startReadMoreRound(run, readMore);
+                                return;
+                            }
+                            for (var req : readMore) {
+                                extraGaps.add(new com.jungwoo.project.memo.ai.consult.ConsultView.Gap(
+                                        readMoreLabel(req), "NOT_READ_LIMIT", round == 1
+                                        ? "이번 응답의 시간·입력 상한 안에서 더 읽지 못했다" : "한 턴의 추가 읽기는 한 번이라 읽지 않았다"));
+                            }
+                            if (round == 1) {
+                                // 첫 응답은 "확인해 볼게요" 한 문장이다. 읽지 못했다는 사실을 답변에 밝힌다.
+                                String note = READ_MORE_SKIPPED_NOTE;
+                                run.sink.onDelta(note);
+                                result = new AiStreamParser.Result(
+                                        (result.reply() == null ? "" : result.reply()) + note, result.structuredJson(), "");
                             }
                         }
-                );
+                        if (run.evidence != null && result.reply() != null) {
+                            String cleaned = stripEvidenceRefs(result.reply());
+                            if (!cleaned.equals(result.reply())) {
+                                result = new AiStreamParser.Result(cleaned, result.structuredJson(), "");
+                            }
+                        }
+                        completeTurnSuccessfully(run.conversation, requestMessageId, result, run.sink, run.today,
+                                run.request, lastFinishReason.get(), lastUsage.get(), run.draftContext,
+                                evidenceView(run, structured, extraGaps),
+                                run.evidence != null && run.evidence.ledger() != null
+                                        && run.evidence.ledger().showedMaterialText());
+                        recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
+                                UsageResultStatus.SUCCESS, null, feature);
+                    } catch (Exception e) {
+                        log.warn("AI 턴 마무리 처리 실패", e);
+                        run.sink.onError(ErrorCode.AI_GENERATION_FAILED);
+                        aiTurnLifecycleService.completeTurnFailure(conversationId, userId, requestMessageId);
+                        recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
+                                UsageResultStatus.FAILED, ErrorCode.AI_GENERATION_FAILED.getCode(), feature);
+                    }
+                }
+        );
+    }
+
+    /**
+     * 두 번째 호출. 조회(DB)는 별도 스레드에서 하고, 그동안 화면에는 "자료 확인 중"을 알린다. 첫 응답의 문장("…확인해
+     * 볼게요")은 화면이 이 알림을 받고 지운다 — 최종 답변은 두 번째 응답이다.
+     */
+    private void startReadMoreRound(TurnRun run, List<com.jungwoo.project.memo.ai.evidence.EvidenceOut.ReadRequest> readMore) {
+        if (run.subscriptions.isDisposed()) {
+            return; // 연결이 이미 끊겼다. 정리는 컨트롤러의 연결 종료 처리가 했다.
+        }
+        run.sink.onEvidenceReading(consultEvidenceService.readingLabel(run.evidence.ledger(), readMore));
+        reactor.core.publisher.Flux<ChatResponse> stream = Mono
+                .fromCallable(() -> {
+                    // 추가 원문은 첫 호출의 대화 기록 몫에서 최소 몫을 뺀 만큼만 — 두 번째 호출도 입력 상한 안이다.
+                    int readBudget = readMoreBudget(run);
+                    var read = consultEvidenceService.readMore(run.userId(), run.evidence.ledger(), readMore, readBudget);
+                    String extra = read.block() + READ_MORE_INSTRUCTION;
+                    return secondRoundPrompt(run, extra);
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(prompt -> aiConsultationClient.streamTurn(run.systemPrompt, prompt, null,
+                        resolveConsultationModel()));
+        Disposable second = subscribeRound(run, 2, withDeadline(stream, run.deadlineNanos));
+        if (!run.subscriptions.add(second)) {
+            second.dispose();
+        }
+    }
+
+    /**
+     * 두 번째 호출의 입력. 첫 호출의 입력 예산에서 추가 원문만큼 대화 기록 몫을 줄인다(최소 몫은 남긴다) — 그대로 덧붙이면
+     * 두 번째 호출이 입력 상한을 넘는다.
+     */
+    private String secondRoundPrompt(TurnRun run, String extra) {
+        if (run.promptWithContext == null || run.contextRebuilder == null) {
+            return run.promptWith.apply(extra);
+        }
+        // 추가 블록 전체(머리말·거절 목록·지시 포함)를 대화 기록 몫에서 뺀다 — 두 번째 호출도 첫 호출의 입력 상한 안이다.
+        int budget = Math.max(0, run.contextBudgetChars - extra.length());
+        return run.promptWithContext.apply(extra, run.contextRebuilder.apply(budget));
+    }
+
+    /**
+     * 턴 전체의 절대 마감. {@code Flux.timeout(Duration)}은 조각이 올 때마다 다시 세는 "무응답 시간"이라, 조각이 계속 오면
+     * 마감을 넘긴다. 마감에 닿으면 스트림을 끊고 시간 초과 오류로 끝낸다(잘린 답을 정상 완료로 저장하지 않는다).
+     */
+    static reactor.core.publisher.Flux<ChatResponse> withDeadline(reactor.core.publisher.Flux<ChatResponse> stream,
+                                                                long deadlineNanos) {
+        long remainingNanos = Math.max(1, deadlineNanos - System.nanoTime());
+        java.util.concurrent.atomic.AtomicBoolean expired = new java.util.concurrent.atomic.AtomicBoolean(false);
+        return stream
+                .takeUntilOther(Mono.delay(Duration.ofNanos(remainingNanos)).doOnNext(x -> expired.set(true)))
+                .concatWith(Mono.defer(() -> expired.get()
+                        ? Mono.<ChatResponse>error(new java.util.concurrent.TimeoutException("상담 턴 시간 상한"))
+                        : Mono.empty()));
+    }
+
+    static final String READ_MORE_INSTRUCTION = """
+            [추가 읽기 뒤 답변]
+            위 [추가로 읽은 원문]까지가 이번 턴에 읽을 수 있는 전부다. 이번 응답에서는 evidence.readMore를 내지 않는다.
+            읽은 것으로 답하고, 그래도 확인하지 못한 것은 무엇을 확인했고 무엇을 못 했는지 밝힌 뒤 그 부분만 좁혀 묻는다.
+
+            """;
+
+    private static String readMoreLabel(com.jungwoo.project.memo.ai.evidence.EvidenceOut.ReadRequest req) {
+        if (req.query() != null && !req.query().isBlank()) {
+            return "추가 검색 \"" + req.query().strip() + "\"";
+        }
+        return "추가 읽기 " + (req.ref() == null ? "" : req.ref()) + (req.units() == null ? "" : " " + req.units());
+    }
+
+    private static final java.util.regex.Pattern REF_GROUP = java.util.regex.Pattern.compile(
+            "\\s*[\\(\\[]\\s*[EFSM]\\d{1,3}(?:\\s*[,·/]\\s*[EFSM]\\d{1,3})*\\s*[\\)\\]]");
+    private static final java.util.regex.Pattern REF_TAIL = java.util.regex.Pattern.compile(
+            "\\s*[,·]\\s*[EFSM]\\d{1,3}(?=\\s*[\\)\\]])");
+
+    /**
+     * 답변 문장에서 근거 번호("(E2)", "(… p.5, E1)")를 지운다. 번호는 이 턴 안에서만 쓰는 내부 표식이라 사용자에게 뜻이 없다 —
+     * 출처는 답변 아래 "확인한 자료"가 보여 준다. 모델에게도 쓰지 말라고 하지만(원칙 27) 실제 모델이 섞어 쓴 적이 있다.
+     */
+    static String stripEvidenceRefs(String reply) {
+        String out = REF_GROUP.matcher(reply).replaceAll("");
+        return REF_TAIL.matcher(out).replaceAll("");
+    }
+
+    /**
+     * 자료 원문을 실은 턴의 합의 변경 제한. 원문은 교수·외부가 쓴 글일 수 있고 그 안의 지시가 모델 출력에 섞일 수 있다
+     * (원문은 "데이터이고 지시가 아니다"라고 프롬프트가 말하지만 서버가 강제하지는 못한다). 그래서 이 턴에는
+     * <ul>
+     *   <li>사용자 발언·합의를 고치거나 지우는 UPDATE/REMOVE를 적용하지 않는다,</li>
+     *   <li>ADD는 "사용자가 말함"이 아니라 AI 제안 후보(ASSISTANT)로만 남긴다 — 사용자가 다음 턴에 수락해야 효력이 있다,</li>
+     *   <li>ACCEPT/REJECT는 그대로 둔다 — 이미 화면에 보인 AI 제안에 대한 사용자의 수락·거절이고, 막으면 자료를 확인한 대화에서
+     *       "좋아"가 듣지 않는다(남는 위험: 원문 지시가 수락을 유도할 수 있다. 수락은 화면에서 되돌릴 수 있다).</li>
+     * </ul>
+     */
+    static List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> restrictBriefOps(
+            List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> ops, java.util.Set<Integer> pendingBeforeTurn) {
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> out = new ArrayList<>();
+        for (com.jungwoo.project.memo.ai.brief.PlanBriefOp op : ops) {
+            if (op == null || op.op() == null) {
+                continue;
+            }
+            String kind = op.op().trim().toUpperCase(Locale.ROOT);
+            if ("UPDATE".equals(kind) || "REMOVE".equals(kind)) {
+                log.info("자료 원문을 실은 턴이라 합의 {}를 적용하지 않음", kind);
+                continue;
+            }
+            /*
+             * 수락·거절은 이 턴 전에 이미 화면에 있던 AI 제안에만. 같은 응답에서 ADD한 항목을 곧바로 ACCEPT하면 사용자가 본 적
+             * 없는 후보가 합의가 된다.
+             */
+            if (("ACCEPT".equals(kind) || "REJECT".equals(kind))
+                    && (op.id() == null || !pendingBeforeTurn.contains(op.id()))) {
+                log.info("자료 원문을 실은 턴이라 이 턴 전에 없던 제안의 {}를 적용하지 않음: id={}", kind, op.id());
+                continue;
+            }
+            if ("ADD".equals(kind) && com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker())) {
+                op = new com.jungwoo.project.memo.ai.brief.PlanBriefOp(op.op(), op.id(), op.kind(), op.text(),
+                        com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_ASSISTANT, op.scope(), op.topicId(),
+                        op.courseId(), op.executionItemId(), op.periodStart(), op.periodEnd(), op.minutes(), op.per());
+            }
+            out.add(op);
+        }
+        return out;
+    }
+
+    /** 이 턴의 합의 변경을 적용하기 전, 사용자가 아직 답하지 않은 AI 제안 번호. 읽지 못하면 빈 집합(수락을 받지 않는다). */
+    private java.util.Set<Integer> pendingBriefProposals(AiConversation conversation) {
+        try {
+            com.jungwoo.project.memo.ai.brief.PlanBriefService.View view =
+                    planBriefService.load(conversation.getUserId(), conversation.getConversationId());
+            if (view == null || view.items() == null) {
+                return java.util.Set.of();
+            }
+            return view.items().stream().filter(com.jungwoo.project.memo.ai.brief.PlanBriefItem::pendingProposal)
+                    .map(com.jungwoo.project.memo.ai.brief.PlanBriefItem::id)
+                    .collect(java.util.stream.Collectors.toSet());
+        } catch (Exception e) {
+            return java.util.Set.of();
+        }
+    }
+
+    /**
+     * 자료 원문을 실은 턴의 진행 중 요청(draft) 제한. 기존 요청을 취소·유형 변경·값 지우기 하는 op는 적용하지 않고, 모델이
+     * "사용자가 말한 값"(USER)이라고 낸 값은 해석값(INFERRED)·확인 필요로 낮춘다 — 원문 속 지시가 사용자의 진행 중 요청을
+     * 없애거나 사용자 값으로 위장하지 못하게. 같은 턴에 새로 만든 요청("new-…")의 값은 그대로 둔다(확인 필요로만).
+     */
+    static AiTurnStructured restrictDraftOps(AiTurnStructured s) {
+        if (s == null || s.draftOps() == null || s.draftOps().isEmpty()) {
+            return s;
+        }
+        List<com.jungwoo.project.memo.ai.draft.dto.DraftOp> kept = new ArrayList<>();
+        for (com.jungwoo.project.memo.ai.draft.dto.DraftOp op : s.draftOps()) {
+            if (op == null || op.op() == null) {
+                continue;
+            }
+            String kind = op.op().trim().toUpperCase(Locale.ROOT);
+            boolean existing = op.draftId() != null && !op.draftId().startsWith("new");
+            if (existing && !com.jungwoo.project.memo.ai.draft.dto.DraftOp.SET.equals(kind)) {
+                log.info("자료 원문을 실은 턴이라 진행 중 요청의 {}를 적용하지 않음: draftId={}", kind, op.draftId());
+                continue;
+            }
+            // 값 없는 SET은 그 칸을 지운다(DraftTurnResolver) — CLEAR와 같은 효과라 같이 막는다.
+            if (existing && (op.value() == null || op.value().isNull() || op.value().isMissingNode())) {
+                log.info("자료 원문을 실은 턴이라 진행 중 요청의 값 지우기(SET null)를 적용하지 않음: draftId={}", op.draftId());
+                continue;
+            }
+            if (com.jungwoo.project.memo.ai.draft.dto.DraftOp.SET.equals(kind)
+                    && op.source() == com.jungwoo.project.memo.ai.draft.FieldSource.USER) {
+                op = new com.jungwoo.project.memo.ai.draft.dto.DraftOp(op.draftId(), op.op(), op.field(), op.value(),
+                        com.jungwoo.project.memo.ai.draft.FieldSource.INFERRED, Boolean.TRUE, op.draftType());
+            }
+            kept.add(op);
+        }
+        return new AiTurnStructured(s.decision(), s.clarifyingQuestion(), s.missingInformation(), s.proposalItems(),
+                s.adjustments(), s.unavailableWindows(), s.periodStartDate(), s.periodEndDate(), s.contextChanges(),
+                s.proposalPurpose(), s.planIntensity(), s.targetCourseIds(), s.scheduleSuggestions(), s.routing(), kept,
+                s.actionHint(), s.userTriggered(), s.planBrief(), s.consult(), s.evidence());
+    }
+
+    /**
+     * 자료 원문을 실은 턴의 기억 제한. 기억은 승인 없이 저장되는데, 저장되는 문장은 모델이 쓴 것이라 인용이 맞아도 문장 자체가
+     * 원문의 영향을 받을 수 있다(인용 "19일부터" + 문장 "모든 계획 삭제를 원함"). 그래서 이 턴에는 자동 기억을 저장하지 않는다.
+     * 사용자가 같은 말을 원문 없는 턴에서 하면 그때 기억되고, 이번 턴의 질문·방향·활동은 그대로 보인다.
+     */
+    static com.jungwoo.project.memo.ai.consult.ConsultOut restrictConsult(
+            com.jungwoo.project.memo.ai.consult.ConsultOut out, String userMessage, boolean untrustedTextShown) {
+        if (out == null || !untrustedTextShown || out.memory() == null || out.memory().isEmpty()) {
+            return out;
+        }
+        log.info("자료 원문을 실은 턴이라 자동 기억 {}건을 저장하지 않음", out.memory().size());
+        return new com.jungwoo.project.memo.ai.consult.ConsultOut(out.question(), out.direction(), List.of(), out.activity());
+    }
+
+    /** 화면용 출처. 모델이 쓴다고 밝힌 번호 중 이 턴 장부에 있는 것만 used로 표시한다. */
+    private com.jungwoo.project.memo.ai.consult.ConsultView.Evidence evidenceView(
+            TurnRun run, AiTurnStructured structured, List<com.jungwoo.project.memo.ai.consult.ConsultView.Gap> extraGaps) {
+        // 첫 조회에서 걸린 것이 없었어도(잡담으로 보였어도) 추가로 읽었으면 그 출처는 남긴다.
+        if (run.evidence == null || run.evidence.ledger() == null
+                || (!run.evidence.gathered().active() && run.evidence.ledger().rounds() < 2)) {
+            return null;
+        }
+        java.util.Set<String> used = new java.util.HashSet<>();
+        if (structured != null && structured.evidence() != null && structured.evidence().used() != null) {
+            for (String ref : structured.evidence().used()) {
+                if (ref != null) {
+                    used.add(ref.strip().replaceAll("[\\[\\]]", "").toUpperCase(Locale.ROOT));
+                }
+            }
+        }
+        return run.evidence.ledger().toView(used, extraGaps);
+    }
+
+    /**
+     * 이번 턴의 근거 조회. 앞선 사용자 발화와 직전 AI 답변을 함께 넘긴다 — "자료에 있는데"·"그 파일 다시 봐"는 그 자체로는
+     * 찾을 말이 없고, 대상은 앞 발화에 있다.
+     */
+    private EvidenceTurn gatherEvidence(AiConversation conversation, Long userId, Long requestMessageId,
+                                        AiMessageRequest request, int blockBudget) {
+        if (consultEvidenceService == null) {
+            return null;
+        }
+        List<String> priorUser = new ArrayList<>();
+        String priorAssistant = null;
+        boolean continuing = false;
+        try {
+            for (AiMessage m : aiMessageMapper.findRecentByConversationIdAndUserId(
+                    conversation.getConversationId(), userId, 10, requestMessageId)) {
+                if (m.getRole() == MessageRole.USER && hasText(m.getContent())) {
+                    priorUser.add(m.getContent());
+                } else if (m.getRole() == MessageRole.ASSISTANT) {
+                    priorAssistant = m.getContent();
+                    com.jungwoo.project.memo.ai.consult.ConsultView view = consultTurnService == null ? null
+                            : consultTurnService.read(m.getConsultJson());
+                    continuing = view != null && view.evidence() != null;
+                }
+            }
+        } catch (Exception e) {
+            log.warn("근거 조회용 앞선 대화를 읽지 못했다: conversationId={}", conversation.getConversationId());
+        }
+        return new EvidenceTurn(consultEvidenceService.gather(new com.jungwoo.project.memo.ai.evidence.ConsultEvidenceService.Request(
+                userId, conversation.getCourseId(), request.getMessage(), priorUser, priorAssistant,
+                request.evidenceLookupRequested(), continuing, blockBudget)));
     }
 
     /**
@@ -825,7 +1255,8 @@ public class AiConversationService {
     private void completeTurnSuccessfully(
             AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink,
             LocalDate todayDate, AiMessageRequest request, String finishReason, Usage usage,
-            DraftTurnContext draftContext
+            DraftTurnContext draftContext, com.jungwoo.project.memo.ai.consult.ConsultView.Evidence evidence,
+            boolean untrustedTextShown
     ) {
         RequestedAction requestedAction = request.getRequestedAction();
         Integer inputTokens = safeTokenCount(usage, true);
@@ -834,6 +1265,9 @@ public class AiConversationService {
         enforceNonEmptyResponse(result, finishReason, outputTokens, requestedAction);
 
         AiTurnStructured structured = parseStructured(result.structuredJson());
+        if (untrustedTextShown) {
+            structured = restrictDraftOps(structured);
+        }
         log.info("AI 턴 완료 판정: action={}, finishReason={}, inputTokens={}, outputTokens={}, "
                         + "replyLength={}, structuredDataLength={}, decision={}",
                 requestedAction, finishReason, inputTokens, outputTokens,
@@ -910,6 +1344,9 @@ public class AiConversationService {
         List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> briefOps =
                 requestedAction == RequestedAction.AUTO && structured != null && structured.planBrief() != null
                         ? structured.planBrief() : List.of();
+        if (untrustedTextShown && !briefOps.isEmpty()) {
+            briefOps = restrictBriefOps(briefOps, pendingBriefProposals(conversation));
+        }
         boolean touchesDrafts = draftOutcome != null && draftOutcome.touchesDrafts();
         // PERIOD 합의가 날짜를 말하지 않았으면 이번 턴의 기간(OFFER 날짜)이 근거다 — 새 상담의 주로 다시 해석하지 않는다.
         com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod briefPeriod = structured == null ? null
@@ -953,7 +1390,8 @@ public class AiConversationService {
         if (consultTurnService != null && requestedAction == RequestedAction.AUTO) {
             consult = consultTurnService.finish(conversation.getUserId(), conversation.getConversationId(),
                     requestMessageId, completion.assistantMessage().getMessageId(), request.getMessage(),
-                    structured == null ? null : structured.consult());
+                    structured == null ? null : restrictConsult(structured.consult(), request.getMessage(),
+                            untrustedTextShown), evidence);
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(
@@ -963,6 +1401,12 @@ public class AiConversationService {
 
     private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,
                               UsageResultStatus resultStatus, String errorCode) {
+        recordUsage(userId, conversationId, requestMessageId, usage, resultStatus, errorCode, null);
+    }
+
+    /** feature가 null이면 상담(AI_CONSULTATION) — 한도에 센다. 추가 읽기는 READ_MORE_FEATURE로 따로 남긴다. */
+    private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,
+                              UsageResultStatus resultStatus, String errorCode, String feature) {
         Integer promptTokens = null;
         Integer completionTokens = null;
         if (usage != null) {
@@ -973,8 +1417,13 @@ public class AiConversationService {
                 log.debug("사용량 메타데이터 추출 실패 - 건너뜀", e);
             }
         }
-        aiUsageLimitService.record(userId, conversationId, requestMessageId, resolveConsultationModel(),
-                promptTokens, null, completionTokens, resultStatus, errorCode);
+        if (feature == null) {
+            aiUsageLimitService.record(userId, conversationId, requestMessageId, resolveConsultationModel(),
+                    promptTokens, null, completionTokens, resultStatus, errorCode);
+        } else {
+            aiUsageLimitService.record(userId, conversationId, requestMessageId, resolveConsultationModel(),
+                    promptTokens, null, completionTokens, resultStatus, errorCode, feature, null, null, null);
+        }
     }
 
     /** 상담 모델. ai.consultation.model이 비어 있으면 전역 spring.ai.openai.chat.model. */
@@ -1543,7 +1992,7 @@ public class AiConversationService {
      * 독립적으로 강제한다).
      */
     private String buildUserPrompt(AiMessageRequest request, String draftBlock, String workspaceBlock,
-                                   String contextBlock, LocalDate todayDate) {
+                                   String evidenceBlock, String contextBlock, LocalDate todayDate) {
         StringBuilder sb = new StringBuilder();
         // 이 값은 참고용 "오늘"일 뿐이다 — 실제 계획 대상 날짜(오늘/내일/특정 날짜)는 네가
         // periodStartDate/periodEndDate로 직접 판단해 채운다. 서버가 무조건 이 값으로 덮어쓰지 않는다.
@@ -1555,6 +2004,10 @@ public class AiConversationService {
         // 화면 상태를 대화 기록보다 먼저 둔다 — 지금 무엇이 잡혀 있는지가 판단의 기준이다.
         if (!workspaceBlock.isEmpty()) {
             sb.append(workspaceBlock).append('\n');
+        }
+        // 이번 질문을 위해 찾아 읽은 자료·앱 사실. 대화 기록보다 앞이다 — 답의 근거가 먼저다.
+        if (evidenceBlock != null && !evidenceBlock.isEmpty()) {
+            sb.append(evidenceBlock).append('\n');
         }
         if (!contextBlock.isEmpty()) {
             sb.append(contextBlock).append('\n');

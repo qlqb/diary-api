@@ -54,6 +54,13 @@ public interface AiTurnEventSink {
     default void onPeriodPlanProgress(String stage, String label) {
     }
 
+    /**
+     * 첫 응답이 자료를 더 읽어야 한다고 해서 서버가 추가로 읽는 중이다(label: "운영체제 계획서 p.3~4 확인 중"). 화면은 첫 응답의
+     * 문장("…확인해 볼게요")을 지우고 이 상태를 보여 준다 — 최종 답변은 다음 delta부터다. 기본 구현은 기존 싱크를 깨지 않으려고 비어 있다.
+     */
+    default void onEvidenceReading(String label) {
+    }
+
     void onCompleted(AiTurnCompletedPayload payload);
 
     void onError(ErrorCode errorCode);

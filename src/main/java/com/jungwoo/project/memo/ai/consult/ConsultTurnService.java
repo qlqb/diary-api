@@ -47,6 +47,14 @@ public class ConsultTurnService {
      */
     public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
                               String userMessage, ConsultOut out) {
+        return finish(userId, conversationId, userMessageId, assistantMessageId, userMessage, out, null);
+    }
+
+    /**
+     * @param evidence 이번 턴에 확인한 자료·앱 정보(없으면 null). 질문·해석과 함께 저장해 새로고침·재생에서도 같은 출처가 보인다
+     */
+    public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
+                              String userMessage, ConsultOut out, ConsultView.Evidence evidence) {
         try {
             List<ConsultView.Understanding> understanding = new ArrayList<>();
             if (out != null && out.memory() != null && !out.memory().isEmpty()) {
@@ -73,7 +81,7 @@ public class ConsultTurnService {
             }
 
             ConsultView view = new ConsultView(question(out, assistantMessageId), understanding, direction(out),
-                    activity(out));
+                    activity(out), evidence);
             if (view.isEmpty()) {
                 return null;
             }
@@ -98,15 +106,40 @@ public class ConsultTurnService {
         }
     }
 
+    /** 사용자가 "내 자료에서 찾아봐"를 눌렀을 때 대화 기록에 남는 말. */
+    public static final String LOOKUP_MESSAGE = "이 질문에 필요한 내용은 내 자료에서 찾아서 확인해 줘.";
+
+    /**
+     * 선택지로 만든 사용자 발화.
+     *
+     * @param lookup 자료 확인을 넓혀 달라는 요청인가(LOOKUP 선택지나 "내 자료에서 찾아봐")
+     */
+    public record Composed(String message, boolean lookup) {
+    }
+
+    /** 예전 호출부 호환: 발화 문장만. */
+    public String composeAnswer(Long userId, Long conversationId, String questionId, List<String> choiceIds, boolean skipped) {
+        Composed composed = compose(userId, conversationId, questionId, choiceIds, skipped, false);
+        return composed == null ? null : composed.message();
+    }
+
     /**
      * 빠른 답(선택지)으로 온 요청의 사용자 발화를 만든다. 선택 답과 자유 답은 같은 경로다 — 고른 것도 대화 기록에 남는다.
      * 클라이언트가 보낸 라벨을 믿지 않고, 저장된 질문의 선택지에서 찾는다.
      *
-     * @return 만들 수 없으면(질문이 없거나 선택지가 그 질문 것이 아님) null
+     * <p>입력 안내(INPUT) 선택지는 답이 아니다 — 그 라벨을 사용자의 답으로 보내면 모델은 같은 질문을 되풀이한다. 그래서 받지
+     * 않는다(null → 400). 자료 찾기(LOOKUP)는 그 라벨을 남기고 자료 확인을 넓힌다.
+     *
+     * @param lookup "내 자료에서 찾아봐"(질문의 선택지가 아니라 화면이 늘 주는 길)
+     * @return 만들 수 없으면(질문이 없거나 선택지가 그 질문 것이 아님, 입력 안내를 답으로 보냄) null
      */
-    public String composeAnswer(Long userId, Long conversationId, String questionId, List<String> choiceIds, boolean skipped) {
+    public Composed compose(Long userId, Long conversationId, String questionId, List<String> choiceIds, boolean skipped,
+                            boolean lookup) {
         if (skipped) {
-            return "이 질문은 건너뛸게요.";
+            return new Composed("이 질문은 건너뛸게요.", false);
+        }
+        if (lookup) {
+            return new Composed(LOOKUP_MESSAGE, true);
         }
         if (questionId == null || choiceIds == null || choiceIds.isEmpty()) {
             return null;
@@ -122,12 +155,17 @@ public class ConsultTurnService {
                 return null;
             }
             List<String> labels = new ArrayList<>();
+            boolean lookupChoice = false;
             for (ConsultView.Choice choice : view.question().choices()) {
                 if (choiceIds.contains(choice.id())) {
+                    if (CHOICE_INPUT.equals(choice.kind())) {
+                        return null;
+                    }
+                    lookupChoice |= CHOICE_LOOKUP.equals(choice.kind());
                     labels.add(choice.label());
                 }
             }
-            return labels.isEmpty() ? null : String.join(", ", labels);
+            return labels.isEmpty() ? null : new Composed(String.join(", ", labels), lookupChoice);
         } catch (Exception e) {
             return null;
         }
@@ -135,18 +173,43 @@ public class ConsultTurnService {
 
     // ===== 변환 =====
 
+    static final String CHOICE_ANSWER = "ANSWER";
+    static final String CHOICE_INPUT = "INPUT";
+    static final String CHOICE_LOOKUP = "LOOKUP";
+
+    /**
+     * 답이 아니라 "어떻게 답하라"는 안내로 끝나는 라벨("과목명과 날짜 말하기", "시간표 붙여넣기"). 모델이 ANSWER로 냈어도
+     * 입력 안내로 다룬다 — 보내도 아무 정보가 없는 답이라 같은 질문이 되풀이된다. 모델 계약(kind)이 1차 판단이고 이것은 방어다.
+     */
+    private static final java.util.regex.Pattern INPUT_INSTRUCTION = java.util.regex.Pattern.compile(
+            "(말하기|말해주기|알려주기|알려 주기|입력하기|적기|적어주기|붙여넣기|붙여 넣기|보내기|올리기)$");
+
+    static String choiceKind(ConsultOut.ChoiceOut raw, String label) {
+        String kind = raw.kind() == null ? CHOICE_ANSWER : raw.kind().trim().toUpperCase(Locale.ROOT);
+        if (!List.of(CHOICE_ANSWER, CHOICE_INPUT, CHOICE_LOOKUP).contains(kind)) {
+            kind = CHOICE_ANSWER;
+        }
+        if (CHOICE_ANSWER.equals(kind) && INPUT_INSTRUCTION.matcher(label.strip()).find()) {
+            return CHOICE_INPUT;
+        }
+        return kind;
+    }
+
     private static ConsultView.Question question(ConsultOut out, Long assistantMessageId) {
         if (out == null || out.question() == null || blank(out.question().text())) {
             return null;
         }
         List<ConsultView.Choice> choices = new ArrayList<>();
         int i = 1;
-        for (String raw : out.question().choices() == null ? List.<String>of() : out.question().choices()) {
-            String label = cut(raw, MAX_CHOICE_CHARS);
+        for (ConsultOut.ChoiceOut raw : out.question().choices() == null ? List.<ConsultOut.ChoiceOut>of()
+                : out.question().choices()) {
+            String label = raw == null ? null : cut(raw.label(), MAX_CHOICE_CHARS);
             if (label == null || choices.stream().anyMatch(c -> c.label().equals(label))) {
                 continue;
             }
-            choices.add(new ConsultView.Choice("c" + i++, label));
+            String kind = choiceKind(raw, label);
+            // 예전 저장 모양을 지킨다: 답 선택지는 kind를 적지 않는다(없으면 ANSWER).
+            choices.add(new ConsultView.Choice("c" + i++, label, CHOICE_ANSWER.equals(kind) ? null : kind));
             if (choices.size() >= MAX_CHOICES) {
                 break;
             }
@@ -155,9 +218,10 @@ public class ConsultTurnService {
         if (!List.of("SUPPORT_LEVEL", "BLOCKER", "TIME", "SCOPE", "DEPTH", "SUBMISSION", "OTHER").contains(topic)) {
             topic = "OTHER";
         }
+        long answerChoices = choices.stream().filter(c -> c.kind() == null).count();
         return new ConsultView.Question("q-" + assistantMessageId, cut(out.question().text(), MAX_TEXT),
                 cut(out.question().why(), MAX_TEXT), topic, choices,
-                Boolean.TRUE.equals(out.question().multiSelect()) && choices.size() > 1);
+                Boolean.TRUE.equals(out.question().multiSelect()) && answerChoices > 1);
     }
 
     private static ConsultView.Direction direction(ConsultOut out) {

@@ -94,6 +94,8 @@ public record AiTurnStructured(
          */
         List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> planBrief,
         /** 질문 카드·방향 변화·기억할 사용자 상황(검증 전). ConsultTurnService가 검증한다. */
-        com.jungwoo.project.memo.ai.consult.ConsultOut consult
+        com.jungwoo.project.memo.ai.consult.ConsultOut consult,
+        /** 답변에 쓴 근거 번호와 추가 읽기 요청(검증 전). 없으면 null(예전 출력 호환). */
+        com.jungwoo.project.memo.ai.evidence.EvidenceOut evidence
 ) {
 }

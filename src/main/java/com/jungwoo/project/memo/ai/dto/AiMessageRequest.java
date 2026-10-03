@@ -60,6 +60,26 @@ public class AiMessageRequest {
         private String questionId;
         private java.util.List<String> choiceIds;
         private boolean skipped;
+        /**
+         * "내 자료에서 찾아봐". 질문의 선택지가 아니라 화면이 늘 주는 길이다 — 서버가 자료 확인을 넓힌다. 예전 화면은 이 칸을
+         * 보내지 않으므로 객체형이다(원시형이면 본문에 없을 때 역직렬화가 실패한다).
+         */
+        private Boolean lookup;
+
+        public boolean lookupRequested() {
+            return Boolean.TRUE.equals(lookup);
+        }
+    }
+
+    /**
+     * 서버가 정한다: 이번 발화가 자료 확인을 넓혀 달라는 요청인가(LOOKUP 선택지·"내 자료에서 찾아봐"). 클라이언트 본문에서는
+     * 읽지 않는다.
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Boolean evidenceLookup;
+
+    public boolean evidenceLookupRequested() {
+        return Boolean.TRUE.equals(evidenceLookup);
     }
 
     @NotBlank(message = "idempotencyKey는 필수입니다")

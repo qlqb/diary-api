@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.ai.consult;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.util.List;
 
@@ -19,7 +21,25 @@ public record ConsultOut(QuestionOut question, DirectionOut direction, List<Memo
      * @param multiSelect 여러 개를 함께 고를 수 있는 질문인가
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record QuestionOut(String text, String why, String topic, List<String> choices, Boolean multiSelect) {
+    public record QuestionOut(String text, String why, String topic, List<ChoiceOut> choices, Boolean multiSelect) {
+    }
+
+    /**
+     * 선택지 하나. 예전 출력처럼 문자열만 오면 kind 없는 답(ANSWER)이다. kind는 ANSWER / INPUT(입력 안내) / LOOKUP(자료 찾기).
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ChoiceOut(String label, String kind) {
+
+        @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
+        public ChoiceOut(@JsonProperty("label") String label, @JsonProperty("kind") String kind) {
+            this.label = label;
+            this.kind = kind;
+        }
+
+        @JsonCreator(mode = JsonCreator.Mode.DELEGATING)
+        public static ChoiceOut of(String label) {
+            return new ChoiceOut(label, null);
+        }
     }
 
     /**
