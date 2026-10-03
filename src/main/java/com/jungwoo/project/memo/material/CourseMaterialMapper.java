@@ -36,6 +36,16 @@ public interface CourseMaterialMapper {
     /** 사용자의 전체 ACTIVE 자료. 전역 자료함 목록용. */
     List<CourseMaterial> findAllByUserId(@Param("userId") Long userId);
 
+    /** 상담 근거용: 활성 자료의 메타데이터(extractedText는 null). */
+    List<CourseMaterial> findMetaByUserId(@Param("userId") Long userId);
+
+    /** 상담 근거의 재확인용: 지운 자료도 포함한 메타데이터(extractedText는 null). */
+    List<CourseMaterial> findMetaByIdsAndUserIdIncludingDeleted(@Param("materialIds") List<Long> materialIds,
+                                                                @Param("userId") Long userId);
+
+    /** 추출 원문이 비어 있지 않은 활성 자료 id. */
+    List<Long> findIdsWithExtractedTextByUserId(@Param("userId") Long userId);
+
     /**
      * ACTIVE 자료를 행 잠금과 함께 가져온다(SELECT ... FOR UPDATE). 연결 제안 apply 전용.
      *

@@ -123,6 +123,16 @@ public class AiWorkspaceContextBuilder {
     @Transactional(readOnly = true)
     public String build(AiConversation conversation, Long userId, LocalDateTime now,
                         RequestedAction requestedAction) {
+        return build(conversation, userId, now, requestedAction, true);
+    }
+
+    /**
+     * @param includeMaterialExcerpt 프로젝트 대화에 자료 앞부분 발췌를 실을지. 상담 근거 조회(ConsultEvidenceService)가 질문에
+     *                               맞는 원문을 따로 싣는 턴은 false — 같은 자료를 두 방식으로 실어 예산을 나눠 쓰지 않는다
+     */
+    @Transactional(readOnly = true)
+    public String build(AiConversation conversation, Long userId, LocalDateTime now,
+                        RequestedAction requestedAction, boolean includeMaterialExcerpt) {
         LocalDate today = now.toLocalDate();
         StringBuilder sb = new StringBuilder();
         AiProposalTargetScope scope = conversation.getScope() != null
@@ -188,7 +198,7 @@ public class AiWorkspaceContextBuilder {
             state = state + "\n" + history;
         }
 
-        if (courseId != null) {
+        if (courseId != null && includeMaterialExcerpt) {
             String materials = buildMaterialExcerpt(userId, courseId);
             if (!materials.isEmpty()) {
                 state = state + "\n" + materials;
@@ -364,6 +374,14 @@ public class AiWorkspaceContextBuilder {
             if (!d.topics().ordered().isEmpty()) {
                 topicAlloc[i] = 1;
                 used += d.topics().costOfHeader() + d.topics().costOf(0);
+            }
+            /*
+             * 평가·시험 첫 줄도 1차에 싣는다. 예전에는 학습 항목이 남는 예산을 먼저 다 쓰고 평가는 그 뒤였다 — 과목이 많으면
+             * "시험이 언제인가"가 통째로 빠져, 이미 저장된 시험 정보를 사용자에게 되물었다(2026-10-03).
+             */
+            if (!d.assessments().isEmpty()) {
+                assessmentAlloc[i] = 1;
+                used += "    평가:\n".length() + 6 + d.assessments().get(0).length() + 1;
             }
         }
 

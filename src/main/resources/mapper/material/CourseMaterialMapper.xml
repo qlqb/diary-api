@@ -44,6 +44,36 @@
         WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
     </select>
 
+    <!--
+      상담 근거용 메타데이터. extracted_text(문서 전체 원문)는 싣지 않는다 — 매 상담 턴마다 모든 자료의 본문을 읽지 않기
+      위해서다. 원문 단위가 없는 옛 자료만 그 본문이 필요하고, 그때는 findByIdAndUserId로 하나씩 읽는다.
+    -->
+    <sql id="materialMetaColumns">
+        material_id, user_id, original_filename, stored_filename, storage_path, content_type, size_bytes, page_count,
+        file_hash, extraction_status, NULL AS extracted_text, extraction_error, extraction_warning, document_title,
+        document_title_read, source_archive_name, source_entry_path, status, created_at, updated_at
+    </sql>
+
+    <select id="findMetaByUserId" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+    </select>
+
+    <select id="findMetaByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- 추출 원문이 비어 있지 않은 활성 자료 id. 원문 단위가 없는 옛 자료를 읽을 수 있는지 본문 없이 판단한다. -->
+    <select id="findIdsWithExtractedTextByUserId" resultType="long">
+        SELECT material_id FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+          AND extracted_text IS NOT NULL AND CHAR_LENGTH(TRIM(extracted_text)) &gt; 0
+    </select>
+
     <select id="findByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
         SELECT * FROM course_materials
         WHERE user_id = #{userId}
