@@ -179,7 +179,8 @@ public class SafePageFetcher implements DisposableBean {
                     return new Page(Status.HTTP_ERROR, requested, uri.toString(), code, null, "HTTP " + code);
                 }
                 HttpEntity entity = response.getEntity();
-                if (entity == null) {
+                if (entity == null || entity.getContentLength() == 0) {
+                    // 200인데 본문이 비었다 — CDN이 자동 접속을 막을 때 이렇게 준다(교보문고, 2026-10-04).
                     return new Page(Status.HTTP_ERROR, requested, uri.toString(), code, null, "본문 없음");
                 }
                 ContentType type = ContentType.parseLenient(entity.getContentType());

@@ -27,7 +27,7 @@ public final class TextbookExtractor {
      * 2(2026-10-04): 강의계획서 교재 표(도서명·저자·출판사 머리 + 주교재/부교재 줄)를 교재 단서로 읽는다.
      * 목차 줄 끝의 "/ 6" 쪽 표기와 Lesson·Section 머리를 읽는다.
      */
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     /** 서지 단서를 찾을 앞쪽·뒤쪽 단위 수. 판권면은 보통 앞 몇 쪽이나 맨 뒤에 있다. */
     private static final int FRONT_UNITS = 8;

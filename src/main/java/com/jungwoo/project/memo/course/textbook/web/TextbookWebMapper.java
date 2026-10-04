@@ -31,5 +31,6 @@ public interface TextbookWebMapper {
 
     /** 같은 ISBN을 가진 범위 안 페이지들의 최신 리비전. 재검색 없이 판 근거를 다시 쓸 때. */
     List<TextbookWebRevision> findLatestByIsbn(@Param("isbn13") String isbn13, @Param("userId") Long userId,
-                                               @Param("since") LocalDateTime since);
+                                               @Param("since") LocalDateTime since,
+                                               @Param("parserVersion") int parserVersion);
 }

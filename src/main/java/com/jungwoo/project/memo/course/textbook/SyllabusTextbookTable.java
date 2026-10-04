@@ -45,6 +45,10 @@ final class SyllabusTextbookTable {
     private static final Pattern PUBLISHER_TAIL = Pattern.compile(
             "[\\p{L}\\p{N}()㈜]{1,20}(출판사|출판부|북스|프레스|아카데미|에듀|미디어|퍼블리싱|Press|Books)",
             Pattern.CASE_INSENSITIVE);
+    /** 여러 낱말 출판사 이름의 끝 낱말("MIT Press", "Addison-Wesley Professional", "한빛 아카데미"). 사람 이름 끝에는 오지 않는다. */
+    private static final Pattern PUBLISHER_LAST_WORD = Pattern.compile(
+            "^[^,]{1,60}\\s(Press|Publishing|Publishers|Publications|Books|Professional|Learning|Education|출판사|출판부|아카데미|북스|프레스|에듀)$",
+            Pattern.CASE_INSENSITIVE);
     private static final Pattern ISBN = Pattern.compile("(97[89][\\d\\-\\s]{10,16}\\d|\\d[\\d\\-\\s]{8,11}[\\dXx])");
 
     private static final int MAX_REGION = 10;
@@ -156,13 +160,37 @@ final class SyllabusTextbookTable {
             }
             StringBuilder quote = new StringBuilder(lines[i].strip());
             if (author == null) {
-                // 저자 칸이 줄바꿈으로 위·아래에 흩어졌다(" Michael" / "Putlack, 이현호").
+                // 저자·출판사 칸이 줄바꿈으로 위·아래에 흩어졌다. 두 모양을 실제로 봤다:
+                //   " Michael" / "주교재  제목  형설출판사" / "Putlack, 이현호"
+                //   "주교재  제목" / " Michael" / "Putlack, 이현호" / " 형설출판사"
+                // 위 한 줄과 아래 줄들(최대 3줄, 출판사 모양 줄에서 멈춤)을 저자의 줄바꿈으로 잇는다.
                 String above = i - 1 > header ? wrapped(lines[i - 1]) : null;
-                String below = i + 1 < end ? wrapped(lines[i + 1]) : null;
-                if (above != null || below != null) {
-                    author = ((above == null ? "" : above) + " " + (below == null ? "" : below)).strip();
+                if (above != null && isPublisherLine(above)) {
+                    above = null;
+                }
+                StringBuilder below = new StringBuilder();
+                StringBuilder belowQuote = new StringBuilder();
+                for (int j = i + 1; j < end && j <= i + 3; j++) {
+                    String w = wrapped(lines[j]);
+                    if (w == null) {
+                        break;
+                    }
+                    belowQuote.append(" / ").append(lines[j].strip());
+                    if (isPublisherLine(w)) {
+                        if (publisher == null) {
+                            publisher = w;
+                        }
+                        break;
+                    }
+                    below.append(' ').append(w);
+                }
+                String joined = ((above == null ? "" : above) + below).strip();
+                if (!joined.isEmpty()) {
+                    author = joined;
+                }
+                if (above != null || !belowQuote.isEmpty()) {
                     quote = new StringBuilder((above == null ? "" : lines[i - 1].strip() + " / ") + lines[i].strip()
-                            + (below == null ? "" : " / " + lines[i + 1].strip()));
+                            + belowQuote);
                 }
             }
             TextbookExtractor.BookClue clue = build(roleOf(role.group(1)), title, author, publisher, unitNo,
@@ -171,6 +199,17 @@ final class SyllabusTextbookTable {
                 out.add(clue);
             }
         }
+    }
+
+    /**
+     * 줄 전체가 출판사 이름 모양이다("형설출판사", "한빛아카데미", "Pearson"). 여러 낱말 줄은 사람 이름일 수 있어
+     * ("Karl Pearson", "David Wiley") 한 낱말짜리만 출판사 낱말로 본다.
+     */
+    private static boolean isPublisherLine(String v) {
+        if (PUBLISHER_TAIL.matcher(v).matches() || PUBLISHER_LAST_WORD.matcher(v).find()) {
+            return true;
+        }
+        return !v.contains(",") && !v.contains(" ") && PUBLISHER_LIKE.matcher(v).find();
     }
 
     /** 다른 칸이 아닌 짧은 줄 — 저자 이름의 줄바꿈일 수 있다. 역할어·숫자뿐·머리 줄은 아니다. */
