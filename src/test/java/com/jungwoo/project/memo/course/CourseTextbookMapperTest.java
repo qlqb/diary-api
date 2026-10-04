@@ -19,15 +19,11 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 교재 정보를 쓰는 두 경로가 서로 반대라는 것을 실제 DB에 대고 확인한다.
+ * 교재 칸의 유일한 쓰기(writeTextbook)를 실제 DB에 대고 확인한다 — 판 대조·판 올리기·목차 연결 풀기는 SQL 조건이라
+ * Mockito로는 증명할 수 없다.
  *
- * 이건 SQL의 COALESCE 인자 순서로 표현되어 있어 Mockito로는 증명할 수 없다 — 두 메서드
- * 모두 호출됐다는 것만 보이고, 무엇이 남는지는 안 보인다.
- *
- * 지키려는 규칙: 자료 분석은 한 프로젝트에서 여러 번 일어나는데(강의계획서 한 번, 나중에
- * 교수 자료로 또 한 번), 그때마다 덮어쓰면 사용자가 고쳐 놓은 값이 조용히 되돌아간다.
- * DB는 그 값이 사람이 고친 것인지 AI가 넣은 것인지 구분할 수 없으므로, 한 번 채워진 칸은
- * 사람 것으로 보고 손대지 않는다.
+ * (2026-10-04) 예전의 두 경로(AI 분석은 빈 칸만, 사용자 편집은 그대로)는 CourseTextbookWriter 하나로 모였다. 덮어쓰기 방지는
+ * 이제 "빈 칸 COALESCE"가 아니라 판(textbook_version) 대조다.
  *
  * 스키마가 레포에 없어 CI에서는 -PexcludeDbTests로 제외된다(build.gradle 참고).
  */
@@ -71,61 +67,54 @@ class CourseTextbookMapperTest {
     }
 
     @Test
-    @DisplayName("AI 경로는 비어 있는 칸만 채운다 — 이미 있는 값은 건드리지 않는다")
-    void aiPathOnlyFillsEmptyColumns() {
+    @DisplayName("받은 값을 그대로 쓰고 판을 1 올린다 — 비운 칸은 비워진다")
+    void writesVerbatimAndBumpsVersion() {
         Long courseId = givenCourse();
 
-        // 첫 분석: 전부 비어 있으므로 다 채워진다.
-        courseMapper.updateTextbookInfo(courseId, userId(),
-                "전처리와 시각화", "오경선 외", "길벗", null);
+        assertThat(courseMapper.writeTextbook(courseId, userId(), 0, "전처리와 시각화", "오경선 외", "길벗", null, null,
+                "USER", null, null, false, null)).isEqualTo(1);
+        Course first = reload(courseId);
+        assertThat(first.getTextbookTitle()).isEqualTo("전처리와 시각화");
+        assertThat(first.getTextbookInfoSource()).isEqualTo("USER");
+        assertThat(first.getTextbookVersion()).isEqualTo(1);
 
-        Course afterFirst = reload(courseId);
-        assertThat(afterFirst.getTextbookTitle()).isEqualTo("전처리와 시각화");
-        assertThat(afterFirst.getTextbookPublisher()).isEqualTo("길벗");
-        assertThat(afterFirst.getTextbookIsbn()).isNull();
-
-        // 두 번째 분석이 다른 값을 들고 와도 이미 찬 칸은 그대로 두고, 빈 칸만 채운다.
-        courseMapper.updateTextbookInfo(courseId, userId(),
-                "다른 제목", "다른 저자", "한빛미디어", "9788956746425");
-
-        Course afterSecond = reload(courseId);
-        assertThat(afterSecond.getTextbookTitle()).isEqualTo("전처리와 시각화");
-        assertThat(afterSecond.getTextbookAuthor()).isEqualTo("오경선 외");
-        assertThat(afterSecond.getTextbookPublisher()).isEqualTo("길벗");
-        // ISBN만 비어 있었으므로 이번에 채워진다.
-        assertThat(afterSecond.getTextbookIsbn()).isEqualTo("9788956746425");
+        // 사람이 화면에서 지운 것은 "모른다"는 뜻이다. 되살리지 않는다.
+        courseMapper.writeTextbook(courseId, userId(), 1, "전처리와 시각화", null, null, null, null, "USER", null, null,
+                false, null);
+        Course cleared = reload(courseId);
+        assertThat(cleared.getTextbookAuthor()).isNull();
+        assertThat(cleared.getTextbookPublisher()).isNull();
+        assertThat(cleared.getTextbookVersion()).isEqualTo(2);
     }
 
     @Test
-    @DisplayName("재분석이 사용자가 고친 값을 덮지 않는다")
-    void reanalysisDoesNotOverwriteUserCorrection() {
+    @DisplayName("본 판과 다르면 0행 — 늦은 쓰기가 사용자가 고친 값을 덮지 않는다")
+    void staleVersionWritesNothing() {
         Long courseId = givenCourse();
-        courseMapper.updateTextbookInfo(courseId, userId(), "전처리와 시각화", "오경선", "길벗", null);
+        courseMapper.writeTextbook(courseId, userId(), 0, "A책", null, null, null, null, "MATERIAL", null, null, false, null);
+        courseMapper.writeTextbook(courseId, userId(), 1, "B책", null, null, null, null, "USER", null, null, false, null);
 
-        // 사용자가 저자를 바로잡는다.
-        courseMapper.updateTextbookByUser(courseId, userId(),
-                "전처리와 시각화", "오경선, 양숙희, 장은실", "길벗", null, null);
-
-        // 나중에 다른 자료를 분석해 적용한다.
-        courseMapper.updateTextbookInfo(courseId, userId(), "전처리와 시각화", "오경선", "길벗", null);
-
-        assertThat(reload(courseId).getTextbookAuthor()).isEqualTo("오경선, 양숙희, 장은실");
+        // 판 0을 본 옛 작업이 A를 다시 쓰려 한다.
+        assertThat(courseMapper.writeTextbook(courseId, userId(), 0, "A책", null, null, null, null, "MATERIAL", null,
+                null, false, null)).isZero();
+        assertThat(reload(courseId).getTextbookTitle()).isEqualTo("B책");
     }
 
     @Test
-    @DisplayName("사용자 경로는 비우면 비워진다 — 지울 방법이 있어야 한다")
-    void userPathCanClearValues() {
+    @DisplayName("목차 연결은 판을 올리고, 교재 식별이 바뀌는 쓰기는 연결을 푼다")
+    void tocLinkIsClearedWhenBookChanges() {
         Long courseId = givenCourse();
-        courseMapper.updateTextbookInfo(courseId, userId(), "전처리와 시각화", "오경선", "길벗", "978");
+        courseMapper.writeTextbook(courseId, userId(), 0, "A책", null, null, null, null, "USER", null, null, false, null);
+        assertThat(courseMapper.writeTextbookTocLink(courseId, userId(), 1, 77L, "hash-a", "title:a책")).isEqualTo(1);
+        Course linked = reload(courseId);
+        assertThat(linked.getTextbookTocMaterialId()).isEqualTo(77L);
+        assertThat(linked.getTextbookVersion()).isEqualTo(2);
 
-        // 사람이 화면에서 지운 것은 "모른다"는 뜻이다. COALESCE로 되살리면 지울 방법이 없어진다.
-        courseMapper.updateTextbookByUser(courseId, userId(), "전처리와 시각화", null, null, null, null);
-
+        courseMapper.writeTextbook(courseId, userId(), 2, "B책", null, null, null, null, "USER", null, null, true, null);
         Course after = reload(courseId);
-        assertThat(after.getTextbookTitle()).isEqualTo("전처리와 시각화");
-        assertThat(after.getTextbookAuthor()).isNull();
-        assertThat(after.getTextbookPublisher()).isNull();
-        assertThat(after.getTextbookIsbn()).isNull();
+        assertThat(after.getTextbookTocMaterialId()).isNull();
+        assertThat(after.getTextbookTocFileHash()).isNull();
+        assertThat(after.getTextbookTocBookKey()).isNull();
     }
 
     private Long userId() {

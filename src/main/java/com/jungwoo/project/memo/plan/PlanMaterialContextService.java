@@ -80,7 +80,20 @@ public class PlanMaterialContextService {
     public record TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
                             String sourceMaterialFilename, int depth, TopicProgressStatus progress,
                             TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
-                            LocalDate assignmentDue, boolean assignmentLinked) {
+                            LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook) {
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, false);
+        }
+
+        TopicLine withPriorTextbook(boolean prior) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, prior);
+        }
 
         public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
                          String sourceMaterialFilename, int depth, TopicProgressStatus progress,
@@ -96,7 +109,7 @@ public class PlanMaterialContextService {
 
         TopicLine with(boolean first, LocalDate due, boolean assignment) {
             return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
-                    depth, progress, mark, lastStudiedAt, first, due, assignment);
+                    depth, progress, mark, lastStudiedAt, first, due, assignment, priorTextbook);
         }
     }
 
@@ -221,9 +234,49 @@ public class PlanMaterialContextService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
 
+    /** 이전 교재 항목 판별용. 없는 환경(단위 테스트)에서는 쓰지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.course.CourseMapper courseMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.CourseTopicMapper courseTopicMapper;
+
+    /**
+     * 지금 교재와 다른 책의 목차에서 온 항목. 교재를 바꿔도 이전 항목·기록은 지우지 않지만, 새 교재의 범위로 세지 않는다.
+     * 교재 칸이 비어 있으면 비교할 기준이 없으므로 없다.
+     */
+    private Set<Long> priorTextbookTopics(Long userId, Long courseId) {
+        if (courseMapper == null || courseTopicMapper == null) {
+            return Set.of();
+        }
+        com.jungwoo.project.memo.course.domain.Course course = courseMapper.findByIdAndUserId(courseId, userId);
+        String current = com.jungwoo.project.memo.course.textbook.BookKey.of(course);
+        if (current == null) {
+            return Set.of();
+        }
+        Set<Long> out = new HashSet<>();
+        for (com.jungwoo.project.memo.learning.domain.CourseTopic t : courseTopicMapper.findActiveByCourseIdAndUserId(courseId, userId)) {
+            if (t.getSourceTextbookKey() != null && !t.getSourceTextbookKey().equals(current)) {
+                out.add(t.getTopicId());
+            }
+        }
+        return out;
+    }
+
     @Transactional(readOnly = true)
     public CourseCatalog build(Long userId, Long courseId, String courseTitle, Set<Long> excludeTopicIds,
                                Collection<Long> requestedMaterialIds, Collection<Long> requestedSectionIds) {
+        return build(userId, courseId, courseTitle, excludeTopicIds, requestedMaterialIds, requestedSectionIds, true);
+    }
+
+    /**
+     * @param firstUnlearnedAnchor "← 첫 미학습"(기록 기준 첫 항목)을 붙일지. 복습·시험 목적이면 false — 수업 진행·시험 범위가
+     *                             근거라 기록이 없다는 것만으로 1단원부터 시작하지 않는다
+     */
+    @Transactional(readOnly = true)
+    public CourseCatalog build(Long userId, Long courseId, String courseTitle, Set<Long> excludeTopicIds,
+                               Collection<Long> requestedMaterialIds, Collection<Long> requestedSectionIds,
+                               boolean firstUnlearnedAnchor) {
         Set<Long> excludedIds = excludeTopicIds == null ? Set.of() : excludeTopicIds;
         Set<Long> requestedMaterials = requestedMaterialIds == null ? Set.of() : new HashSet<>(requestedMaterialIds);
         Set<Long> requestedSections = requestedSectionIds == null ? Set.of() : new HashSet<>(requestedSectionIds);
@@ -271,6 +324,8 @@ public class PlanMaterialContextService {
         List<TopicLine> candidates = new ArrayList<>();
         List<ExcludedTopic> excluded = new ArrayList<>();
         boolean firstMarked = false;
+        // 이전 교재의 목차에서 온 항목: 지금 교재의 범위로 세지 않는다(기록은 그대로, 후보에는 남되 표시한다).
+        Set<Long> priorTextbookTopicIds = priorTextbookTopics(userId, courseId);
         /*
          * 사용자가 정정한 범위 제외("이번 시험에는 이 단원이 빠져"). 그 항목과 하위 항목을 후보에서 뺀다 — 학습 완료로 보지
          * 않고(진도는 그대로), 트리에서 지우지도 않는다. 사유에 어느 시험·계획의 범위인지 남긴다. 화면에서 풀 수 있다.
@@ -300,11 +355,14 @@ public class PlanMaterialContextService {
                 excluded.add(new ExcludedTopic(line.topicId(), line.title(), "THIS_TIME"));
                 continue;
             }
-            boolean first = !firstMarked && line.progress() == TopicProgressStatus.NOT_STARTED;
+            boolean priorTextbook = priorTextbookTopicIds.contains(line.topicId());
+            boolean first = firstUnlearnedAnchor && !priorTextbook && !firstMarked
+                    && line.progress() == TopicProgressStatus.NOT_STARTED;
             if (first) {
                 firstMarked = true;
             }
-            candidates.add(line.with(first, dueByTopic.get(line.topicId()), openTopicIds.contains(line.topicId())));
+            candidates.add(line.with(first, dueByTopic.get(line.topicId()), openTopicIds.contains(line.topicId()))
+                    .withPriorTextbook(priorTextbook));
         }
         Set<Long> candidateTopicIds = candidates.stream().map(TopicLine::topicId).collect(Collectors.toSet());
         Set<Long> excludedTopicIds = excluded.stream().map(ExcludedTopic::topicId).collect(Collectors.toSet());

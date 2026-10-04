@@ -30,6 +30,8 @@ public class CourseResponse {
     private String textbookEdition;
     /** USER / MATERIAL / null. 화면이 "직접 적음"과 "자료에서 찾아 적용함"을 구분해 보인다. */
     private String textbookInfoSource;
+    /** 교재 판. 교재를 고칠 때 함께 보낸다(expectedTextbookVersion) — 다르면 409. */
+    private Integer textbookVersion;
     private Long textbookInfoMaterialId;
     private CourseStatus status;
     private int topicCount;
@@ -50,6 +52,7 @@ public class CourseResponse {
                 .textbookIsbn(course.getTextbookIsbn())
                 .textbookEdition(course.getTextbookEdition())
                 .textbookInfoSource(course.getTextbookInfoSource())
+                .textbookVersion(course.getTextbookVersion() == null ? 0 : course.getTextbookVersion())
                 .textbookInfoMaterialId(course.getTextbookInfoMaterialId())
                 .status(course.getStatus())
                 .topicCount(counts != null ? counts.getTopicCount() : 0)

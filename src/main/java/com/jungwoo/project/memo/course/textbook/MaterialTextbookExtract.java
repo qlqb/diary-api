@@ -21,5 +21,7 @@ public class MaterialTextbookExtract {
     private String bookJson;
     private String tocJson;
     private int tocEntryCount;
+    /** 규칙이 못 읽은 교재 표에서 모델 보조로 읽은 단서 {status, clues[]} — 조회 작업이 채운다. */
+    private String clueJson;
     private LocalDateTime createdAt;
 }

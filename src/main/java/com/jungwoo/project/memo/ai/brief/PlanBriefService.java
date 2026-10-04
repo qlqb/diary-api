@@ -43,7 +43,7 @@ public class PlanBriefService {
     public static final int MAX_ITEMS = 40;
     public static final int MAX_TEXT_CHARS = 300;
     static final Set<String> KINDS = Set.of("GOAL", "PRIORITY", "EXCLUDE", "TIME_CONSTRAINT", "FREQUENCY", "SCOPE",
-            "DEPTH", "TIME_BUDGET",
+            "DEPTH", "TIME_BUDGET", "PURPOSE",
             "DIFFICULTY", "CAUSE", "OTHER");
     static final Set<String> OPS = Set.of("ADD", "ACCEPT", "REJECT", "UPDATE", "REMOVE");
 
@@ -479,6 +479,7 @@ public class PlanBriefService {
             case "SCOPE" -> "범위";
             case "DEPTH" -> "깊이(점검·복습·처음부터·문제 풀이)";
             case "TIME_BUDGET" -> "쓸 수 있는 시간";
+            case "PURPOSE" -> "계획 목적(복습·수업 따라잡기·예습·시험 준비·독학)";
             case "DIFFICULTY" -> "확인된 어려움";
             case "CAUSE" -> "원인(사용자 확인)";
             default -> "기타";

@@ -6,6 +6,7 @@ import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiMessageMapper;
 import com.jungwoo.project.memo.ai.AiStreamParser;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
+import com.jungwoo.project.memo.ai.brief.PlanBriefItem;
 import com.jungwoo.project.memo.ai.brief.PlanBriefService;
 import com.jungwoo.project.memo.ai.domain.AiMessage;
 import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
@@ -254,8 +255,17 @@ public class PeriodPlanDraftGenerator {
             List<Long> requestedMaterialIds,
             /** 이번 요청에서 사용자가 지정한 구간. */
             List<Long> requestedSectionIds,
-            Origin origin
+            Origin origin,
+            /** (2026-10-04) 화면에서 고른 계획 목적(PlanPurpose 이름). 없으면 상담 합의를 본다. */
+            String purpose
     ) {
+        public Spec(Long userId, LocalDate start, LocalDate end, PlanIntensity intensity, String instruction,
+                    String title, List<Long> courseIds, List<Long> excludeTopicIds, List<Long> requestedMaterialIds,
+                    List<Long> requestedSectionIds, Origin origin) {
+            this(userId, start, end, intensity, instruction, title, courseIds, excludeTopicIds, requestedMaterialIds,
+                    requestedSectionIds, origin, null);
+        }
+
         public Spec(Long userId, LocalDate start, LocalDate end, PlanIntensity intensity, String instruction,
                     String title, List<Long> courseIds) {
             this(userId, start, end, intensity, instruction, title, courseIds, List.of(), List.of(), List.of(), null);
@@ -275,7 +285,7 @@ public class PeriodPlanDraftGenerator {
 
         public Spec withOrigin(Origin newOrigin) {
             return new Spec(userId, start, end, intensity, instruction, title, courseIds, excludeTopicIds,
-                    requestedMaterialIds, requestedSectionIds, newOrigin);
+                    requestedMaterialIds, requestedSectionIds, newOrigin, purpose);
         }
 
         public Set<Long> excludedTopicIdSet() {
@@ -562,17 +572,19 @@ public class PeriodPlanDraftGenerator {
                 spec.courseIds() != null && !spec.courseIds().isEmpty(), spec.requestedMaterialIds(),
                 spec.requestedSectionIds(), spec.instruction());
         Set<Long> excluded = spec.excludedTopicIdSet();
+        List<UserContext> contexts = loadUserContexts(spec.userId());
+        Facts facts = collectFacts(spec, courses, capturedAt, opts);
+        // 목적이 정해져야 "기록 기준 첫 항목"을 출발점으로 표시할지 정한다(복습·시험은 진도·시험 범위가 근거다).
+        boolean firstAnchor = facts.purpose().allowsFirstUnlearnedAnchor();
         List<PlanMaterialContextService.CourseCatalog> catalogs = new ArrayList<>();
         for (Course course : courses) {
             catalogs.add(materialContextService.build(spec.userId(), course.getCourseId(), course.getTitle(),
-                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds()));
+                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(), firstAnchor));
         }
         if (!requested.unscoped().isEmpty()) {
             catalogs.add(materialContextService.buildUnscoped(spec.userId(), requested.unscoped(),
                     requested.materialIds(), requested.sectionIds()));
         }
-        List<UserContext> contexts = loadUserContexts(spec.userId());
-        Facts facts = collectFacts(spec, courses, capturedAt, opts);
 
         /*
          * 시간은 범위·깊이와 따로 온다. 사용자가 상담에서 "오늘 한 시간만"처럼 쓸 수 있는 시간을 말했으면(TIME_BUDGET 합의)
@@ -592,8 +604,13 @@ public class PeriodPlanDraftGenerator {
             target = userTimeLimit;
         }
 
+        // 교재(사용자 정정 포함)와 계획 목적이 바뀌면 같은 자료라도 다시 고른다 — 이전 선택을 재사용하지 않는다.
+        StringBuilder judgmentBasis = new StringBuilder("purpose:").append(facts.purpose().name());
+        courses.forEach(c -> judgmentBasis.append("|tb").append(c.getCourseId()).append(':')
+                .append(com.jungwoo.project.memo.course.textbook.BookKey.of(c)));
         EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.busyWindows(), capturedAt, spec.start(), spec.end(),
-                courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds());
+                courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds(),
+                judgmentBasis.toString());
         PlanRequestContext previous = opts.previous();
         List<String> changesFromPrevious = previous == null ? List.of()
                 : fingerprint.changesFrom(previous.evidence(), previous, spec.start(), spec.end(),
@@ -613,8 +630,12 @@ public class PeriodPlanDraftGenerator {
         } else {
             opts.stage(PlanGenerationProgress.Stage.SELECTING);
             long startedAt = System.currentTimeMillis();
+            // 자료 선택도 목적의 범위 원칙을 안다(시험 준비와 독학은 고를 근거가 다르다).
+            String selectionInstruction = facts.purpose() == PlanPurpose.UNSPECIFIED ? spec.instruction()
+                    : facts.purpose().promptRule() + (spec.instruction() == null || spec.instruction().isBlank() ? ""
+                    : "\n" + spec.instruction());
             selection = materialSelector.select(new PlanMaterialSelector.Request(
-                    spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), spec.instruction(),
+                    spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), selectionInstruction,
                     catalogs, contexts.stream().map(UserContext::getContent).toList(), requested.materials(),
                     requested.ambiguities(),
                     /*
@@ -915,7 +936,46 @@ public class PeriodPlanDraftGenerator {
      * @param nextClasses 프로젝트 → 지금 이후 첫 수업(계획 종료 + 14일까지)
      */
     record Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
-                 PlanBriefService.View brief, List<ExecutionItem> existing) {
+                 PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose) {
+    }
+
+    private static boolean newer(PlanBriefItem a, PlanBriefItem b) {
+        if (a.updatedAt() != null && b.updatedAt() != null && !a.updatedAt().equals(b.updatedAt())) {
+            return a.updatedAt().isAfter(b.updatedAt());
+        }
+        if (a.updatedAt() != null && b.updatedAt() == null) {
+            return true;
+        }
+        if (a.updatedAt() == null && b.updatedAt() != null) {
+            return false;
+        }
+        return a.revision() != b.revision() ? a.revision() > b.revision() : a.id() > b.id();
+    }
+
+    /** 화면에서 고른 목적이 먼저, 없으면 이 기간·흐름에 유효한 상담 합의(PURPOSE)의 가장 최근 것, 없으면 말하지 않음. */
+    static PlanPurpose purposeOf(Spec spec, PlanBriefService.View brief) {
+        PlanPurpose chosen = PlanPurpose.parse(spec.purpose());
+        if (chosen != null && chosen != PlanPurpose.UNSPECIFIED) {
+            return chosen;
+        }
+        if (brief != null) {
+            Long flowRoot = spec.origin() == null ? null : spec.origin().flowRootProposalId();
+            // 배열 순서가 아니라 마지막으로 고치거나 받아들인 것이 지금 목적이다(UPDATE는 자리를 그대로 둔다).
+            PlanBriefItem latest = null;
+            for (PlanBriefService.Applicable a : brief.effectiveFor(spec.start(), spec.end(), flowRoot)) {
+                PlanBriefItem item = a.item();
+                if (!"PURPOSE".equals(item.kind()) || PlanPurpose.fromBriefText(item.text()) == null) {
+                    continue;
+                }
+                if (latest == null || newer(item, latest)) {
+                    latest = item;
+                }
+            }
+            if (latest != null) {
+                return PlanPurpose.fromBriefText(latest.text());
+            }
+        }
+        return PlanPurpose.UNSPECIFIED;
     }
 
     private Facts collectFacts(Spec spec, List<Course> courses, LocalDateTime now, Options opts) {
@@ -950,7 +1010,7 @@ public class PeriodPlanDraftGenerator {
         }
         List<ExecutionItem> existing = executionItemMapper.findByUserIdAndPlanningRange(spec.userId(), spec.start(), spec.end());
         return new Facts(history, nextClasses, transcript == null ? List.of() : transcript, brief,
-                existing == null ? List.of() : existing);
+                existing == null ? List.of() : existing, purposeOf(spec, brief));
     }
 
     // ===== 선택 재사용·추가 읽기 =====
@@ -1622,6 +1682,12 @@ public class PeriodPlanDraftGenerator {
                 .append("줄 끝 대괄호(예: [s7])는 그 줄의 인용 번호다. 항목의 refIds·deadlineRefId·existingItems.refId·")
                 .append("deferred.refIds에 이 값만 쓴다.\n\n");
 
+        sb.append(inputs.facts().purpose().promptRule()).append('\n')
+                .append("범위의 근거를 섞지 않는다: [교재 범위](목차)는 책이 다루는 범위이고, 강의계획서의 예정 진도, [실제 수업 진행], ")
+                .append("내 학습 기록(진행 중·학습 완료·실행 기록)은 각각 다른 사실이다. 목차에 있다는 이유만으로 계획 대상·시험 범위·")
+                .append("밀린 일로 보지 않는다. \"목차만 확인\"한 항목은 제목·쪽만 안다 — 대화문·문제 번호·정답을 교재 내용처럼 쓰지 않고, ")
+                .append("필요하면 그 단원의 사진·본문을 보라고 제안한다.\n\n");
+
         appendUserContexts(sb, inputs.contexts(), collector);
 
         Facts facts = inputs.facts();
@@ -1823,16 +1889,23 @@ public class PeriodPlanDraftGenerator {
         if (course != null) {
             StringBuilder head = new StringBuilder("id=").append(course.getCourseId())
                     .append(" ").append(course.getTitle());
-            if (course.getTextbookTitle() != null) {
-                head.append(" (교재: ").append(course.getTextbookTitle()).append(")");
+            String textbook = PlanTextbookFacts.identity(course);
+            if (textbook != null) {
+                head.append(" (교재: ").append(textbook).append(")");
             }
             sb.append("- ").append(collector.mark(
                     ProvenanceSourceType.COURSE, course.getCourseId(), null, course.getUpdatedAt(),
                     ProvenanceRepresentation.SELECTED_FIELDS,
                     ProvenanceCollector.value(
                             "title", course.getTitle(),
-                            "textbookTitle", course.getTextbookTitle()),
+                            "textbookTitle", course.getTextbookTitle(),
+                            "textbookEdition", course.getTextbookEdition(),
+                            "textbookSource", course.getTextbookInfoSource()),
                     head.toString()).text()).append("\n");
+            String scope = PlanTextbookFacts.scopeLine(catalog);
+            if (scope != null) {
+                sb.append("  - ").append(scope).append('\n');
+            }
             RoutineOccurrence next = inputs.facts().nextClasses().get(courseId);
             if (next != null) {
                 ProvenanceCollector.Marked marked = PlanPromptBlocks.markNextClass(next, courseId, collector);

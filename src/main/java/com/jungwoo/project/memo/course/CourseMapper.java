@@ -33,30 +33,33 @@ public interface CourseMapper {
     List<CourseSummaryCounts> findSummaryCounts(@Param("userId") Long userId,
                                                  @Param("courseId") Long courseId);
 
-    /** AI 분석 적용 경로. 비어 있는 칸만 채운다 — 이미 있는 값은 사람 것으로 보고 건드리지 않는다. */
-    void updateTextbookInfo(@Param("courseId") Long courseId,
-                             @Param("userId") Long userId,
-                             @Param("textbookTitle") String textbookTitle,
-                             @Param("textbookAuthor") String textbookAuthor,
-                             @Param("textbookPublisher") String textbookPublisher,
-                             @Param("textbookIsbn") String textbookIsbn);
+    /** 교재 칸 쓰기. 반환 0이면 그 사이 판이 바뀌었다. {@link com.jungwoo.project.memo.course.textbook.CourseTextbookWriter}만 부른다. */
+    int writeTextbook(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                      @Param("currentVersion") int currentVersion,
+                      @Param("textbookTitle") String textbookTitle,
+                      @Param("textbookAuthor") String textbookAuthor,
+                      @Param("textbookPublisher") String textbookPublisher,
+                      @Param("textbookIsbn") String textbookIsbn,
+                      @Param("textbookEdition") String textbookEdition,
+                      @Param("source") String source,
+                      @Param("materialId") Long materialId,
+                      @Param("webRevisionId") Long webRevisionId,
+                      @Param("clearTocLink") boolean clearTocLink,
+                      @Param("bookKey") String bookKey);
 
-    /** 사용자 편집 경로. 받은 값을 그대로 쓴다 — null이면 비운다. */
-    void updateTextbookByUser(@Param("courseId") Long courseId,
-                              @Param("userId") Long userId,
-                              @Param("textbookTitle") String textbookTitle,
-                              @Param("textbookAuthor") String textbookAuthor,
-                              @Param("textbookPublisher") String textbookPublisher,
-                              @Param("textbookIsbn") String textbookIsbn,
-                              @Param("textbookEdition") String textbookEdition);
+    int writeTextbookTocLink(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                             @Param("currentVersion") int currentVersion, @Param("materialId") Long materialId,
+                             @Param("fileHash") String fileHash, @Param("bookKey") String bookKey);
 
-    int applyTextbookFromMaterial(@Param("courseId") Long courseId, @Param("userId") Long userId,
-                                  @Param("materialId") Long materialId,
-                                  @Param("textbookTitle") String textbookTitle,
-                                  @Param("textbookAuthor") String textbookAuthor,
-                                  @Param("textbookPublisher") String textbookPublisher,
-                                  @Param("textbookIsbn") String textbookIsbn,
-                                  @Param("textbookEdition") String textbookEdition);
+    /**
+     * 같은 판(ISBN)의 목차를 새로 확보했을 때 교재 칸의 웹 근거만 새 리비전으로 옮긴다. 교재 판(version)은 그대로다
+     * — 책은 같고 근거 페이지만 새로 읽었다. 그 사이 근거가 바뀌었으면(expected와 다르면) 0행.
+     */
+    int moveTextbookWebRevision(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                                @Param("expected") Long expected, @Param("revisionId") Long revisionId);
+
+    int updateTextbookWebLookupEnabled(@Param("courseId") Long courseId, @Param("userId") Long userId,
+                                       @Param("enabled") boolean enabled);
 
     /** 제목/분류 수정. groupLabel은 COALESCE하지 않는다 — null을 보내면 "분류 없음"으로 지운다. */
     void updateBasics(@Param("courseId") Long courseId,

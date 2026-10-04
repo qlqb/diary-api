@@ -175,7 +175,7 @@ public class PlanDraftService {
                 request.getExcludeTopicIds() == null ? List.of() : request.getExcludeTopicIds(),
                 request.getRequestedMaterialIds() == null ? List.of() : request.getRequestedMaterialIds(),
                 request.getRequestedSectionIds() == null ? List.of() : request.getRequestedSectionIds(),
-                origin);
+                origin, PlanPurpose.parse(request.getPurpose()) == null ? null : PlanPurpose.parse(request.getPurpose()).name());
 
         if ("V0".equalsIgnoreCase(generatorMode)) {
             log.info("기간 계획 초안: v0 결정적 생성기로 만든다. userId={}, {}~{}", userId, spec.start(), spec.end());
@@ -313,6 +313,7 @@ public class PlanDraftService {
                             ? body.getRequestedMaterialIds() : context.requestedMaterialIds())
                     .requestedSectionIds(context.requestedSectionIds())
                     .requestKey(requestKey)
+                    .purpose(context.purpose())
                     .build();
             // 다시 만들기는 같은 초안 흐름이다 — 처음 초안 id를 흐름의 뿌리로 이어 간다(THIS_DRAFT 합의의 범위).
             Long flowRoot = context.flowRootProposalId() != null ? context.flowRootProposalId() : proposalId;
@@ -372,7 +373,7 @@ public class PlanDraftService {
                     extras == null ? null : extras.briefId(), extras == null ? null : extras.briefVersion(),
                     origin == null ? null : origin.previousProposalId(),
                     generated.extras() == null ? null : generated.extras().evidence(),
-                    origin == null ? null : origin.flowRootProposalId()));
+                    origin == null ? null : origin.flowRootProposalId(), spec.purpose()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
             return null;

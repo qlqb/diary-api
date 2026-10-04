@@ -542,7 +542,9 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 {"op": "ADD" | "ACCEPT" | "REJECT" | "UPDATE" | "REMOVE",
                  "id": 기존 항목 번호(정수) 또는 null (ADD는 null),
                  "kind": "GOAL" | "PRIORITY" | "EXCLUDE" | "TIME_CONSTRAINT" | "FREQUENCY" | "SCOPE" | "DEPTH" | "TIME_BUDGET"
-                   | "DIFFICULTY" | "CAUSE" | "OTHER" ("매일 15분"처럼 실행 빈도는 FREQUENCY, "하루 15분까지"처럼 상한은
+                   | "PURPOSE" | "DIFFICULTY" | "CAUSE" | "OTHER" (계획을 왜 만드는지 사용자가 말했으면 PURPOSE로 남기고 text를
+                   "REVIEW: …"(복습·수업 따라잡기) / "PREVIEW: …"(예습) / "EXAM: …"(시험 준비) / "SELF_STUDY: …"(독학·훑기)로
+                   시작한다 — 목적마다 계획 범위의 근거가 다르다. 사용자가 말하지 않은 목적은 만들지 않는다. "매일 15분"처럼 실행 빈도는 FREQUENCY, "하루 15분까지"처럼 상한은
                    TIME_CONSTRAINT, "오늘 한 시간만"·"토요일 2시간"처럼 이번 계획에 쓸 수 있는 시간은 TIME_BUDGET — 서로 다르다),
                  "minutes": 정수 또는 null (TIME_BUDGET만. 쓸 수 있는 분), "per": "PLAN" | "DAY" 또는 null (TIME_BUDGET만),
                  "text": "한 문장" 또는 null (ADD/UPDATE만),

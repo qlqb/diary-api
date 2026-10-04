@@ -11,6 +11,7 @@ import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.CourseNoteService;
 import com.jungwoo.project.memo.course.CourseService;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.textbook.CourseTextbookWriter;
 import com.jungwoo.project.memo.course.dto.CourseNoteDraft;
 import com.jungwoo.project.memo.learning.TopicService;
 import com.jungwoo.project.memo.learning.dto.TopicDraft;
@@ -44,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -69,6 +71,7 @@ class MaterialAnalysisServiceTest {
     @Mock private CourseMapper courseMapper;
     @Mock private AiConsultationClient aiConsultationClient;
     @Mock private AiUsageLimitService aiUsageLimitService;
+    @Mock private CourseTextbookWriter textbookWriter;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -170,7 +173,7 @@ class MaterialAnalysisServiceTest {
         verify(analysisMapper).insert(any());
         // DRAFT 저장만 하고, 확정 topic 트리에는 전혀 손대지 않는다.
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
-        verify(courseMapper, never()).updateTextbookInfo(any(), any(), any(), any(), any(), any());
+        verify(textbookWriter, never()).write(any(), any(), any(), any(), any(), any());
     }
 
     // ===== 열린 DRAFT는 맥락당 하나 =====
@@ -390,13 +393,17 @@ class MaterialAnalysisServiceTest {
         when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(2);
+        when(textbookWriter.lock(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).userId(USER_ID)
+                .textbookVersion(0).build());
 
         MaterialAnalysisResponse response = service.apply(USER_ID, ANALYSIS_ID);
 
         assertThat(response.getStatus()).isEqualTo(MaterialAnalysisStatus.APPLIED);
         assertThat(response.getCreatedTopicCount()).isEqualTo(2);
 
-        verify(courseMapper).updateTextbookInfo(COURSE_ID, USER_ID, "자료구조", null, null, null);
+        // 교재 칸이 아직 아무도 정하지 않은 빈 상태일 때만 옛 분석의 값을 쓴다(교재 쓰기 경로 하나로).
+        verify(textbookWriter).write(any(), isNull(), eq(new CourseTextbookWriter.Values("자료구조", null, null, null, null)),
+                eq(CourseTextbookWriter.SOURCE_MATERIAL), eq(MATERIAL_ID), isNull());
 
         ArgumentCaptor<List<TopicDraft>> captor = ArgumentCaptor.forClass(List.class);
         verify(topicService).applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), captor.capture());

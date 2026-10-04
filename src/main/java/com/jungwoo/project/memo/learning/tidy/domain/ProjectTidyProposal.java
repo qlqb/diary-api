@@ -44,6 +44,11 @@ public class ProjectTidyProposal {
     private String origin;
     /** 사용자 요청 {text, focusTopicIds}. 없으면 null. */
     private String userRequestJson;
+    /**
+     * (2026-10-04) 이 안이 쓴 교재 목차의 근거 {kind, materialId, fileHash, revisionId, textbookVersion, bookKey}.
+     * 적용할 때 지금 근거와 다르면 목차에서 온 변경만 막는다. 목차를 쓰지 않은 안·옛 안은 null.
+     */
+    private String tocBasisJson;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime resolvedAt;

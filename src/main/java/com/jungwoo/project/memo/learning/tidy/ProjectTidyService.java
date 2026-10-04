@@ -84,6 +84,9 @@ public class ProjectTidyService {
     private final com.jungwoo.project.memo.learning.correction.CourseCorrectionService correctionService;
     private final com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
     private final ObjectMapper objectMapper;
+    private final com.jungwoo.project.memo.course.textbook.TextbookService textbookService;
+    private final com.jungwoo.project.memo.course.textbook.CourseTextbookWriter textbookWriter;
+    private final com.jungwoo.project.memo.course.textbook.web.TextbookWebMapper textbookWebMapper;
 
     /** edits_json의 값. */
     /**
@@ -125,7 +128,13 @@ public class ProjectTidyService {
      */
     @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
     record InputSnapshot(Integer version, Long treeVersion, List<Long> materialIds,
-                         List<SnapshotMaterial> materials, List<ProjectTidyScope.Excluded> excludedAtRequest) {
+                         List<SnapshotMaterial> materials, List<ProjectTidyScope.Excluded> excludedAtRequest,
+                         Boolean tocRecorded, com.jungwoo.project.memo.course.textbook.TocResolver.Basis tocBasis) {
+
+        InputSnapshot(Integer version, Long treeVersion, List<Long> materialIds, List<SnapshotMaterial> materials,
+                      List<ProjectTidyScope.Excluded> excludedAtRequest) {
+            this(version, treeVersion, materialIds, materials, excludedAtRequest, null, null);
+        }
     }
 
     /** 요청 때 본 자료 하나. 실행할 때 지금 상태가 이것과 같아야 한다. */
@@ -186,7 +195,9 @@ public class ProjectTidyService {
             return view(userId, courseId);
         }
         ProjectTidyInputBuilder.Preview preview = inputBuilder.preview(userId, courseId);
-        if (!preview.canTidy()) {
+        // 분석된 자료 구간이 없어도 교재 목차가 있으면 정리할 수 있다(교재 중심 수업 — 수업 파일이 없다).
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc = tocOf(userId, courseId);
+        if (!preview.canTidy() && toc == null) {
             throw new ConflictException(ErrorCode.PROJECT_TIDY_NO_MATERIALS,
                     preview.analyzingCount() > 0
                             ? "아직 분석 중인 자료 " + preview.analyzingCount() + "개뿐이에요. 끝나면 정리할 수 있어요"
@@ -203,7 +214,7 @@ public class ProjectTidyService {
                 .nextRunAt(LocalDateTime.now())
                 // ★ 입력을 지금 고정한다. 모델이 도는 동안 분석이 더 끝나도 이번 정리에는 들어가지
                 //   않는다 — 사용자가 승인 화면에서 볼 근거와 실제로 쓴 근거를 같게 하기 위해서다.
-                .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview)))
+                .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview, toc)))
                 .userRequestJson(text == null ? null : writeJson(userRequest(text, focusTopicIds)))
                 .build();
         try {
@@ -218,6 +229,104 @@ public class ProjectTidyService {
         return view(userId, courseId);
     }
 
+    /**
+     * 이 안이 쓴 목차가 지금 목차와 같은가. 적용과 화면 조회가 같은 판정을 쓴다.
+     * 목차 근거를 남기기 전의 옛 안은 골격이 가리키는 목차 자료가 지금 쓰는 목차 자료와 같을 때만 같다고 본다.
+     */
+    boolean sameTocAsProposal(ProjectTidyProposal proposal, List<TopicChangeOp> ops,
+                              com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot currentToc) {
+        if (currentToc == null) {
+            return false;
+        }
+        com.jungwoo.project.memo.course.textbook.TocResolver.Basis proposalBasis = readTocBasis(proposal.getTocBasisJson());
+        if (proposalBasis != null) {
+            return currentToc.basis().sameAs(proposalBasis);
+        }
+        Long tocMaterial = ops.stream().filter(ProjectTidyService::anyFromToc).map(TopicChangeOp::materialId)
+                .filter(java.util.Objects::nonNull).findFirst().orElse(null);
+        return !currentToc.isWeb() && tocMaterial != null && tocMaterial.equals(currentToc.materialId());
+    }
+
+    /** 이 변경이나 그 자식 중 하나라도 목차에서 왔는가(혼합 모드에서는 일반 ADD 아래에 목차 항목 자식이 있을 수 있다). */
+    static boolean anyFromToc(TopicChangeOp op) {
+        if (op.isFromToc()) {
+            return true;
+        }
+        return op.children() != null && op.children().stream().anyMatch(ProjectTidyService::anyFromToc);
+    }
+
+    /** 이 프로젝트에서 쓸 교재 목차. 읽지 못하면 없는 것으로 본다(없는 목차를 있다고 하지 않는다). */
+    private com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot tocOf(Long userId, Long courseId) {
+        try {
+            return textbookService.tocOf(userId, courseId);
+        } catch (Exception e) {
+            log.warn("교재 목차를 읽지 못했다: courseId={}, {}", courseId, e.getClass().getSimpleName());
+            return null;
+        }
+    }
+
+    /** 교재 목차를 확보한 뒤 정리안을 자동으로 만들 수 있었는가. */
+    public enum AutoOutcome { ENQUEUED, JOB_RUNNING, OPEN_PROPOSAL_SAME_TOC, OPEN_PROPOSAL, NO_TOC, ALREADY_DONE }
+
+    public record AutoResult(AutoOutcome outcome, Long jobId) {
+    }
+
+    /**
+     * 교재 조회가 목차를 확보했을 때 서버가 정리안 만들기를 시작한다. 사용자가 검토 중인 정리안이 있으면 건드리지 않는다
+     * (화면이 "새 목차 반영 가능"을 보이고, 반영은 사용자가 [새 목차로 다시 정리]로 한다 — 편집은 새 판으로 승계된다).
+     * 같은 목차 근거로 이미 정리안이 만들어졌으면(적용·폐기 포함) 다시 만들지 않는다.
+     */
+    @Transactional
+    public AutoResult requestForTextbookToc(Long userId, Long courseId) {
+        Course course = courseService.getOwned(userId, courseId);
+        if (tidyMapper.findOpenJobByCourse(courseId, userId) != null) {
+            return new AutoResult(AutoOutcome.JOB_RUNNING, null);
+        }
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc = tocOf(userId, courseId);
+        if (toc == null) {
+            return new AutoResult(AutoOutcome.NO_TOC, null);
+        }
+        ProjectTidyProposal open = tidyMapper.findOpenProposalByCourse(courseId, userId);
+        if (open != null) {
+            return new AutoResult(toc.basis().sameAs(readTocBasis(open.getTocBasisJson()))
+                    ? AutoOutcome.OPEN_PROPOSAL_SAME_TOC : AutoOutcome.OPEN_PROPOSAL, null);
+        }
+        for (ProjectTidyProposal past : tidyMapper.findHistoryByCourse(courseId, userId, 5)) {
+            if (toc.basis().sameAs(readTocBasis(past.getTocBasisJson()))) {
+                return new AutoResult(AutoOutcome.ALREADY_DONE, null);
+            }
+        }
+        ProjectTidyInputBuilder.Preview preview = inputBuilder.preview(userId, courseId);
+        Long maxGeneration = tidyMapper.findMaxGeneration(courseId);
+        ProjectTidyJob job = ProjectTidyJob.builder()
+                .userId(userId).courseId(courseId)
+                .generation(maxGeneration == null ? 1 : maxGeneration + 1)
+                .status(TidyJobStatus.QUEUED)
+                .baseTreeVersion(course.getTopicTreeVersion() == null ? 0 : course.getTopicTreeVersion())
+                .maxAttempts(3)
+                .nextRunAt(LocalDateTime.now())
+                .inputSnapshotJson(writeJson(snapshotOf(userId, course, preview, toc)))
+                .build();
+        try {
+            tidyMapper.insertJob(job);
+        } catch (DuplicateKeyException e) {
+            return new AutoResult(AutoOutcome.JOB_RUNNING, null);
+        }
+        log.info("교재 목차 확보 → 정리 자동 요청: courseId={}, jobId={}, 목차={}", courseId, job.getJobId(), toc.label());
+        return new AutoResult(AutoOutcome.ENQUEUED, job.getJobId());
+    }
+
+    com.jungwoo.project.memo.course.textbook.TocResolver.Basis readTocBasis(String json) {
+        if (json == null) {
+            return null;
+        }
+        try {
+            return objectMapper.readValue(json, com.jungwoo.project.memo.course.textbook.TocResolver.Basis.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private static Map<String, Object> userRequest(String text, List<Long> focusTopicIds) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("text", text);
@@ -228,7 +337,8 @@ public class ProjectTidyService {
     /**
      * 지금 상태를 스냅샷으로 남긴다. 자료마다 해시·분석 판·근거 구간 id까지.
      */
-    private InputSnapshot snapshotOf(Long userId, Course course, ProjectTidyInputBuilder.Preview preview) {
+    private InputSnapshot snapshotOf(Long userId, Course course, ProjectTidyInputBuilder.Preview preview,
+                                     com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc) {
         List<Long> ids = preview.ready().stream().map(ProjectTidyInputBuilder.Preview.Ready::materialId).toList();
         Map<Long, CourseMaterial> materials = new HashMap<>();
         if (!ids.isEmpty()) {
@@ -254,7 +364,7 @@ public class ProjectTidyService {
         }
         return new InputSnapshot(SNAPSHOT_VERSION,
                 course.getTopicTreeVersion() == null ? 0 : course.getTopicTreeVersion(),
-                ids, out, preview.excluded());
+                ids, out, preview.excluded(), Boolean.TRUE, toc == null ? null : toc.basis());
     }
 
     /**
@@ -292,6 +402,8 @@ public class ProjectTidyService {
                 .maxAttempts(3)
                 .nextRunAt(LocalDateTime.now())
                 .inputSnapshotJson(failed.getInputSnapshotJson())
+                // 사용자 지시도 같은 입력이다 — 빠지면 다시 시도한 정리가 지시 없이 돈다.
+                .userRequestJson(failed.getUserRequestJson())
                 .build();
         try {
             tidyMapper.insertJob(again);
@@ -529,6 +641,24 @@ public class ProjectTidyService {
             chosen.add(title == null ? op : op.withTitle(title));
         }
 
+        /*
+         * 교재 목차에서 온 변경(골격·목차 항목 ADD와 그에 기대는 변경)을 골랐으면, 이 안을 만든 목차 근거가 지금도 같은지 본다.
+         * 과목 행을 잠근 채 본다 — 교재 칸을 바꾸는 쓰기(CourseTextbookWriter)도 같은 행을 잠그므로 확인과 쓰기 사이에 교재가
+         * 바뀌지 않는다. 다르면 목차에서 온 변경만 막는다(목차와 무관한 변경은 빼고 적용하면 된다).
+         */
+        Course lockedCourse = textbookWriter.lock(userId, proposal.getCourseId());
+        boolean usesToc = chosen.stream().anyMatch(ProjectTidyService::anyFromToc);
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot currentToc = null;
+        TopicTreeEditor.TocProvenance tocProvenance = null;
+        if (usesToc) {
+            currentToc = tocOf(userId, proposal.getCourseId());
+            if (!sameTocAsProposal(proposal, chosen, currentToc)) {
+                throw new ConflictException(ErrorCode.TEXTBOOK_TOC_CHANGED);
+            }
+            tocProvenance = new TopicTreeEditor.TocProvenance(currentToc.isWeb() ? currentToc.basis().revisionId() : null,
+                    currentToc.basis().bookKey());
+        }
+
         // 고른 것이 없으면 트리 판을 올리지 않는다. 아무것도 바뀌지 않았는데 다른 정리안이
         // 어긋나게 만들 이유가 없다.
         // 실제 수업·범위 정정(CLASS·MATERIAL_WEEK·SCOPE_EXCLUDE)은 트리를 바꾸지 않는다 — 그것만 골랐으면 트리 판도 그대로다.
@@ -537,7 +667,7 @@ public class ProjectTidyService {
         List<TopicChangeOp> corrections = chosen.stream().filter(op -> !op.isTreeOp()).toList();
         if (anyTree) {
             applied = treeEditor.apply(userId, proposal.getCourseId(), null, chosen,
-                    proposal.getBaseTreeVersion(), sections, TopicLinkOrigin.PROPOSAL_APPLIED);
+                    proposal.getBaseTreeVersion(), sections, TopicLinkOrigin.PROPOSAL_APPLIED, tocProvenance);
         } else if (!corrections.isEmpty()) {
             com.jungwoo.project.memo.learning.structure.TopicChangeOpsValidator.Result checked =
                     com.jungwoo.project.memo.learning.structure.TopicChangeOpsValidator.validate(corrections,
@@ -550,9 +680,27 @@ public class ProjectTidyService {
         }
         com.jungwoo.project.memo.learning.correction.CourseCorrectionService.Applied corrected = corrections.isEmpty()
                 ? null : correctionService.apply(userId, proposal.getCourseId(), corrections);
+        // 웹에서 찾은 목차의 변경을 적용했고 교재 칸이 비어 있으면, 검토한 그 책을 지금 교재로 남긴다(같은 트랜잭션).
+        // 사용자가 적은 교재가 있으면 건드리지 않는다.
+        boolean recordedTextbook = false;
+        if (usesToc && applied != null && currentToc != null && currentToc.isWeb()
+                && com.jungwoo.project.memo.course.textbook.BookKey.of(lockedCourse) == null) {
+            com.jungwoo.project.memo.course.textbook.web.TextbookWebRevision revision =
+                    textbookWebMapper.findRevision(currentToc.basis().revisionId(), userId);
+            if (revision != null) {
+                recordedTextbook = textbookWriter.write(lockedCourse, null,
+                        new com.jungwoo.project.memo.course.textbook.CourseTextbookWriter.Values(revision.getTitle(),
+                                revision.getAuthors(), revision.getPublisher(), revision.getIsbn13(), revision.getEdition()),
+                        com.jungwoo.project.memo.course.textbook.CourseTextbookWriter.SOURCE_WEB, null,
+                        revision.getRevisionId());
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("selectedChangeIds", new ArrayList<>(selected));
         result.put("appliedCount", chosen.size());
+        if (recordedTextbook) {
+            result.put("recordedTextbook", true);
+        }
         if (applied != null) {
             result.put("created", applied.createdTopicIds());
             result.put("reviewNotes", applied.reviewNotes());
@@ -775,6 +923,7 @@ public class ProjectTidyService {
             changes.add(describe(op, topics, sections, materials, dependsOn, records, newTitles));
         }
         TopicChangeOpsValidator.Summary counts = countOf(ops);
+        TocView tocView = tocViewOf(userId, course, proposal, ops);
 
         return builder
                 .proposalId(proposal.getProposalId())
@@ -798,7 +947,51 @@ public class ProjectTidyService {
                 .origin(proposal.getOrigin() == null ? "AI" : proposal.getOrigin())
                 .userRequest(requestTextOf(proposal.getUserRequestJson()))
                 .tree(treeOf(topics))
+                .tocLabel(tocView.label())
+                .tocStale(tocView.stale())
+                .newTocAvailable(tocView.newAvailable())
+                .recordsTextbook(tocView.recordsTextbook())
                 .build();
+    }
+
+    record TocView(String label, boolean stale, boolean newAvailable, String recordsTextbook) {
+        static final TocView NONE = new TocView(null, false, false, null);
+    }
+
+    /** 이 안이 쓴 목차와 지금 목차를 비교해 화면에 알린다(읽기만). */
+    private TocView tocViewOf(Long userId, Course course, ProjectTidyProposal proposal, List<TopicChangeOp> ops) {
+        if (proposal.getStatus() != TidyProposalStatus.PROPOSED) {
+            return TocView.NONE;
+        }
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot current;
+        try {
+            current = textbookService.tocOfReadOnly(userId, course.getCourseId());
+        } catch (Exception e) {
+            return TocView.NONE;
+        }
+        com.jungwoo.project.memo.course.textbook.TocResolver.Basis used = readTocBasis(proposal.getTocBasisJson());
+        boolean usesToc = ops.stream().anyMatch(ProjectTidyService::anyFromToc);
+        if (used == null && !usesToc) {
+            // 목차를 쓰지 않은 안: 새 목차가 있으면 반영할 수 있다고만 알린다.
+            return new TocView(null, false, current != null, null);
+        }
+        boolean sameAsCurrent = sameTocAsProposal(proposal, ops, current);
+        String label = sameAsCurrent ? current.label() : "이 안을 만들 때의 교재 목차";
+        boolean stale = usesToc && !sameAsCurrent;
+        boolean newAvailable = current != null && !sameAsCurrent;
+        String records = null;
+        if (usesToc && sameAsCurrent && current.isWeb()
+                && com.jungwoo.project.memo.course.textbook.BookKey.of(course) == null) {
+            com.jungwoo.project.memo.course.textbook.web.TextbookWebRevision r =
+                    textbookWebMapper.findRevision(current.basis().revisionId(), userId);
+            if (r != null) {
+                records = com.jungwoo.project.memo.course.textbook.TextbookFacts.identity(r.getTitle(), r.getIsbn13(),
+                        r.getEdition(), r.getPublisher(), null, null)
+                        + (r.getIsbn13() == null ? "" : " · ISBN " + r.getIsbn13())
+                        + (r.getPublishedDate() == null ? "" : " · " + r.getPublishedDate() + " 발행");
+            }
+        }
+        return new TocView(label, stale, newAvailable, records);
     }
 
     private String requestTextOf(String json) {

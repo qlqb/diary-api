@@ -112,6 +112,19 @@ public class ProjectTidyWorker {
         ProjectTidyInputBuilder.Input input = withRequestExclusions(
                 inputBuilder.build(job.getUserId(), course, check.allowed()), check.snapshot());
         input = input.withGuidance(guidanceOf(job, input));
+        // 요청 때 본 교재 목차와 지금 목차가 같은가(교재 정정·판 선택·목차 자료 교체 뒤에는 옛 목차로 만들지 않는다).
+        ProjectTidyService.InputSnapshot snap = check.snapshot();
+        if (snap != null && Boolean.TRUE.equals(snap.tocRecorded())) {
+            com.jungwoo.project.memo.course.textbook.TocResolver.Basis now =
+                    input.guidance().toc() == null ? null : input.guidance().toc().basis();
+            boolean same = snap.tocBasis() == null ? now == null : snap.tocBasis().sameAs(now);
+            if (!same) {
+                tidyMapper.finishJob(job.getJobId(), job.getLeaseToken(), TidyJobStatus.FAILED.name(), null,
+                        "STALE_INPUT", "요청한 뒤 교재나 교재 목차가 바뀌었어요", LocalDateTime.now());
+                log.info("정리 입력의 교재 목차가 요청 때와 달라 멈춤: jobId={}, courseId={}", job.getJobId(), job.getCourseId());
+                return Result.FAILED;
+            }
+        }
         if (input.isEmpty()) {
             // 요청 시점에는 쓸 자료가 있었는데 그 사이 전부 사라졌다. 실패가 아니라 "바꿀 것이 없음"이다.
             return save(job, course, input, List.of(), "정리에 쓸 수 있는 자료가 없어요", null);
@@ -121,10 +134,19 @@ public class ProjectTidyWorker {
             return Result.LOST;
         }
         List<TopicChangeOp> skeleton = input.guidance().skeleton();
-        ProjectTidyAnalyzer.Draft draft = input.sections().isEmpty()
-                // 읽을 구간은 없고 목차 골격만 있다. 모델을 부르지 않는다.
-                ? new ProjectTidyAnalyzer.Draft(List.of(), "교재 목차로 학습 구조의 첫 골격을 만들었어요", null)
-                : analyzer.analyze(job.getUserId(), input);
+        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc = input.guidance().toc();
+        TocOps.Mode mode = TocOps.modeOf(input, toc);
+        ProjectTidyAnalyzer.Draft draft;
+        if (input.sections().isEmpty() && !skeleton.isEmpty()) {
+            // 읽을 구간은 없고 목차 골격만 있다. 모델을 부르지 않는다.
+            draft = new ProjectTidyAnalyzer.Draft(List.of(), "교재 목차로 학습 구조의 첫 골격을 만들었어요", null);
+        } else if (input.sections().isEmpty()) {
+            // 트리가 있고 읽을 구간은 없다 — 목차와 지금 트리만 비교한다(수업 파일 없는 교재 중심 과목).
+            draft = analyzer.analyzeTocOnly(job.getUserId(), input, TocOps.switchedFrom(input, toc));
+        } else {
+            draft = analyzer.analyze(job.getUserId(), input);
+        }
+        List<TopicChangeOp> modelOps = TocOps.apply(draft.ops(), toc, mode, TocOps.switchedFrom(input, toc) != null);
         // 무엇을 목록으로 보고 무엇을 자세히 읽었는지로 범위를 채운다. 정리안에 그대로 저장된다.
         if (draft.review() != null) {
             input = inputBuilder.finalizeScope(input, draft.review());
@@ -133,7 +155,7 @@ public class ProjectTidyWorker {
         Set<Long> sectionIds = input.sections().stream()
                 .map(MaterialSection::getSectionId).collect(Collectors.toSet());
         List<TopicChangeOp> raw = new ArrayList<>(skeleton);
-        raw.addAll(withoutSkeletonDuplicates(draft.ops(), skeleton));
+        raw.addAll(withoutSkeletonDuplicates(modelOps, skeleton));
         raw.addAll(carriedUserOps(job));
         TopicChangeOpsValidator.Result validated = TopicChangeOpsValidator.validate(
                 TopicChangePlan.order(raw), input.topics(), sectionIds, false);
@@ -173,7 +195,9 @@ public class ProjectTidyWorker {
             log.warn("정리 입력의 교재 목차를 읽지 못했다: courseId={}, {}", job.getCourseId(), e.getClass().getSimpleName());
         }
         List<TopicChangeOp> skeleton = input.topics().isEmpty() ? TocSkeleton.build(toc) : List.of();
-        return new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton);
+        ProjectTidyInputBuilder.Guidance guidance = new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton);
+        return new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton,
+                TocOps.switchedFrom(input.withGuidance(guidance), toc));
     }
 
     /** 모델이 골격과 같은 장을 또 만들었으면 뺀다(서버 골격이 먼저다). */
@@ -256,6 +280,8 @@ public class ProjectTidyWorker {
                     .model(model)
                     .origin("AI")
                     .userRequestJson(job.getUserRequestJson())
+                    .tocBasisJson(input.guidance() == null || input.guidance().toc() == null ? null
+                            : writeJson(input.guidance().toc().basis()))
                     .build();
 
             /*

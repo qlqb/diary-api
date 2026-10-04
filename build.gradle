@@ -59,6 +59,11 @@ dependencies {
     // ZIP 가져오기: 항목의 UTF-8 플래그·CP949 이름·심볼릭 링크 판별이 필요해 java.util.zip 대신 쓴다.
     // POI가 이미 끌어오는 버전이지만 직접 쓰므로 명시한다.
     implementation 'org.apache.commons:commons-compress:1.26.2'
+    // 교재 웹 근거 수집(SafePageFetcher). 검증한 IP로만 연결하려면 이름 해석을 갈아끼울 수 있어야 해서
+    // JDK HttpClient 대신 쓴다(DnsResolver). 버전은 Spring Boot가 관리한다.
+    implementation 'org.apache.httpcomponents.client5:httpclient5'
+    // 서점·출판사 상세 HTML에서 목차·서지 블록을 읽는다.
+    implementation 'org.jsoup:jsoup:1.21.1'
     compileOnly 'org.projectlombok:lombok'
     developmentOnly 'org.springframework.boot:spring-boot-devtools'
     runtimeOnly 'io.jsonwebtoken:jjwt-impl:0.12.3'
@@ -106,6 +111,13 @@ tasks.named('test') {
       직접 불러 검증한다.
     */
     systemProperty 'project.tidy.worker.enabled', 'false'
+
+    /*
+      교재 웹 조회 worker도 끈다. 살아 있으면 테스트가 만든 QUEUED 조회를 집어 실제 웹 검색과 서점 페이지
+      수집을 한다(외부 전송·비용). 등록·선점·결과 저장은 테스트가 서비스 메서드를 직접 불러 검증하고,
+      실제 외부 조회는 scripts/ai-baseline의 검증 스크립트에서만 한다.
+    */
+    systemProperty 'textbook.lookup.worker.enabled', 'false'
 
     /*
       통합 테스트는 사용자의 memo DB에 붙지 않는다.
@@ -180,6 +192,7 @@ tasks.named('test') {
             excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanDraftPersistenceDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.plan.PlanDailyRepeatIntegrationTest'
             excludeTestsMatching 'com.jungwoo.project.memo.learning.tidy.ProjectTidyApplyDbTest'
+            excludeTestsMatching 'com.jungwoo.project.memo.course.textbook.web.TextbookWebLookupDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.learning.tidy.ProjectTidyRaceDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.learning.tidy.ProjectTidyResolveRaceDbTest'
             excludeTestsMatching 'com.jungwoo.project.memo.learning.tidy.ProjectTidyCarryOverDbTest'

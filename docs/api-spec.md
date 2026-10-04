@@ -814,3 +814,49 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 - 업로드·ZIP 허용 확장자에 `sh`(text/plain으로 저장, 실행하지 않음). 파일 응답에 `X-Content-Type-Options: nosniff`.
 - `POST /api/execution-items/{id}/complete|partial`: 선택 필드 `blockerKind`(`TIME|CONCEPT|ENERGY|OTHER`, 모르는 값은 버린다).
   `GET /api/execution-records`의 각 행에 `blockerKind`.
+
+## Textbook Web Lookup — 교재 목차 자동 검색 (2026-10-04)
+
+설계 17번, DB 05번 §23. 모든 추가 필드는 예전 응답에서 null/빈 목록이다.
+
+### `GET /api/courses/{courseId}/textbook`
+
+외부 호출을 하지 않는다. 지금 근거에 맞는 조회가 없으면 등록만 한다(서버 worker가 찾는다). 화면은 찾는 중이면 다시 부른다.
+
+| 필드 | 뜻 |
+|---|---|
+| `current` | 지금 쓰는 교재 `{title, author, publisher, isbn, edition, source USER|MATERIAL|WEB, materialId, version, web{revisionId, site, url, fetchedAt, isbn13, publishedDate}}` |
+| `syllabusClues[]` | 강의계획서 등에 적힌 교재(후보) `{materialId, filename, role MAIN|SUPPLEMENT|REFERENCE|UNKNOWN, title, author, publisher, isbn, edition, unit, quote, source RULE|MODEL, sameAsCurrent}` |
+| `lookup` | 웹 조회 `{lookupId, status, clueOrigin, query(보낸 단서), searchedWith, editions[], candidates[], failures[], clueOptions[], note, errorCode, createdAt, finishedAt, autoTidy, chosenRevisionId, reused}` — 단서가 없거나 꺼졌으면 null |
+| `toc` | 확보한 목차 + `kind MATERIAL|WEB`, `label`, `coverage`, `sourceUrl`, `fetchedAt` |
+| `unlinkedTocs[]` | 교재가 정해져 있는데 어느 책인지 적히지 않아 저절로 쓰지 않은 업로드 목차 `{materialId, filename, entryCount}` |
+| `webLookupEnabled` | 교재 단서를 외부로 보내 찾는가 |
+
+### 바꾸는 요청(모두 교재 판 대조 — 다르면 409 E409_040)
+
+| 요청 | 본문 | 뜻 |
+|---|---|---|
+| `POST …/textbook/apply` | `{materialId, values, expected, expectedVersion?}` | 자료 판권면 후보의 고른 칸(기존) |
+| `POST …/textbook/clue/apply` | `{materialId, title, expectedVersion}` | 강의계획서 단서 하나를 지금 교재로. 판 필수(400 E400_036) |
+| `POST …/textbook/web/choose` | `{lookupId, revisionId, expectedVersion}` | 웹에서 찾은 판을 지금 교재(WEB)로. 그 사용자·과목의 지금 근거 조회이고 허용 후보일 때만(409 E409_042) |
+| `POST …/textbook/web/retry` | — | 지금 근거로 다시 찾기(재사용·캐시 건너뜀) |
+| `POST …/textbook/web/link` | `{url}` | 사용자가 준 상세 페이지 링크로 찾기. 받을 수 없는 주소 400 E400_037, 검색 꺼짐 409 E409_043 |
+| `PUT …/textbook/web/enabled` | `{enabled}` | 외부 조회 켜기·끄기(끄면 열린 조회를 닫는다) |
+| `POST …/textbook/toc-link` | `{materialId, expectedVersion}` | 식별 없는 업로드 목차를 지금 교재의 목차로. 판 필수 |
+| `PATCH /api/courses/{id}` | 교재 칸 + `expectedTextbookVersion` | **보내지 않은 칸은 그대로, null·빈 값은 지움**. 교재 칸이 바뀌면 판 필수(400 E400_036) |
+
+### 정리(`GET /api/courses/{id}/tidy`) 추가 필드
+
+| 필드 | 뜻 |
+|---|---|
+| `tocLabel` | 이 안이 쓴 교재 목차의 출처 한 줄 |
+| `tocStale` | 이 안을 만든 뒤 교재·목차 근거가 바뀌었다 — 목차에서 온 변경은 적용되지 않는다(E409_041) |
+| `newTocAvailable` | 이 안이 쓰지 않은 새 목차가 있다 — [새 목차로 다시 정리] |
+| `recordsTextbook` | 목차에서 온 변경을 적용하면 비어 있던 교재 칸에 기록될 책 |
+
+### 그 밖
+
+- `POST /api/plans/draft`에 `purpose`(REVIEW·PREVIEW·EXAM·SELF_STUDY, 선택). 다시 만들기에 보존된다.
+- `GET /api/courses/{id}/learning-map`에 `textbook`(지금 교재 한 줄), `topics[].tocOrigin`(WEB·MATERIAL), `topics[].priorTextbook`.
+- `CourseResponse.textbookVersion`.
+- 정리 요청은 분석된 자료 구간이 없어도 교재 목차가 있으면 받는다(E409_033 완화).

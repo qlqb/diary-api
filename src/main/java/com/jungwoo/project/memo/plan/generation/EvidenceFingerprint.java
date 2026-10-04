@@ -38,6 +38,16 @@ public record EvidenceFingerprint(String fingerprint, String availabilityHash, S
     public static EvidenceFingerprint of(List<CourseCatalog> catalogs, List<BusyWindow> busy, LocalDateTime now,
                                          LocalDate start, LocalDate end, Collection<Long> courseIds, String instruction,
                                          Collection<Long> excluded, Collection<Long> requestedMaterials) {
+        return of(catalogs, busy, now, start, end, courseIds, instruction, excluded, requestedMaterials, null);
+    }
+
+    /**
+     * @param judgmentBasis 판단 기준(계획 목적·과목별 지금 교재). 바뀌면 같은 자료라도 선택을 다시 한다. 없으면 null
+     */
+    public static EvidenceFingerprint of(List<CourseCatalog> catalogs, List<BusyWindow> busy, LocalDateTime now,
+                                         LocalDate start, LocalDate end, Collection<Long> courseIds, String instruction,
+                                         Collection<Long> excluded, Collection<Long> requestedMaterials,
+                                         String judgmentBasis) {
         TreeSet<String> availability = new TreeSet<>();
         LocalDate today = now == null ? null : now.toLocalDate();
         for (BusyWindow b : busy == null ? List.<BusyWindow>of() : busy) {
@@ -59,7 +69,7 @@ public record EvidenceFingerprint(String fingerprint, String availabilityHash, S
                         + (overdue ? ":overdue" : ""));
             }
             for (TopicLine t : c.topics()) {
-                progress.add("t" + t.topicId() + ":" + t.progress() + ":" + t.mark());
+                progress.add("t" + t.topicId() + ":" + t.progress() + ":" + t.mark() + (t.priorTextbook() ? ":prior" : ""));
             }
             c.excluded().forEach(e -> progress.add("x" + e.topicId() + ":" + e.reason()));
         }
@@ -78,6 +88,9 @@ public record EvidenceFingerprint(String fingerprint, String availabilityHash, S
         all.add("mat:" + materialsHash);
         all.add("asg:" + assignmentsHash);
         all.add("prog:" + progressHash);
+        if (judgmentBasis != null) {
+            all.add("basis:" + judgmentBasis);
+        }
         return new EvidenceFingerprint(hash(all), availabilityHash, materialsHash, assignmentsHash, progressHash);
     }
 

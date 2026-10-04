@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.course;
 
+import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.course.textbook.CourseTextbookWriter;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
@@ -37,6 +39,9 @@ class CourseServiceTest {
     @Mock
     private ProjectTidyMapper tidyMapper;
 
+    @Mock
+    private CourseTextbookWriter textbookWriter;
+
     @InjectMocks
     private CourseService service;
 
@@ -51,24 +56,43 @@ class CourseServiceTest {
     }
 
     @Test
-    void update_writesTextbookThroughTheUserPath_soClearingActuallyClears() {
+    void update_writesOnlyTheSentTextbookFields_andClearsExplicitBlanks() {
         when(courseMapper.findByIdAndUserId(COURSE_ID, USER_ID))
                 .thenReturn(Course.builder().courseId(COURSE_ID).status(CourseStatus.ACTIVE).build());
         when(courseMapper.findSummaryCounts(USER_ID, COURSE_ID)).thenReturn(List.of());
+        Course locked = Course.builder().courseId(COURSE_ID).userId(USER_ID).status(CourseStatus.ACTIVE)
+                .textbookTitle("옛 제목").textbookIsbn("9791156645672").textbookVersion(3).build();
+        when(textbookWriter.lock(USER_ID, COURSE_ID)).thenReturn(locked);
 
         CourseUpdateRequest request = new CourseUpdateRequest();
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "title", "빅데이터분석");
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "textbookTitle", "전처리와 시각화");
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "textbookAuthor", "오경선 외");
+        request.setTitle("빅데이터분석");
+        request.setTextbookTitle("전처리와 시각화");
+        request.setTextbookAuthor("오경선 외");
         // 빈 문자열은 "모른다"는 뜻이다 — 지울 수 있어야 한다.
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "textbookPublisher", "  ");
+        request.setTextbookPublisher("  ");
+        request.setExpectedTextbookVersion(3);
 
         service.update(USER_ID, COURSE_ID, request);
 
-        // AI 경로(updateTextbookInfo)는 비어 있는 칸만 채우므로 사용자 편집에 쓸 수 없다.
-        verify(courseMapper).updateTextbookByUser(COURSE_ID, USER_ID,
-                "전처리와 시각화", "오경선 외", null, null, null);
-        verify(courseMapper, never()).updateTextbookInfo(any(), any(), any(), any(), any(), any());
+        // 보내지 않은 ISBN·판은 지금 값 그대로다(제목만 고친 요청이 교재를 지우지 않는다).
+        verify(textbookWriter).write(eq(locked), eq(3), eq(new CourseTextbookWriter.Values("전처리와 시각화", "오경선 외",
+                null, "9791156645672", null)), eq(CourseTextbookWriter.SOURCE_USER), isNull(), isNull());
+    }
+
+    @Test
+    void update_requiresTheSeenTextbookVersion_whenTextbookChanges() {
+        when(courseMapper.findByIdAndUserId(COURSE_ID, USER_ID))
+                .thenReturn(Course.builder().courseId(COURSE_ID).status(CourseStatus.ACTIVE).build());
+        when(textbookWriter.lock(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).userId(USER_ID)
+                .textbookTitle("A책").textbookVersion(1).build());
+
+        CourseUpdateRequest request = new CourseUpdateRequest();
+        request.setTextbookTitle("B책");
+
+        assertThatThrownBy(() -> service.update(USER_ID, COURSE_ID, request))
+                .isInstanceOfSatisfying(BadRequestException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.TEXTBOOK_VERSION_REQUIRED));
+        verify(textbookWriter, never()).write(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -77,14 +101,16 @@ class CourseServiceTest {
         when(courseMapper.findByIdAndUserId(COURSE_ID, USER_ID)).thenReturn(Course.builder().courseId(COURSE_ID)
                 .status(CourseStatus.ACTIVE).textbookTitle("쉬운 자료구조").textbookInfoSource("MATERIAL").build());
         when(courseMapper.findSummaryCounts(USER_ID, COURSE_ID)).thenReturn(List.of());
+        when(textbookWriter.lock(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).userId(USER_ID)
+                .textbookTitle("쉬운 자료구조").textbookInfoSource("MATERIAL").textbookVersion(2).build());
 
         CourseUpdateRequest request = new CourseUpdateRequest();
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "title", "자료구조(월)");
-        org.springframework.test.util.ReflectionTestUtils.setField(request, "textbookTitle", "쉬운 자료구조");
+        request.setTitle("자료구조(월)");
+        request.setTextbookTitle("쉬운 자료구조");
 
         service.update(USER_ID, COURSE_ID, request);
 
-        verify(courseMapper, never()).updateTextbookByUser(any(), any(), any(), any(), any(), any(), any());
+        verify(textbookWriter, never()).write(any(), any(), any(), any(), any(), any());
     }
 
     @Test

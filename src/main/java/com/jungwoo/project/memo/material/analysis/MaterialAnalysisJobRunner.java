@@ -32,6 +32,7 @@ public class MaterialAnalysisJobRunner {
     private final MaterialContentAnalyzer contentAnalyzer;
     private final TopicLinkAnalyzer linkAnalyzer;
     private final AnalysisTimingRecorder timingRecorder;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     @Value("${material.analysis.auth-cooldown-seconds:1800}")
     private int authCooldownSeconds = 1800;
@@ -51,6 +52,10 @@ public class MaterialAnalysisJobRunner {
                 return Result.LOST_LEASE;
             }
             jobService.finish(job, outcome.status(), outcome.errorCode(), outcome.message(), outcome.resultRefId());
+            if (job.getJobKind() != AnalysisJobKind.LINK) {
+                // 원문 단위가 생겼다 — 연결된 과목의 교재 조회를 새 근거로 맞춘다(실패해도 분석 결과에는 영향 없음).
+                events.publishEvent(new MaterialContentAnalyzedEvent(job.getUserId(), job.getMaterialId()));
+            }
             // 끝난 뒤에 남긴다. 이 기록이 다음 번 "예상 3~5분"의 근거다.
             timingRecorder.record(job, metrics, outcome.status(), System.currentTimeMillis() - startedAt);
             log.info("분석 작업 종료: jobId={}, kind={}, materialId={}, status={}, {}ms",

@@ -17,4 +17,7 @@ public interface MaterialTextbookExtractMapper {
     List<MaterialTextbookExtract> findCurrent(@Param("materialIds") List<Long> materialIds,
                                               @Param("extractorVersion") int extractorVersion,
                                               @Param("userId") Long userId);
+
+    int updateClueJsonIfEmpty(@Param("extractId") Long extractId, @Param("userId") Long userId,
+                              @Param("clueJson") String clueJson);
 }

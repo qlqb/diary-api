@@ -23,6 +23,10 @@ public class TopicResponse {
     private int orderIndex;
     private TopicSourceType sourceType;
     private String sourceLocator;
+    /** (2026-10-04) 웹 목차에서 온 항목이면 그 리비전. */
+    private Long sourceWebRevisionId;
+    /** 목차에서 온 항목이 어느 책의 것인가(BookKey). */
+    private String sourceTextbookKey;
     private Long sourceMaterialId;
     /**
      * 이 항목이 나온 자료의 파일명. 원본을 삭제했어도 남는다 — 확정된 학습 내용은 유지되므로
@@ -75,6 +79,8 @@ public class TopicResponse {
                 .orderIndex(topic.getOrderIndex())
                 .sourceType(topic.getSourceType())
                 .sourceLocator(topic.getSourceLocator())
+                .sourceWebRevisionId(topic.getSourceWebRevisionId())
+                .sourceTextbookKey(topic.getSourceTextbookKey())
                 .sourceMaterialId(topic.getSourceMaterialId())
                 .sourceMaterialFilename(sourceMaterial != null ? sourceMaterial.getOriginalFilename() : null)
                 .sourceMaterialDeleted(sourceMaterial != null && sourceMaterial.getStatus() == MaterialStatus.DELETED)

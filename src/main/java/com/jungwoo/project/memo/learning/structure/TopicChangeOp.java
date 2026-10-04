@@ -62,9 +62,26 @@ public record TopicChangeOp(
         /*
          * 누가 낸 변경인가. null = AI 정리, USER = 직접 조작, REQUEST = 사용자의 자연어 요청을 해석한 것.
          * AI가 정리안을 새로 만들어도 사용자가 낸 변경은 새 판으로 옮겨 간다(버리지 않는다).
+         * TOC = 서버가 교재 목차에서 그대로 옮긴 골격.
          */
-        String by
+        String by,
+        /*
+         * (2026-10-04) 이 ADD가 교재 목차의 몇 번째 항목(1부터)에서 왔나. 모델이 낼 수 있지만 서버가 그 항목이 있는지 확인하고
+         * 제목·쪽을 목차에서 다시 채운다. 목차에서 온 변경은 적용할 때 목차 근거가 그대로인지 다시 본다.
+         */
+        Integer tocLine
 ) {
+    /** 예전 모양(by까지). tocLine은 비운다. */
+    public TopicChangeOp(String op, String tempId, Long topicId, Long parentTopicId, String parentTempId,
+                         String title, String sourceType, String locator, List<Long> sectionIds, String role,
+                         Long survivingTopicId, List<Long> absorbedTopicIds, List<TopicChangeOp> children,
+                         String reason, String changeId, Long afterTopicId, Integer week, Long materialId,
+                         String label, String by) {
+        this(op, tempId, topicId, parentTopicId, parentTempId, title, sourceType, locator, sectionIds, role,
+                survivingTopicId, absorbedTopicIds, children, reason, changeId, afterTopicId, week, materialId, label,
+                by, null);
+    }
+
     /** 예전 모양(changeId까지). 새 칸은 비운다. */
     public TopicChangeOp(String op, String tempId, Long topicId, Long parentTopicId, String parentTempId,
                          String title, String sourceType, String locator, List<Long> sectionIds, String role,
@@ -109,25 +126,37 @@ public record TopicChangeOp(
     public TopicChangeOp withTitle(String newTitle) {
         return new TopicChangeOp(op, tempId, topicId, parentTopicId, parentTempId, newTitle, sourceType, locator,
                 sectionIds, role, survivingTopicId, absorbedTopicIds, children, reason, changeId,
-                afterTopicId, week, materialId, label, by);
+                afterTopicId, week, materialId, label, by, tocLine);
     }
 
     public TopicChangeOp withChangeId(String id) {
         return new TopicChangeOp(op, tempId, topicId, parentTopicId, parentTempId, title, sourceType, locator,
                 sectionIds, role, survivingTopicId, absorbedTopicIds, children, reason, id,
-                afterTopicId, week, materialId, label, by);
+                afterTopicId, week, materialId, label, by, tocLine);
     }
 
     public TopicChangeOp withChildren(List<TopicChangeOp> newChildren) {
         return new TopicChangeOp(op, tempId, topicId, parentTopicId, parentTempId, title, sourceType, locator,
                 sectionIds, role, survivingTopicId, absorbedTopicIds, newChildren, reason, changeId,
-                afterTopicId, week, materialId, label, by);
+                afterTopicId, week, materialId, label, by, tocLine);
     }
 
     public TopicChangeOp withBy(String who) {
         return new TopicChangeOp(op, tempId, topicId, parentTopicId, parentTempId, title, sourceType, locator,
                 sectionIds, role, survivingTopicId, absorbedTopicIds, children, reason, changeId,
-                afterTopicId, week, materialId, label, who);
+                afterTopicId, week, materialId, label, who, tocLine);
+    }
+
+    /** 교재 목차 항목에서 온 ADD로 표시하고 제목·출처를 목차 값으로 바꾼다. */
+    public TopicChangeOp fromToc(int line, String tocTitle, String tocLocator) {
+        return new TopicChangeOp(op, tempId, topicId, parentTopicId, parentTempId, tocTitle, "SOURCE", tocLocator,
+                sectionIds, role, survivingTopicId, absorbedTopicIds, children, reason, changeId,
+                afterTopicId, week, materialId, label, by, line);
+    }
+
+    /** 목차(골격 또는 목차 항목)에서 온 변경인가. 적용할 때 목차 근거를 다시 본다. */
+    public boolean isFromToc() {
+        return "TOC".equals(by) || tocLine != null;
     }
 
     /** changeId를 지운다(판을 다시 세울 때). */

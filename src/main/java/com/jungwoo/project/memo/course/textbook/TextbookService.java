@@ -1,49 +1,43 @@
 package com.jungwoo.project.memo.course.textbook;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.course.textbook.web.LookupResult;
+import com.jungwoo.project.memo.course.textbook.web.TextbookLookup;
+import com.jungwoo.project.memo.course.textbook.web.TextbookLookupMapper;
+import com.jungwoo.project.memo.course.textbook.web.TextbookLookupPlanner;
+import com.jungwoo.project.memo.course.textbook.web.TextbookLookupService;
+import com.jungwoo.project.memo.course.textbook.web.TextbookWebMapper;
+import com.jungwoo.project.memo.course.textbook.web.TextbookWebRevision;
 import com.jungwoo.project.memo.learning.CourseTopicMapper;
-import com.jungwoo.project.memo.material.CourseMaterialMapper;
-import com.jungwoo.project.memo.material.MaterialLinkMapper;
-import com.jungwoo.project.memo.material.MaterialTextUnitMapper;
-import com.jungwoo.project.memo.material.MaterialTextUnitService;
 import com.jungwoo.project.memo.material.domain.CourseMaterial;
-import com.jungwoo.project.memo.material.domain.MaterialLink;
-import com.jungwoo.project.memo.material.domain.MaterialStatus;
-import com.jungwoo.project.memo.material.domain.MaterialTextUnit;
-import com.jungwoo.project.memo.material.domain.MaterialType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 
 /**
  * 프로젝트의 교재: 어느 책인가(서지)와 그 책이 다루는 범위(목차).
  *
- * <p>자동 분석 흐름 안에서 돈다 — 옛 [구조 분석] 버튼을 찾지 않아도, 프로젝트를 열면 연결된 자료의 원문 단위에서
- * 교재 단서를 규칙으로 읽어 {@code material_textbook_extracts}에 한 번 남기고, 지금 교재 칸과 비교해 보여 준다.
- *
  * <ul>
- *   <li><b>조용히 덮지 않는다.</b> 자료에서 찾은 값은 후보다. 사용자가 고른 칸만 적용되고, 적용하려는 순간 교재 칸이
- *       화면이 본 값과 다르면(다른 탭·직접 수정) 409로 멈춘다. 후보가 그 사이 바뀌어도 409다.</li>
- *   <li><b>목차를 상상하지 않는다.</b> 책 이름만 있으면 "목차 미확보"와 다음 행동만 알리고, 계획·학습은 그대로 된다.</li>
- *   <li><b>같은 파일은 한 번만.</b> (자료, 해시, 추출 판)마다 한 행이라 재분석·재시도·동시 조회가 중복을 만들지 않는다.</li>
- *   <li>외부 도서 검색은 쓰지 않는다. 판 정보는 원문에 적힌 것만이다.</li>
+ *   <li><b>조용히 덮지 않는다.</b> 자료·웹에서 찾은 값은 후보다. 교재 칸은 {@link CourseTextbookWriter}로만 바뀌고, 화면이 본
+ *       판·값과 다르면 409로 멈춘다.</li>
+ *   <li><b>목차를 상상하지 않는다.</b> 책 이름만 있으면 웹에서 실제 목차 원문을 찾고(서버 백그라운드), 못 찾으면 그렇다고 말한다.
+ *       계획·학습은 그대로 된다.</li>
+ *   <li><b>같은 파일은 한 번만.</b> 규칙 추출은 (자료, 해시, 추출 판)마다 한 행({@link TextbookExtracts}).</li>
+ *   <li>웹 조회의 상태는 {@code textbook_lookups}가 원본이다 — 화면을 닫거나 새로고침해도 이어진다.</li>
  * </ul>
  */
 @Slf4j
@@ -55,24 +49,33 @@ public class TextbookService {
 
     private final CourseMapper courseMapper;
     private final CourseTopicMapper topicMapper;
-    private final MaterialLinkMapper linkMapper;
-    private final CourseMaterialMapper materialMapper;
-    private final MaterialTextUnitMapper unitMapper;
-    private final MaterialTextUnitService unitService;
-    private final MaterialTextbookExtractMapper extractMapper;
-    private final ObjectMapper objectMapper;
+    private final TextbookExtracts extracts;
+    private final TocResolver tocResolver;
+    private final TextbookLookupService lookupService;
+    private final TextbookLookupMapper lookupMapper;
+    private final TextbookWebMapper webMapper;
+    private final CourseTextbookWriter textbookWriter;
+
+    private static final DateTimeFormatter AT = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
 
     // ===== 조회 =====
 
+    /** 교재 구역. 지금 근거에 맞는 웹 조회가 없으면 등록만 한다(외부 호출은 worker가 한다). */
     @Transactional
     public TextbookReview review(Long userId, Long courseId) {
+        owned(userId, courseId);
+        lookupService.ensure(userId, courseId);
+        return build(userId, courseId);
+    }
+
+    private TextbookReview build(Long userId, Long courseId) {
         Course course = owned(userId, courseId);
-        Materials materials = ensureExtracts(userId, courseId);
+        TextbookExtracts.Materials materials = extracts.load(userId, courseId);
         Map<String, String> current = currentValues(course);
 
         List<TextbookReview.Candidate> candidates = new ArrayList<>();
         for (MaterialTextbookExtract extract : materials.extracts()) {
-            Map<String, TextbookExtractor.Field> book = readBook(extract.getBookJson());
+            Map<String, TextbookExtractor.Field> book = extracts.book(extract);
             if (book.isEmpty()) {
                 continue;
             }
@@ -91,60 +94,140 @@ public class TextbookService {
                     materials.types().get(extract.getMaterialId()), fields));
         }
 
-        MaterialTextbookExtract tocSource = bestToc(materials);
-        TextbookReview.Toc toc;
-        if (tocSource == null) {
-            toc = new TextbookReview.Toc("NOT_FOUND", null, null, 0, null, null, List.of());
-        } else {
-            TocJson json = readToc(tocSource.getTocJson());
-            CourseMaterial material = materials.byId().get(tocSource.getMaterialId());
-            toc = new TextbookReview.Toc("FOUND", tocSource.getMaterialId(),
-                    material == null ? null : material.getOriginalFilename(), tocSource.getTocEntryCount(),
-                    json.fromUnit(), json.toUnit(), json.entries());
+        List<TextbookReview.SyllabusClue> clues = new ArrayList<>();
+        for (TextbookLookupPlanner.SourcedClue c : TextbookLookupPlanner.syllabusClues(materials, extracts)) {
+            TextbookExtractor.BookClue b = c.clue();
+            boolean sameAsCurrent = BookKey.of(course) != null && BookKey.sameBook(b.title(), b.isbn(), b.edition(),
+                    course.getTextbookTitle(), course.getTextbookIsbn(), course.getTextbookEdition());
+            clues.add(new TextbookReview.SyllabusClue(c.materialId(), c.filename(), b.role(), b.title(), b.author(),
+                    b.publisher(), b.isbn(), b.edition(), b.unit(), b.quote(), c.source(), sameAsCurrent));
         }
 
-        boolean hasBookIdentity = current.get("title") != null || current.get("isbn") != null
+        TocResolver.Resolution resolution = tocResolver.resolve(course, materials);
+        TocSnapshot snapshot = resolution.toc();
+        TextbookReview.Toc toc = snapshot == null
+                ? new TextbookReview.Toc("NOT_FOUND", null, null, 0, null, null, List.of(), null, null, null, null, null)
+                : new TextbookReview.Toc("FOUND", snapshot.materialId(), snapshot.filename(), snapshot.entries().size(),
+                snapshot.fromUnit(), snapshot.toUnit(), snapshot.entries(), snapshot.kind(), snapshot.label(),
+                snapshot.coverage(), snapshot.sourceUrl(), snapshot.fetchedAt());
+
+        TextbookLookup latest = lookupMapper.findLatestByCourse(courseId, userId);
+        TextbookReview.Lookup lookup = latest == null || TextbookLookup.SUPERSEDED.equals(latest.getStatus())
+                || TextbookLookup.CANCELLED.equals(latest.getStatus()) ? null : lookupView(latest);
+        boolean enabled = !Boolean.FALSE.equals(course.getTextbookWebLookupEnabled());
+
+        boolean hasBookIdentity = BookKey.of(course) != null || !clues.isEmpty()
                 || candidates.stream().anyMatch(c -> c.fields().stream()
                 .anyMatch(f -> f.field().equals("title") || f.field().equals("isbn")));
         String state = "FOUND".equals(toc.status()) ? "TOC_FOUND" : hasBookIdentity ? "TITLE_ONLY" : "NONE";
         int topics = topicMapper.findActiveByCourseIdAndUserId(courseId, userId).size();
-        return new TextbookReview(courseId, TextbookReview.Current.of(course), candidates, toc, state,
-                nextAction(state, topics, materials.pending()), topics, materials.pending());
+        return new TextbookReview(courseId, TextbookReview.Current.of(course, webSource(course)), candidates, toc, state,
+                nextAction(state, topics, materials.pending(), lookup, enabled, !resolution.unlinked().isEmpty()),
+                topics, materials.pending(), clues, lookup, resolution.unlinked(), enabled);
     }
 
-    private static String nextAction(String state, int topics, int pending) {
+    private TextbookReview.WebSource webSource(Course course) {
+        if (course.getTextbookWebRevisionId() == null) {
+            return null;
+        }
+        TextbookWebRevision r = webMapper.findRevision(course.getTextbookWebRevisionId(), course.getUserId());
+        if (r == null) {
+            return null;
+        }
+        return new TextbookReview.WebSource(r.getRevisionId(), r.getSite(),
+                "SHARED".equals(r.getCacheScopeKey()) ? r.getUrl() : com.jungwoo.project.memo.course.textbook.web.SafePageFetcher.masked(r.getUrl()),
+                r.getFetchedAt() == null ? null : r.getFetchedAt().format(AT), r.getIsbn13(), r.getPublishedDate());
+    }
+
+    private TextbookReview.Lookup lookupView(TextbookLookup l) {
+        LookupResult result = lookupService.read(l.getResultJson());
+        LookupResult.Query query = lookupService.readQuery(l.getQueryJson());
+        if (query != null && query.link() != null) {
+            query = new LookupResult.Query(query.title(), query.author(), query.publisher(), query.isbn(), query.edition(),
+                    com.jungwoo.project.memo.course.textbook.web.SafePageFetcher.masked(query.link()), query.needsClue());
+        }
+        return new TextbookReview.Lookup(l.getLookupId(), l.getStatus(), l.getClueOrigin(), query,
+                result == null ? null : result.searchedWith(),
+                result == null || result.editions() == null ? List.of() : result.editions(),
+                result == null || result.candidates() == null ? List.of() : result.candidates(),
+                result == null || result.failures() == null ? List.of() : result.failures(),
+                result == null || result.clueOptions() == null ? List.of() : result.clueOptions(),
+                result == null ? null : result.note(), l.getErrorCode(),
+                l.getCreatedAt() == null ? null : l.getCreatedAt().format(AT),
+                l.getFinishedAt() == null ? null : l.getFinishedAt().format(AT), l.getAutoTidyState(),
+                l.getChosenRevisionId(), l.getReusedFromLookupId() != null);
+    }
+
+    static String nextAction(String state, int topics, int pending, TextbookReview.Lookup lookup, boolean enabled,
+                             boolean hasUnlinkedToc) {
+        String keepGoing = " 지금 자료로도 계획과 학습은 그대로 진행할 수 있어요.";
+        String waiting = pending > 0 ? " 아직 읽는 중인 자료 " + pending + "개는 끝나면 다시 확인해요." : "";
         if ("TOC_FOUND".equals(state)) {
             return topics == 0
-                    ? "목차로 학습 구조의 첫 골격을 만들 수 있어요. [이 프로젝트 자료 정리]에서 골격을 검토하고 적용하세요."
-                    : "목차와 지금 학습 구조를 비교해 필요한 변경만 제안받을 수 있어요. [이 프로젝트 자료 정리]를 눌러 주세요.";
+                    ? "목차로 학습 구조의 첫 골격을 만들 수 있어요. 정리 구역에서 변경안을 검토하고 고른 것만 적용하세요."
+                    : "목차와 지금 학습 구조를 비교해 빠진 장·절만 변경안으로 받을 수 있어요. 정리 구역에서 검토하세요.";
         }
-        String waiting = pending > 0 ? " 아직 읽는 중인 자료 " + pending + "개는 끝나면 다시 확인해요." : "";
+        if (hasUnlinkedToc) {
+            return "올린 목차가 어느 책의 것인지 적혀 있지 않아요. 지금 교재의 목차가 맞으면 [이 교재 목차로 쓰기]를 눌러 주세요."
+                    + keepGoing;
+        }
+        if (lookup != null) {
+            String status = lookup.status();
+            if (TextbookLookup.QUEUED.equals(status) || TextbookLookup.RUNNING.equals(status)) {
+                return "교재와 목차를 웹에서 찾는 중이에요. 화면을 닫아도 서버에서 계속돼요." + keepGoing;
+            }
+            switch (status) {
+                case TextbookLookup.NEEDS_CHOICE:
+                    // 판이 하나뿐인데 고르라는 것은 사용자가 준 링크라 서버가 같은 책인지 확인하지 못한 경우다.
+                    return (lookup.editions().size() == 1
+                            ? "준 링크의 책이 지금 교재와 같은지 확인하지 못했어요. 맞으면 이 판으로 정해 주세요."
+                            : "같은 제목의 책이 " + lookup.editions().size() + "가지(판·발행일이 달라요) 있어요. 지금 쓰는 판을 골라 주세요.")
+                            + keepGoing;
+                case TextbookLookup.BOOK_NO_TOC:
+                    return "책은 찾았지만 찾은 페이지에 목차가 없어요. 목차 쪽 사진·PDF를 올리거나 목차가 있는 상세 페이지 링크를 주세요."
+                            + keepGoing;
+                case TextbookLookup.NOT_FOUND:
+                    return "이 정보로 맞는 책 페이지를 찾지 못했어요(책이 없다는 뜻은 아니에요). ISBN·판을 적거나 출판사·서점 링크를 주세요."
+                            + keepGoing;
+                case TextbookLookup.ACCESS_FAILED:
+                    return "찾은 페이지에 접속하지 못했어요. 잠시 뒤 [다시 찾기]를 누르거나 다른 링크를 주세요." + keepGoing;
+                case TextbookLookup.FAILED:
+                    return "교재를 찾는 중 문제가 생겼어요. [다시 찾기]를 눌러 주세요." + keepGoing;
+                case TextbookLookup.CLUE_CONFLICT:
+                    return "자료마다 다른 주교재가 적혀 있어요. 지금 쓰는 교재를 골라 주세요." + keepGoing;
+                case TextbookLookup.FOUND:
+                    return "책은 찾았지만 목차를 쓰기 전에 확인할 것이 있어요." + keepGoing;
+                default:
+                    break;
+            }
+        }
+        if (!enabled && "TITLE_ONLY".equals(state)) {
+            return "웹 검색을 꺼 두어 목차를 찾지 않았어요. 목차 쪽(사진·PDF)을 올리면 범위를 확인할 수 있어요." + keepGoing + waiting;
+        }
         if ("TITLE_ONLY".equals(state)) {
-            return "교재 목차를 아직 확보하지 못했어요. 목차 쪽(사진·PDF)이나 본문을 올리면 범위를 확인할 수 있어요. "
-                    + "지금 자료로도 계획과 학습은 그대로 진행할 수 있어요." + waiting;
+            return "교재 목차를 아직 확보하지 못했어요. 목차 쪽(사진·PDF)이나 본문을 올리면 범위를 확인할 수 있어요."
+                    + keepGoing + waiting;
         }
         return "교재 정보가 없어요. 교재를 쓰는 과목이면 이름을 적거나 목차·판권 쪽을 올려 주세요. 없어도 계획·학습은 할 수 있어요." + waiting;
     }
 
-    // ===== 적용 =====
+    // ===== 적용(자료 후보) =====
 
     /**
      * 자료에서 찾은 값 중 사용자가 고른 칸만 교재 칸에 넣는다.
      *
-     * @param expected 화면이 본 지금 교재 칸 값(고른 칸만). 지금 값과 다르면 409 — 그 사이 사용자가 고친 값을 덮지 않는다
-     * @param values   화면이 본 후보 값(고른 칸만). 지금 추출한 후보와 다르면 409
+     * @param expected        화면이 본 지금 교재 칸 값(고른 칸만). 지금 값과 다르면 409 — 그 사이 사용자가 고친 값을 덮지 않는다
+     * @param values          화면이 본 후보 값(고른 칸만). 지금 추출한 후보와 다르면 409
+     * @param expectedVersion 화면이 본 교재 판(없으면 칸 값 대조만). 다르면 409
      */
     @Transactional
     public TextbookReview apply(Long userId, Long courseId, Long materialId, Map<String, String> values,
-                                Map<String, String> expected) {
+                                Map<String, String> expected, Integer expectedVersion) {
         if (materialId == null || values == null || values.isEmpty()
                 || !FIELDS.containsAll(values.keySet())) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
         }
-        Course course = courseMapper.findByIdAndUserIdForUpdate(courseId, userId);
-        if (course == null) {
-            throw new NotFoundException(ErrorCode.COURSE_NOT_FOUND);
-        }
+        Course course = textbookWriter.lock(userId, courseId);
         Map<String, String> current = currentValues(course);
         for (String key : values.keySet()) {
             String seen = expected == null ? null : blankToNull(expected.get(key));
@@ -152,120 +235,116 @@ public class TextbookService {
                 throw new ConflictException(ErrorCode.TEXTBOOK_INFO_CHANGED);
             }
         }
-        Materials materials = ensureExtracts(userId, courseId);
-        MaterialTextbookExtract extract = materials.extracts().stream()
-                .filter(e -> e.getMaterialId().equals(materialId)).findFirst().orElse(null);
+        TextbookExtracts.Materials materials = extracts.load(userId, courseId);
+        MaterialTextbookExtract extract = materials.extractOf(materialId);
         if (extract == null) {
             throw new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE);
         }
-        Map<String, TextbookExtractor.Field> book = readBook(extract.getBookJson());
+        Map<String, TextbookExtractor.Field> book = extracts.book(extract);
         for (Map.Entry<String, String> entry : values.entrySet()) {
             TextbookExtractor.Field found = book.get(entry.getKey());
             if (found == null || !found.value().equals(entry.getValue())) {
                 throw new ConflictException(ErrorCode.TEXTBOOK_CANDIDATE_CHANGED);
             }
         }
-        courseMapper.applyTextbookFromMaterial(courseId, userId, materialId,
-                cut(values.get("title"), 300), cut(values.get("author"), 200), cut(values.get("publisher"), 200),
-                cut(values.get("isbn"), 50), cut(values.get("edition"), 100));
+        textbookWriter.write(course, expectedVersion, merged(current, values), CourseTextbookWriter.SOURCE_MATERIAL,
+                materialId, null);
         log.info("교재 정보 적용: courseId={}, materialId={}, fields={}", courseId, materialId, values.keySet());
-        return review(userId, courseId);
+        return build(userId, courseId);
+    }
+
+    /**
+     * 강의계획서가 적은 교재 단서 하나를 지금 교재로 정한다(주교재가 여럿일 때 고르기, "이 교재로 정하기").
+     * 그 자료에서 실제로 읽은 단서와 같을 때만.
+     */
+    @Transactional
+    public TextbookReview applyClue(Long userId, Long courseId, Long materialId, String title, Integer expectedVersion) {
+        if (materialId == null || title == null || title.isBlank()) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        if (expectedVersion == null) {
+            throw new BadRequestException(ErrorCode.TEXTBOOK_VERSION_REQUIRED);
+        }
+        Course course = textbookWriter.lock(userId, courseId);
+        TextbookExtracts.Materials materials = extracts.load(userId, courseId);
+        TextbookExtractor.BookClue clue = TextbookLookupPlanner.syllabusClues(materials, extracts).stream()
+                .filter(c -> materialId.equals(c.materialId()) && title.equals(c.clue().title()))
+                .map(TextbookLookupPlanner.SourcedClue::clue).findFirst().orElse(null);
+        if (clue == null) {
+            throw new ConflictException(ErrorCode.TEXTBOOK_CANDIDATE_CHANGED);
+        }
+        textbookWriter.write(course, expectedVersion, new CourseTextbookWriter.Values(clue.title(), clue.author(),
+                clue.publisher(), clue.isbn(), clue.edition()), CourseTextbookWriter.SOURCE_MATERIAL, materialId, null);
+        return build(userId, courseId);
+    }
+
+    /** 식별이 없는 업로드 목차를 "지금 교재의 목차"로 잇는다. */
+    @Transactional
+    public TextbookReview linkToc(Long userId, Long courseId, Long materialId, Integer expectedVersion) {
+        if (expectedVersion == null) {
+            throw new BadRequestException(ErrorCode.TEXTBOOK_VERSION_REQUIRED);
+        }
+        Course course = textbookWriter.lock(userId, courseId);
+        if (BookKey.of(course) == null) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        TextbookExtracts.Materials materials = extracts.load(userId, courseId);
+        MaterialTextbookExtract extract = materials.extractOf(materialId);
+        if (extract == null || extract.getTocJson() == null || extract.getTocEntryCount() < 3) {
+            throw new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE);
+        }
+        textbookWriter.linkToc(course, expectedVersion, materialId, extract.getFileHash());
+        return build(userId, courseId);
+    }
+
+    public TextbookReview view(Long userId, Long courseId) {
+        return build(userId, courseId);
     }
 
     // ===== 정리(tidy)가 쓰는 목차 =====
 
-    /** 이 프로젝트에서 확보한 교재 목차. 없으면 null — 목차를 만들어 내지 않는다. */
+    /** 이 프로젝트에서 쓸 교재 목차. 없으면 null — 목차를 만들어 내지 않는다. */
     @Transactional
     public TocSnapshot tocOf(Long userId, Long courseId) {
-        Materials materials = ensureExtracts(userId, courseId);
-        MaterialTextbookExtract best = bestToc(materials);
-        if (best == null) {
+        Course course = courseMapper.findByIdAndUserId(courseId, userId);
+        if (course == null) {
             return null;
         }
-        TocJson json = readToc(best.getTocJson());
-        CourseMaterial material = materials.byId().get(best.getMaterialId());
-        return new TocSnapshot(best.getMaterialId(), material == null ? null : material.getOriginalFilename(),
-                best.getFileHash(), json.fromUnit(), json.toUnit(), json.entries());
+        return tocResolver.resolve(course, extracts.load(userId, courseId)).toc();
     }
 
-    public record TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
-                              List<TextbookExtractor.TocEntry> entries) {
-    }
-
-    // ===== 추출 =====
-
-    record Materials(List<MaterialTextbookExtract> extracts, Map<Long, CourseMaterial> byId,
-                     Map<Long, String> types, int pending) {
+    /** 화면 조회용(읽기 전용 트랜잭션 안에서도 쓸 수 있다 — 추출을 새로 남기지 않는다). */
+    public TocSnapshot tocOfReadOnly(Long userId, Long courseId) {
+        Course course = courseMapper.findByIdAndUserId(courseId, userId);
+        if (course == null) {
+            return null;
+        }
+        return tocResolver.resolve(course, extracts.loadExisting(userId, courseId)).toc();
     }
 
     /**
-     * 연결된 자료마다 지금 파일의 추출이 있게 한다. 원문 단위가 아직 없으면(분석 전) 파일에서 뽑은 전체 텍스트로 읽고,
-     * 그것도 없으면 건너뛰고 "읽는 중"으로 센다 — 없는 목차를 "없음"으로 확정하지 않는다.
+     * 정리에 쓰는 목차.
+     *
+     * @param basis    이 목차의 근거. 정리안이 들고 있다가 적용할 때 지금 근거와 대조한다
+     * @param kind     MATERIAL · WEB
+     * @param label    출처 한 줄
+     * @param coverage WEB일 때 페이지 목차를 얼마나 읽었나
      */
-    private Materials ensureExtracts(Long userId, Long courseId) {
-        List<MaterialLink> links = linkMapper.findByCourseIdAndUserId(courseId, userId);
-        Map<Long, String> types = new LinkedHashMap<>();
-        for (MaterialLink link : links) {
-            types.put(link.getMaterialId(), link.getMaterialType() == null ? null : link.getMaterialType().name());
-        }
-        if (types.isEmpty()) {
-            return new Materials(List.of(), Map.of(), types, 0);
-        }
-        Map<Long, CourseMaterial> byId = new LinkedHashMap<>();
-        for (CourseMaterial material : materialMapper.findByIdsAndUserIdIncludingDeleted(new ArrayList<>(types.keySet()), userId)) {
-            if (material.getStatus() == MaterialStatus.ACTIVE) {
-                byId.put(material.getMaterialId(), material);
-            }
-        }
-        int pending = 0;
-        for (CourseMaterial material : byId.values()) {
-            if (material.getFileHash() == null) {
-                pending++;
-                continue;
-            }
-            if (extractMapper.find(material.getMaterialId(), material.getFileHash(), TextbookExtractor.VERSION, userId) != null) {
-                continue;
-            }
-            List<TextbookExtractor.Unit> units = unitsOf(material);
-            if (units.isEmpty()) {
-                pending++;
-                continue;
-            }
-            TextbookExtractor.Result result = TextbookExtractor.extract(units);
-            extractMapper.insertIgnore(MaterialTextbookExtract.builder()
-                    .userId(userId).materialId(material.getMaterialId()).fileHash(material.getFileHash())
-                    .extractorVersion(TextbookExtractor.VERSION)
-                    .bookJson(result.book().isEmpty() ? null : write(result.book()))
-                    .tocJson(result.hasToc() ? write(new TocJson(result.toc(), result.tocFromUnit(), result.tocToUnit())) : null)
-                    .tocEntryCount(result.toc().size())
-                    .build());
-        }
-        List<MaterialTextbookExtract> extracts = byId.isEmpty() ? List.of()
-                : extractMapper.findCurrent(new ArrayList<>(byId.keySet()), TextbookExtractor.VERSION, userId);
-        return new Materials(extracts, byId, types, pending);
-    }
+    public record TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
+                              List<TextbookExtractor.TocEntry> entries, TocResolver.Basis basis, String label,
+                              String kind, String sourceUrl, String fetchedAt, String coverage) {
 
-    private List<TextbookExtractor.Unit> unitsOf(CourseMaterial material) {
-        List<MaterialTextUnit> units = unitMapper.findByMaterialIdAndHash(material.getMaterialId(), material.getFileHash());
-        if (units.isEmpty() && material.getExtractedText() != null) {
-            // 분석 전 자료: 저장하지 않고 이 자리에서만 나눠 읽는다(단위 저장은 분석의 일이다).
-            units = unitService.blocksFromText(material.getExtractedText(), material.getUserId(), material.getMaterialId(),
-                    material.getFileHash());
+        /** 예전 모양(업로드 목차). 근거는 자료·해시만. */
+        public TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
+                           List<TextbookExtractor.TocEntry> entries) {
+            this(materialId, filename, fileHash, fromUnit, toUnit, entries,
+                    new TocResolver.Basis("MATERIAL", materialId, fileHash, null, null, null),
+                    filename == null ? "교재 목차" : "「" + filename + "」 목차", "MATERIAL", null, null, null);
         }
-        List<TextbookExtractor.Unit> out = new ArrayList<>();
-        for (MaterialTextUnit unit : units) {
-            out.add(new TextbookExtractor.Unit(unit.getUnitNo() == null ? out.size() + 1 : unit.getUnitNo(), unit.getText()));
-        }
-        return out;
-    }
 
-    /** 목차가 가장 긴 자료. 같으면 "교재 목차"로 연결한 자료를 앞에 둔다. */
-    private MaterialTextbookExtract bestToc(Materials materials) {
-        return materials.extracts().stream()
-                .filter(e -> e.getTocEntryCount() >= 3 && e.getTocJson() != null)
-                .max(Comparator.comparingInt((MaterialTextbookExtract e) -> e.getTocEntryCount())
-                        .thenComparing(e -> MaterialType.TEXTBOOK_TOC.name().equals(materials.types().get(e.getMaterialId()))))
-                .orElse(null);
+        public boolean isWeb() {
+            return "WEB".equals(kind);
+        }
     }
 
     // ===== 도움 =====
@@ -276,6 +355,15 @@ public class TextbookService {
             throw new NotFoundException(ErrorCode.COURSE_NOT_FOUND);
         }
         return course;
+    }
+
+    private static CourseTextbookWriter.Values merged(Map<String, String> current, Map<String, String> values) {
+        return new CourseTextbookWriter.Values(
+                values.containsKey("title") ? cut(values.get("title"), 300) : current.get("title"),
+                values.containsKey("author") ? cut(values.get("author"), 200) : current.get("author"),
+                values.containsKey("publisher") ? cut(values.get("publisher"), 200) : current.get("publisher"),
+                values.containsKey("isbn") ? cut(values.get("isbn"), 50) : current.get("isbn"),
+                values.containsKey("edition") ? cut(values.get("edition"), 100) : current.get("edition"));
     }
 
     static Map<String, String> currentValues(Course course) {
@@ -300,43 +388,6 @@ public class TextbookService {
             y = y.replace("-", "");
         }
         return x.equals(y);
-    }
-
-    private static final Set<String> KNOWN = Set.copyOf(FIELDS);
-
-    private Map<String, TextbookExtractor.Field> readBook(String json) {
-        if (json == null) {
-            return Map.of();
-        }
-        try {
-            Map<String, TextbookExtractor.Field> raw = objectMapper.readValue(json,
-                    new TypeReference<LinkedHashMap<String, TextbookExtractor.Field>>() {
-                    });
-            raw.keySet().retainAll(KNOWN);
-            return raw;
-        } catch (Exception e) {
-            return Map.of();
-        }
-    }
-
-    record TocJson(List<TextbookExtractor.TocEntry> entries, Integer fromUnit, Integer toUnit) {
-    }
-
-    private TocJson readToc(String json) {
-        try {
-            TocJson toc = objectMapper.readValue(json, TocJson.class);
-            return new TocJson(toc.entries() == null ? List.of() : toc.entries(), toc.fromUnit(), toc.toUnit());
-        } catch (Exception e) {
-            return new TocJson(List.of(), null, null);
-        }
-    }
-
-    private String write(Object value) {
-        try {
-            return objectMapper.writeValueAsString(value);
-        } catch (Exception e) {
-            throw new IllegalStateException(e);
-        }
     }
 
     private static String blankToNull(String value) {

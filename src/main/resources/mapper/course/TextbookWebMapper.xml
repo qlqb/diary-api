@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.textbook.web.TextbookWebMapper">
+
+    <resultMap id="pageMap" type="com.jungwoo.project.memo.course.textbook.web.TextbookWebPage">
+        <id     property="pageId"           column="page_id"/>
+        <result property="cacheScopeKey"    column="cache_scope_key"/>
+        <result property="urlHash"          column="url_hash"/>
+        <result property="url"              column="url"/>
+        <result property="site"             column="site"/>
+        <result property="latestRevisionId" column="latest_revision_id"/>
+        <result property="lastFetchedAt"    column="last_fetched_at"/>
+        <result property="lastFetchStatus"  column="last_fetch_status"/>
+        <result property="createdAt"        column="created_at"/>
+    </resultMap>
+
+    <resultMap id="revisionMap" type="com.jungwoo.project.memo.course.textbook.web.TextbookWebRevision">
+        <id     property="revisionId"    column="revision_id"/>
+        <result property="pageId"        column="page_id"/>
+        <result property="contentHash"   column="content_hash"/>
+        <result property="parserVersion" column="parser_version"/>
+        <result property="fetchedAt"     column="fetched_at"/>
+        <result property="httpStatus"    column="http_status"/>
+        <result property="isbn13"        column="isbn13"/>
+        <result property="title"         column="title"/>
+        <result property="authors"       column="authors"/>
+        <result property="authorNotes"   column="author_notes"/>
+        <result property="publisher"     column="publisher"/>
+        <result property="publishedDate" column="published_date"/>
+        <result property="edition"       column="edition"/>
+        <result property="tocRaw"        column="toc_raw"/>
+        <result property="tocJson"       column="toc_json"/>
+        <result property="tocEntryCount" column="toc_entry_count"/>
+        <result property="tocCoverage"   column="toc_coverage"/>
+        <result property="createdAt"     column="created_at"/>
+        <result property="url"           column="url"/>
+        <result property="site"          column="site"/>
+        <result property="cacheScopeKey" column="cache_scope_key"/>
+    </resultMap>
+
+    <insert id="insertPageIgnore" useGeneratedKeys="true" keyProperty="pageId">
+        INSERT IGNORE INTO textbook_web_pages (cache_scope_key, url_hash, url, site)
+        VALUES (#{cacheScopeKey}, #{urlHash}, #{url}, #{site})
+    </insert>
+
+    <select id="findPage" resultMap="pageMap">
+        SELECT * FROM textbook_web_pages WHERE cache_scope_key = #{cacheScopeKey} AND url_hash = #{urlHash}
+    </select>
+
+    <update id="updatePageFetch">
+        UPDATE textbook_web_pages
+           SET latest_revision_id = COALESCE(#{latestRevisionId}, latest_revision_id),
+               last_fetch_status = #{status}, last_fetched_at = #{fetchedAt}
+         WHERE page_id = #{pageId}
+    </update>
+
+    <insert id="insertRevisionIgnore" useGeneratedKeys="true" keyProperty="revisionId">
+        INSERT IGNORE INTO textbook_web_revisions
+            (page_id, content_hash, parser_version, fetched_at, http_status, isbn13, title, authors, publisher,
+             author_notes, published_date, edition, toc_raw, toc_json, toc_entry_count, toc_coverage)
+        VALUES (#{pageId}, #{contentHash}, #{parserVersion}, #{fetchedAt}, #{httpStatus}, #{isbn13}, #{title}, #{authors},
+                #{publisher}, #{authorNotes}, #{publishedDate}, #{edition}, #{tocRaw}, #{tocJson}, #{tocEntryCount}, #{tocCoverage})
+    </insert>
+
+    <select id="findRevisionByContent" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id
+         WHERE r.page_id = #{pageId} AND r.content_hash = #{contentHash} AND r.parser_version = #{parserVersion}
+    </select>
+
+    <sql id="inScope">
+        (p.cache_scope_key = 'SHARED' OR p.cache_scope_key = CONCAT('USER:', #{userId}))
+    </sql>
+
+    <select id="findRevision" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id
+         WHERE r.revision_id = #{revisionId} AND <include refid="inScope"/>
+    </select>
+
+    <select id="findRevisions" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id
+         WHERE <include refid="inScope"/>
+           AND r.revision_id IN
+        <foreach collection="revisionIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findLatestByIsbn" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_pages p JOIN textbook_web_revisions r ON r.revision_id = p.latest_revision_id
+         WHERE <include refid="inScope"/>
+           AND r.isbn13 = #{isbn13} AND p.last_fetched_at &gt;= #{since}
+         ORDER BY r.toc_entry_count DESC, r.revision_id DESC
+    </select>
+</mapper>

@@ -132,14 +132,22 @@ public record PlanBriefItem(
                 periodEnd, saidOn, flowProposalId);
     }
 
-    /** 초안 흐름·기간을 묶는다(markProposal). 이미 있는 값은 바꾸지 않는다 — 처음 묶인 범위가 그 합의의 범위다. */
+    /**
+     * 초안 흐름·기간을 묶는다(markProposal). 이미 있는 값은 바꾸지 않는다 — 처음 묶인 범위가 그 합의의 범위다.
+     * 수정 시각(updatedAt)은 그대로 둔다 — 범위를 묶는 것은 사용자가 그 합의를 고친 것이 아니다(가장 최근에 고친 합의를
+     * 고르는 판단(예: 계획 목적)이 초안 저장으로 바뀌지 않게).
+     */
     public PlanBriefItem bound(Long flow, LocalDate start, LocalDate end, LocalDateTime at) {
         Long nextFlow = flowProposalId != null ? flowProposalId : (SCOPE_THIS_DRAFT.equals(scope) ? flow : null);
         LocalDate nextStart = periodStart != null ? periodStart : (isPeriod() ? start : null);
         LocalDate nextEnd = periodEnd != null ? periodEnd : (isPeriod() ? end : null);
+        if (java.util.Objects.equals(nextFlow, flowProposalId) && java.util.Objects.equals(nextStart, periodStart)
+                && java.util.Objects.equals(nextEnd, periodEnd)) {
+            return this;
+        }
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
-                acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, at, nextStart,
-                nextEnd, saidOn, nextFlow);
+                acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history,
+                updatedAt != null ? updatedAt : at, nextStart, nextEnd, saidOn, nextFlow);
     }
 
     /** 사용자가 문장을 고쳤다. 최신 문장이 우선하고 이전 문장은 history에 남는다. 기간을 함께 말했으면 그 날짜로 바뀐다. */

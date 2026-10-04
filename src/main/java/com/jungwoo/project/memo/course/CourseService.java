@@ -1,6 +1,8 @@
 package com.jungwoo.project.memo.course;
 
+import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.course.textbook.CourseTextbookWriter;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.course.domain.CourseStatus;
@@ -32,6 +34,7 @@ public class CourseService {
 
     private final CourseMapper courseMapper;
     private final ProjectTidyMapper tidyMapper;
+    private final CourseTextbookWriter textbookWriter;
 
     @Transactional
     public CourseResponse create(Long userId, CourseCreateRequest request) {
@@ -49,31 +52,39 @@ public class CourseService {
     /**
      * 제목·분류·교재 정보를 고친다.
      *
-     * 교재는 사용자 편집 전용 경로(updateTextbookByUser)로 쓴다 — 받은 값을 그대로 넣고,
-     * 비우면 비운다. AI 분석 적용 경로(updateTextbookInfo)는 반대로 비어 있는 칸만 채우는데,
-     * 그래야 사람이 고쳐 놓은 값을 재분석이 조용히 뒤집지 않는다.
+     * 교재는 {@link CourseTextbookWriter}로만 쓴다. 요청에 온 칸만 바꾸고(없는 칸은 지금 값 유지, 빈 값은 지움),
+     * 화면이 본 교재 판과 다르면 409. 실제로 값이 바뀌었을 때만 출처가 "사용자가 적은 값"이 된다 — 이름만 고친 저장이
+     * 자료·웹에서 찾아 적용한 값의 출처를 사용자로 바꾸지 않게.
      */
     @Transactional
     public CourseResponse update(Long userId, Long courseId, CourseUpdateRequest request) {
-        Course before = getOwned(userId, courseId);
+        getOwned(userId, courseId);
         courseMapper.updateBasics(courseId, userId, blankToNull(request.getTitle()),
                 blankToNull(request.getGroupLabel()));
-        String title = blankToNull(request.getTextbookTitle());
-        String author = blankToNull(request.getTextbookAuthor());
-        String publisher = blankToNull(request.getTextbookPublisher());
-        String isbn = blankToNull(request.getTextbookIsbn());
-        String edition = blankToNull(request.getTextbookEdition());
-        // 교재 칸이 실제로 바뀌었을 때만 "사용자가 적은 값"으로 기록한다. 이름만 고친 저장이 자료에서 찾아 적용한 값의
-        // 출처를 사용자로 바꾸지 않게.
-        boolean changed = !java.util.Objects.equals(title, before.getTextbookTitle())
-                || !java.util.Objects.equals(author, before.getTextbookAuthor())
-                || !java.util.Objects.equals(publisher, before.getTextbookPublisher())
-                || !java.util.Objects.equals(isbn, before.getTextbookIsbn())
-                || !java.util.Objects.equals(edition, before.getTextbookEdition());
-        if (changed) {
-            courseMapper.updateTextbookByUser(courseId, userId, title, author, publisher, isbn, edition);
+        if (request.anyTextbookFieldPresent()) {
+            Course locked = textbookWriter.lock(userId, courseId);
+            CourseTextbookWriter.Values next = new CourseTextbookWriter.Values(
+                    pick(request, "title", request.getTextbookTitle(), locked.getTextbookTitle()),
+                    pick(request, "author", request.getTextbookAuthor(), locked.getTextbookAuthor()),
+                    pick(request, "publisher", request.getTextbookPublisher(), locked.getTextbookPublisher()),
+                    pick(request, "isbn", request.getTextbookIsbn(), locked.getTextbookIsbn()),
+                    pick(request, "edition", request.getTextbookEdition(), locked.getTextbookEdition()));
+            boolean changed = !next.equals(new CourseTextbookWriter.Values(blankToNull(locked.getTextbookTitle()),
+                    blankToNull(locked.getTextbookAuthor()), blankToNull(locked.getTextbookPublisher()),
+                    blankToNull(locked.getTextbookIsbn()), blankToNull(locked.getTextbookEdition())));
+            if (changed) {
+                if (request.getExpectedTextbookVersion() == null) {
+                    throw new BadRequestException(ErrorCode.TEXTBOOK_VERSION_REQUIRED);
+                }
+                textbookWriter.write(locked, request.getExpectedTextbookVersion(), next,
+                        CourseTextbookWriter.SOURCE_USER, null, null);
+            }
         }
         return get(userId, courseId);
+    }
+
+    private static String pick(CourseUpdateRequest request, String field, String sent, String current) {
+        return request.textbookFieldPresent(field) ? blankToNull(sent) : blankToNull(current);
     }
 
     /**
@@ -133,7 +144,7 @@ public class CourseService {
         return course;
     }
 
-    private String blankToNull(String value) {
+    private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value.trim();
     }
 }

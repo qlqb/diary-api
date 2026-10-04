@@ -720,6 +720,68 @@ requestedMaterialIds, requestedSectionIds, conversationId). `POST /api/plans/pro
 ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더해졌다(없으면 예전 모양 그대로 읽힌다).
 열린 정리안에 변경을 더할 때는 행을 잠그고 `revision = 화면이 본 값`일 때만 `ops_json`을 바꾸며 판을 올린다.
 
+## 23. 교재 목차 자동 검색 (2026-10-04)
+
+마이그레이션 `docs/sql/2026-10-04-textbook-web-toc.sql`(추가형, 다시 돌려도 됨). 설계 17번.
+
+### textbook_web_pages / textbook_web_revisions
+
+웹 근거. 페이지는 URL 하나의 캐시 자리(`latest_revision_id`, 마지막 수집 시각·상태)이고, 근거는 **불변** 리비전이다.
+
+| 표 | 열쇠 | 뜻 |
+|---|---|---|
+| textbook_web_pages | `UNIQUE (cache_scope_key, url_hash)` | `cache_scope_key` = `SHARED`(지원 서점의 정규화된 상품 주소) 또는 `USER:{userId}`(사용자 링크·그 밖의 페이지). 읽기는 항상 공유이거나 그 사용자의 것만 |
+| textbook_web_revisions | `UNIQUE (page_id, content_hash, parser_version)` | 식별(isbn13·title·authors·author_notes·publisher·published_date·edition)과 목차 원문(`toc_raw`)·구조화(`toc_json` = `{entries[{level, number, title, page, unit=원문 줄}], method RULE|MODEL_PICK, lines, readLines}`)·`toc_coverage`(PAGE_FULL·PARTIAL·UNKNOWN·NONE). content_hash에는 구조화 결과도 들어간다 |
+
+토픽·정리안·교재 칸은 리비전 id를 가리킨다 — 같은 URL의 내용이 나중에 바뀌어도 과거 근거를 그대로 다시 본다.
+
+### textbook_lookups
+
+과목 하나의 교재 조회 작업(상태의 원본). `UNIQUE (course_id, open_guard)` — 과목마다 열린 작업 하나.
+
+| 열 | 뜻 |
+|---|---|
+| basis_key | 과목·교재 판·단서 종류·종류별 입력의 해시. 결과 저장 때 다시 계산해 다르면 SUPERSEDED |
+| query_key | 종류별 입력만(과목·판 제외). 같은 질의의 완료 결과를 검색 없이 새 basis 행으로 복사할 때 |
+| query_json | 외부로 보낸 단서 그대로 `{title, author, publisher, isbn, edition, link, needsClue}` |
+| clue_origin | `CURRENT_TEXTBOOK` · `SYLLABUS` · `ISBN` · `USER_LINK` |
+| clue_material_id·clue_file_hash·clue_extractor_version | SYLLABUS 단서의 자료와 그때의 파일·추출 판 |
+| textbook_version | 등록 때의 교재 판 |
+| status | QUEUED·RUNNING·FOUND·NEEDS_CHOICE·BOOK_NO_TOC·NOT_FOUND·ACCESS_FAILED·FAILED·CLUE_CONFLICT·SUPERSEDED·CANCELLED·DISABLED |
+| result_json | `{clue, searchedWith, candidates[{revisionId, site, url, verdict MATCH|MISMATCH|UNVERIFIED|LINK, reasons[], 식별, tocCoverage, tocEntryCount, fetchedAt}], editions[{key, isbn13, …, bestRevisionId, revisionIds[], sameTocAs[]}], failures[{url, status}], clueOptions[], note}` |
+| chosen_revision_id | 사용자가 고른 판 |
+| auto_tidy_state·auto_tidy_next_at·tidy_job_id | 목차 확보 뒤 정리안 자동 생성: NONE·PENDING·ENQUEUED·WAITING_OPEN_PROPOSAL·DONE, 다음 평가 시각 |
+| attempt·max_attempts·next_run_at·lease_owner·lease_until·lease_token | 폴러 선점·임대(다른 작업 표와 같은 모양) |
+
+### textbook_lookup_usage
+
+`(user_id, usage_date) → calls`. 외부 호출(웹 검색·모델 보조) 직전에 `UPDATE … SET calls = calls + n WHERE calls + n <= 상한`으로 예약한다.
+
+### courses 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| textbook_version | 교재 칸이 바뀔 때마다 +1(CourseTextbookWriter만). 화면은 본 판을 보내고 다르면 409 |
+| textbook_web_revision_id | `textbook_info_source = WEB`일 때 그 판의 리비전. 같은 책의 표기만 고친 사용자 편집은 유지 |
+| textbook_toc_material_id·textbook_toc_file_hash·textbook_toc_book_key | "이 교재의 목차"로 이은 업로드 자료와 그때의 해시·책 열쇠. 교재 식별이 바뀌면 풀린다 |
+| textbook_web_lookup_enabled | 0이면 교재 단서를 외부로 보내지 않는다 |
+
+`textbook_info_source` CHECK에 `WEB`을 더했다.
+
+### course_topics 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| source_web_revision_id | 웹 목차에서 온 항목의 리비전. `source_material_id`(업로드 자료 출처)는 쓰지 않는다 |
+| source_textbook_key | 목차에서 온 항목의 책 열쇠(`isbn:…` 또는 `title:…`). 지금 교재와 다르면 "이전 교재 항목"(계획 범위로 세지 않음). 같은 책의 식별을 보강하면 새 열쇠로 옮겨진다 |
+
+### 그 밖
+
+- `project_tidy_proposals.toc_basis_json` — 이 안이 쓴 목차 근거 `{kind MATERIAL|WEB, materialId, fileHash, revisionId, textbookVersion, bookKey}`.
+  동일성 비교는 kind·자료·해시·리비전(판·책 열쇠는 정보).
+- `material_textbook_extracts.clue_json` — 교재 단서 `{source RULE|SIGNAL|MODEL|NONE, clues[{role, title, author, publisher, isbn, edition, unit, quote}]}`.
+  모델 보조 단서는 SIGNAL 자리에만 한 번 쓴다. 추출 판(extractor_version)이 2가 됐다(표 교재 칸·"/ 6" 쪽 표기).
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

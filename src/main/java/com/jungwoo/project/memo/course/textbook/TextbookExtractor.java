@@ -23,7 +23,11 @@ import java.util.regex.Pattern;
  */
 public final class TextbookExtractor {
 
-    public static final int VERSION = 1;
+    /**
+     * 2(2026-10-04): 강의계획서 교재 표(도서명·저자·출판사 머리 + 주교재/부교재 줄)를 교재 단서로 읽는다.
+     * 목차 줄 끝의 "/ 6" 쪽 표기와 Lesson·Section 머리를 읽는다.
+     */
+    public static final int VERSION = 2;
 
     /** 서지 단서를 찾을 앞쪽·뒤쪽 단위 수. 판권면은 보통 앞 몇 쪽이나 맨 뒤에 있다. */
     private static final int FRONT_UNITS = 8;
@@ -42,13 +46,29 @@ public final class TextbookExtractor {
     public record TocEntry(int level, String number, String title, Integer page, int unit) {
     }
 
-    public record Result(Map<String, Field> book, List<TocEntry> toc, Integer tocFromUnit, Integer tocToUnit) {
+    /**
+     * 강의계획서 등이 "이 과목의 교재"라고 적은 책 하나. 그 책이 정말 지금 쓰는 교재인지는 모른다 — 후보다.
+     *
+     * @param role  MAIN(주교재) · SUPPLEMENT(부교재·보조) · REFERENCE(참고) · UNKNOWN
+     * @param quote 읽은 원문 줄들 그대로
+     */
+    public record BookClue(String role, String title, String author, String publisher, String isbn, String edition,
+                           int unit, String quote) {
+    }
+
+    public record Result(Map<String, Field> book, List<TocEntry> toc, Integer tocFromUnit, Integer tocToUnit,
+                         List<BookClue> clues) {
+
+        public Result(Map<String, Field> book, List<TocEntry> toc, Integer tocFromUnit, Integer tocToUnit) {
+            this(book, toc, tocFromUnit, tocToUnit, List.of());
+        }
+
         public boolean hasToc() {
             return toc.size() >= MIN_TOC_ENTRIES;
         }
 
         public boolean isEmpty() {
-            return book.isEmpty() && !hasToc();
+            return book.isEmpty() && !hasToc() && clues.isEmpty();
         }
     }
 
@@ -133,6 +153,10 @@ public final class TextbookExtractor {
         }
     }
 
+    public static boolean isValidIsbn(String digits) {
+        return digits != null && validIsbn(digits);
+    }
+
     static boolean validIsbn(String digits) {
         if (digits.length() == 13 && digits.chars().allMatch(Character::isDigit)) {
             int sum = 0;
@@ -165,11 +189,11 @@ public final class TextbookExtractor {
     private static final Pattern TOC_HEAD = Pattern.compile(
             "^\\s*(목\\s*차|차\\s*례|contents|table\\s+of\\s+contents|brief\\s+contents)\\s*$", Pattern.CASE_INSENSITIVE);
     /** 줄 끝의 점선·가운뎃점과 쪽수. */
-    private static final String TAIL = "\\s*(?:[.·…‥ㆍ_\\-\\s]{2,})?\\s*(\\d{1,4})?\\s*$";
+    private static final String TAIL = "\\s*(?:[.·…‥ㆍ_\\-/\\s]{2,})?\\s*(?:p\\.\\s*)?(\\d{1,4})?\\s*$";
     private static final Pattern PART_OR_CHAPTER_KO = Pattern.compile(
             "^\\s*(제\\s*\\d{1,2}\\s*[부편장])\\s*[.:]?\\s*(.+?)" + TAIL);
     private static final Pattern CHAPTER_EN = Pattern.compile(
-            "^\\s*((?:CHAPTER|Chapter|PART|Part|Unit|UNIT)\\s*\\d{1,2})\\s*[.:-]?\\s*(.+?)" + TAIL);
+            "^\\s*((?:CHAPTER|Chapter|PART|Part|Unit|UNIT|Lesson|LESSON|Section|SECTION)\\s*\\d{1,2})\\s*[.:-]?\\s*(.+?)" + TAIL);
     private static final Pattern NUMBERED = Pattern.compile(
             "^\\s*(\\d{1,2}(?:\\.\\d{1,2}){0,3})\\s*(?:장|\\.|\\))?\\s+(\\D.*?)" + TAIL);
 
@@ -232,7 +256,7 @@ public final class TextbookExtractor {
         return out;
     }
 
-    static TocEntry parseLine(String line, int unitNo) {
+    public static TocEntry parseLine(String line, int unitNo) {
         Matcher m = PART_OR_CHAPTER_KO.matcher(line);
         if (m.matches()) {
             String number = m.group(1).replaceAll("\\s+", "");
@@ -259,7 +283,8 @@ public final class TextbookExtractor {
     }
 
     private static TocEntry entry(int level, String number, String rawTitle, String page, int unitNo) {
-        String title = rawTitle == null ? "" : rawTitle.replaceAll("[.·…‥ㆍ_]{2,}.*$", "").strip();
+        String title = rawTitle == null ? "" : rawTitle.replaceAll("[.·…‥ㆍ_]{2,}.*$", "")
+                .replaceAll("\\s*/\\s*$", "").strip();
         if (title.length() < 2 || title.replaceAll("[\\p{Punct}\\d\\s]", "").isEmpty()) {
             return null;
         }
@@ -285,6 +310,7 @@ public final class TextbookExtractor {
         List<TocEntry> toc = readToc(units, range);
         Map<String, Field> book = readBook(units);
         boolean found = toc.size() >= MIN_TOC_ENTRIES;
-        return new Result(book, found ? toc : List.of(), found ? range[0] : null, found ? range[1] : null);
+        return new Result(book, found ? toc : List.of(), found ? range[0] : null, found ? range[1] : null,
+                SyllabusTextbookTable.read(units));
     }
 }

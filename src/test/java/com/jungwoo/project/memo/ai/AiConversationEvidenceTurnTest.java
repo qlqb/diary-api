@@ -285,13 +285,14 @@ class AiConversationEvidenceTurnTest {
         when(evidenceService.readingLabel(any(), anyList())).thenReturn("확인 중");
         when(evidenceService.readMore(any(), any(), anyList(), anyInt()))
                 .thenReturn(new ConsultEvidenceService.ReadMoreResult("[추가로 읽은 원문]\n", 1, List.of()));
-        java.util.concurrent.atomic.AtomicBoolean secondCancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        // 두 번째 호출은 다른 스레드(boundedElastic)에서 구독된다 — 취소 신호도 그 스레드에서 늦게 올 수 있으니 기다린다.
+        java.util.concurrent.CountDownLatch secondCancelled = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch secondStarted = new java.util.concurrent.CountDownLatch(1);
         when(aiConsultationClient.streamTurn(any(), any(), any(), any()))
                 .thenReturn(Flux.just(chat("확인해 볼게요.\n<<<AI_STRUCTURED>>>\n"
                         + "{\"decision\":\"CHAT\",\"evidence\":{\"readMore\":[{\"ref\":\"M1\"}]}}")))
                 .thenReturn(Flux.<ChatResponse>never().doOnSubscribe(s -> secondStarted.countDown())
-                        .doOnCancel(() -> secondCancelled.set(true)));
+                        .doOnCancel(secondCancelled::countDown));
 
         RecordingSink sink = new RecordingSink();
         Disposable turn = service.streamAndComplete(prepared(), request("성적은?"), sink);
@@ -299,7 +300,7 @@ class AiConversationEvidenceTurnTest {
 
         turn.dispose();
 
-        assertThat(secondCancelled.get()).isTrue();
+        assertThat(secondCancelled.await(3, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
         assertThat(sink.completed).isNull();
     }
 
