@@ -180,7 +180,10 @@ public class TextbookLookupWorker {
 
         Map<Long, TextbookWebRevision> revisions = new LinkedHashMap<>();
         List<LookupResult.Failure> failures = new ArrayList<>();
-        String searchedWith;
+        String searchedWith = null;
+        // 조회 한 번이 여는 페이지 수와 이미 본 주소는 모든 수집 단계가 함께 쓴다.
+        Budget budget = new Budget(maxPages);
+        String searchNote = null;
 
         if (userLink) {
             searchedWith = "link";
@@ -189,46 +192,80 @@ public class TextbookLookupWorker {
                 return Result.SUPERSEDED;
             }
             // 사용자가 준 링크: 공개 주소면 어느 사이트든(사용자 범위 캐시). 주소 검사는 수집기가 한다.
-            collect(job, List.of(query.link()), notBefore, deadline, revisions, failures, false);
-        } else {
-            String isbn13 = BookPageParser.toIsbn13(BookPageParser.isbnOrNull(query.isbn()));
+            collect(job, List.of(query.link()), notBefore, deadline, revisions, failures, false, budget);
+        }
+        java.util.Set<Long> linkRevisionIds = new java.util.HashSet<>(revisions.keySet());
+        // 링크 페이지가 책은 확인해 줬는데 목차를 싣지 않았다(알라딘 상세 등) — 그 ISBN으로 다른 서점의 목차를 이어서 찾는다.
+        String linkIsbn = userLink ? linkedIsbnWithoutToc(clue, revisions) : null;
+        // 검색에는 링크 책의 ISBN을 보탠다. 판정은 따로 한다 — 이어서 찾은 페이지는 링크 책과 ISBN이 같을 때만 같은 판이고,
+        // 그 판정은 링크 페이지의 판정을 따른다(링크 책이 지금 교재로 확인되지 않았으면 사용자가 고르게 둔다).
+        BookMatcher.Clue searchClue = linkIsbn == null ? clue
+                : new BookMatcher.Clue(clue.title(), clue.author(), clue.publisher(), linkIsbn, clue.edition());
+        String linkVerdict = linkIsbn == null ? null : linkVerdictOf(clue, revisions, linkIsbn);
+        if (!userLink || linkIsbn != null) {
+            String isbn13 = linkIsbn != null ? linkIsbn : BookPageParser.toIsbn13(BookPageParser.isbnOrNull(query.isbn()));
             List<String> urls = new ArrayList<>();
-            searchedWith = "web_search";
+            searchedWith = linkIsbn != null ? "link" : "web_search";
             if (isbn13 != null) {
-                searchedWith = "isbn";
+                searchedWith = linkIsbn != null ? "link+isbn" : "isbn";
                 for (TextbookWebRevision r : job.isForceRefresh() ? List.<TextbookWebRevision>of()
                         : store.byIsbn(isbn13, job.getUserId(), LocalDateTime.now().minusDays(pageCacheDays))) {
                     revisions.put(r.getRevisionId(), r);
                 }
-                if (revisions.isEmpty()) {
+                if (revisions.values().stream().noneMatch(r -> r.getTocEntryCount() > 0) && linkIsbn == null) {
                     urls.add("https://www.aladin.co.kr/shop/wproduct.aspx?ISBN=" + isbn13);
                 }
             }
-            boolean haveToc = revisions.values().stream().anyMatch(r -> r.getTocEntryCount() > 0);
+            // 쓸 수 있는 목차만 센다 — 결국 다른 책으로 빠질 캐시 목차 때문에 검색을 건너뛰지 않게.
+            boolean haveToc = hasUsableToc(clue, linkIsbn, revisions);
             if (!haveToc) {
-                collect(job, urls, notBefore, deadline, revisions, failures, true);
-                haveToc = revisions.values().stream().anyMatch(r -> r.getTocEntryCount() > 0);
+                collect(job, urls, notBefore, deadline, revisions, failures, true, budget);
+                haveToc = hasUsableToc(clue, linkIsbn, revisions);
             }
-            if (!haveToc) {
+            // 링크로 이미 책을 확인했으면 이어서 하는 검색은 덤이다 — 못 해도 확인한 책 정보는 그대로 남긴다.
+            boolean followUp = linkIsbn != null;
+            if (!haveToc && followUp && !searchClient.isConfigured()) {
+                searchNote = "다른 서점에서 목차를 찾지 못했어요(서버에 웹 검색이 설정되지 않음).";
+            } else if (!haveToc && followUp && deadline - System.currentTimeMillis() < FOLLOW_UP_MIN_MILLIS) {
+                searchNote = "시간이 모자라 다른 서점에서 목차를 찾지 않았어요. [다시 찾기]로 이어서 찾을 수 있어요.";
+            } else if (!haveToc && budget.pagesLeft <= 0) {
+                // 검색해도 열 페이지가 없다 — 검색 비용을 쓰지 않는다.
+                searchNote = "이번 조회에서 열 수 있는 페이지를 다 써서 웹 검색을 하지 않았어요.";
+            } else if (!haveToc) {
                 if (!searchClient.isConfigured()) {
                     return finish(job, TextbookLookup.FAILED, new LookupResult(query, null, List.of(), List.of(),
                             failures, List.of(), "서버에 웹 검색이 설정되지 않았어요."), query, "NOT_CONFIGURED", null);
                 }
                 if (!lookupService.reserveCalls(job.getUserId(), 1)) {
-                    throw new DailyLimit();
+                    if (!followUp) {
+                        throw new DailyLimit();
+                    }
+                    searchNote = "오늘 웹 검색 횟수를 다 써서 다른 서점에서 목차를 찾지 않았어요.";
+                } else {
+                    if (!lookupService.isCurrent(job)) {
+                        lookupService.supersede(job);
+                        return Result.SUPERSEDED;
+                    }
+                    keepLease(job);
+                    BookWebSearchClient.SearchResult found = null;
+                    try {
+                        found = searchClient.search(searchClue);
+                    } catch (RuntimeException e) {
+                        // 인증 실패는 이어서 하는 검색이어도 올린다 — 스케줄러가 잘못된 키로 계속 부르지 않게 멈춘다.
+                        if (!followUp || e instanceof BookWebSearchClient.SearchFailure f && f.isAuth()) {
+                            throw e;
+                        }
+                        searchNote = "다른 서점에서 목차를 찾는 검색이 실패했어요. [다시 찾기]로 다시 해 볼 수 있어요.";
+                    }
+                    if (found != null) {
+                        searchedWith = followUp ? "link+isbn+web_search" : isbn13 != null ? "isbn+web_search" : "web_search";
+                        List<String> hinted = new ArrayList<>();
+                        for (BookWebSearchClient.PageHint hint : found.pages()) {
+                            hinted.add(hint.url());
+                        }
+                        collect(job, hinted, notBefore, deadline, revisions, failures, true, budget);
+                    }
                 }
-                if (!lookupService.isCurrent(job)) {
-                    lookupService.supersede(job);
-                    return Result.SUPERSEDED;
-                }
-                keepLease(job);
-                BookWebSearchClient.SearchResult found = searchClient.search(clue);
-                searchedWith = isbn13 != null ? "isbn+web_search" : "web_search";
-                List<String> hinted = new ArrayList<>();
-                for (BookWebSearchClient.PageHint hint : found.pages()) {
-                    hinted.add(hint.url());
-                }
-                collect(job, hinted, notBefore, deadline, revisions, failures, true);
             }
         }
 
@@ -236,8 +273,24 @@ public class TextbookLookupWorker {
         List<LookupResult.Candidate> candidates = new ArrayList<>();
         for (TextbookWebRevision r : revisions.values()) {
             BookMatcher.Result m = BookMatcher.match(clue, WebEvidenceStore.asParsed(r));
-            String verdict = userLink && m.verdict() != BookMatcher.Verdict.MATCH ? "LINK" : m.verdict().name();
-            candidates.add(new LookupResult.Candidate(r.getRevisionId(), r.getSite(), displayUrl(r), verdict, m.reasons(),
+            List<String> reasons = m.reasons();
+            String verdict;
+            if (!userLink) {
+                verdict = m.verdict().name();
+            } else if (linkRevisionIds.contains(r.getRevisionId())) {
+                // 사용자가 직접 준 링크의 페이지 — 맞다고 확인되지 않아도 사용자가 고를 수 있다.
+                verdict = m.verdict() == BookMatcher.Verdict.MATCH ? "MATCH" : "LINK";
+            } else if (linkIsbn != null && linkIsbn.equals(r.getIsbn13()) && m.verdict() != BookMatcher.Verdict.MISMATCH) {
+                verdict = linkVerdict;
+                reasons = new ArrayList<>(reasons);
+                reasons.add("준 링크의 책과 ISBN이 같아요");
+            } else {
+                // 이어서 찾은 페이지가 링크의 책이 아니다 — 고를 수 없다.
+                verdict = "MISMATCH";
+                reasons = new ArrayList<>(reasons);
+                reasons.add("준 링크의 책과 ISBN이 달라요");
+            }
+            candidates.add(new LookupResult.Candidate(r.getRevisionId(), r.getSite(), displayUrl(r), verdict, reasons,
                     r.getIsbn13(), r.getTitle(), r.getAuthors(), r.getPublisher(), r.getPublishedDate(), r.getEdition(),
                     r.getTocCoverage(), r.getTocEntryCount(), r.getFetchedAt() == null ? null : r.getFetchedAt().format(AT)));
         }
@@ -265,9 +318,65 @@ public class TextbookLookupWorker {
         } else {
             status = TextbookLookup.NEEDS_CHOICE;
         }
+        if (searchNote != null && !TextbookLookup.FOUND.equals(status) && note == null) {
+            note = searchNote;
+        }
         String autoTidy = TextbookLookup.FOUND.equals(status) ? "PENDING" : "NONE";
         LookupResult result = new LookupResult(sent, searchedWith, candidates, editions, failures, List.of(), note);
         return finish(job, status, result, sent, null, autoTidy);
+    }
+
+    /** 이어서 하는 검색을 시작할 최소 남은 시간 — 검색 뒤 페이지를 받을 시간까지. */
+    private static final long FOLLOW_UP_MIN_MILLIS = 25_000;
+
+    /** 조회 한 번의 페이지 예산과 이미 본 주소. */
+    private static final class Budget {
+        int pagesLeft;
+        final java.util.Set<String> visited = new java.util.HashSet<>();
+
+        Budget(int pages) {
+            this.pagesLeft = pages;
+        }
+    }
+
+    /** 최종 후보로 남을 목차가 있다 — 다른 책(MISMATCH)이 아니고, 링크를 이어 찾는 중이면 링크 책과 ISBN이 같다. */
+    private static boolean hasUsableToc(BookMatcher.Clue clue, String linkIsbn, Map<Long, TextbookWebRevision> revisions) {
+        for (TextbookWebRevision r : revisions.values()) {
+            if (r.getTocEntryCount() <= 0 || linkIsbn != null && !linkIsbn.equals(r.getIsbn13())) {
+                continue;
+            }
+            if (BookMatcher.match(clue, WebEvidenceStore.asParsed(r)).verdict() != BookMatcher.Verdict.MISMATCH) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 링크 페이지(그 ISBN)의 지금 교재 단서 판정 — 맞으면 MATCH, 확인 못 했으면 LINK(사용자가 고른다). */
+    private static String linkVerdictOf(BookMatcher.Clue clue, Map<Long, TextbookWebRevision> revisions, String isbn) {
+        for (TextbookWebRevision r : revisions.values()) {
+            if (isbn.equals(r.getIsbn13())
+                    && BookMatcher.match(clue, WebEvidenceStore.asParsed(r)).verdict() == BookMatcher.Verdict.MATCH) {
+                return "MATCH";
+            }
+        }
+        return "LINK";
+    }
+
+    /**
+     * 사용자 링크에서 읽은 책의 ISBN — 그 페이지가 다른 책이라고 판정되지 않았고 목차가 없을 때만. 목차가 있으면 null.
+     */
+    private static String linkedIsbnWithoutToc(BookMatcher.Clue clue, Map<Long, TextbookWebRevision> revisions) {
+        if (revisions.values().stream().anyMatch(r -> r.getTocEntryCount() > 0)) {
+            return null;
+        }
+        for (TextbookWebRevision r : revisions.values()) {
+            if (r.getIsbn13() != null
+                    && BookMatcher.match(clue, WebEvidenceStore.asParsed(r)).verdict() != BookMatcher.Verdict.MISMATCH) {
+                return r.getIsbn13();
+            }
+        }
+        return null;
     }
 
     /**
@@ -275,10 +384,10 @@ public class TextbookLookupWorker {
      *                  "자동으로 열지 않음"으로 남긴다(사용자가 그 링크를 직접 주면 그때 연다)
      */
     private void collect(TextbookLookup job, List<String> urls, LocalDateTime notBefore, long deadline,
-                         Map<Long, TextbookWebRevision> revisions, List<LookupResult.Failure> failures, boolean automatic) {
-        int tried = 0;
+                         Map<Long, TextbookWebRevision> revisions, List<LookupResult.Failure> failures, boolean automatic,
+                         Budget budget) {
         for (String raw : urls) {
-            if (raw == null || tried >= maxPages || System.currentTimeMillis() >= deadline) {
+            if (raw == null || budget.pagesLeft <= 0 || System.currentTimeMillis() >= deadline) {
                 break;
             }
             WebEvidenceStore.Target target;
@@ -292,7 +401,10 @@ public class TextbookLookupWorker {
                 failures.add(new LookupResult.Failure(SafePageFetcher.masked(target.url()), "NOT_OPENED_AUTOMATICALLY"));
                 continue;
             }
-            tried++;
+            if (!budget.visited.add(target.url())) {
+                continue; // 이 조회에서 이미 본 주소(사용자 링크가 검색 결과에 다시 나오는 경우 등)
+            }
+            budget.pagesLeft--;
             TextbookWebRevision cached = store.cached(target, job.getUserId(), notBefore);
             if (cached != null) {
                 if (WebEvidenceStore.asParsed(cached).hasIdentity()) {
