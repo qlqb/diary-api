@@ -16,6 +16,7 @@
         <result property="sourceLocator"   column="source_locator"/>
         <result property="sourceWebRevisionId" column="source_web_revision_id"/>
         <result property="sourceTextbookKey" column="source_textbook_key"/>
+        <result property="sourceTocSeq" column="source_toc_seq"/>
         <result property="status"          column="status"/>
         <result property="userMark"        column="user_mark"/>
         <result property="mergedIntoTopicId" column="merged_into_topic_id"/>
@@ -32,10 +33,10 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="topicId">
         INSERT INTO course_topics (
             user_id, course_id, parent_topic_id, title, order_index,
-            source_type, source_material_id, source_locator, source_web_revision_id, source_textbook_key, status
+            source_type, source_material_id, source_locator, source_web_revision_id, source_textbook_key, source_toc_seq, status
         ) VALUES (
             #{userId}, #{courseId}, #{parentTopicId}, #{title}, #{orderIndex},
-            #{sourceType}, #{sourceMaterialId}, #{sourceLocator}, #{sourceWebRevisionId}, #{sourceTextbookKey}, #{status}
+            #{sourceType}, #{sourceMaterialId}, #{sourceLocator}, #{sourceWebRevisionId}, #{sourceTextbookKey}, #{sourceTocSeq}, #{status}
         )
     </insert>
 

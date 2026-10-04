@@ -782,6 +782,34 @@ ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더
 - `material_textbook_extracts.clue_json` — 교재 단서 `{source RULE|SIGNAL|MODEL|NONE, clues[{role, title, author, publisher, isbn, edition, unit, quote}]}`.
   모델 보조 단서는 SIGNAL 자리에만 한 번 쓴다. 추출 판(extractor_version)이 2가 됐다(표 교재 칸·"/ 6" 쪽 표기).
 
+## 24. 학습 기억·목차 원본 순번 (2026-10-05)
+
+마이그레이션 `docs/sql/2026-10-05-study-memory.sql`(추가형, 다시 돌려도 됨). 설계 18번.
+
+### user_contexts 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| fact_kind | PROGRESS(수업 진도) / EXAM_SCOPE / DIFFICULTY(내가 막힌 곳) / RESOLVED / GOAL / PREFERENCE / CONSTRAINT / OTHER. NULL = 예전 행 |
+| fact_label | EXAM_SCOPE의 시험 이름. 같은 과목·종류·이름끼리만 대체 |
+| help_level | RESOLVED의 SOLO / GUIDED. 사용자 말로 확인된 것만 |
+| said_at | 근거 발화 시각(사용자 메시지 created_at, 수정·확인은 그 시각). 대체 순서의 기준 — 같은 초면 source_message_id, 수정이 이긴다 |
+| content_key | 정규화 본문의 SHA-256(64자). 중복·철회 판정. 예전 행은 NULL(정규화 비교로 대신) |
+
+인덱스 `(user_id, course_id, fact_kind, status)`, `(user_id, content_key, status)`. 쓰기(자동 저장·고치기·확인)는 과목 행
+`FOR UPDATE` 아래 READ COMMITTED 트랜잭션 — 잠금을 기다린 뒤 다른 턴의 커밋을 보고 "과목당 현재 값 하나"를 지킨다.
+
+### course_topics 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| source_toc_seq | 같은 교재 목차 안의 원본 순번(1부터). 골격(TocSkeleton)·정리안 ADD(tocLine) 두 경로 모두 채운다. 트리 순서(order_index)와 달리 바뀌지 않는다 — 제목이 같은 단원을 가른다. 목차에서 오지 않은 항목은 NULL |
+
+### 그 밖
+
+- `ai_proposal_items.evidence_json`에 `goal`·`goalBasis`. `ai_proposals.plan_request_json`에 `projectStates`(과목별 상태 지문). 스키마 변경 없음.
+- `ai_usage_logs.feature`에 `MEMORY_EXTRACT`(자료 원문 턴의 사용자 발화 전용 기억 추출).
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

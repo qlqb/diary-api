@@ -373,7 +373,8 @@ public class PlanDraftService {
                     extras == null ? null : extras.briefId(), extras == null ? null : extras.briefVersion(),
                     origin == null ? null : origin.previousProposalId(),
                     generated.extras() == null ? null : generated.extras().evidence(),
-                    origin == null ? null : origin.flowRootProposalId(), spec.purpose()));
+                    origin == null ? null : origin.flowRootProposalId(), spec.purpose(),
+                    extras == null ? null : extras.projectStates()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
             return null;
@@ -608,6 +609,10 @@ public class PlanDraftService {
      * 이 초안을 만든 뒤 상담 합의나 그때 읽은 기억이 바뀌었는가. 바뀌었으면 STALE과 그 이유를 돌려준다.
      * 판단은 서버 기록의 비교다(합의 판 번호, 근거로 든 기억 행의 상태·수정 시각) — 모델에게 묻지 않는다.
      */
+    /** 프로젝트 상태(초안 최신성). 단위 테스트처럼 없을 수 있다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.state.ProjectStateService projectStateService;
+
     PlanDraftResponse.Freshness freshnessOf(Long userId, AiProposal proposal, PlanRequestContext context,
                                             PlanProvenance provenance) {
         List<String> reasons = new ArrayList<>();
@@ -636,6 +641,20 @@ public class PlanDraftService {
                     proposal.getConversationId(), userId, proposal.getCreatedAt().plusSeconds(2)) > 0) {
                 reasons.add("이 초안을 만든 뒤의 답변으로 계획 방향이 바뀌었어요.");
             }
+            /*
+             * 프로젝트 상태(진도·시험 범위·막힘·해결·실제 수업 정정)가 생성 때와 다르면 오래된 초안이다 — 다른 대화에서 새 막힘이
+             * 생겼거나 추정을 "맞아요"로 확인한 것도 여기서 잡힌다(같은 행이 바뀌어도 지문이 바뀐다). 서버 기록의 비교라
+             * 새로고침해도 유지된다.
+             */
+            if (reasons.isEmpty() && context != null && context.projectStates() != null && projectStateService != null) {
+                for (var entry : context.projectStates().entrySet()) {
+                    var now = projectStateService.loadQuietly(userId, entry.getKey());
+                    if (now != null && !now.fingerprint().equals(entry.getValue())) {
+                        reasons.add("이 초안을 만든 뒤 프로젝트에서 기억하는 진도·막힌 곳이 바뀌었어요.");
+                        break;
+                    }
+                }
+            }
             if (provenance != null && provenance.providedSources() != null && userContextMapper != null) {
                 for (var source : provenance.providedSources()) {
                     if (source.sourceType() != com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType.USER_CONTEXT
@@ -648,6 +667,11 @@ public class PlanDraftService {
                     }
                     boolean changed = row.getStatus() != com.jungwoo.project.memo.ai.domain.UserContextStatus.ACTIVE
                             && row.getStatus() != com.jungwoo.project.memo.ai.domain.UserContextStatus.STALE;
+                    // 같은 행이 바뀐 것(추정 확인 등)도 변경이다 — 생성 때 기록한 수정 시각과 비교한다.
+                    if (!changed && source.sourceUpdatedAt() != null && row.getUpdatedAt() != null
+                            && row.getUpdatedAt().isAfter(source.sourceUpdatedAt())) {
+                        changed = true;
+                    }
                     if (changed) {
                         reasons.add("이 초안이 참고한 '내 상황'을 고치거나 지웠어요.");
                         break;
@@ -696,6 +720,8 @@ public class PlanDraftService {
                 if (evidence != null) {
                     item.setSelectionReason(evidence.reason());
                     item.setOrigin(evidence.origin());
+                    item.setLearningGoal(evidence.goal());
+                    item.setLearningGoalBasis(evidence.goalBasis());
                     if (startSourceResolver != null) {
                         item.setStartSource(startSourceResolver.resolve(userId, evidence, provenance));
                     }

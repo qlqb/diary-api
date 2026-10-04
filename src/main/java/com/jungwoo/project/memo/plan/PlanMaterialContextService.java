@@ -80,19 +80,60 @@ public class PlanMaterialContextService {
     public record TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
                             String sourceMaterialFilename, int depth, TopicProgressStatus progress,
                             TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
-                            LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook) {
+                            LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook,
+                            /** (2026-10-05) 같은 교재 목차 안의 원본 순번. 목차에서 오지 않았으면 null */
+                            Integer tocSeq,
+                            /**
+                             * (2026-10-05) 프로젝트 기억에서 온 표시(막힌 곳·도움받아 해결). 있으면 선택과 무관하게 판단에 남는다 —
+                             * 막혔던 단원이 목록에 없으면 계획이 그 단원을 가리킬 수 없다(실호출 재현).
+                             */
+                            String stateNote) {
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook, Integer tocSeq) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, tocSeq, null);
+        }
+
+        public TopicLine withStateNote(String note) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook,
+                    tocSeq, note);
+        }
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, null);
+        }
 
         public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
                          String sourceMaterialFilename, int depth, TopicProgressStatus progress,
                          TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
                          LocalDate assignmentDue, boolean assignmentLinked) {
             this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
-                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, false);
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, false, null);
         }
 
         TopicLine withPriorTextbook(boolean prior) {
             return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
-                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, prior);
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, prior, tocSeq,
+                    stateNote);
+        }
+
+        public TopicLine withTocSeq(Integer seq) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, seq,
+                    stateNote);
+        }
+
+        /** 교재 목차에서 온 항목인가(제목·쪽만 확인). */
+        public boolean fromToc() {
+            return com.jungwoo.project.memo.learning.TocTopics.isToc(locator);
         }
 
         public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
@@ -104,12 +145,12 @@ public class PlanMaterialContextService {
 
         /** 판단에 반드시 남아야 하는 항목(선택 결과와 무관). */
         public boolean requiredFact() {
-            return progress == TopicProgressStatus.IN_PROGRESS || firstUnlearned || assignmentLinked;
+            return progress == TopicProgressStatus.IN_PROGRESS || firstUnlearned || assignmentLinked || stateNote != null;
         }
 
         TopicLine with(boolean first, LocalDate due, boolean assignment) {
             return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
-                    depth, progress, mark, lastStudiedAt, first, due, assignment, priorTextbook);
+                    depth, progress, mark, lastStudiedAt, first, due, assignment, priorTextbook, tocSeq, stateNote);
         }
     }
 
@@ -205,6 +246,12 @@ public class PlanMaterialContextService {
                              List<CourseMaterial> materials, int totalTopics) {
             this(courseId, courseTitle, topics, sections, excluded, open, completed, unconfirmed, pending, materials,
                     totalTopics, Map.of());
+        }
+
+        /** 학습 항목만 바꾼 사본(프로젝트 기억 표시를 붙일 때). */
+        public CourseCatalog withTopics(List<TopicLine> newTopics) {
+            return new CourseCatalog(courseId, courseTitle, newTopics, sections, excluded, open, completed, unconfirmed,
+                    pending, materials, totalTopics, proposedBySection);
         }
 
         public List<TopicLine> requiredTopics() {
@@ -510,7 +557,7 @@ public class PlanMaterialContextService {
     private void flatten(List<TopicLine> out, TopicResponse node, int depth) {
         out.add(new TopicLine(node.getTopicId(), node.getParentTopicId(), node.getTitle(), node.getSourceLocator(),
                 node.getSourceMaterialId(), node.getSourceMaterialFilename(), depth, node.getProgressStatus(),
-                node.getUserMark(), node.getLastStudiedAt(), false));
+                node.getUserMark(), node.getLastStudiedAt(), false).withTocSeq(node.getSourceTocSeq()));
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
                 flatten(out, child, depth + 1);

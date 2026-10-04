@@ -341,6 +341,10 @@ public class AiConversationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.consult.ConsultTurnService consultTurnService;
 
+    /** 자료 원문을 실은 턴의 기억을 사용자 발화만으로 다시 뽑는다. 없으면 그 턴은 기억 없이 끝난다(예전 동작). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.consult.UserMemoryExtractor userMemoryExtractor;
+
     static final String ASSUMED_INTENSITY_NOTE =
             " (분량은 '보통'을 기준으로 잡아요. 쓸 수 있는 시간을 말해 줬다면 그 시간이 우선이에요.)";
 
@@ -488,11 +492,20 @@ public class AiConversationService {
 
         // 지금 화면의 실제 상태(오늘 실행/이번 주 일정/프로젝트 자료)를 가장 먼저 확보하고 그
         // 길이만큼 예산에서 뺀다 — 이 블록이 없으면 "오늘 줄여줘" 같은 요청의 근거 자체가 없다.
-        String workspaceBlock = useEvidence
+        String screenBlock = useEvidence
                 ? aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(),
                         request.getRequestedAction(), false)
                 : aiWorkspaceContextBuilder.build(conversation, userId, requestMoment.toLocalDateTime(),
                         request.getRequestedAction());
+        /*
+         * 프로젝트의 확인된 상태(교재·진도·시험 범위·막힘·해결). 화면 상태의 잘림과 따로, 예산을 먼저 차지한다 — 새 대화에서도
+         * 이미 말한 교재·진도를 다시 묻지 않게. 여기 실린 기억은 장기 컨텍스트에서 뺀다(실제로 실린 id만).
+         */
+        com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered projectState = java.util.Objects.requireNonNullElse(
+                aiWorkspaceContextBuilder.projectStateBlock(conversation, userId, request.getRequestedAction()),
+                com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered.EMPTY);
+        String workspaceBlock = projectState.text().isEmpty() ? screenBlock : screenBlock + "\n" + projectState.text();
+        java.util.Set<Long> shownState = new java.util.HashSet<>(projectState.contextIds());
 
         /*
          * 진행 중 요청(draft). 일반 상담 턴(AUTO)에서만 다룬다 — 버튼 턴(CREATE_PROPOSAL)은 이미
@@ -539,8 +552,8 @@ public class AiConversationService {
 
         // requestMessageId(현재 사용자 발언)는 이미 PROCESSING으로 ai_messages에 저장돼 있다 —
         // "최근 대화" 조회에서 제외해야 buildUserPrompt의 "사용자 상담 원문"과 중복되지 않는다.
-        String contextBlock = contextSnapshotService.buildContextBlock(
-                conversationId, userId, conversation.getSummary(), contextBudgetChars, requestMessageId);
+        String contextBlock = contextBlock(conversationId, userId, conversation.getSummary(), contextBudgetChars,
+                requestMessageId, shownState);
         String fixedBlocks = draftBlock + briefBlock;
         java.util.function.Function<String, String> promptWith = extra -> buildUserPrompt(request, fixedBlocks,
                 workspaceBlock, evidenceBlock + extra, contextBlock, requestMoment.toLocalDate());
@@ -573,8 +586,8 @@ public class AiConversationService {
         TurnRun run = new TurnRun(conversation, request, sink, requestMoment.toLocalDate(), draftContext, systemPrompt,
                 promptWith, evidenceTurn, System.nanoTime() + Duration.ofSeconds(requestTimeoutSeconds).toNanos());
         run.requestMessageId = requestMessageId;
-        run.contextRebuilder = budget -> contextSnapshotService.buildContextBlock(
-                conversationId, userId, conversation.getSummary(), budget, requestMessageId);
+        run.contextRebuilder = budget -> contextBlock(conversationId, userId, conversation.getSummary(), budget,
+                requestMessageId, shownState);
         run.contextBudgetChars = contextBudgetChars;
         run.promptWithContext = (extra, ctx) -> buildUserPrompt(request, fixedBlocks, workspaceBlock, evidenceBlock + extra,
                 ctx, requestMoment.toLocalDate());
@@ -587,6 +600,53 @@ public class AiConversationService {
             first.dispose();
         }
         return run.subscriptions;
+    }
+
+    /**
+     * 사용자 발화만 보는 기억 추출을 부를 때: (1) 자료 원문을 실은 턴 — 원문을 본 모델의 기억은 버렸다, (2) 발화에 진도·막힘·해결
+     * 신호가 분명한데 모델이 과목 사실(진도·시험 범위·막힘·해결) 기억을 하나도 내지 않았을 때(실호출에서 "Unit 4까지 나갔어"·
+     * "이제 만들 수 있어"를 빠뜨린 것을 재현). 둘 다 아니면 모델의 기억을 그대로 쓴다.
+     */
+    private com.jungwoo.project.memo.ai.consult.ConsultOut withExtractedMemory(
+            AiConversation conversation, String message, com.jungwoo.project.memo.ai.consult.ConsultOut out,
+            boolean untrustedTextShown) {
+        if (userMemoryExtractor == null) {
+            return out;
+        }
+        boolean missedStudyFact = !untrustedTextShown && StudyFactRules.strongStudySignal(message)
+                && (out == null || out.memory() == null || out.memory().stream().noneMatch(m -> m != null
+                && isCourseFact(com.jungwoo.project.memo.ai.domain.FactKind.parse(m.kind()))));
+        if (!untrustedTextShown && !missedStudyFact) {
+            return out;
+        }
+        List<com.jungwoo.project.memo.ai.consult.ConsultOut.MemoryOut> extracted = userMemoryExtractor.extract(
+                conversation.getUserId(), conversation.getCourseId(), message);
+        if (extracted.isEmpty()) {
+            return out;
+        }
+        List<com.jungwoo.project.memo.ai.consult.ConsultOut.MemoryOut> memory = new ArrayList<>();
+        if (missedStudyFact && out != null && out.memory() != null) {
+            memory.addAll(out.memory()); // 모델이 낸 다른 기억(선호 등)은 그대로 두고 빠진 과목 사실만 보탠다
+        }
+        memory.addAll(extracted);
+        return out == null ? new com.jungwoo.project.memo.ai.consult.ConsultOut(null, null, memory, null)
+                : new com.jungwoo.project.memo.ai.consult.ConsultOut(out.question(), out.direction(), memory, out.activity());
+    }
+
+    private static boolean isCourseFact(com.jungwoo.project.memo.ai.domain.FactKind kind) {
+        return kind == com.jungwoo.project.memo.ai.domain.FactKind.PROGRESS
+                || kind == com.jungwoo.project.memo.ai.domain.FactKind.EXAM_SCOPE
+                || kind == com.jungwoo.project.memo.ai.domain.FactKind.DIFFICULTY
+                || kind == com.jungwoo.project.memo.ai.domain.FactKind.RESOLVED;
+    }
+
+    /** 상태 블록에 실린 기억이 없으면 예전 그대로 부른다(장기 컨텍스트에서 뺄 것이 없다). */
+    private String contextBlock(Long conversationId, Long userId, String summary, int budget, Long requestMessageId,
+                                java.util.Set<Long> shownState) {
+        return shownState.isEmpty()
+                ? contextSnapshotService.buildContextBlock(conversationId, userId, summary, budget, requestMessageId)
+                : contextSnapshotService.buildContextBlock(conversationId, userId, summary, budget, requestMessageId,
+                shownState);
     }
 
     /** 추가 읽기를 하려면 남아 있어야 하는 시간. 이보다 적으면 읽지 않고 그 사실을 답변과 출처에 남긴다. */
@@ -1388,10 +1448,28 @@ public class AiConversationService {
          */
         com.jungwoo.project.memo.ai.consult.ConsultView consult = null;
         if (consultTurnService != null && requestedAction == RequestedAction.AUTO) {
+            com.jungwoo.project.memo.ai.consult.ConsultOut consultOut = structured == null ? null
+                    : restrictConsult(structured.consult(), request.getMessage(), untrustedTextShown);
+            java.time.LocalDateTime saidAt = null;
+            try {
+                consultOut = withExtractedMemory(conversation, request.getMessage(), consultOut, untrustedTextShown);
+                AiMessage asked = aiMessageMapper.findByIdAndUserId(requestMessageId, conversation.getUserId());
+                saidAt = asked == null ? null : asked.getCreatedAt();
+            } catch (RuntimeException e) {
+                // 부가 처리 실패로 이미 저장된 답변을 실패로 만들지 않는다.
+                log.warn("상담 기억 보조 처리 실패 — 답변은 그대로 전달한다. conversationId={}, {}",
+                        conversation.getConversationId(), e.getClass().getSimpleName());
+            }
+            if (saidAt == null && consultOut != null && consultOut.memory() != null && !consultOut.memory().isEmpty()) {
+                // 발화 시각을 모르면 늦게 끝난 옛 턴이 최신 정정을 덮을 수 있다 — 답변은 그대로, 이 턴의 기억만 저장하지 않는다.
+                log.warn("사용자 발화 시각을 확인하지 못해 이 턴의 기억을 저장하지 않는다. conversationId={}",
+                        conversation.getConversationId());
+                consultOut = new com.jungwoo.project.memo.ai.consult.ConsultOut(consultOut.question(),
+                        consultOut.direction(), List.of(), consultOut.activity());
+            }
             consult = consultTurnService.finish(conversation.getUserId(), conversation.getConversationId(),
                     requestMessageId, completion.assistantMessage().getMessageId(), request.getMessage(),
-                    structured == null ? null : restrictConsult(structured.consult(), request.getMessage(),
-                            untrustedTextShown), evidence);
+                    consultOut, evidence, saidAt, conversation.getCourseId());
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(

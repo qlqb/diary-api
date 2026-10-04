@@ -50,8 +50,21 @@ public record PlanRequestContext(
         EvidenceSnapshot evidence,
         Long flowRootProposalId,
         /** (2026-10-04) 화면에서 고른 계획 목적. 다시 만들 때 그대로 쓴다. */
-        String purpose
+        String purpose,
+        /** (2026-10-05) 생성 때의 과목별 프로젝트 상태 지문. 지금과 다르면 초안이 오래된 것이다. 예전 초안은 null */
+        java.util.Map<Long, String> projectStates
 ) {
+
+    public PlanRequestContext(int version, String source, LocalDate startDate, LocalDate endDate, PlanIntensity intensity,
+                              String title, String instruction, List<Long> courseIds, List<Long> excludeTopicIds,
+                              List<Long> requestedMaterialIds, List<Long> requestedSectionIds,
+                              FamiliarityAnswer familiarityAnswer, List<Long> familiarityTopicIds, Long conversationId,
+                              String requestKey, Long briefId, Integer briefVersion, Long previousProposalId,
+                              EvidenceSnapshot evidence, Long flowRootProposalId, String purpose) {
+        this(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
+                requestedMaterialIds, requestedSectionIds, familiarityAnswer, familiarityTopicIds, conversationId,
+                requestKey, briefId, briefVersion, previousProposalId, evidence, flowRootProposalId, purpose, null);
+    }
     public static final int VERSION = 2;
 
     /** 목적 칸이 생기기 전 모양. */

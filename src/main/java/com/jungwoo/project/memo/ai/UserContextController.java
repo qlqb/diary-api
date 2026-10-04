@@ -31,7 +31,19 @@ public class UserContextController {
 
     private final UserContextService userContextService;
 
-    public record EditRequest(String content) {
+    /**
+     * 고치기. content 말고는 선택 — 비우면 그대로 둔다.
+     *
+     * @param kind    종류(PROGRESS·EXAM_SCOPE·DIFFICULTY·RESOLVED·GOAL·PREFERENCE·CONSTRAINT·OTHER)
+     * @param topicId 단원(그 과목의 단원만). 0이면 단원 연결을 끊는다
+     * @param help    해결의 도움 수준 SOLO / GUIDED
+     * @param label   시험 이름(시험 범위)
+     */
+    public record EditRequest(String content, String kind, Long topicId, String help, String label) {
+
+        public EditRequest(String content) {
+            this(content, null, null, null, null);
+        }
     }
 
     /** @param staleDraftIds 이 내용을 근거로 든 열린 계획 초안 */
@@ -53,7 +65,10 @@ public class UserContextController {
     ) {
         log.info("PATCH /api/contexts/{} - userId={}", contextId, principal.getUserId());
         UserContextService.Change change = userContextService.edit(principal.getUserId(), contextId,
-                request == null ? null : request.content());
+                request == null ? new UserContextService.Edit(null, null, null, null, null)
+                        : new UserContextService.Edit(request.content(),
+                        com.jungwoo.project.memo.ai.domain.FactKind.parse(request.kind()), request.topicId(),
+                        request.help(), request.label()));
         return ResponseEntity.ok(new ChangeResponse(change.context(), change.staleDraftIds()));
     }
 

@@ -54,7 +54,12 @@ public record ConsultView(Question question, List<Understanding> understanding, 
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record Understanding(String id, String source, String text, String evidenceType, String scopeLabel,
-                                boolean isNew) {
+                                boolean isNew, String kind, String topicTitle) {
+
+        public Understanding(String id, String source, String text, String evidenceType, String scopeLabel,
+                             boolean isNew) {
+            this(id, source, text, evidenceType, scopeLabel, isNew, null, null);
+        }
     }
 
     @JsonIgnoreProperties(ignoreUnknown = true)

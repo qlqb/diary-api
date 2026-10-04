@@ -40,18 +40,34 @@ public record PlanItemEvidence(
          * 항목의 출처 유형(서버 검증 뒤): SOURCE_TASK / AI_PRACTICE / USER_REQUEST. 예전 항목은 null.
          * SOURCE_TASK는 "자료 원문에 있는 과제·실습"이고 전달된 원문 구간을 인용했을 때만 남는다.
          */
-        String origin
+        String origin,
+        /** (2026-10-05) 학습 목표 한 줄과 그 근거(서버 판정): TOC_AI(목차에서 추론) / MATERIAL_AI(자료 기반 AI 목표) / USER. */
+        String goal,
+        String goalBasis
 ) {
 
     public PlanItemEvidence(String generationId, List<String> refIds, String reason, List<String> aiEstimates,
                             List<String> serverCalculationIds, EvidenceStatus status, List<String> staleReasons,
                             int unknownRefCount) {
-        this(generationId, refIds, reason, aiEstimates, serverCalculationIds, status, staleReasons, unknownRefCount, null);
+        this(generationId, refIds, reason, aiEstimates, serverCalculationIds, status, staleReasons, unknownRefCount, null,
+                null, null);
+    }
+
+    public PlanItemEvidence(String generationId, List<String> refIds, String reason, List<String> aiEstimates,
+                            List<String> serverCalculationIds, EvidenceStatus status, List<String> staleReasons,
+                            int unknownRefCount, String origin) {
+        this(generationId, refIds, reason, aiEstimates, serverCalculationIds, status, staleReasons, unknownRefCount, origin,
+                null, null);
     }
 
     public PlanItemEvidence withOrigin(String newOrigin) {
         return new PlanItemEvidence(generationId, refIds, reason, aiEstimates, serverCalculationIds, status,
-                staleReasons, unknownRefCount, newOrigin);
+                staleReasons, unknownRefCount, newOrigin, goal, goalBasis);
+    }
+
+    public PlanItemEvidence withGoal(String newGoal, String newBasis) {
+        return new PlanItemEvidence(generationId, refIds, reason, aiEstimates, serverCalculationIds, status,
+                staleReasons, unknownRefCount, origin, newGoal, newGoal == null ? null : newBasis);
     }
 
     public static PlanItemEvidence of(String generationId, List<String> refIds, String reason,
@@ -64,7 +80,7 @@ public record PlanItemEvidence(
     /** 상태만 바꾼 사본. 근거 자체는 그대로 둔다. */
     public PlanItemEvidence withStatus(EvidenceStatus newStatus, List<String> reasons) {
         return new PlanItemEvidence(generationId, refIds, reason, aiEstimates, serverCalculationIds,
-                newStatus, safe(reasons), unknownRefCount, origin);
+                newStatus, safe(reasons), unknownRefCount, origin, goal, goalBasis);
     }
 
     private static List<String> safe(List<String> values) {
