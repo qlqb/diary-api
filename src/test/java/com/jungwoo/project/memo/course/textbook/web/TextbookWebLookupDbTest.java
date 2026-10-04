@@ -67,6 +67,7 @@ class TextbookWebLookupDbTest {
     private static final long USER = 999_000_951L;
     private static final long OTHER_USER = 999_000_952L;
     private static final long SYLLABUS = 999_495_101L;
+    private static final String ALADIN_LINK = "https://www.aladin.co.kr/shop/wproduct.aspx?ItemId=384913155";
     private static final String HASH_SYLLABUS = "5".repeat(64);
     private static final String NEW_URL = "https://www.yes24.com/product/goods/175899340";
     private static final String OLD_URL = "https://www.yes24.com/product/goods/89873002";
@@ -208,6 +209,85 @@ class TextbookWebLookupDbTest {
         assertThat(chosen.toc().entries().get(9).number()).isEqualTo("Unit 10");
         // 고른 판은 다시 검색하지 않는다.
         verify(searchClient, org.mockito.Mockito.times(1)).search(any());
+    }
+
+    /** 알라딘 상세 모양(축약): ISBN·저자·출판사는 있지만 목차는 없다. */
+    private void aladinLinkWithoutToc() {
+        when(fetcher.fetch(eq(ALADIN_LINK))).thenReturn(new SafePageFetcher.Page(SafePageFetcher.Status.OK, ALADIN_LINK,
+                ALADIN_LINK, 200, """
+                <html><head><meta property="og:title" content="New English Conversation Arts 1 | Michael Putlack"/>
+                <meta property="books:isbn" content="9788947288132"/><meta property="og:author" content="Michael Putlack"/>
+                </head><body><p>ISBN : 9788947288132</p></body></html>
+                """, null));
+    }
+
+    private void currentTextbook(String title, String isbn) {
+        CourseUpdateRequest edit = new CourseUpdateRequest();
+        edit.setTextbookTitle(title);
+        edit.setTextbookIsbn(isbn);
+        edit.setExpectedTextbookVersion(courseMapper.findByIdAndUserId(courseId, USER).getTextbookVersion());
+        courseService.update(USER, courseId, edit);
+    }
+
+    @Test
+    void 링크_페이지에_목차가_없으면_그_ISBN으로_다른_서점의_목차를_찾는다() throws Exception {
+        currentTextbook("NEW English Conversation Arts 1", "9788947288132");
+        aladinLinkWithoutToc();
+        searchReturns(NEW_URL, OLD_URL);
+
+        lookupService.link(USER, courseId, ALADIN_LINK);
+        runLookup();
+
+        TextbookReview review = textbookService.review(USER, courseId);
+        assertThat(review.lookup().status()).isEqualTo("FOUND");
+        assertThat(review.lookup().editions()).hasSize(1);
+        assertThat(review.lookup().editions().get(0).isbn13()).isEqualTo("9788947288132");
+        assertThat(review.lookup().editions().get(0).tocEntryCount()).isEqualTo(12);
+        // 검색은 링크 책의 ISBN으로, 다른 ISBN(2017년 판)은 고를 수 없다.
+        verify(searchClient).search(org.mockito.ArgumentMatchers.argThat(c -> "9788947288132".equals(c.isbn())));
+        assertThat(review.lookup().candidates()).filteredOn(c -> "9788947281980".equals(c.isbn13()))
+                .allMatch(c -> "MISMATCH".equals(c.verdict()));
+    }
+
+    @Test
+    void 교재가_확인되지_않은_링크의_책은_목차를_찾아도_사용자가_고른다() throws Exception {
+        aladinLinkWithoutToc();
+        searchReturns(NEW_URL);
+
+        lookupService.link(USER, courseId, ALADIN_LINK);
+        runLookup();
+
+        TextbookReview review = textbookService.review(USER, courseId);
+        assertThat(review.lookup().status()).isEqualTo("NEEDS_CHOICE");
+        assertThat(review.lookup().editions()).hasSize(1);
+        assertThat(review.lookup().editions().get(0).tocEntryCount()).isEqualTo(12);
+        assertThat(review.current().title()).isNull();
+    }
+
+    @Test
+    void 이어서_하는_검색이_실패해도_링크로_확인한_책은_남는다() throws Exception {
+        currentTextbook("NEW English Conversation Arts 1", "9788947288132");
+        aladinLinkWithoutToc();
+        when(searchClient.search(any())).thenThrow(new RuntimeException("검색 실패"));
+
+        lookupService.link(USER, courseId, ALADIN_LINK);
+        runLookup();
+
+        TextbookReview review = textbookService.review(USER, courseId);
+        assertThat(review.lookup().status()).isEqualTo("BOOK_NO_TOC");
+        assertThat(review.lookup().editions()).hasSize(1);
+        assertThat(review.lookup().note()).contains("검색이 실패");
+    }
+
+    @Test
+    void 이어서_하는_검색의_인증_실패는_스케줄러에_알린다() throws Exception {
+        currentTextbook("NEW English Conversation Arts 1", "9788947288132");
+        aladinLinkWithoutToc();
+        when(searchClient.search(any())).thenThrow(new BookWebSearchClient.SearchFailure("인증 실패", true, false));
+
+        lookupService.link(USER, courseId, ALADIN_LINK);
+
+        assertThat(worker.run(claim())).isEqualTo(TextbookLookupWorker.Result.AUTH_FAILURE);
     }
 
     @Test
@@ -814,7 +894,7 @@ class TextbookWebLookupDbTest {
             exec("DELETE FROM textbook_web_pages WHERE cache_scope_key = ?", "USER:" + u);
         }
         // 공유 페이지는 이 테스트가 쓰는 두 상품 주소만 지운다.
-        for (String url : List.of(NEW_URL, OLD_URL)) {
+        for (String url : List.of(NEW_URL, OLD_URL, ALADIN_LINK)) {
             String hash = TextbookLookupPlanner.hash(url);
             exec("DELETE r FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id "
                     + "WHERE p.cache_scope_key = 'SHARED' AND p.url_hash = ?", hash);
