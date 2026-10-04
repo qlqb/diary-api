@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  */
 public final class BookPageParser {
 
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
 
     static final int MAX_TOC_RAW_CHARS = 20_000;
 
@@ -155,12 +155,38 @@ public final class BookPageParser {
         if (title != null) {
             title = clean(title.split("\\s[|\\-–]\\s")[0], 300);
         }
-        String bodyText = doc.body() == null ? "" : doc.body().text();
-        String isbn = null;
-        Matcher m = Pattern.compile("(97[89][\\d\\-\\s]{10,16}\\d)").matcher(bodyText);
-        while (isbn == null && m.find()) {
-            isbn = isbnOrNull(m.group(1));
+        // 서지 메타(books:isbn·author·JSON-LD Book)가 있으면 먼저 쓴다 — 알라딘 상세가 이렇게 싣는다.
+        String metaIsbn = toIsbn13(isbnOrNull(meta(doc, "books:isbn")));
+        JsonLdBook ld = jsonLdBook(doc, title, metaIsbn);
+        if (ld != null && ld.name() != null && title == null) {
+            title = ld.name();
         }
+        String isbn = metaIsbn;
+        if (isbn == null && ld != null) {
+            isbn = toIsbn13(isbnOrNull(ld.isbn()));
+        }
+        String bodyText = doc.body() == null ? "" : doc.body().text();
+        // 13자리 ISBN 그대로("9788947288132")나 하이픈·공백이 섞인 것("978-89-472-8813-2").
+        Matcher m = Pattern.compile("(97[89][\\d\\-\\s]{9,16}\\d)").matcher(bodyText);
+        while (isbn == null && m.find()) {
+            isbn = toIsbn13(isbnOrNull(m.group(1)));
+        }
+        List<String> authors = new ArrayList<>();
+        if (ld != null && !ld.authors().isEmpty()) {
+            authors.addAll(ld.authors());
+        } else if (isbn != null || String.valueOf(meta(doc, "og:type")).toLowerCase(Locale.ROOT).startsWith("book")) {
+            // 작성자 메타는 책이라는 근거(ISBN·책 종류 표시)가 있을 때만 책 저자로 본다 — 일반 글의 작성자는 저자가 아니다.
+            String metaAuthor = meta(doc, "og:author");
+            if (metaAuthor == null) {
+                Element el = doc.selectFirst("meta[name=author]");
+                metaAuthor = el == null ? null : clean(el.attr("content"), 200);
+            }
+            if (metaAuthor != null) {
+                authors.add(metaAuthor);
+            }
+        }
+        String publisher = ld == null ? null : ld.publisher();
+        String published = ld == null ? null : ld.datePublished();
         String tocRaw = null;
         if (doc.body() != null) {
             for (Element el : doc.body().select("h1,h2,h3,h4,h5,dt,strong,th")) {
@@ -176,8 +202,79 @@ public final class BookPageParser {
                 }
             }
         }
-        return new Parsed(site, title, List.of(), List.of(), null, isbn, null, editionOf(title, null), cutRaw(tocRaw),
-                false);
+        return new Parsed(site, title, List.copyOf(authors), List.of(), publisher, isbn, published,
+                editionOf(title, null), cutRaw(tocRaw), false);
+    }
+
+    record JsonLdBook(String name, List<String> authors, String publisher, String isbn, String datePublished) {
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper JSON = new com.fasterxml.jackson.databind.ObjectMapper();
+
+    /**
+     * 이 페이지의 책인 JSON-LD Book. 추천 도서·다른 판의 Book이 섞일 수 있으니, 메타 ISBN이나 페이지 제목과 맞는
+     * 노드만 고른다. Book이 하나뿐이면 그것(메타 ISBN과 다르면 버림), 여럿인데 맞는 것이 하나가 아니면 쓰지 않는다.
+     * 형식이 틀리면 없는 것으로 본다(페이지 글은 데이터다).
+     */
+    static JsonLdBook jsonLdBook(Document doc, String pageTitle, String metaIsbn) {
+        List<JsonLdBook> books = jsonLdBooks(doc);
+        if (books.size() == 1) {
+            String onlyIsbn = toIsbn13(isbnOrNull(books.get(0).isbn()));
+            return metaIsbn != null && onlyIsbn != null && !metaIsbn.equals(onlyIsbn) ? null : books.get(0);
+        }
+        List<JsonLdBook> matching = new ArrayList<>();
+        for (JsonLdBook b : books) {
+            String bIsbn = toIsbn13(isbnOrNull(b.isbn()));
+            boolean byIsbn = metaIsbn != null && metaIsbn.equals(bIsbn);
+            boolean byTitle = metaIsbn == null && pageTitle != null && b.name() != null
+                    && b.name().replaceAll("\\s+", "").equalsIgnoreCase(pageTitle.replaceAll("\\s+", ""));
+            if (byIsbn || byTitle) {
+                matching.add(b);
+            }
+        }
+        return matching.size() == 1 ? matching.get(0) : null;
+    }
+
+    private static List<JsonLdBook> jsonLdBooks(Document doc) {
+        List<JsonLdBook> out = new ArrayList<>();
+        for (Element script : doc.select("script[type=application/ld+json]")) {
+            String raw = script.data();
+            if (raw == null || raw.length() > 200_000) {
+                continue;
+            }
+            try {
+                com.fasterxml.jackson.databind.JsonNode node = JSON.readTree(raw);
+                List<com.fasterxml.jackson.databind.JsonNode> candidates = new ArrayList<>();
+                if (node.isArray()) {
+                    node.forEach(candidates::add);
+                } else {
+                    candidates.add(node);
+                    node.path("@graph").forEach(candidates::add);
+                }
+                for (com.fasterxml.jackson.databind.JsonNode n : candidates) {
+                    if (!"Book".equalsIgnoreCase(n.path("@type").asText(""))) {
+                        continue;
+                    }
+                    List<String> authors = new ArrayList<>();
+                    com.fasterxml.jackson.databind.JsonNode a = n.path("author");
+                    (a.isArray() ? a : JSON.createArrayNode().add(a)).forEach(x -> {
+                        String v = clean(x.isTextual() ? x.asText() : x.path("name").asText(null), 200);
+                        if (v != null) {
+                            authors.add(v);
+                        }
+                    });
+                    com.fasterxml.jackson.databind.JsonNode p = n.path("publisher");
+                    String publisher = clean(p.isTextual() ? p.asText() : p.path("name").asText(null), 200);
+                    String date = clean(n.path("datePublished").asText(null), 20);
+                    out.add(new JsonLdBook(clean(n.path("name").asText(null), 300), authors, publisher,
+                            clean(n.path("isbn").asText(null), 30), date != null && date.matches("\\d{4}-\\d{2}-\\d{2}.*")
+                            ? date.substring(0, 10) : null));
+                }
+            } catch (Exception ignored) {
+                // 형식이 틀린 JSON-LD는 근거가 아니다.
+            }
+        }
+        return out;
     }
 
     // ===== 도움 =====

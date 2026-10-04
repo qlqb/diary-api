@@ -253,7 +253,9 @@ public class TextbookLookupWorker {
                     && failures.stream().anyMatch(f -> "NOT_OPENED_AUTOMATICALLY".equals(f.status()));
             boolean allFailed = revisions.isEmpty() && fetchFailures > 0;
             status = allFailed ? TextbookLookup.ACCESS_FAILED : TextbookLookup.NOT_FOUND;
-            note = allFailed ? "찾은 페이지에 접속하지 못했어요." : onlySkipped
+            note = allFailed ? (userLink
+                    ? "그 페이지를 열지 못했어요(사이트가 자동 접속을 막았을 수 있어요). 예스24 같은 다른 서점의 상세 페이지 링크를 주세요."
+                    : "찾은 페이지에 접속하지 못했어요.") : onlySkipped
                     ? "자동으로 열지 않는 사이트(출판사·블로그 등)의 페이지만 찾았어요. 그 상세 페이지 링크를 주면 열어 볼게요."
                     : candidates.isEmpty()
                     ? "이 단서로 맞는 책 페이지를 찾지 못했어요. 책이 없다는 뜻은 아니에요."

@@ -77,12 +77,17 @@ public class WebEvidenceStore {
                 || page.getLastFetchedAt().isBefore(notBefore) || !"OK".equals(page.getLastFetchStatus())) {
             return null;
         }
-        return webMapper.findRevision(page.getLatestRevisionId(), userId);
+        TextbookWebRevision revision = webMapper.findRevision(page.getLatestRevisionId(), userId);
+        // 파서 규칙이 바뀌었으면(옛 판으로 읽은 리비전) 다시 받아 새 규칙으로 읽는다.
+        if (revision == null || !Integer.valueOf(BookPageParser.VERSION).equals(revision.getParserVersion())) {
+            return null;
+        }
+        return revision;
     }
 
     @Transactional(readOnly = true)
     public List<TextbookWebRevision> byIsbn(String isbn13, Long userId, LocalDateTime notBefore) {
-        return webMapper.findLatestByIsbn(isbn13, userId, notBefore);
+        return webMapper.findLatestByIsbn(isbn13, userId, notBefore, BookPageParser.VERSION);
     }
 
     /** 받은 페이지를 리비전으로 남긴다. 같은 내용·같은 파서면 기존 리비전을 돌려준다. */

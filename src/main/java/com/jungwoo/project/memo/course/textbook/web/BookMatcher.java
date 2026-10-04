@@ -48,6 +48,10 @@ public final class BookMatcher {
             return new Result(Verdict.UNVERIFIED, List.of("페이지에서 책 정보를 읽지 못했어요"));
         }
         boolean mismatch = false;
+        // 저자·출판사 표기만 다르다(ISBN·제목이 같으면 같은 판으로 본다 — 강의계획서 칸이 잘리거나 다르게 적히는 일이 잦다).
+        boolean softMismatch = false;
+        // 저자 단서가 이름 한 낱말뿐이라 확인하지 못했다 — 다른 근거(ISBN·출판사 등)가 받쳐 주지 않으면 보류한다.
+        boolean authorUnverified = false;
         int corroborated = 0;
 
         // ISBN
@@ -93,11 +97,22 @@ public final class BookMatcher {
             } else {
                 Set<String> clueNames = nameKeys(clue.author());
                 boolean any = clueNames.stream().anyMatch(pageNames::contains);
+                Set<String> pageWords = latinWords(String.join(", ", page.authors()));
+                page.authorNotes().forEach(n -> pageWords.addAll(latinWords(n)));
+                boolean onlyGivenNames = onlySingleLatinWords(clue.author());
                 if (any) {
                     corroborated++;
                     reasons.add("저자 일치");
+                } else if (onlyGivenNames && clueNames.stream().anyMatch(pageWords::contains)) {
+                    // 단서에 이름 한 낱말만 있다(표가 줄바꿈으로 잘려 "Michael"만 남는 경우). 페이지 저자의 이름 낱말과 맞으면 일치다.
+                    corroborated++;
+                    reasons.add("저자 일치(이름 일부)");
+                } else if (onlyGivenNames) {
+                    // 이름 한 낱말로는 다른 사람이라고 단정하지 않는다(그렇다고 같은 책이라고도 하지 않는다).
+                    authorUnverified = true;
+                    reasons.add("저자를 확인하지 못했어요(단서에 이름 일부만 있어요)");
                 } else if (!clueNames.isEmpty()) {
-                    mismatch = true;
+                    softMismatch = true;
                     reasons.add("저자가 달라요(" + String.join(", ", page.authors()) + ")");
                 }
             }
@@ -112,7 +127,7 @@ public final class BookMatcher {
                     corroborated++;
                     reasons.add("출판사 일치");
                 } else {
-                    mismatch = true;
+                    softMismatch = true;
                     reasons.add("출판사가 달라요(" + page.publisher() + ")");
                 }
             }
@@ -126,16 +141,23 @@ public final class BookMatcher {
             }
         }
 
-        if (mismatch) {
+        boolean isbnMatched = clueIsbn != null && clueIsbn.equals(page.isbn13());
+        if (!mismatch && softMismatch && isbnMatched && title == TitleMatch.SAME) {
+            reasons.add("ISBN과 제목이 같아 저자·출판사 표기 차이는 같은 판으로 봐요");
+            return new Result(Verdict.MATCH, reasons);
+        }
+        if (mismatch || softMismatch) {
             return new Result(Verdict.MISMATCH, reasons);
         }
-        boolean isbnMatched = clueIsbn != null && clueIsbn.equals(page.isbn13());
         if (clueIsbn != null && !isbnMatched) {
             // 단서에 ISBN이 있으면 그 ISBN을 확인한 페이지만 같은 책이다(같은 제목의 다른 판일 수 있다).
             return new Result(Verdict.UNVERIFIED, reasons);
         }
-        if (title == TitleMatch.SAME || isbnMatched) {
+        if (isbnMatched) {
             return new Result(Verdict.MATCH, reasons);
+        }
+        if (title == TitleMatch.SAME) {
+            return new Result(authorUnverified && corroborated == 0 ? Verdict.UNVERIFIED : Verdict.MATCH, reasons);
         }
         if (title == TitleMatch.CONTAINS && corroborated > 0) {
             return new Result(Verdict.MATCH, reasons);
@@ -241,6 +263,37 @@ public final class BookMatcher {
             }
         }
         return out;
+    }
+
+    /** 라틴 문자 이름의 모든 낱말(3자 이상, 소문자). */
+    static Set<String> latinWords(String names) {
+        Set<String> out = new LinkedHashSet<>();
+        if (names == null) {
+            return out;
+        }
+        for (String w : Normalizer.normalize(names, Normalizer.Form.NFKC).replaceAll("[^A-Za-z\\s\\-']", " ")
+                .strip().split("\\s+")) {
+            if (w.length() >= 3) {
+                out.add(w.toLowerCase(Locale.ROOT));
+            }
+        }
+        return out;
+    }
+
+    /** 저자 단서가 라틴 문자 한 낱말짜리 이름들뿐이다(성을 알 수 없다). */
+    static boolean onlySingleLatinWords(String names) {
+        boolean any = false;
+        for (String raw : names.split("\\s*[,;/·&]\\s*")) {
+            String v = raw.strip();
+            if (v.isEmpty()) {
+                continue;
+            }
+            if (!v.matches("[A-Za-z][A-Za-z\\-']*")) {
+                return false;
+            }
+            any = true;
+        }
+        return any;
     }
 
     static String publisherKey(String publisher) {

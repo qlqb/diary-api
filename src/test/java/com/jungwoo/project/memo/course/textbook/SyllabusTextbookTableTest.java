@@ -40,6 +40,53 @@ class SyllabusTextbookTableTest {
     }
 
     @Test
+    void 제목_아래로_저자_두_줄과_출판사_줄이_이어진_표도_읽는다() {
+        // 실제 강의계획서 PDF에서 본 다른 모양(합성 재현): 저자 칸이 두 줄로, 출판사가 그 아래 줄로 흩어진다.
+        List<TextbookExtractor.BookClue> clues = read("""
+                도서명 저자 출판사 비고
+                 주교재  NEW English Conversation Arts 1
+                 Michael
+                Putlack, 이현호
+                 형설출판사
+                수업시
+                사용도구
+                """);
+
+        assertThat(clues).hasSize(1);
+        TextbookExtractor.BookClue c = clues.get(0);
+        assertThat(c.title()).isEqualTo("NEW English Conversation Arts 1");
+        assertThat(c.author()).isEqualTo("Michael Putlack, 이현호");
+        assertThat(c.publisher()).isEqualTo("형설출판사");
+        assertThat(c.quote()).contains("Michael", "Putlack", "형설출판사");
+    }
+
+    @Test
+    void 출판사_낱말이_들어간_사람_이름은_출판사로_보지_않는다() {
+        List<TextbookExtractor.BookClue> clues = read("""
+                도서명 저자 출판사 비고
+                 주교재  Statistics Primer
+                 Karl Pearson
+                 Wiley
+                수업시
+                """);
+
+        assertThat(clues).hasSize(1);
+        assertThat(clues.get(0).author()).isEqualTo("Karl Pearson");
+        assertThat(clues.get(0).publisher()).isEqualTo("Wiley");
+
+        // 여러 낱말 출판사 이름은 출판사다.
+        List<TextbookExtractor.BookClue> mit = read("""
+                도서명 저자 출판사 비고
+                 주교재  Introduction to Algorithms
+                 Thomas H. Cormen
+                 MIT Press
+                수업시
+                """);
+        assertThat(mit.get(0).author()).isEqualTo("Thomas H. Cormen");
+        assertThat(mit.get(0).publisher()).isEqualTo("MIT Press");
+    }
+
+    @Test
     void 칸이_한_줄에_있는_표와_부교재를_구분한다() {
         List<TextbookExtractor.BookClue> clues = read("""
                 교재명    저자    출판사

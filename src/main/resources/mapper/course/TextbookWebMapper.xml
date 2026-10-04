@@ -92,7 +92,7 @@
         SELECT r.*, p.url, p.site, p.cache_scope_key
           FROM textbook_web_pages p JOIN textbook_web_revisions r ON r.revision_id = p.latest_revision_id
          WHERE <include refid="inScope"/>
-           AND r.isbn13 = #{isbn13} AND p.last_fetched_at &gt;= #{since}
+           AND r.isbn13 = #{isbn13} AND p.last_fetched_at &gt;= #{since} AND r.parser_version = #{parserVersion}
          ORDER BY r.toc_entry_count DESC, r.revision_id DESC
     </select>
 </mapper>

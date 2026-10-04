@@ -31,6 +31,33 @@ class BookMatcherTest {
     }
 
     @Test
+    void 저자_단서가_이름_한_낱말뿐이면_다른_사람이라고_단정하지_않는다() {
+        // 실제 강의계획서에서 저자 칸이 줄바꿈으로 잘려 "Michael"만 남았다.
+        BookMatcher.Result given = BookMatcher.match(
+                new BookMatcher.Clue("NEW English Conversation Arts 1", "Michael", null, null, null), ARTS_1);
+        assertThat(given.verdict()).isNotEqualTo(BookMatcher.Verdict.MISMATCH);
+        assertThat(given.reasons()).contains("저자 일치(이름 일부)");
+
+        BookMatcher.Result unknown = BookMatcher.match(
+                new BookMatcher.Clue("NEW English Conversation Arts 1", "John", null, null, null), ARTS_1);
+        assertThat(unknown.verdict()).isNotEqualTo(BookMatcher.Verdict.MISMATCH);
+        // 맞지 않는 한 낱말(성일 수도 있다)은 다른 근거 없이 같은 책이라고도 하지 않는다.
+        BookMatcher.Result surnameOnly = BookMatcher.match(
+                new BookMatcher.Clue("NEW English Conversation Arts 1", "Knuth", null, null, null), ARTS_1);
+        assertThat(surnameOnly.verdict()).isEqualTo(BookMatcher.Verdict.UNVERIFIED);
+
+        // 실제 기록(2026-10-04): ISBN·제목·출판사가 맞는데 저자 칸이 잘려 거절됐다. ISBN·제목이 같으면 저자 표기 차이로 거절하지 않는다.
+        BookMatcher.Result byIsbn = BookMatcher.match(
+                new BookMatcher.Clue("NEW English Conversation Arts 1", "John Smith", "형설출판사", "9788947288132", null), ARTS_1);
+        assertThat(byIsbn.verdict()).isEqualTo(BookMatcher.Verdict.MATCH);
+
+        // 성까지 적힌 다른 이름은 여전히 다른 저자다.
+        BookMatcher.Result other = BookMatcher.match(
+                new BookMatcher.Clue("NEW English Conversation Arts 1", "John Smith", null, null, null), ARTS_1);
+        assertThat(other.verdict()).isEqualTo(BookMatcher.Verdict.MISMATCH);
+    }
+
+    @Test
     void 다른_권은_제목이_거의_같아도_다른_책이다() {
         BookPageParser.Parsed arts2 = page("New English Conversation Arts 2", ARTS_1.authors(), ARTS_1.authorNotes(),
                 "형설출판사", "9788947288149", null);

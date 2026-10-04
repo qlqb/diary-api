@@ -211,6 +211,23 @@ class TextbookWebLookupDbTest {
     }
 
     @Test
+    void 옛_파서로_읽은_캐시는_다시_받는다() throws Exception {
+        BookPageParser.Parsed parsed = BookPageParser.parse(NEW_URL, fixture("yes24-175899340.html"));
+        WebEvidenceStore.Target target = store.target(NEW_URL, USER);
+        TextbookWebRevision saved = store.save(target, parsed, WebTocStructurer.byRules(parsed.tocRaw(), false), 200,
+                LocalDateTime.now(), USER);
+        LocalDateTime since = LocalDateTime.now().minusDays(1);
+        assertThat(store.cached(target, USER, since)).isNotNull();
+        assertThat(store.byIsbn("9788947288132", USER, since)).isNotEmpty();
+
+        exec("UPDATE textbook_web_revisions SET parser_version = ? WHERE revision_id = ?", BookPageParser.VERSION - 1,
+                saved.getRevisionId());
+
+        assertThat(store.cached(target, USER, since)).isNull();
+        assertThat(store.byIsbn("9788947288132", USER, since)).isEmpty();
+    }
+
+    @Test
     void 판을_고른_뒤의_조회가_못_찾음으로_끝나도_고른_판의_목차는_그대로다() throws Exception {
         syllabus();
         searchReturns(NEW_URL, OLD_URL);
