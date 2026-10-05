@@ -161,13 +161,37 @@ public class PlanMaterialContextService {
      * @param completedAssignment 이 구간에서 나온 과제를 사용자가 완료했다
      * @param openAssignment      이 구간에서 나온 확정·미완료 과제가 있다
      * @param requested           이번 요청에서 사용자가 지정한 자료(또는 구간)다
+     * @param photoLink           상담 사진 구간의 단원 연결: GUESSED(서버 추정) / CONFIRMED(사용자 확인) / null(사진 아님·연결 없음)
+     * @param focus               막힌·도움받아 해결한 단원의 사진 본문 — 접어도 항상 보이고, 선택에서 빠지면 서버가 보탠다
      */
     public record SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
                               List<Long> topicIds, boolean completedAssignment, boolean openAssignment,
-                              boolean requested) {
+                              boolean requested, String photoLink, boolean focus,
+                              /** 상담 사진 구간의 실제 연결 상태(후보 필터와 무관, PlanProvenancePhoto.state 형식). 사진 아니면 null */
+                              String photoState) {
+
+        public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
+                           List<Long> topicIds, boolean completedAssignment, boolean openAssignment, boolean requested) {
+            this(section, material, roles, topicIds, completedAssignment, openAssignment, requested, null, false, null);
+        }
 
         public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles) {
             this(section, material, roles, List.of(), false, false, false);
+        }
+
+        /** 상담에서 올린 교재 사진의 구간(글자 읽기 결과). */
+        public boolean photo() {
+            return material != null && material.isConsultPhoto();
+        }
+
+        public SectionLine withFocus() {
+            return new SectionLine(section, material, roles, topicIds, completedAssignment, openAssignment, requested,
+                    photoLink, true, photoState);
+        }
+
+        public SectionLine withTopics(List<Long> ids) {
+            return new SectionLine(section, material, roles, ids, completedAssignment, openAssignment, requested,
+                    photoLink, focus, photoState);
         }
 
         public String roleLabels() {
@@ -430,6 +454,16 @@ public class PlanMaterialContextService {
 
         Map<Long, List<Long>> topicsBySection = new HashMap<>();
         Map<Long, Boolean> linkedOnlyToExcluded = new HashMap<>();
+        // 상담 사진 구간의 단원 연결 상태(추정·확인). 선택 목록·최종 입력·근거 기록에 그대로 실린다.
+        Map<Long, String> photoLinks = new HashMap<>();
+        for (TopicMaterialLink link : courseLinks) {
+            if (link.getSectionId() != null && link.getSectionId() != TopicMaterialLink.WHOLE_MATERIAL
+                    && candidateTopicIds.contains(link.getTopicId())) {
+                photoLinks.merge(link.getSectionId(),
+                        link.getOrigin() == com.jungwoo.project.memo.learning.domain.TopicLinkOrigin.PHOTO_GUESS
+                                ? "GUESSED" : "CONFIRMED", (a, b) -> "GUESSED".equals(a) ? a : b);
+            }
+        }
         for (TopicMaterialLink link : courseLinks) {
             if (link.getSectionId() == null || link.getSectionId() == TopicMaterialLink.WHOLE_MATERIAL) {
                 continue;
@@ -471,7 +505,10 @@ public class PlanMaterialContextService {
                         && !a.isCompleted());
                 sections.add(new SectionLine(section, material, roles(section),
                         List.copyOf(topicsBySection.getOrDefault(section.getSectionId(), List.of())),
-                        completed, open, requested));
+                        completed, open, requested, photoLinks.get(section.getSectionId()), false,
+                        material.isConsultPhoto()
+                                ? com.jungwoo.project.memo.plan.PlanProvenancePhoto.state(courseLinks, section.getSectionId())
+                                : null));
             }
         }
 

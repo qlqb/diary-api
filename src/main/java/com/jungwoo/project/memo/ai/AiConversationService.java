@@ -257,8 +257,15 @@ public class AiConversationService {
     @Transactional(readOnly = true)
     public List<AiMessageResponse> getMessages(Long conversationId, Long userId) {
         requireOwnedConversation(conversationId, userId);
+        java.util.Map<Long, List<Long>> photos = new java.util.HashMap<>();
+        if (messagePhotoMapper != null) {
+            for (var row : messagePhotoMapper.findByConversation(conversationId, userId)) {
+                photos.computeIfAbsent(row.messageId(), k -> new ArrayList<>()).add(row.materialId());
+            }
+        }
         return aiMessageMapper.findByConversationIdAndUserId(conversationId, userId).stream()
                 .map(this::toMessageResponse)
+                .peek(r -> r.setPhotoIds(photos.getOrDefault(r.getMessageId(), List.of())))
                 .toList();
     }
 
@@ -345,6 +352,13 @@ public class AiConversationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.consult.UserMemoryExtractor userMemoryExtractor;
 
+    /** 상담 사진 문맥(근거 고정·사진을 가리킨 기억의 단원). 없으면 사진 없이 예전처럼. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.photo.ConsultPhotoContext photoContext;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper messagePhotoMapper;
+
     static final String ASSUMED_INTENSITY_NOTE =
             " (분량은 '보통'을 기준으로 잡아요. 쓸 수 있는 시간을 말해 줬다면 그 시간이 우선이에요.)";
 
@@ -358,6 +372,16 @@ public class AiConversationService {
         // 자료 확인을 넓힐지는 서버가 저장된 선택지로 정한다. 본문에 같은 이름이 와도 믿지 않는다.
         request.setEvidenceLookup(false);
         boolean noText = request.getMessage() == null || request.getMessage().isBlank();
+        if (request.hasPhotos()) {
+            /*
+             * 사진은 사용자가 자기 말로 묻는 자유 입력 턴에만 붙는다. 빈 입력에 사진만 오면 저장·모델 호출 전에 막는다 — 사용자 말이
+             * 아닌 문장을 대신 넣지 않는다(기억은 사용자 말만으로 만든다). 빠른 선택 답·계획 버튼에는 사진을 붙이지 않는다.
+             */
+            if (noText || request.getAnswer() != null || request.getRequestedAction() != RequestedAction.AUTO
+                    || request.getPhotoIds().size() > 4 || request.getPhotoIds().stream().anyMatch(java.util.Objects::isNull)) {
+                throw new com.jungwoo.project.memo.common.exception.BadRequestException(ErrorCode.PHOTO_IDS_INVALID);
+            }
+        }
         if (request.getRequestedAction() == RequestedAction.PLAN_NOW) {
             request.setRequestedAction(RequestedAction.AUTO);
             if (noText) {
@@ -906,12 +930,24 @@ public class AiConversationService {
      * <ul>
      *   <li>사용자 발언·합의를 고치거나 지우는 UPDATE/REMOVE를 적용하지 않는다,</li>
      *   <li>ADD는 "사용자가 말함"이 아니라 AI 제안 후보(ASSISTANT)로만 남긴다 — 사용자가 다음 턴에 수락해야 효력이 있다,</li>
-     *   <li>ACCEPT/REJECT는 그대로 둔다 — 이미 화면에 보인 AI 제안에 대한 사용자의 수락·거절이고, 막으면 자료를 확인한 대화에서
-     *       "좋아"가 듣지 않는다(남는 위험: 원문 지시가 수락을 유도할 수 있다. 수락은 화면에서 되돌릴 수 있다).</li>
+     *   <li>ACCEPT/REJECT는 사용자 발화가 그 자체로 짧은 수락·거절일 때만, 이 턴 전에 답을 기다리던 제안이 <b>하나</b>뿐일 때만
+     *       적용한다. 원문(교재 사진 포함) 속 지시가 수락을 유도해도, 사용자가 "이 답 맞아?"(질문)나 다른 얘기를 했으면 수락되지
+     *       않고, 어느 제안인지 모호하지 않다. 수락 말에 부정이 섞이면 수락하지 않는다. 막지 않는 이유: 사진을 올린 대화는 이후
+     *       턴에도 사진 본문이 실려, 전부 막으면 그 대화에서는 "좋아"가 영영 듣지 않는다(화면에 따로 수락 버튼이 없다).</li>
      * </ul>
      */
+    static final java.util.regex.Pattern BRIEF_ACCEPT = java.util.regex.Pattern.compile(
+            "^(?:응|어|네|예|그래|좋아|좋아요|좋네|오케이|ok|okay|그렇게 해|그렇게 할게|그걸로|그거로|넣어|넣어 줘|넣어줘|할게|맞아|맞아요)"
+                    + "[\\s!.~ㅎㅋ요]*$", java.util.regex.Pattern.CASE_INSENSITIVE);
+    static final java.util.regex.Pattern BRIEF_REJECT = java.util.regex.Pattern.compile(
+            "^(?:아니|아니야|아니요|싫어|빼|빼 줘|빼줘|안 할래|안할래|하지 마|하지마|거절|됐어|별로)[\\s!.~ㅠ요]*$");
+
     static List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> restrictBriefOps(
-            List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> ops, java.util.Set<Integer> pendingBeforeTurn) {
+            List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> ops, java.util.Set<Integer> pendingBeforeTurn,
+            String userMessage) {
+        String said = userMessage == null ? "" : userMessage.strip();
+        boolean saysAccept = said.length() <= 20 && BRIEF_ACCEPT.matcher(said).matches();
+        boolean saysReject = said.length() <= 20 && BRIEF_REJECT.matcher(said).matches();
         List<com.jungwoo.project.memo.ai.brief.PlanBriefOp> out = new ArrayList<>();
         for (com.jungwoo.project.memo.ai.brief.PlanBriefOp op : ops) {
             if (op == null || op.op() == null) {
@@ -929,6 +965,11 @@ public class AiConversationService {
             if (("ACCEPT".equals(kind) || "REJECT".equals(kind))
                     && (op.id() == null || !pendingBeforeTurn.contains(op.id()))) {
                 log.info("자료 원문을 실은 턴이라 이 턴 전에 없던 제안의 {}를 적용하지 않음: id={}", kind, op.id());
+                continue;
+            }
+            if (("ACCEPT".equals(kind) && !saysAccept) || ("REJECT".equals(kind) && !saysReject)
+                    || (("ACCEPT".equals(kind) || "REJECT".equals(kind)) && pendingBeforeTurn.size() != 1)) {
+                log.info("자료 원문을 실은 턴이라 사용자의 명시적 답이 아닌 {}를 적용하지 않음: id={}", kind, op.id());
                 continue;
             }
             if ("ADD".equals(kind) && com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker())) {
@@ -1055,9 +1096,12 @@ public class AiConversationService {
         } catch (Exception e) {
             log.warn("근거 조회용 앞선 대화를 읽지 못했다: conversationId={}", conversation.getConversationId());
         }
+        java.util.Map<Long, String> pinned = photoContext == null ? java.util.Map.of()
+                : com.jungwoo.project.memo.ai.photo.ConsultPhotoContext.pinned(photoContext.active(
+                conversation.getConversationId(), conversation.getCourseId(), userId, requestMessageId));
         return new EvidenceTurn(consultEvidenceService.gather(new com.jungwoo.project.memo.ai.evidence.ConsultEvidenceService.Request(
                 userId, conversation.getCourseId(), request.getMessage(), priorUser, priorAssistant,
-                request.evidenceLookupRequested(), continuing, blockBudget)));
+                request.evidenceLookupRequested(), continuing || !pinned.isEmpty(), blockBudget, pinned)));
     }
 
     /**
@@ -1405,7 +1449,7 @@ public class AiConversationService {
                 requestedAction == RequestedAction.AUTO && structured != null && structured.planBrief() != null
                         ? structured.planBrief() : List.of();
         if (untrustedTextShown && !briefOps.isEmpty()) {
-            briefOps = restrictBriefOps(briefOps, pendingBriefProposals(conversation));
+            briefOps = restrictBriefOps(briefOps, pendingBriefProposals(conversation), request.getMessage());
         }
         boolean touchesDrafts = draftOutcome != null && draftOutcome.touchesDrafts();
         // PERIOD 합의가 날짜를 말하지 않았으면 이번 턴의 기간(OFFER 날짜)이 근거다 — 새 상담의 주로 다시 해석하지 않는다.
@@ -1467,9 +1511,16 @@ public class AiConversationService {
                 consultOut = new com.jungwoo.project.memo.ai.consult.ConsultOut(consultOut.question(),
                         consultOut.direction(), List.of(), consultOut.activity());
             }
+            UserContextService.PhotoRef photoRef = null;
+            if (photoContext != null) {
+                var ref = com.jungwoo.project.memo.ai.photo.ConsultPhotoContext.reference(photoContext.active(
+                        conversation.getConversationId(), conversation.getCourseId(), conversation.getUserId(),
+                        requestMessageId), request.getMessage());
+                photoRef = ref == null ? null : new UserContextService.PhotoRef(ref.topicId(), ref.photoId(), ref.allPhotoIds());
+            }
             consult = consultTurnService.finish(conversation.getUserId(), conversation.getConversationId(),
                     requestMessageId, completion.assistantMessage().getMessageId(), request.getMessage(),
-                    consultOut, evidence, saidAt, conversation.getCourseId());
+                    consultOut, evidence, saidAt, conversation.getCourseId(), photoRef);
         }
 
         sink.onCompleted(new AiTurnCompletedPayload(

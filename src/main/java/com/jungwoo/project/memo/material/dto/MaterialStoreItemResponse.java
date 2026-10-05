@@ -30,6 +30,12 @@ public class MaterialStoreItemResponse {
     private LocalDateTime createdAt;
     private List<MaterialLinkResponse> links;
 
+    /** CONSULT_PHOTO(상담 사진)면 값이 있다. 예전 업로드는 null. */
+    private String origin;
+    /** 지금 원본을 볼 수 있나(상담 사진은 30일 뒤·사용자가 지우면 false). */
+    private boolean originalAvailable;
+    private LocalDateTime originalExpiresAt;
+
     public static MaterialStoreItemResponse of(CourseMaterial material, List<MaterialLinkResponse> links) {
         return MaterialStoreItemResponse.builder()
                 .materialId(material.getMaterialId())
@@ -41,6 +47,9 @@ public class MaterialStoreItemResponse {
                 .extractionWarning(material.getExtractionWarning())
                 .createdAt(material.getCreatedAt())
                 .links(links)
+                .origin(material.getOrigin() == null ? null : material.getOrigin().name())
+                .originalAvailable(material.originalAvailable(LocalDateTime.now()))
+                .originalExpiresAt(material.getOriginalExpiresAt())
                 .build();
     }
 }

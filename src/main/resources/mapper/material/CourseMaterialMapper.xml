@@ -23,6 +23,12 @@
         <result property="sourceArchiveName" column="source_archive_name"/>
         <result property="sourceEntryPath"  column="source_entry_path"/>
         <result property="status"           column="status"/>
+        <result property="origin"           column="origin"/>
+        <result property="sourceConversationId" column="source_conversation_id"/>
+        <result property="originalExpiresAt" column="original_expires_at"/>
+        <result property="originalRemovedAt" column="original_removed_at"/>
+        <result property="originalRemovedReason" column="original_removed_reason"/>
+        <result property="originalPurgedAt" column="original_purged_at"/>
         <result property="createdAt"        column="created_at"/>
         <result property="updatedAt"        column="updated_at"/>
     </resultMap>
@@ -31,11 +37,13 @@
         INSERT INTO course_materials (
             user_id, original_filename, stored_filename, storage_path,
             content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error,
-            extraction_warning, document_title, document_title_read, source_archive_name, source_entry_path
+            extraction_warning, document_title, document_title_read, source_archive_name, source_entry_path,
+            origin, source_conversation_id, original_expires_at
         ) VALUES (
             #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
             #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError},
-            #{extractionWarning}, #{documentTitle}, #{documentTitleRead}, #{sourceArchiveName}, #{sourceEntryPath}
+            #{extractionWarning}, #{documentTitle}, #{documentTitleRead}, #{sourceArchiveName}, #{sourceEntryPath},
+            #{origin}, #{sourceConversationId}, #{originalExpiresAt}
         )
     </insert>
 
@@ -51,7 +59,8 @@
     <sql id="materialMetaColumns">
         material_id, user_id, original_filename, stored_filename, storage_path, content_type, size_bytes, page_count,
         file_hash, extraction_status, NULL AS extracted_text, extraction_error, extraction_warning, document_title,
-        document_title_read, source_archive_name, source_entry_path, status, created_at, updated_at
+        document_title_read, source_archive_name, source_entry_path, status, origin, source_conversation_id,
+        original_expires_at, original_removed_at, original_removed_reason, original_purged_at, created_at, updated_at
     </sql>
 
     <select id="findMetaByUserId" resultMap="courseMaterialResultMap">
@@ -130,8 +139,50 @@
 
     <update id="markDeleted">
         UPDATE course_materials
-        SET status = 'DELETED', extracted_text = NULL
+        SET status = 'DELETED', extracted_text = NULL,
+            <!-- 상담 사진이면 원본 접근도 같은 순간 막는다. 파일 삭제가 실패해도 정리 작업이 이 표시로 다시 지운다. -->
+            original_removed_at = IF(origin IS NULL, original_removed_at, COALESCE(original_removed_at, NOW())),
+            original_removed_reason = IF(origin IS NULL, original_removed_reason, COALESCE(original_removed_reason, 'USER'))
         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!-- 이 대화에 올린 활성 상담 사진(오래된 것부터). -->
+    <select id="findPhotosByConversation" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId} AND source_conversation_id = #{conversationId}
+          AND origin = 'CONSULT_PHOTO' AND status = 'ACTIVE'
+        ORDER BY material_id
+    </select>
+
+    <!-- 원본 접근 차단. 이미 차단된 행은 그대로 둔다(처음 차단한 사유·시각을 지킨다). -->
+    <update id="markOriginalRemoved">
+        UPDATE course_materials
+           SET original_removed_at = #{now}, original_removed_reason = #{reason}
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+           AND origin = 'CONSULT_PHOTO' AND original_removed_at IS NULL
+    </update>
+
+    <!-- 만료 처리: 만료 시각이 지났는데 아직 차단 표시가 없는 사진. 조건부라 두 정리 작업이 겹쳐도 한 번만 바뀐다. -->
+    <update id="markExpiredOriginals">
+        UPDATE course_materials
+           SET original_removed_at = #{now}, original_removed_reason = 'EXPIRED'
+         WHERE origin = 'CONSULT_PHOTO' AND original_removed_at IS NULL
+           AND original_expires_at IS NOT NULL AND original_expires_at &lt;= #{now}
+         ORDER BY material_id
+         LIMIT #{limit}
+    </update>
+
+    <!-- 차단됐는데 디스크 파일을 아직 못 지운 사진(자료 전체 삭제 포함). -->
+    <select id="findUnpurgedOriginals" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE origin = 'CONSULT_PHOTO' AND original_purged_at IS NULL AND original_removed_at IS NOT NULL
+        ORDER BY material_id
+        LIMIT #{limit}
+    </select>
+
+    <update id="markOriginalPurged">
+        UPDATE course_materials SET original_purged_at = #{now}
+         WHERE material_id = #{materialId} AND original_purged_at IS NULL
     </update>
 
     <!--
@@ -170,6 +221,7 @@
     <select id="findAnalysisBacklog" resultMap="courseMaterialResultMap">
         SELECT cm.* FROM course_materials cm
         WHERE cm.status = 'ACTIVE' AND cm.extraction_status = 'SUCCESS'
+          AND cm.origin IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM material_analysis_jobs j
                WHERE j.material_id = cm.material_id AND j.job_kind = 'CONTENT'

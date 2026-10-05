@@ -68,6 +68,8 @@ public class AiTurnLifecycleService {
     private final ScheduleSuggestionService scheduleSuggestionService;
     private final DraftPromotionService draftPromotionService;
     private final com.jungwoo.project.memo.ai.brief.PlanBriefService planBriefService;
+    private final com.jungwoo.project.memo.material.CourseMaterialMapper courseMaterialMapper;
+    private final com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper messagePhotoMapper;
 
     // 기본값을 필드 이니셜라이저에도 둔다 — 순수 단위 테스트(@InjectMocks)는 Spring 컨텍스트
     // 없이 @Value를 처리하지 않으므로, 이게 없으면 테스트에서 0초가 돼 stale 판정이 어긋난다.
@@ -158,6 +160,8 @@ public class AiTurnLifecycleService {
             throw new ConflictException(ErrorCode.AI_CONVERSATION_BUSY);
         }
 
+        java.util.List<Long> photoIds = verifiedPhotoIds(conversation, userId, request);
+
         String content = createPeriodPlan && (request.getMessage() == null || request.getMessage().isBlank())
                 ? CREATE_PERIOD_PLAN_PLACEHOLDER_CONTENT
                 : createProposalWithoutText ? CREATE_PROPOSAL_PLACEHOLDER_CONTENT : request.getMessage();
@@ -171,9 +175,28 @@ public class AiTurnLifecycleService {
                 .status(MessageStatus.PROCESSING)
                 .build();
         aiMessageMapper.insert(requestMessage);
+        // 첨부는 사용자 메시지와 같은 트랜잭션에 남긴다(기록 복원·이어지는 턴의 근거·"그때 보던 사진").
+        for (Long photoId : photoIds) {
+            messagePhotoMapper.insert(requestMessage.getMessageId(), photoId, userId, conversationId);
+        }
         aiConversationMapper.acquireActiveRequest(conversationId, userId, requestMessage.getMessageId());
 
         return PreparedTurn.proceed(conversation, requestMessage);
+    }
+
+    /** 이 대화에 올린 살아 있는 상담 사진만(중복 제거, 최대 4장). 아니면 400. */
+    private java.util.List<Long> verifiedPhotoIds(AiConversation conversation, Long userId, AiMessageRequest request) {
+        if (!request.hasPhotos()) {
+            return java.util.List.of();
+        }
+        java.util.List<Long> ids = request.getPhotoIds().stream().distinct().toList();
+        java.util.Set<Long> mine = courseMaterialMapper.findPhotosByConversation(userId, conversation.getConversationId())
+                .stream().map(com.jungwoo.project.memo.material.domain.CourseMaterial::getMaterialId)
+                .collect(java.util.stream.Collectors.toSet());
+        if (ids.size() > 4 || !mine.containsAll(ids)) {
+            throw new BadRequestException(ErrorCode.PHOTO_IDS_INVALID);
+        }
+        return ids;
     }
 
     private PreparedTurn handleExistingIdempotentMessage(AiConversation conversation, AiMessage existing) {

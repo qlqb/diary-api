@@ -907,3 +907,46 @@ briefId, briefVersion            // 그때 읽은 상담 합의
   기억하는 진도·막힌 곳이 바뀌었어요.").
 - `GET /api/courses/{id}/topics` 등 학습 항목 응답에 `sourceTocSeq`.
 
+## Consult Photo — 상담 교재 사진 (2026-10-05)
+
+설계 19번. 원본 사진은 30일 뒤 지워지고 읽은 글·단원 연결은 남는다.
+
+### `POST /api/ai/conversations/{id}/photos` (multipart `image`, `uploadKey`)
+
+한 장씩. 과목 대화만(아니면 400 `E400_038`), JPG·PNG·WebP 8MB(앞머리 바이트 확인, 아니면 400 `E400_039`), `uploadKey`는 8~64자
+`[A-Za-z0-9_-]`. 하루 30장(`ai.consult-photo.daily-limit`) 넘으면 429 `E429_003`. 같은 키가 처리 중이면 409 `E409_044`, 대화가 보관됐거나
+과목이 바뀌었으면 409 `E409_045`. 응답:
+
+```json
+{ "photoId": 91, "uploadKey": "k…", "status": "READ", "title": "교재 사진 p.24 · Unit 3 …", "printedPage": 24,
+  "headings": ["Unit 3 …"], "text": "읽은 글(손글씨는 [손글씨 — 누가 썼는지 확인되지 않음] 아래)",
+  "topic": {"topicId": 503, "title": "Unit 3 …", "sourceTocSeq": 3}, "link": "GUESSED",
+  "topics": [{"topicId": 501, "title": "Unit 1 …", "sourceTocSeq": 1}],
+  "originalAvailable": true, "originalExpiresAt": "2026-11-04T10:00:00", "createdAt": "…" }
+```
+
+`status`: READ / UNREADABLE(글자 없음·교재 아님 — 저장 안 함) / FAILED(읽기 실패 — 저장 안 함). `link`: GUESSED(서버 추정) / CONFIRMED /
+NONE(화면이 단원을 묻는다). `topics`는 바꾸기 선택지.
+
+- `GET …/photos?uploadKey=` — 같은 키의 결과(처리 중이면 409, 10분 넘게 처리 중이면 FAILED).
+- `GET …/photos` — 이 대화에 올린 사진들.
+- `PUT /api/materials/{id}/photo-topic` `{topicId}` — 같은 단원이면 확인, 다른 단원이면 변경, null이면 해제. 그 과목 단원이 아니면 400
+  `E400_041`, 상담 사진이 아니면 400 `E400_042`. 그 사진 문맥으로 단원을 채운 기억도 같이 바뀐다.
+- `DELETE /api/materials/{id}/original` — 원본만 지운다(읽은 글·연결 유지).
+- `GET /api/materials/{id}/file` — 상담 사진은 만료·삭제 뒤 410 `E410_001`. 재추출은 409 `E409_046`.
+- 자료함 목록 항목에 `origin`, `originalAvailable`, `originalExpiresAt`.
+
+### 상담 턴
+
+- `POST /api/ai/conversations/{id}/messages` 본문에 `photoIds`(이 대화에 올린 살아 있는 사진, 최대 4). 자유 입력 AUTO 턴만, 메시지가
+  비면 400 `E400_040`.
+- `GET …/messages`의 사용자 메시지에 `photoIds`.
+- 활성 사진(가장 최근에 사진을 붙인 메시지의 사진) 본문이 근거 맨 앞에 실린다. 원문 턴 제한이 그대로 걸리고, 합의 수락·거절은 짧은 명시적
+  답이고 기다리던 제안이 하나일 때만.
+
+### 계획 초안
+
+- 근거 기록(provenance)의 자료 구간 값에 `photo`, `photoTopicLink`, `photoTopic`(연결 상태), `focusPhoto`.
+- 초안이 읽은 사진의 단원 연결이 바뀌면(생성 도중 포함) `freshness` STALE("이 초안이 참고한 교재 사진의 단원이 바뀌었어요.").
+- 상담 사진이 후보에 있으면 `plan_generation_traces.user_prompt`에 전문을 남기지 않는다.
+

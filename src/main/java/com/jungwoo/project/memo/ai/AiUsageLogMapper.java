@@ -11,6 +11,9 @@ public interface AiUsageLogMapper {
 
     void insert(AiUsageLog usageLog);
 
+    /** 사용자 행 잠금(한도 차감을 사용자 단위로 줄 세운다). */
+    Long lockUser(@Param("userId") Long userId);
+
     /** sinceInclusive 이후(오늘/이번 달 시작) 이 사용자의 feature 호출 횟수. 일/월 한도 체크용. */
     int countByUserIdAndFeatureSince(@Param("userId") Long userId, @Param("feature") String feature,
                                      @Param("sinceInclusive") LocalDateTime sinceInclusive);

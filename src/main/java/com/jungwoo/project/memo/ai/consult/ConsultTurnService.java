@@ -65,6 +65,14 @@ public class ConsultTurnService {
     public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
                               String userMessage, ConsultOut out, ConsultView.Evidence evidence,
                               java.time.LocalDateTime saidAt, Long courseId) {
+        return finish(userId, conversationId, userMessageId, assistantMessageId, userMessage, out, evidence, saidAt,
+                courseId, null);
+    }
+
+    /** @param photo 사진을 가리킨 발화의 사진 단원(서버 판정). 없으면 null */
+    public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
+                              String userMessage, ConsultOut out, ConsultView.Evidence evidence,
+                              java.time.LocalDateTime saidAt, Long courseId, UserContextService.PhotoRef photo) {
         try {
             List<ConsultView.Understanding> understanding = new ArrayList<>();
             if (out != null && out.memory() != null && !out.memory().isEmpty()) {
@@ -79,7 +87,7 @@ public class ConsultTurnService {
                             m.help(), m.resolves()));
                 }
                 for (UserContextResponse saved : userContextService.autoSave(userId, userMessageId, userMessage, ops,
-                        MAX_MEMORY_PER_TURN, saidAt, courseId)) {
+                        MAX_MEMORY_PER_TURN, saidAt, courseId, photo)) {
                     understanding.add(new ConsultView.Understanding(String.valueOf(saved.getContextId()), "MEMORY",
                             saved.getContent(), saved.getEvidenceType().name(), scopeLabel(saved), true,
                             saved.getFactKind() == null ? null : saved.getFactKind().name(), saved.getTopicTitle()));

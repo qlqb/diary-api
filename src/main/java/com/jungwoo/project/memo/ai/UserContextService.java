@@ -223,6 +223,63 @@ public class UserContextService {
     @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public List<UserContextResponse> autoSave(Long userId, Long sourceMessageId, String userMessage, List<AutoSave> ops,
                                               int maxPerTurn, LocalDateTime saidAt, Long defaultCourseId) {
+        return autoSave(userId, sourceMessageId, userMessage, ops, maxPerTurn, saidAt, defaultCourseId, null);
+    }
+
+    /**
+     * 사진 문맥: 사용자가 사진을 가리키며("이 문제 모르겠어") 말했고 그 사진이 단원 하나에 연결돼 있다. 서버가 정한 값이다(모델 아님).
+     *
+     * @param topicId 사진의 단원
+     * @param photoId 그 사진(자료 id) — 사진 연결을 고치면 이 기억의 단원도 따라간다
+     */
+    public record PhotoRef(Long topicId, Long photoId, List<Long> allPhotoIds) {
+
+        public PhotoRef(Long topicId, Long photoId) {
+            this(topicId, photoId, photoId == null ? List.of() : List.of(photoId));
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.TopicMaterialLinkMapper photoLinkMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.material.CourseMaterialMapper photoMaterialMapper;
+
+    /**
+     * 사진의 지금 단원(과목 잠금 아래에서 다시 읽는다). 사진 단원 변경도 같은 잠금을 쓰므로, 잠금 전에 본 단원이 그 사이 바뀌었으면
+     * 바뀐 단원을 쓴다. 사진이 지워졌거나 연결이 없거나 여러 단원이면 null(단원을 채우지 않는다).
+     */
+    private Long currentPhotoTopic(Long userId, PhotoRef photo) {
+        if (photo == null || photo.photoId() == null) {
+            return null;
+        }
+        if (photoLinkMapper == null || photoMaterialMapper == null) {
+            return photo.topicId();
+        }
+        // 그 발화가 가리킨 활성 사진 전부가 지금도 살아 있고, 모두 같은 단원 하나에 연결돼 있을 때만.
+        List<Long> photos = photo.allPhotoIds() == null || photo.allPhotoIds().isEmpty()
+                ? List.of(photo.photoId()) : photo.allPhotoIds();
+        java.util.Set<Long> topics = new java.util.HashSet<>();
+        for (Long id : photos) {
+            if (photoMaterialMapper.findByIdAndUserId(id, userId) == null) {
+                return null;
+            }
+            List<Long> own = photoLinkMapper.findActiveByMaterialId(id, userId).stream()
+                    .map(com.jungwoo.project.memo.learning.domain.TopicMaterialLink::getTopicId).distinct().toList();
+            if (own.size() != 1) {
+                return null;
+            }
+            topics.add(own.get(0));
+        }
+        return topics.size() == 1 ? topics.iterator().next() : null;
+    }
+
+    /**
+     * 위와 같되, 단원을 말하지 않은 막힘·해결이면 사진 문맥의 단원을 쓴다. 사용자가 다른 단원을 직접 말했으면 그쪽이 우선이다.
+     */
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public List<UserContextResponse> autoSave(Long userId, Long sourceMessageId, String userMessage, List<AutoSave> ops,
+                                              int maxPerTurn, LocalDateTime saidAt, Long defaultCourseId, PhotoRef photo) {
         if (ops == null || ops.isEmpty()) {
             return List.of();
         }
@@ -238,6 +295,7 @@ public class UserContextService {
             }
         }
         courses.forEach(c -> lockCourse(userId, c));
+        Long photoTopic = currentPhotoTopic(userId, photo);
 
         // 예전 철회 행(본문 키 없음)은 그 사용자의 것 전부를 같은 정규화로 비교한다 — 최근 몇 건으로 자르지 않는다.
         List<UserContext> withdrawnLegacy = userContextMapper.findLegacyWithdrawnByUserId(userId);
@@ -314,6 +372,16 @@ public class UserContextService {
                 }
             }
             String help = kind == FactKind.RESOLVED && userSaid ? helpLevel(op.help()) : null;
+            Long topicPhotoId = null;
+            if (target != null && Objects.equals(topicId, target.getTopicId())) {
+                topicPhotoId = target.getTopicPhotoId(); // 막힘이 사진에서 단원을 얻었으면 해결도 같은 사진을 따른다
+            }
+            if (topicId == null && photoTopic != null && courseId != null
+                    && (kind == FactKind.DIFFICULTY || kind == FactKind.RESOLVED)
+                    && topicOf(userId, courseId, photoTopic) != null) {
+                topicId = photoTopic;
+                topicPhotoId = photo.photoId();
+            }
 
             if (userContextMapper.countWithdrawnByKey(userId, courseId, topicId, k) > 0
                     || withdrawnLegacy.stream().anyMatch(w -> key(w.getContent()).equals(key(text)))) {
@@ -383,7 +451,7 @@ public class UserContextService {
             UserContext row = UserContext.builder()
                     .userId(userId).content(text).contentKey(k).status(UserContextStatus.ACTIVE)
                     .sourceType(ContextSourceType.CONSULT_AUTO).evidenceType(type).courseId(courseId)
-                    .factKind(kind).factLabel(label).helpLevel(help).topicId(topicId)
+                    .factKind(kind).factLabel(label).helpLevel(help).topicId(topicId).topicPhotoId(topicPhotoId)
                     .scopeStart(start).scopeEnd(end).sourceMessageId(sourceMessageId).supersedesContextId(supersedes)
                     .confirmedAt(type == ContextEvidenceType.INFERRED ? null : LocalDateTime.now())
                     .saidAt(said).build();

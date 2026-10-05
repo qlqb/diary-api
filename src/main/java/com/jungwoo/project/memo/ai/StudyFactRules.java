@@ -60,6 +60,19 @@ public final class StudyFactRules {
         return out;
     }
 
+    /** 글에서 단원 표기와 함께 나온 번호 전부("Unit 3", "3과", "Lesson 12"). 앞머리 번호("3. …")는 보지 않는다. */
+    public static java.util.Set<Integer> markedUnitNumbers(String text) {
+        java.util.Set<Integer> out = new java.util.LinkedHashSet<>();
+        if (text == null) {
+            return out;
+        }
+        Matcher m = UNIT_NUMBER.matcher(text);
+        while (m.find()) {
+            out.add(Integer.parseInt(m.group(1) != null ? m.group(1) : m.group(2)));
+        }
+        return out;
+    }
+
     /** 단원 제목의 번호("Unit 10 What's your name?" → 10). 없으면 null. */
     public static Integer unitNumberOf(String title) {
         if (title == null) {

@@ -59,7 +59,9 @@ public record EvidenceFingerprint(String fingerprint, String availabilityHash, S
         TreeSet<String> progress = new TreeSet<>();
         for (CourseCatalog c : catalogs == null ? List.<CourseCatalog>of() : catalogs) {
             for (SectionLine s : c.sections()) {
-                materials.add("s" + s.section().getSectionId() + ":" + s.section().getFileHash());
+                // 상담 사진은 단원 연결(추정·확인과 그 단원)까지 근거다 — 연결을 고치면 선택을 다시 하고 초안이 오래됨이 된다.
+                materials.add("s" + s.section().getSectionId() + ":" + s.section().getFileHash()
+                        + (s.photo() ? ":" + s.photoLink() + ":" + s.topicIds() : ""));
             }
             for (AssignmentLine a : concat(c.open(), c.completed(), c.unconfirmed())) {
                 LocalDate due = a.assignment().dueDay();

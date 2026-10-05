@@ -52,6 +52,11 @@ public class UserContext {
     /** 적용 범위. 전부 null이면 범위를 모르는(전반적인) 것이다. */
     private Long courseId;
     private Long topicId;
+    /**
+     * 단원을 사진 문맥("이 문제 모르겠어")으로 채웠으면 그 사진(자료 id). 사진의 단원 연결을 고치면 이 기억의 단원도 따라간다.
+     * 사용자가 단원을 직접 고친 행은 NULL(사용자 수정이 우선).
+     */
+    private Long topicPhotoId;
     private Long sectionId;
     private java.time.LocalDate scopeStart;
     private java.time.LocalDate scopeEnd;

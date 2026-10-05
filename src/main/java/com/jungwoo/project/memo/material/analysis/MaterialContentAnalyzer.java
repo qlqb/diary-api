@@ -352,6 +352,7 @@ public class MaterialContentAnalyzer {
             case PPTX_SLIDE -> "슬라이드 " + unit.getUnitNo();
             case NOTEBOOK_CELL -> "셀 " + unit.getUnitNo();
             case TEXT_BLOCK -> "구간 " + unit.getUnitNo();
+            case IMAGE_PAGE -> "사진 " + unit.getUnitNo();
         };
     }
 

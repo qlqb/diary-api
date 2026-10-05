@@ -511,7 +511,44 @@ public class PlanDraftService {
                         .build())
                 .briefId(extras == null ? null : extras.briefId())
                 .briefVersion(extras == null ? null : extras.briefVersion())
+                // 생성 도중 사진의 단원 연결이 바뀌었으면 받자마자 "오래됨"으로 보인다(확정 전에 다시 만들 수 있게).
+                .freshness(photoLinkChanged(userId, generated.provenance())
+                        ? new PlanDraftResponse.Freshness("STALE", List.of(PHOTO_LINK_CHANGED)) : null)
                 .build());
+    }
+
+    static final String PHOTO_LINK_CHANGED = "이 초안이 참고한 교재 사진의 단원이 바뀌었어요.";
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.TopicMaterialLinkMapper topicMaterialLinkMapper;
+
+    /**
+     * 초안이 읽은 상담 사진 구간의 단원 연결(추정·확인과 그 단원)이 지금과 다른가. 생성 때 근거 기록에 남긴 값과 비교한다.
+     */
+    boolean photoLinkChanged(Long userId, PlanProvenance provenance) {
+        if (provenance == null || provenance.providedSources() == null || topicMaterialLinkMapper == null) {
+            return false;
+        }
+        try {
+            for (var source : provenance.providedSources()) {
+                if (source.sourceType() != com.jungwoo.project.memo.plan.provenance.ProvenanceSourceType.MATERIAL_SECTION
+                        || source.providedValue() == null || source.providedValue().get("photoTopic") == null) {
+                    continue;
+                }
+                Object materialId = source.providedValue().get("materialId");
+                if (!(materialId instanceof Number n)) {
+                    continue;
+                }
+                String now = PlanProvenancePhoto.state(topicMaterialLinkMapper.findActiveByMaterialId(n.longValue(), userId),
+                        source.sourceId());
+                if (!now.equals(String.valueOf(source.providedValue().get("photoTopic")))) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            log.debug("사진 단원 연결 비교 실패 — 바뀌지 않은 것으로 본다");
+        }
+        return false;
     }
 
     // ===== 검토 상태 =====
@@ -654,6 +691,9 @@ public class PlanDraftService {
                         break;
                     }
                 }
+            }
+            if (reasons.isEmpty() && photoLinkChanged(userId, provenance)) {
+                reasons.add(PHOTO_LINK_CHANGED);
             }
             if (provenance != null && provenance.providedSources() != null && userContextMapper != null) {
                 for (var source : provenance.providedSources()) {

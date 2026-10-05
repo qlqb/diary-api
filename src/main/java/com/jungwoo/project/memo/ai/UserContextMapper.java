@@ -11,6 +11,8 @@ import java.util.List;
 @Mapper
 public interface UserContextMapper {
 
+    int retargetPhotoTopic(@Param("userId") Long userId, @Param("photoId") Long photoId, @Param("topicId") Long topicId);
+
     void insert(UserContext context);
 
     UserContext findByIdAndUserId(@Param("contextId") Long contextId, @Param("userId") Long userId);

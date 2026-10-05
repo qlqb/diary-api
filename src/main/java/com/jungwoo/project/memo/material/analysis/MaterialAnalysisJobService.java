@@ -72,8 +72,8 @@ public class MaterialAnalysisJobService {
     /** 업로드 직후. 추출이 실패한 자료는 등록하지 않는다 — 읽을 원문이 없다. */
     public MaterialAnalysisJob enqueueContent(CourseMaterial material, int priority) {
         String hash = hashOf(material);
-        if (hash == null || material.getExtractedText() == null) {
-            return null;
+        if (hash == null || material.getExtractedText() == null || material.isConsultPhoto()) {
+            return null; // 상담 사진은 서버가 구간·연결을 직접 만든다 — 분석 대상이 아니다.
         }
         return enqueue(material.getUserId(), material.getMaterialId(), MaterialAnalysisJob.NO_COURSE,
                 AnalysisJobKind.CONTENT, hash, priority);
@@ -349,7 +349,7 @@ public class MaterialAnalysisJobService {
     @Transactional
     public MaterialAnalysisJob retryContent(CourseMaterial material) {
         String hash = hashOf(material);
-        if (hash == null) {
+        if (hash == null || material.isConsultPhoto()) {
             return null;
         }
         MaterialAnalysisJob existing = jobMapper.findByScope(material.getMaterialId(), MaterialAnalysisJob.NO_COURSE,

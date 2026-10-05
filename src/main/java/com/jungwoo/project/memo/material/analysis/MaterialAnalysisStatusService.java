@@ -129,6 +129,9 @@ public class MaterialAnalysisStatusService {
         String state;
         if (material.getExtractionStatus() != ExtractionStatus.SUCCESS) {
             state = "NO_TEXT";
+        } else if (material.isConsultPhoto()) {
+            // 상담 사진은 분석 작업 없이 서버가 사진 구간을 바로 만든다 — "분석 대기"로 영영 남지 않게 끝난 상태로 보인다.
+            state = "DONE";
         } else if (content == null) {
             state = "NONE";
         } else {
@@ -249,7 +252,7 @@ public class MaterialAnalysisStatusService {
         CourseMaterial material = materialService.getActiveOwned(userId, materialId);
         materialService.getRequiredLink(userId, materialId, courseId);
         String hash = jobService.hashOf(material);
-        if (hash != null) {
+        if (hash != null && !material.isConsultPhoto()) {
             jobService.retryLink(userId, materialId, courseId, hash);
         }
         return statuses(userId, List.of(courseMaterialMapper.findByIdAndUserId(materialId, userId))).get(0);
