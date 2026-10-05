@@ -103,6 +103,8 @@ class ConsultPhotoFlowDbTest {
     @Autowired
     private AiUsageLimitService usageLimitService;
     @Autowired
+    private com.jungwoo.project.memo.material.analysis.MaterialAnalysisStatusService analysisStatusService;
+    @Autowired
     private DataSource dataSource;
 
     private Long userId;
@@ -219,6 +221,10 @@ class ConsultPhotoFlowDbTest {
         Long photoId = photo.photoId();
         String storagePath = scalar("SELECT storage_path FROM course_materials WHERE material_id = " + photoId);
         assertThat(Files.exists(fileStorageService.resolve(storagePath))).isTrue();
+        // 사진은 분석 작업 없이 구간이 생긴다 — 자료 화면에 "분석 대기"로 남지 않는다.
+        assertThat(count("SELECT COUNT(*) FROM material_analysis_jobs WHERE material_id = " + photoId)).isZero();
+        assertThat(analysisStatusService.statuses(userId, List.of(materialService.getActiveOwned(userId, photoId)))
+                .get(0).getState()).isEqualTo("DONE");
         // 업로드는 학습 완료가 아니다 — 기억·진도를 바꾸지 않는다.
         assertThat(projectStateService.load(userId, courseId).facts()).isEmpty();
 
