@@ -99,6 +99,12 @@ public final class PlanCatalogText {
         if (line.requested()) {
             sb.append(" · 이번 요청에서 지정한 자료");
         }
+        if (line.photo()) {
+            sb.append(" · 교재 사진(글자 읽기 결과").append("GUESSED".equals(line.photoLink()) ? ", 단원 추정" : "").append(')');
+        }
+        if (line.focus()) {
+            sb.append(" · 막힌·도움받아 해결한 단원의 사진 본문 — 먼저 읽을 후보");
+        }
         if (topicHandles != null && line.topicIds().size() > 1) {
             sb.append(" · 함께 연결: ").append(line.topicIds().stream().skip(1)
                     .map(topicHandles::get).filter(h -> h != null).collect(Collectors.joining(",")));

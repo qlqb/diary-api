@@ -249,7 +249,7 @@ public class MaterialAnalysisStatusService {
         CourseMaterial material = materialService.getActiveOwned(userId, materialId);
         materialService.getRequiredLink(userId, materialId, courseId);
         String hash = jobService.hashOf(material);
-        if (hash != null) {
+        if (hash != null && !material.isConsultPhoto()) {
             jobService.retryLink(userId, materialId, courseId, hash);
         }
         return statuses(userId, List.of(courseMaterialMapper.findByIdAndUserId(materialId, userId))).get(0);

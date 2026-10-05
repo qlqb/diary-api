@@ -694,7 +694,7 @@ public class PlanMaterialSelector {
         CourseCatalog current = null;
         for (Map.Entry<String, SectionLine> entry : registry.sections.entrySet()) {
             SectionLine line = entry.getValue();
-            if (!line.requested() && !line.openAssignment()) {
+            if (!line.requested() && !line.openAssignment() && !line.focus()) {
                 continue;
             }
             CourseCatalog catalog = registry.sectionCatalog.get(entry.getKey());
@@ -1094,8 +1094,7 @@ public class PlanMaterialSelector {
                         }
                         if (!section.topicIds().isEmpty()) {
                             // 연결된 토픽이 후보가 아니면(카탈로그가 이미 걸렀다) 미연결로 둔다.
-                            section = new SectionLine(section.section(), section.material(), section.roles(), List.of(),
-                                    section.completedAssignment(), section.openAssignment(), section.requested());
+                            section = section.withTopics(List.of());
                         }
                     }
                     group.sections.add(section);

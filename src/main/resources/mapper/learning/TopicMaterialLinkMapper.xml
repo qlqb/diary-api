@@ -57,6 +57,11 @@
          WHERE topic_id = #{topicId} AND user_id = #{userId} AND status = 'ACTIVE'
     </update>
 
+    <update id="activateAsUser">
+        UPDATE topic_material_links SET status = 'ACTIVE', origin = 'USER'
+         WHERE topic_id = #{topicId} AND material_id = #{materialId} AND section_id = #{sectionId} AND user_id = #{userId}
+    </update>
+
     <update id="remove">
         UPDATE topic_material_links SET status = 'REMOVED'
          WHERE link_id = #{linkId} AND user_id = #{userId}

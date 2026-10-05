@@ -164,6 +164,18 @@ public class PeriodPlanDraftGenerator {
         this.traceService = traceService;
     }
 
+    /** 상담 사진 첨부 기록(초점 사진 고르기 ①). 없으면 확인·추정·최신 순으로만 고른다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper messagePhotoMapper;
+
+    /** 초점 사진 구간의 원문 상한. 다른 구간(2,400자부터 줄인다)보다 넉넉히 — 사진 뒤쪽의 문제까지 싣는다. */
+    static final int FOCUS_PHOTO_CAP = 6000;
+
+    /** 예산을 줄일 때 초점 사진도 다른 구간 상한에 비례해 줄인다(처음엔 6,000자, 다른 구간의 2.5배). */
+    static int focusCap(int cap) {
+        return Math.min(FOCUS_PHOTO_CAP, (int) (cap * 2.5));
+    }
+
     /**
      * 계획 호출 한 번의 입력 토큰 예산(시스템 + 사용자, 추정·여유 포함). 넘으면 [더 읽을 수 있는 구간] 목록을 빼고, 고른
      * 구간의 원문 글자 상한을 줄이고, 그래도 넘으면 뒤에서부터 원문을 싣지 않는다(결과에 NOT_RETRIEVED_BUDGET으로 남긴다).
@@ -589,8 +601,9 @@ public class PeriodPlanDraftGenerator {
             com.jungwoo.project.memo.ai.state.ProjectStateService.State state = facts.projectStates().get(course.getCourseId());
             // 확인된 수업 진도가 있으면 그것이 출발점이다 — 기록 기준 "첫 미학습"(목차 트리면 Unit 1)을 붙이지 않는다.
             boolean anchor = firstAnchor && !hasConfirmedProgress(state);
-            catalogs.add(withStateFocus(materialContextService.build(spec.userId(), course.getCourseId(), course.getTitle(),
-                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(), anchor), state));
+            catalogs.add(FocusPhotos.mark(withStateFocus(materialContextService.build(spec.userId(), course.getCourseId(),
+                    course.getTitle(), excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(),
+                    anchor), state), state, messagePhotoMapper, spec.userId()));
         }
         if (!requested.unscoped().isEmpty()) {
             catalogs.add(materialContextService.buildUnscoped(spec.userId(), requested.unscoped(),
@@ -659,8 +672,8 @@ public class PeriodPlanDraftGenerator {
             long latency = System.currentTimeMillis() - startedAt;
             for (PlanMaterialSelector.CallTrace t : selection.traces()) {
                 traceEntries.add(new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry(t.kind(),
-                        modelName, t.estimatedTokens(), t.systemPrompt(), t.userPrompt(), t.sectionIds(), t.topicIds(),
-                        List.of(), materialIdsOf(catalogs), courseCounts(selection, List.of())));
+                        modelName, t.estimatedTokens(), t.systemPrompt(), traceText(t.userPrompt(), catalogs), t.sectionIds(),
+                        t.topicIds(), List.of(), materialIdsOf(catalogs), courseCounts(selection, List.of())));
             }
             for (int i = 0; i < selection.calls(); i++) {
                 Integer estimate = selection.estimatedInputTokens().size() > i ? selection.estimatedInputTokens().get(i) : null;
@@ -668,6 +681,9 @@ public class PeriodPlanDraftGenerator {
                         estimate, null, i == 0 ? latency : 0, true, "입력 토큰은 추정값");
             }
         }
+
+        // 막힌·도움받아 해결한 단원의 사진 본문은 선택 모델이 고르지 않아도 읽는다(C).
+        selection = FocusPhotos.withFocusSections(selection, catalogs);
 
         // ===== 3. 서버 원문 조회 =====
         opts.stage(PlanGenerationProgress.Stage.RETRIEVING);
@@ -911,8 +927,20 @@ public class PeriodPlanDraftGenerator {
             String kind, PlanPrompt prompt, PlanInputs inputs, List<PlanMaterialContextService.CourseCatalog> catalogs) {
         List<Long> delivered = new ArrayList<>(prompt.refBySection().keySet());
         return new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry(kind, modelName,
-                prompt.estimatedTokens(), SYSTEM_PROMPT, prompt.text(), List.of(), List.of(), delivered,
+                prompt.estimatedTokens(), SYSTEM_PROMPT, traceText(prompt.text(), catalogs), List.of(), List.of(), delivered,
                 materialIdsOf(catalogs), courseCounts(inputs.selection(), delivered));
+    }
+
+    static final String PHOTO_TRACE_TEXT = "(상담 사진 본문이 든 입력 — 전문을 저장하지 않는다. 구간·자료 id만 남긴다)";
+
+    /**
+     * 근거 기록에 남길 입력 전문. 상담 사진 구간이 후보에 있으면 남기지 않는다 — 사진 글은 사용자가 지우면 지워져야 하는데,
+     * 모델 호출 중에 지우면 호출이 끝난 뒤 저장되는 기록에 다시 남을 수 있다.
+     */
+    static String traceText(String text, List<PlanMaterialContextService.CourseCatalog> catalogs) {
+        boolean photo = catalogs != null && catalogs.stream()
+                .anyMatch(c -> c.sections().stream().anyMatch(PlanMaterialContextService.SectionLine::photo));
+        return photo ? PHOTO_TRACE_TEXT : text;
     }
 
     private static List<Long> materialIdsOf(List<PlanMaterialContextService.CourseCatalog> catalogs) {
@@ -1360,8 +1388,11 @@ public class PeriodPlanDraftGenerator {
         }
         Set<Long> budgetDropped = inputs.budgetDropped();
         while (prompt.estimatedTokens() > planInputTokenBudget) {
+            // 뒤에서부터 뺀다 — 초점 사진 구간을 앞에 두어 다른 원문을 다 뺀 뒤에야 빠지게 한다.
+            Set<Long> focus = FocusPhotos.sectionIds(inputs.catalogs());
             List<Long> still = inputs.retrieved().stream().filter(r -> r.outcome().retrieved())
-                    .map(r -> r.target().sectionId()).filter(id -> !budgetDropped.contains(id)).toList();
+                    .map(r -> r.target().sectionId()).filter(id -> !budgetDropped.contains(id))
+                    .sorted(Comparator.comparingInt(id -> focus.contains(id) ? 0 : 1)).toList();
             if (still.isEmpty()) {
                 log.warn("계획 초안: 원문을 모두 빼도 입력 예산을 넘는다(판단 사실·일정이 크다). 추정={}/{} 상한={}",
                         prompt.estimatedTokens(), planInputTokenBudget, planMaxInputTokens);
@@ -1371,7 +1402,12 @@ public class PeriodPlanDraftGenerator {
                 break;
             }
             int drop = Math.max(1, (int) Math.ceil(still.size() * 0.2));
-            budgetDropped.addAll(still.subList(still.size() - drop, still.size()));
+            List<Long> dropping = still.subList(still.size() - drop, still.size());
+            if (dropping.stream().anyMatch(focus::contains)) {
+                log.warn("계획 초안: 입력 한도 때문에 막힌 단원의 사진 본문까지 뺀다(다른 원문은 이미 모두 뺐다). 구간={}",
+                        dropping.stream().filter(focus::contains).toList());
+            }
+            budgetDropped.addAll(dropping);
             prompt = planPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
                     cappedByItemLimit, generationId, capturedAt, inputs);
         }
@@ -2131,8 +2167,13 @@ public class PeriodPlanDraftGenerator {
             boolean openAssignment = selection.sections().stream()
                     .anyMatch(sel -> sel.line().section().getSectionId().equals(r.target().sectionId())
                             && sel.line().openAssignment());
-            appendRetrievedSection(sb, courseId, r, inputs.cap(), completedAssignment, openAssignment, collector,
-                    refBySection, rendered);
+            PlanMaterialContextService.SectionLine line = selection.sections().stream()
+                    .filter(sel -> sel.line().section().getSectionId().equals(r.target().sectionId()))
+                    .map(PlanMaterialSelector.SelectedSection::line).findFirst().orElse(null);
+            boolean focusPhoto = FocusPhotos.isFocus(r.target().sectionId(), inputs.catalogs());
+            appendRetrievedSection(sb, courseId, r, focusPhoto ? focusCap(inputs.cap()) : inputs.cap(),
+                    completedAssignment, openAssignment, collector, refBySection, rendered,
+                    line == null ? null : line.photoLink(), line == null ? null : line.photoState(), focusPhoto);
         }
         if (droppedChanged > 0) {
             sb.append("  (고른 구간 중 ").append(droppedChanged)
@@ -2353,7 +2394,9 @@ public class PeriodPlanDraftGenerator {
     private void appendRetrievedSection(StringBuilder sb, Long courseId, PlanMaterialRetriever.Retrieved r, int cap,
                                         boolean completedAssignment, boolean openAssignment,
                                         ProvenanceCollector collector, Map<Long, String> refBySection,
-                                        Map<Long, PlanMaterialRetriever.Rendered> rendered) {
+                                        Map<Long, PlanMaterialRetriever.Rendered> rendered, String photoLink,
+                                        String photoState, boolean focusPhoto) {
+        boolean photo = r.material() != null && r.material().isConsultPhoto();
         MaterialSection section = r.section();
         PlanMaterialRetriever.Rendered body = PlanMaterialRetriever.render(r, cap);
         List<String> roles = materialContextService.rolesOf(section);
@@ -2374,6 +2417,13 @@ public class PeriodPlanDraftGenerator {
             text.append(" · 고른 이유: ").append(r.target().reason());
         }
         text.append(" · 읽은 범위: ").append(body.rangeLabel());
+        if (photo) {
+            // 사진 본문은 글자 읽기 결과다 — 틀릴 수 있고, 단원이 추정이면 단정하지 않는다. 손글씨 표지는 본문에 그대로 있다.
+            text.append(" · 교재 사진(글자 읽기 결과").append("GUESSED".equals(photoLink) ? ", 단원 추정" : "").append(')');
+        }
+        if (focusPhoto) {
+            text.append(" · 막힌·도움받아 해결한 단원의 사진 — 이 본문의 실제 표현·문제로 목표와 연습을 만든다");
+        }
         if (completedAssignment) {
             text.append(" · 사용자가 완료한 과제의 구간 — 과제를 다시 수행하게 하지 않는다");
         } else if (openAssignment) {
@@ -2394,7 +2444,12 @@ public class PeriodPlanDraftGenerator {
                         "retrievedChars", body.chars(),
                         "retrievedTextSha256", body.textHash(),
                         "retrieval", body.outcome().name(),
-                        "completedAssignment", completedAssignment ? Boolean.TRUE : null),
+                        "completedAssignment", completedAssignment ? Boolean.TRUE : null,
+                        "photo", photo ? Boolean.TRUE : null,
+                        "photoTopicLink", photo ? photoLink : null,
+                        // 모델 입력에 쓴 연결 상태 — 초안 최신성이 지금 DB 상태와 비교한다(생성 도중·뒤에 바뀐 연결).
+                        "photoTopic", photo ? (photoState == null ? "NONE" : photoState) : null,
+                        "focusPhoto", focusPhoto ? Boolean.TRUE : null),
                 text.toString(),
                 r.target().topicId(),
                 providedMaterial(r.material(), section.getMaterialId(), r.material().getOriginalFilename(), locator));
@@ -2522,7 +2577,9 @@ public class PeriodPlanDraftGenerator {
     static final String STATE_RULE = "과목 아래 [이 프로젝트에서 확인된 상태]의 교재·수업 진도·시험 범위는 확인된 사실이다 — questions·"
             + "missingInformation에 다시 넣지 않는다. 막힌 곳과 도움받아 해결한 단원은 복습·AI 연습 후보로 먼저 본다(범위에서 뺀 "
             + "항목·사용자가 뺀 항목이 앞선다). \"AI 추정 — 확인 전\"은 사실이 아니다(가정으로만 쓰고 assumptions에 밝힌다). "
-            + "수업 진도(수업에서 나간 곳)와 막힘·해결(내 이해)을 섞지 않는다.";
+            + "수업 진도(수업에서 나간 곳)와 막힘·해결(내 이해)을 섞지 않는다. 그 단원의 \"교재 사진\" 원문이 있으면 그 본문의 실제 "
+            + "표현·문제로 목표와 연습을 만들고 그 원문을 인용한다(사진은 글자 읽기 결과라 이상한 글자는 그대로 옮기지 않는다. "
+            + "단원 추정이면 단정하지 않는다).";
 
     /** 과목의 확인된 상태. 기억 줄마다 근거 번호를 붙인다(고치면 이 초안이 오래됨으로 보인다). */
     private void appendProjectState(StringBuilder sb, com.jungwoo.project.memo.ai.state.ProjectStateService.State state, ProvenanceCollector collector) {

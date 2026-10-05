@@ -132,6 +132,9 @@ public class MaterialService {
      */
     public MaterialStoreItemResponse retryExtraction(Long userId, Long materialId) {
         CourseMaterial material = getActiveOwned(userId, materialId);
+        if (material.isConsultPhoto()) {
+            throw new ConflictException(ErrorCode.PHOTO_NOT_REEXTRACTABLE);
+        }
         if (material.getExtractionStatus() == ExtractionStatus.SUCCESS) {
             throw new ConflictException(ErrorCode.MATERIAL_ALREADY_EXTRACTED);
         }
@@ -358,6 +361,10 @@ public class MaterialService {
         CourseMaterial material = getActiveOwned(userId, materialId);
         if (material.getStoragePath() == null) {
             throw new NotFoundException(ErrorCode.MATERIAL_FILE_NOT_FOUND);
+        }
+        // 상담 사진의 원본은 만료 시각부터 막는다(정리 작업이 아직 안 돌았어도). 읽은 글은 남아 있다.
+        if (material.isConsultPhoto() && !material.originalAvailable(java.time.LocalDateTime.now())) {
+            throw new com.jungwoo.project.memo.common.exception.BusinessException(ErrorCode.MATERIAL_ORIGINAL_REMOVED);
         }
         Path path = fileStorageService.resolve(material.getStoragePath());
         if (!Files.isReadable(path)) {

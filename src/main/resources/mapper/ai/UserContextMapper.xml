@@ -17,6 +17,7 @@
         <result property="factLabel"            column="fact_label"/>
         <result property="courseId"             column="course_id"/>
         <result property="topicId"              column="topic_id"/>
+        <result property="topicPhotoId"         column="topic_photo_id"/>
         <result property="sectionId"            column="section_id"/>
         <result property="scopeStart"           column="scope_start"/>
         <result property="scopeEnd"             column="scope_end"/>
@@ -43,6 +44,7 @@
             fact_label,
             course_id,
             topic_id,
+            topic_photo_id,
             section_id,
             scope_start,
             scope_end,
@@ -63,6 +65,7 @@
             #{factLabel},
             #{courseId},
             #{topicId},
+            #{topicPhotoId},
             #{sectionId},
             #{scopeStart},
             #{scopeEnd},
@@ -195,6 +198,12 @@
     </select>
 
     <!-- 대체: 옛 행을 SUPERSEDED로. 살아 있는 행만(이미 바뀐 것은 0행). -->
+    <!-- 사진의 단원 연결이 바뀌면 그 사진 문맥으로 단원을 채운 살아 있는 기억도 따라간다(과목 잠금 아래 호출). -->
+    <update id="retargetPhotoTopic">
+        UPDATE user_contexts SET topic_id = #{topicId}
+         WHERE user_id = #{userId} AND topic_photo_id = #{photoId} AND status IN ('ACTIVE', 'STALE')
+    </update>
+
     <update id="supersede">
         UPDATE user_contexts
         SET status = 'SUPERSEDED'

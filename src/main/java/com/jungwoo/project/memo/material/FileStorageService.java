@@ -183,6 +183,67 @@ public class FileStorageService {
                 HexFormat.of().formatHex(digest.digest()), "application/zip");
     }
 
+    /**
+     * 상담 교재 사진을 저장한다. 형식은 호출부가 앞머리로 이미 알아냈다({@link ImageFormat#detect}). 크기 상한도 호출부(8MB)가 본다.
+     * 원래 파일명은 받지 않는다 — 저장 이름은 UUID, 표시 이름은 호출부가 정한다(파일명에 든 개인 정보를 남기지 않는다).
+     */
+    public StoredFile storeImage(Long userId, byte[] bytes, ImageFormat format) {
+        return writeImage(planImage(userId, format), bytes);
+    }
+
+    /**
+     * 사진을 쓸 자리만 정한다(아직 쓰지 않는다). 호출부가 이 경로를 DB에 먼저 남긴 뒤 {@link #writeImage}로 쓴다 — 쓰는 도중·직후에
+     * 실패해도 정리 작업이 경로로 파일을 찾는다.
+     */
+    public StoredFile planImage(Long userId, ImageFormat format) {
+        String storedFilename = UUID.randomUUID() + "." + format.extension();
+        return new StoredFile(storedFilename, userId + "/" + storedFilename, format.extension(), null, format.contentType());
+    }
+
+    /** 정한 자리에 쓴다. 쓰다 실패하면 쓰던 파일을 지운다. */
+    public StoredFile writeImage(StoredFile planned, byte[] bytes) {
+        if (bytes == null || bytes.length == 0) {
+            throw new BadRequestException(ErrorCode.EMPTY_FILE);
+        }
+        String storagePath = planned.storagePath();
+        String storedFilename = planned.storedFilename();
+        Path target = resolve(storagePath);
+        try {
+            Files.createDirectories(target.getParent());
+            Files.write(target, bytes);
+        } catch (IOException e) {
+            log.error("사진 저장 실패: storagePath={}", storagePath, e);
+            try {
+                Files.deleteIfExists(target);
+            } catch (IOException ignored) {
+                // 지우지 못한 조각은 업로드 행의 경로로 정리 작업이 다시 지운다.
+            }
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        String userId = storagePath.substring(0, storagePath.indexOf('/'));
+        String fileHash = HexFormat.of().formatHex(sha256().digest(bytes));
+        log.info("사진 저장 완료: userId={}, storagePath={}, size={}", userId, storagePath, bytes.length);
+        return new StoredFile(storedFilename, storagePath, planned.extension(), fileHash, planned.contentType());
+    }
+
+    /**
+     * 파일을 지우고 결과를 돌려준다(원본 정리 작업용). 파일이 이미 없으면 지운 것으로 본다.
+     *
+     * @return 지웠거나 원래 없었으면 true, 지우지 못했으면 false(다음 정리 주기에 다시)
+     */
+    public boolean deleteForPurge(Long materialId, String storagePath) {
+        if (storagePath == null) {
+            return true;
+        }
+        try {
+            Files.deleteIfExists(resolve(storagePath));
+            return true;
+        } catch (Exception e) {
+            log.warn("원본 삭제 실패(다음 주기에 다시): materialId={}, storagePath={}", materialId, storagePath, e);
+            return false;
+        }
+    }
+
     private static byte[] header(MultipartFile file) {
         try (InputStream in = file.getInputStream()) {
             return in.readNBytes(MaterialFileFormat.HEADER_BYTES);

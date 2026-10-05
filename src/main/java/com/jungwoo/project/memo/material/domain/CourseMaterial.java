@@ -70,7 +70,34 @@ public class CourseMaterial {
 
     private MaterialStatus status;
 
+    /** 들어온 경로. NULL이면 예전 업로드. */
+    private MaterialOrigin origin;
+
+    /** 상담 사진이면 올린 대화. 그 대화의 메시지만 이 사진을 붙일 수 있다. */
+    private Long sourceConversationId;
+
+    /** 원본 자동 삭제 시각. 이 시각부터 원본 접근을 막는다. NULL이면 보관 기한 없음(예전 업로드). */
+    private LocalDateTime originalExpiresAt;
+
+    /** 원본 접근 차단 확정 시각(만료 처리·사용자 삭제·자료 삭제). */
+    private LocalDateTime originalRemovedAt;
+
+    /** EXPIRED / USER. */
+    private String originalRemovedReason;
+
+    /** 디스크 원본 파일 삭제 완료 시각. 차단됐는데 NULL이면 정리 작업이 다시 지운다. */
+    private LocalDateTime originalPurgedAt;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
+
+    public boolean isConsultPhoto() {
+        return origin == MaterialOrigin.CONSULT_PHOTO;
+    }
+
+    /** 지금 원본 파일을 보여 줄 수 있나. 만료 시각이 지났으면 정리 작업이 아직 안 돌았어도 막는다. */
+    public boolean originalAvailable(LocalDateTime now) {
+        return originalRemovedAt == null && (originalExpiresAt == null || originalExpiresAt.isAfter(now));
+    }
 }

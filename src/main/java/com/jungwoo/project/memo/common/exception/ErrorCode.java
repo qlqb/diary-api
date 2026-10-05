@@ -71,6 +71,11 @@ public enum ErrorCode {
     TEXTBOOK_VERSION_REQUIRED(HttpStatus.BAD_REQUEST, "E400_036",
             "교재를 고칠 때는 화면이 본 교재 판(expectedTextbookVersion)을 함께 보내야 해요. 화면을 새로고침해 주세요"),
     TEXTBOOK_LINK_INVALID(HttpStatus.BAD_REQUEST, "E400_037", "받을 수 없는 링크예요(http/https 공개 주소만)"),
+    PHOTO_NEEDS_COURSE(HttpStatus.BAD_REQUEST, "E400_038", "교재 사진은 과목 대화에서 올릴 수 있어요"),
+    PHOTO_INVALID(HttpStatus.BAD_REQUEST, "E400_039", "JPG·PNG·WebP 사진을 8MB까지 올릴 수 있어요"),
+    PHOTO_IDS_INVALID(HttpStatus.BAD_REQUEST, "E400_040", "이 대화에 올린 사진만 4장까지 붙일 수 있어요"),
+    PHOTO_TOPIC_INVALID(HttpStatus.BAD_REQUEST, "E400_041", "이 과목의 단원만 고를 수 있어요"),
+    NOT_CONSULT_PHOTO(HttpStatus.BAD_REQUEST, "E400_042", "상담에서 올린 사진이 아니에요"),
     PLAN_REQUESTED_MATERIAL_INVALID(HttpStatus.BAD_REQUEST, "E400_033",
             "지정한 자료를 이 계획에 쓸 수 없습니다(삭제됐거나 선택한 프로젝트에 연결돼 있지 않습니다)"),
 
@@ -205,12 +210,19 @@ public enum ErrorCode {
             "이 조회의 후보가 아니거나 이미 지난 조회예요. 교재 구역을 새로고침해 주세요"),
     ZIP_IMPORT_ARCHIVE_EXPIRED(HttpStatus.CONFLICT, "E409_026",
             "보관 기한이 지나 원본 압축 파일이 없습니다. 파일을 다시 올려주세요"),
+    PHOTO_UPLOAD_IN_PROGRESS(HttpStatus.CONFLICT, "E409_044", "이 사진을 아직 읽고 있어요. 잠시 뒤 결과를 다시 확인해 주세요"),
+    PHOTO_CONVERSATION_CHANGED(HttpStatus.CONFLICT, "E409_045", "대화나 과목이 바뀌어 사진을 저장하지 않았어요"),
+    PHOTO_NOT_REEXTRACTABLE(HttpStatus.CONFLICT, "E409_046", "상담 사진은 다시 읽을 수 없어요. 사진을 새로 올려 주세요"),
+
+    // ===== 410 Gone =====
+    MATERIAL_ORIGINAL_REMOVED(HttpStatus.GONE, "E410_001", "원본 사진은 지워졌어요(읽은 글은 남아 있어요)"),
 
     // ===== 429 Too Many Requests =====
     AI_QUOTA_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_001",
             "AI 사용 한도 또는 결제 상태를 확인한 뒤 다시 시도해 주세요"),
     AI_USAGE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "E429_002",
             "오늘의 AI 상담 호출 한도를 모두 사용했습니다"),
+    PHOTO_DAILY_LIMIT(HttpStatus.TOO_MANY_REQUESTS, "E429_003", "오늘 읽을 수 있는 사진 수를 모두 썼어요. 내일 다시 올려 주세요"),
 
     // ===== 500 Internal Server Error =====
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "E500_001", "서버 내부 오류가 발생했습니다"),

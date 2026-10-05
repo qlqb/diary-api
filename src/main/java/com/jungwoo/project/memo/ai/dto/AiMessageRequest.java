@@ -84,4 +84,11 @@ public class AiMessageRequest {
 
     @NotBlank(message = "idempotencyKey는 필수입니다")
     private String idempotencyKey;
+
+    /** 이번 발화에 붙인 상담 교재 사진(이 대화에 올린 것만, 최대 4장). 서버가 소유·대화를 다시 확인한다. */
+    private java.util.List<Long> photoIds;
+
+    public boolean hasPhotos() {
+        return photoIds != null && !photoIds.isEmpty();
+    }
 }

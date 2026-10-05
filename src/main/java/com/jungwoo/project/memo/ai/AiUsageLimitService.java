@@ -52,6 +52,29 @@ public class AiUsageLimitService {
         }
     }
 
+    /**
+     * 한 기능의 일일 한도를 <b>호출 전에</b> 원자적으로 차감한다: 사용자 행을 잠근 채 오늘 수를 세고, 한도 안이면 기록 행을 넣는다.
+     * 같은 사용자의 동시 요청은 잠금에서 줄을 서므로 한도를 넘지 못한다. 기록은 호출 결과와 무관하게 1건(호출을 시도했다).
+     *
+     * @return 차감했으면 true, 한도가 찼으면 false
+     */
+    @Transactional
+    public boolean reserveDaily(Long userId, Long conversationId, String feature, int dailyLimitForFeature, String model) {
+        aiUsageLogMapper.lockUser(userId);
+        int today = aiUsageLogMapper.countByUserIdAndFeatureSince(userId, feature, LocalDate.now().atStartOfDay());
+        if (today >= dailyLimitForFeature) {
+            return false;
+        }
+        aiUsageLogMapper.insert(AiUsageLog.builder()
+                .userId(userId)
+                .conversationId(conversationId)
+                .feature(feature)
+                .model(model)
+                .resultStatus(UsageResultStatus.SUCCESS)
+                .build());
+        return true;
+    }
+
     /** 한 기능의 호출 수(성공·실패 모두) — 상담 한도와 따로 세는 보조 호출의 상한에 쓴다. */
     @Transactional(readOnly = true)
     public int countSince(Long userId, String feature, LocalDateTime since) {

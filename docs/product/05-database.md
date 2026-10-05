@@ -810,6 +810,38 @@ ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더
 - `ai_proposal_items.evidence_json`에 `goal`·`goalBasis`. `ai_proposals.plan_request_json`에 `projectStates`(과목별 상태 지문). 스키마 변경 없음.
 - `ai_usage_logs.feature`에 `MEMORY_EXTRACT`(자료 원문 턴의 사용자 발화 전용 기억 추출).
 
+## 25. 상담 교재 사진 (2026-10-05)
+
+마이그레이션 `docs/sql/2026-10-05-consult-photo.sql`(추가형·재실행 가능). 설계 19번.
+
+### course_materials 추가 열
+
+| 열 | 뜻 |
+|---|---|
+| origin | `CONSULT_PHOTO`(상담에서 올린 교재 사진). NULL = 예전 업로드. 사진은 자동 분석 대상이 아니다 |
+| source_conversation_id | 올린 상담 대화. 그 대화의 메시지만 이 사진을 붙인다 |
+| original_expires_at | 원본 자동 삭제 시각(올린 시각 + 30일). 이 시각부터 원본 조회는 410 |
+| original_removed_at / original_removed_reason | 원본 접근 차단 확정(EXPIRED·USER, 자료 삭제는 USER) |
+| original_purged_at | 디스크 파일 삭제 완료. 차단됐는데 NULL이면 정리 작업이 다시 지운다 |
+
+`storage_path`는 NOT NULL 그대로(원본을 지운 뒤에도 재시도 단서). 인덱스 `(origin, original_purged_at, original_expires_at)`,
+`(source_conversation_id)`.
+
+### 새 표
+
+- `consult_photo_uploads` — 사진 한 장 업로드의 선점·결과. `(user_id, upload_key)` 유일. status PROCESSING/READ/UNREADABLE/FAILED,
+  `storage_path`(파일을 쓰자마자), `material_id`(READ), `file_removed_at`(자료가 못 된 업로드의 파일 삭제). 10분 넘은 PROCESSING은 FAILED.
+- `ai_message_photos(message_id, material_id, user_id, conversation_id)` — 사용자 메시지에 붙인 사진. 기록 복원·활성 사진·
+  "그 어려움을 말할 때 보던 사진"에 쓴다.
+
+### 그 밖
+
+- `material_text_units.unit_type` CHECK에 `IMAGE_PAGE`(사진 한 장, unit_index 0·unit_no 1).
+- `material_sections`: 사진마다 1행(analysis_version 0, unit 1~1, printed_page = 인쇄 쪽, dedupe_key `photo`).
+- `topic_material_links.origin` CHECK에 `PHOTO_GUESS`(서버 추정). 확인·변경하면 USER. 사진 구간당 ACTIVE 연결 하나.
+- `user_contexts.topic_photo_id` — 사진 문맥으로 단원을 채운 기억의 사진. 사진 연결을 고치면 그 기억의 단원도 바뀐다.
+- `ai_usage_logs.feature`에 `CONSULT_PHOTO_READ`(사진 1장 = 1행, 비전 호출 전에 사용자 잠금 아래 기록).
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

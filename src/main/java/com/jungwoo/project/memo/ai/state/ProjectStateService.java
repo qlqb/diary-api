@@ -60,6 +60,13 @@ public class ProjectStateService {
     @Autowired(required = false)
     private CourseCorrectionMapper correctionMapper;
 
+    /** 사진 문맥으로 단원을 채운 기억의 연결 상태(추정 표시). 없으면 표시 없이. */
+    @Autowired(required = false)
+    private com.jungwoo.project.memo.learning.TopicMaterialLinkMapper topicMaterialLinkMapper;
+
+    /** 사진 문맥으로 단원을 채운 기억인데 그 사진의 단원이 아직 서버 추정이면 붙는 표시. */
+    public static final String PHOTO_GUESS_MARK = " (사진 단원 추정)";
+
     /** 기억 한 줄. */
     public record Fact(Long contextId, FactKind kind, String label, String text, Long topicId, String topicTitle,
                        Integer topicTocSeq, ContextEvidenceType evidenceType, ContextSourceType sourceType,
@@ -173,8 +180,9 @@ public class ProjectStateService {
                 continue; // 적용 기간이 지난 것은 지금 상태가 아니다
             }
             CourseTopic topic = c.getTopicId() == null ? null : topics.get(c.getTopicId());
+            String topicTitle = topic == null ? null : topic.getTitle() + (photoGuess(userId, c) ? PHOTO_GUESS_MARK : "");
             facts.add(new Fact(c.getContextId(), c.getFactKind(), c.getFactLabel(), c.getContent(),
-                    topic == null ? null : topic.getTopicId(), topic == null ? null : topic.getTitle(),
+                    topic == null ? null : topic.getTopicId(), topicTitle,
                     topic == null ? null : topic.getSourceTocSeq(), c.getEvidenceType(), c.getSourceType(),
                     c.getHelpLevel(), saidAt(c), c.getUpdatedAt(), c.getStatus() == null ? null : c.getStatus().name(),
                     c.getSourceMessageId(), c.getScopeStart(), c.getScopeEnd()));
@@ -241,6 +249,20 @@ public class ProjectStateService {
             case OBSERVED -> "실행 기록";
             case INFERRED -> "AI 추정 — 확인 전";
         };
+    }
+
+    /** 이 기억의 단원이 사진 문맥에서 왔고, 그 사진의 연결이 아직 서버 추정(PHOTO_GUESS)인가. */
+    private boolean photoGuess(Long userId, UserContext c) {
+        if (c.getTopicPhotoId() == null || topicMaterialLinkMapper == null) {
+            return false;
+        }
+        try {
+            return topicMaterialLinkMapper.findActiveByMaterialId(c.getTopicPhotoId(), userId).stream()
+                    .anyMatch(l -> java.util.Objects.equals(l.getTopicId(), c.getTopicId())
+                            && l.getOrigin() == com.jungwoo.project.memo.learning.domain.TopicLinkOrigin.PHOTO_GUESS);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** 단원 표시: "#12 Unit 3 I have to … (교재 목차 3번째)". */

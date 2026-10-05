@@ -63,6 +63,17 @@ public interface CourseMaterialMapper {
     /** soft delete. 파일 원문은 이 호출 이후 서비스가 별도로 디스크에서 지운다. */
     void markDeleted(@Param("materialId") Long materialId, @Param("userId") Long userId);
 
+    List<CourseMaterial> findPhotosByConversation(@Param("userId") Long userId, @Param("conversationId") Long conversationId);
+
+    int markOriginalRemoved(@Param("materialId") Long materialId, @Param("userId") Long userId,
+                            @Param("reason") String reason, @Param("now") java.time.LocalDateTime now);
+
+    int markExpiredOriginals(@Param("now") java.time.LocalDateTime now, @Param("limit") int limit);
+
+    List<CourseMaterial> findUnpurgedOriginals(@Param("limit") int limit);
+
+    int markOriginalPurged(@Param("materialId") Long materialId, @Param("now") java.time.LocalDateTime now);
+
     /** 재추출 결과(상태·본문·오류·경고·쪽수·속성 제목)를 덮어쓴다. 다른 열은 건드리지 않는다. */
     int updateExtraction(@Param("materialId") Long materialId, @Param("userId") Long userId,
                          @Param("extractionStatus") com.jungwoo.project.memo.material.domain.ExtractionStatus extractionStatus,

@@ -27,4 +27,8 @@ public interface TopicMaterialLinkMapper {
     int removeByTopicId(@Param("topicId") Long topicId, @Param("userId") Long userId);
 
     int remove(@Param("linkId") Long linkId, @Param("userId") Long userId);
+
+    /** 사진 연결 확정: (단원, 자료, 구간) 행을 ACTIVE·USER로. upsert는 origin을 바꾸지 않아 따로 둔다. */
+    int activateAsUser(@Param("topicId") Long topicId, @Param("materialId") Long materialId,
+                       @Param("sectionId") Long sectionId, @Param("userId") Long userId);
 }

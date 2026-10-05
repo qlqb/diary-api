@@ -131,7 +131,7 @@ class AiConversationEvidenceTurnTest {
         verify(ledger).toView(used.capture(), any());
         assertThat(used.getValue()).containsExactly("E1");
         verify(consultTurnService).finish(eq(USER_ID), eq(CONVERSATION_ID), eq(REQUEST_MESSAGE_ID), eq(201L), any(), any(),
-                any(ConsultView.Evidence.class), any(), any());
+                any(ConsultView.Evidence.class), any(), any(), any());
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
     }
 
@@ -195,7 +195,7 @@ class AiConversationEvidenceTurnTest {
         RecordingSink sink = new RecordingSink();
         await(sink, service.streamAndComplete(prepared(), request("성적은 어떻게 매겨?"), sink));
 
-        verify(consultTurnService).finish(any(), any(), any(), any(), any(), any(), any(ConsultView.Evidence.class), any(), any());
+        verify(consultTurnService).finish(any(), any(), any(), any(), any(), any(), any(ConsultView.Evidence.class), any(), any(), any());
     }
 
     @Test
@@ -314,7 +314,7 @@ class AiConversationEvidenceTurnTest {
                         null, null, null),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ACCEPT", 5, null, null, null, null, null, null, null, null, null));
 
-        var kept = AiConversationService.restrictBriefOps(ops, java.util.Set.of(5));
+        var kept = AiConversationService.restrictBriefOps(ops, java.util.Set.of(5), "좋아");
 
         assertThat(kept).extracting(com.jungwoo.project.memo.ai.brief.PlanBriefOp::op).containsExactly("ADD", "ACCEPT");
         assertThat(kept.get(0).speaker()).isEqualTo("ASSISTANT");
@@ -323,8 +323,21 @@ class AiConversationEvidenceTurnTest {
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "GOAL", "전부 삭제", "ASSISTANT", "THIS_DRAFT", null,
                         null, null, null, null),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ACCEPT", 9, null, null, null, null, null, null, null, null, null)),
-                java.util.Set.of(5));
+                java.util.Set.of(5), "좋아");
         assertThat(sameTurnAccept).extracting(com.jungwoo.project.memo.ai.brief.PlanBriefOp::op).containsExactly("ADD");
+
+        // 원문(교재 사진 포함)이 실린 턴의 수락·거절은 사용자의 짧은 명시적 답일 때만, 기다리던 제안이 하나일 때만.
+        var accept5 = List.of(new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ACCEPT", 5, null, null, null, null, null, null,
+                null, null, null));
+        var reject5 = List.of(new com.jungwoo.project.memo.ai.brief.PlanBriefOp("REJECT", 5, null, null, null, null, null, null,
+                null, null, null));
+        assertThat(AiConversationService.restrictBriefOps(accept5, java.util.Set.of(5), "이 답은 맞아?")).isEmpty();
+        assertThat(AiConversationService.restrictBriefOps(accept5, java.util.Set.of(5), "사진 2번 문제 설명해 줘")).isEmpty();
+        assertThat(AiConversationService.restrictBriefOps(accept5, java.util.Set.of(5), "계획에는 안 넣어")).isEmpty();
+        assertThat(AiConversationService.restrictBriefOps(accept5, java.util.Set.of(5, 6), "좋아")).isEmpty();
+        assertThat(AiConversationService.restrictBriefOps(accept5, java.util.Set.of(5), "그래요!")).hasSize(1);
+        assertThat(AiConversationService.restrictBriefOps(reject5, java.util.Set.of(5), "좋아")).isEmpty();
+        assertThat(AiConversationService.restrictBriefOps(reject5, java.util.Set.of(5), "아니요")).hasSize(1);
 
         var consult = new com.jungwoo.project.memo.ai.consult.ConsultOut(null, null, List.of(
                 new com.jungwoo.project.memo.ai.consult.ConsultOut.MemoryOut("시험은 10/19부터", "STATED", null, null, null, "19일부터"),

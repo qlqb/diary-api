@@ -40,6 +40,10 @@
         )
     </insert>
 
+    <select id="lockUser" resultType="long">
+        SELECT user_id FROM users WHERE user_id = #{userId} FOR UPDATE
+    </select>
+
     <select id="countByUserIdAndFeatureSince" resultType="int">
         SELECT COUNT(*)
         FROM ai_usage_logs
