@@ -28,6 +28,7 @@ public class TextbookLookupScheduler implements DisposableBean {
     private final TextbookLookupMapper lookupMapper;
     private final TextbookLookupWorker worker;
     private final TextbookAutoTidy autoTidy;
+    private final WebTocRefresher tocRefresher;
     private final ExecutorService executor;
 
     @Value("${textbook.lookup.worker.enabled:true}")
@@ -47,10 +48,11 @@ public class TextbookLookupScheduler implements DisposableBean {
     private final String owner = "textbook-" + UUID.randomUUID().toString().substring(0, 8);
 
     public TextbookLookupScheduler(TextbookLookupMapper lookupMapper, TextbookLookupWorker worker,
-                                   TextbookAutoTidy autoTidy) {
+                                   TextbookAutoTidy autoTidy, WebTocRefresher tocRefresher) {
         this.lookupMapper = lookupMapper;
         this.worker = worker;
         this.autoTidy = autoTidy;
+        this.tocRefresher = tocRefresher;
         this.executor = Executors.newFixedThreadPool(2, r -> {
             Thread t = new Thread(r, "textbook-lookup");
             t.setDaemon(true);
@@ -62,6 +64,11 @@ public class TextbookLookupScheduler implements DisposableBean {
     public void tick() {
         if (!enabled) {
             return;
+        }
+        try {
+            tocRefresher.refreshOutdated();
+        } catch (Exception e) {
+            log.warn("목차 다시 읽기 실패: {}", e.getClass().getSimpleName(), e);
         }
         try {
             autoTidy.evaluate();

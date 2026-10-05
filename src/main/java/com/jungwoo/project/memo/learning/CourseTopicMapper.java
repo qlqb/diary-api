@@ -71,4 +71,11 @@ public interface CourseTopicMapper {
 
     Integer findMaxChildOrderIndex(@Param("courseId") Long courseId, @Param("userId") Long userId,
                                    @Param("parentTopicId") Long parentTopicId);
+
+    /** 목차 열쇠 일회 변환 대상(상태 없음 + 목차 출처 흔적). */
+    List<CourseTopic> findTocKeyBackfillTargets(@Param("limit") int limit);
+
+    /** 상태가 없는 행에만 열쇠·상태를 한 번 쓴다. */
+    int backfillTocKey(@Param("topicId") Long topicId, @Param("kind") String kind, @Param("hash") String hash,
+                       @Param("line") Integer line, @Param("state") String state);
 }

@@ -144,7 +144,10 @@ public final class TopicChangePlan {
         return switch (kind) {
             case TopicChangeOp.LINK -> "LINK|" + (op.topicId() != null ? op.topicId() : "n" + op.tempId())
                     + "|" + sortedIds(op.sectionIds());
-            case TopicChangeOp.ADD -> "ADD|" + (op.parentTopicId() != null ? "t" + op.parentTopicId()
+            // 목차 항목 ADD는 그 항목 열쇠가 이름표다 — 장마다 반복되는 "요약"·"연습문제"가 서로의 제외·제목 편집을 승계하지 않는다.
+            // (같은 정리안 판 사이의 승계는 목차 근거가 같을 때만 일어난다.)
+            case TopicChangeOp.ADD -> op.tocLine() != null ? "ADD|toc|" + op.tocLine()
+                    : "ADD|" + (op.parentTopicId() != null ? "t" + op.parentTopicId()
                     : op.parentTempId() != null ? "n" + op.parentTempId() : "root")
                     + "|" + normalizeTitle(op.title());
             case TopicChangeOp.RENAME -> "RENAME|" + op.topicId();
@@ -190,7 +193,9 @@ public final class TopicChangePlan {
                 .append("|week=").append(op.week())
                 .append("|m=").append(op.materialId())
                 .append("|label=").append(normalizeTitle(op.label()))
-                .append("|temp=").append(TopicChangeOp.LINK.equals(op.op()) ? op.tempId() : "");
+                .append("|temp=").append(TopicChangeOp.LINK.equals(op.op()) ? op.tempId() : "")
+                // 목차 항목 열쇠. 부모·제목·자식 구성은 위에서 그대로 비교한다 — 같은 열쇠라도 그것들이 바뀌면 다른 제안이다.
+                .append("|toc=").append(op.tocLine() == null ? "" : op.tocLine());
         if (op.children() != null && !op.children().isEmpty()) {
             // 분할의 자식 구성. 개수만 세지 않는다 — 이름이 바뀌면 다른 분할이다.
             sb.append("|children=[");

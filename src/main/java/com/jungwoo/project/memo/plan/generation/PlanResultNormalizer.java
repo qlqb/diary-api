@@ -131,6 +131,22 @@ public final class PlanResultNormalizer {
             if (description == null) {
                 description = blankToNull(raw.reason());
             }
+            String itemTitle = raw.title();
+            String reason = blankToNull(raw.reason());
+            DoneCriteriaSource doneSource = doneCriteria == null ? null : DoneCriteriaSource.MODEL;
+            String rawGoal = raw.goal();
+            // 목차 제목만 있는 실습·연습문제: 그 토픽의 본문을 인용하지 않았으면 모델 문구(지어낸 문제일 수 있다)를 쓰지 않는다.
+            TocTaskGuard.Replacement guard = TocTaskGuard.check(refs, byRef);
+            if (guard != null) {
+                log.info("계획 초안: 목차 제목만 있는 실습·연습문제 항목을 교재를 가리키는 문구로 바꾼다. title={}", raw.title());
+                itemTitle = guard.title();
+                doneCriteria = guard.doneCriteria();
+                doneSource = DoneCriteriaSource.DEFAULT;
+                description = mergedDescription(guard.description(), doneCriteria);
+                reason = guard.reason();
+                rawGoal = null;
+                origin = null;
+            }
             Long topicId = topicIdOf(refs, byRef);
             Deadline deadline = resolveDeadline(raw, deadlineFacts, byRef, now, end, unknown);
             if (deadline.unknownRef) {
@@ -138,7 +154,7 @@ public final class PlanResultNormalizer {
             }
 
             items.add(new ProposalItem(
-                    raw.title(), description, raw.expectedMinutes(), normalizePriority(raw.priority()),
+                    itemTitle, description, raw.expectedMinutes(), normalizePriority(raw.priority()),
                     scheduled != null ? PlacementType.DATE_ONLY : PlacementType.UNSCHEDULED,
                     null, null,
                     scheduled != null ? scheduled : start,
@@ -146,13 +162,13 @@ public final class PlanResultNormalizer {
                     null, null,
                     resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId),
                     deadline.at, topicId, parseAction(raw.actionType()), doneCriteria,
-                    doneCriteria == null ? null : DoneCriteriaSource.MODEL, null,
+                    doneSource, null,
                     deadline.at == null && deadline.date == null ? null : deadline.source));
 
             List<String> estimates = aiEstimates(raw, scheduled, deadline);
             Long itemCourseId = resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId);
-            Goal goal = goalOf(raw.goal(), refs, byRef, itemCourseId, topicId);
-            evidence.add(PlanItemEvidence.of(provenance.generationId(), refs, blankToNull(raw.reason()), estimates,
+            Goal goal = goalOf(rawGoal, refs, byRef, itemCourseId, topicId);
+            evidence.add(PlanItemEvidence.of(provenance.generationId(), refs, reason, estimates,
                     List.of(), unknown + (deadline.unknownRef ? 1 : 0)).withOrigin(origin)
                     .withGoal(goal == null ? null : goal.text(), goal == null ? null : goal.basis()));
         }

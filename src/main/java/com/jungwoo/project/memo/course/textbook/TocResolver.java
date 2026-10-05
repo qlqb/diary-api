@@ -191,10 +191,11 @@ public class TocResolver {
     }
 
     private TextbookService.TocSnapshot webSnapshot(Course course, Long revisionId, int version, String bookKey) {
-        TextbookWebRevision revision = webMapper.findRevision(revisionId, course.getUserId());
+        TextbookWebRevision revision = effective(webMapper.findRevision(revisionId, course.getUserId()), course.getUserId());
         if (revision == null || revision.getTocEntryCount() < 1) {
             return null;
         }
+        revisionId = revision.getRevisionId();
         List<TextbookExtractor.TocEntry> entries = webEntries(revision.getTocJson());
         if (entries.isEmpty()) {
             return null;
@@ -208,7 +209,41 @@ public class TocResolver {
                 "SHARED".equals(revision.getCacheScopeKey()) ? revision.getUrl()
                         : com.jungwoo.project.memo.course.textbook.web.SafePageFetcher.masked(revision.getUrl()),
                 revision.getFetchedAt() == null ? null : revision.getFetchedAt().format(AT),
-                revision.getTocCoverage());
+                revision.getTocCoverage(),
+                revision.getTocRawHash() != null ? revision.getTocRawHash()
+                        : com.jungwoo.project.memo.course.textbook.web.WebEvidenceStore.rawHash(revision.getTocRaw()),
+                unreadOf(revision.getTocJson()));
+    }
+
+    /**
+     * 실제로 쓸 리비전. 옛 구조화 판이면 같은 페이지·같은 원문을 지금 판으로 다시 읽은 리비전을 따라간다(교재 칸·조회가 옛 리비전
+     * 번호를 들고 있어도 새 구조를 본다). 범위(SHARED·그 사용자) 조건은 그대로다. 다시 읽은 것이 없으면 옛 것.
+     */
+    public TextbookWebRevision effective(TextbookWebRevision revision, Long userId) {
+        if (!com.jungwoo.project.memo.course.textbook.web.WebEvidenceStore.needsRestructure(revision)) {
+            return revision;
+        }
+        String hash = revision.getTocRawHash() != null ? revision.getTocRawHash()
+                : com.jungwoo.project.memo.course.textbook.web.WebEvidenceStore.rawHash(revision.getTocRaw());
+        TextbookWebRevision newer = webMapper.findRestructured(revision.getPageId(), hash,
+                com.jungwoo.project.memo.course.textbook.web.WebTocStructurer.TOC_VERSION, userId);
+        return newer != null ? newer : revision;
+    }
+
+    /** 목차 JSON에 남긴 "못 읽은 줄 수". 예전 JSON이면 lines - readLines. */
+    int unreadOf(String tocJson) {
+        if (tocJson == null) {
+            return 0;
+        }
+        try {
+            JsonNode root = objectMapper.readTree(tocJson);
+            if (root.has("unread")) {
+                return Math.max(0, root.path("unread").asInt(0));
+            }
+            return Math.max(0, root.path("lines").asInt(0) - root.path("readLines").asInt(0));
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     public List<TextbookExtractor.TocEntry> webEntries(String tocJson) {

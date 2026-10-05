@@ -135,18 +135,26 @@ public class ProjectTidyWorker {
         }
         List<TopicChangeOp> skeleton = input.guidance().skeleton();
         com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc = input.guidance().toc();
+        TocReconciler.Result reconciled = input.guidance().reconciledOrNone();
         TocOps.Mode mode = TocOps.modeOf(input, toc);
         ProjectTidyAnalyzer.Draft draft;
         if (input.sections().isEmpty() && !skeleton.isEmpty()) {
             // 읽을 구간은 없고 목차 골격만 있다. 모델을 부르지 않는다.
             draft = new ProjectTidyAnalyzer.Draft(List.of(), "교재 목차로 학습 구조의 첫 골격을 만들었어요", null);
+        } else if (input.sections().isEmpty() && !reconciled.isNone() && !reconciled.anyForModel()) {
+            // 트리가 있고 읽을 구간은 없는데, 목차 항목마다 서버가 판단을 끝냈다(대응·새 항목·보류). 모델을 부르지 않는다.
+            draft = new ProjectTidyAnalyzer.Draft(List.of(), reconciled.adds().isEmpty()
+                    ? "교재 목차와 지금 학습 구조를 비교했어요" : "교재 목차에서 빠진 항목을 찾았어요", null);
         } else if (input.sections().isEmpty()) {
             // 트리가 있고 읽을 구간은 없다 — 목차와 지금 트리만 비교한다(수업 파일 없는 교재 중심 과목).
             draft = analyzer.analyzeTocOnly(job.getUserId(), input, TocOps.switchedFrom(input, toc));
         } else {
             draft = analyzer.analyze(job.getUserId(), input);
         }
-        List<TopicChangeOp> modelOps = TocOps.apply(draft.ops(), toc, mode, TocOps.switchedFrom(input, toc) != null);
+        // 서버 목차 추가안과 같은 모델 항목은 목차 확인(TocOps)보다 먼저 정리한다 — 그 항목을 가리키던 연결·자식을 서버 항목으로 옮기려면
+        // 지워지기 전의 tempId가 필요하다.
+        List<TopicChangeOp> modelOps = TocOps.apply(withoutServerTocDuplicates(draft.ops(), reconciled.adds()), toc, mode,
+                TocOps.switchedFrom(input, toc) != null, reconciled, input.topics());
         // 무엇을 목록으로 보고 무엇을 자세히 읽었는지로 범위를 채운다. 정리안에 그대로 저장된다.
         if (draft.review() != null) {
             input = inputBuilder.finalizeScope(input, draft.review());
@@ -155,6 +163,7 @@ public class ProjectTidyWorker {
         Set<Long> sectionIds = input.sections().stream()
                 .map(MaterialSection::getSectionId).collect(Collectors.toSet());
         List<TopicChangeOp> raw = new ArrayList<>(skeleton);
+        raw.addAll(reconciled.adds());
         raw.addAll(withoutSkeletonDuplicates(modelOps, skeleton));
         raw.addAll(carriedUserOps(job));
         TopicChangeOpsValidator.Result validated = TopicChangeOpsValidator.validate(
@@ -164,7 +173,10 @@ public class ProjectTidyWorker {
                     validated.rejected().size(), job.getJobId(), validated.rejected());
         }
         TopicChangePlan.Plan plan = TopicChangePlan.of(validated.ops());
-        return save(job, course, input, plan.ops(), draft.summary(), draft.model());
+        String note = reconciled.note();
+        String summary = note.isEmpty() ? draft.summary()
+                : (draft.summary() == null || draft.summary().isBlank() ? note : draft.summary() + " · " + note);
+        return save(job, course, input, plan.ops(), summary, draft.model());
     }
 
     /**
@@ -195,9 +207,12 @@ public class ProjectTidyWorker {
             log.warn("정리 입력의 교재 목차를 읽지 못했다: courseId={}, {}", job.getCourseId(), e.getClass().getSimpleName());
         }
         List<TopicChangeOp> skeleton = input.topics().isEmpty() ? TocSkeleton.build(toc) : List.of();
+        // 트리가 있으면 서버가 먼저 목차와 맞춰 본다 — 확실히 새 항목만 ADD하고, 모호한 곳은 아무도 추가하지 않는다.
+        TocReconciler.Result reconciled = input.topics().isEmpty() ? TocReconciler.Result.NONE
+                : TocReconciler.reconcile(toc, input.topics());
         ProjectTidyInputBuilder.Guidance guidance = new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton);
         return new ProjectTidyInputBuilder.Guidance(request, focus, toc, skeleton,
-                TocOps.switchedFrom(input.withGuidance(guidance), toc));
+                TocOps.switchedFrom(input.withGuidance(guidance), toc), reconciled);
     }
 
     /** 모델이 골격과 같은 장을 또 만들었으면 뺀다(서버 골격이 먼저다). */
@@ -218,6 +233,102 @@ public class ProjectTidyWorker {
             out.add(op);
         }
         return out;
+    }
+
+    /**
+     * 서버가 목차에서 추가하는 항목과 같은 것을 모델이 또 냈으면 뺀다 — 같은 열쇠, 또는 같은 부모 아래 같은 정규화 제목.
+     * <ul>
+     *   <li>뺀 모델 항목을 가리키던 tempId(LINK·자식의 부모)는 서버 항목의 tempId로 바꾼다.</li>
+     *   <li>뺀 항목이 직접 든 자료 구간은 서버 항목으로의 LINK로, 그 자식들은 서버 항목 아래 ADD로 옮긴다(옮긴 자식도 다시 본다).</li>
+     *   <li>별칭을 먼저 끝까지 모은 뒤 판정한다 — 모델이 자식을 부모보다 먼저 내도 결과가 같다.</li>
+     * </ul>
+     */
+    static List<TopicChangeOp> withoutServerTocDuplicates(List<TopicChangeOp> ops, List<TopicChangeOp> server) {
+        if (server.isEmpty() || ops == null || ops.isEmpty()) {
+            return ops == null ? List.of() : ops;
+        }
+        Map<Integer, String> tempByKey = new HashMap<>();
+        Map<String, String> tempByParentTitle = new HashMap<>();
+        for (TopicChangeOp op : server) {
+            collectServer(op, op.parentTopicId() == null ? "root" : "t" + op.parentTopicId(), tempByKey, tempByParentTitle);
+        }
+        // 1. 뺀 항목의 자식을 서버 항목 아래 ADD로 펼친 목록을 만들면서, 별칭이 더 늘지 않을 때까지 모은다.
+        List<TopicChangeOp> work = new ArrayList<>(ops);
+        Map<String, String> alias = new HashMap<>();
+        java.util.IdentityHashMap<TopicChangeOp, String> duplicateOf = new java.util.IdentityHashMap<>();
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            List<TopicChangeOp> lifted = new ArrayList<>();
+            for (TopicChangeOp op : work) {
+                if (!TopicChangeOp.ADD.equalsIgnoreCase(op.op()) || duplicateOf.containsKey(op)) {
+                    continue;
+                }
+                String same = serverTwin(op, alias, tempByKey, tempByParentTitle);
+                if (same == null) {
+                    continue;
+                }
+                duplicateOf.put(op, same);
+                if (op.tempId() != null) {
+                    alias.put(op.tempId(), same);
+                }
+                for (TopicChangeOp child : op.children() == null ? List.<TopicChangeOp>of() : op.children()) {
+                    lifted.add(new TopicChangeOp(TopicChangeOp.ADD, child.tempId(), null, null, same, child.title(),
+                            child.sourceType(), child.locator(), child.sectionIds(), child.role(), null, null,
+                            child.children(), child.reason(), null, null, null, child.materialId(), child.label(),
+                            child.by(), child.tocLine()));
+                }
+                changed = true;
+            }
+            work.addAll(lifted);
+        }
+        if (duplicateOf.isEmpty()) {
+            return ops;
+        }
+        // 2. 뺀 항목의 구간은 LINK로, 남은 작업의 참조는 별칭으로.
+        List<TopicChangeOp> out = new ArrayList<>();
+        for (TopicChangeOp op : work) {
+            String same = duplicateOf.get(op);
+            if (same != null) {
+                if (op.sectionIds() != null && !op.sectionIds().isEmpty()) {
+                    out.add(new TopicChangeOp(TopicChangeOp.LINK, same, null, null, null, null, null, null, op.sectionIds(),
+                            op.role(), null, null, null, op.reason()));
+                }
+                continue;
+            }
+            String temp = TopicChangeOp.LINK.equalsIgnoreCase(op.op()) && op.tempId() != null
+                    ? alias.getOrDefault(op.tempId(), op.tempId()) : op.tempId();
+            String parentTemp = op.parentTempId() == null ? null : alias.getOrDefault(op.parentTempId(), op.parentTempId());
+            out.add(new TopicChangeOp(op.op(), temp, op.topicId(), op.parentTopicId(), parentTemp, op.title(),
+                    op.sourceType(), op.locator(), op.sectionIds(), op.role(), op.survivingTopicId(), op.absorbedTopicIds(),
+                    op.children(), op.reason(), op.changeId(), op.afterTopicId(), op.week(), op.materialId(), op.label(),
+                    op.by(), op.tocLine()));
+        }
+        return out;
+    }
+
+    /** 이 모델 ADD와 같은 서버 항목의 tempId. 같은 열쇠가 먼저, 그다음 같은 부모(별칭 반영) 아래 같은 정규화 제목. */
+    private static String serverTwin(TopicChangeOp op, Map<String, String> alias, Map<Integer, String> tempByKey,
+                                     Map<String, String> tempByParentTitle) {
+        if (op.tocLine() != null && tempByKey.containsKey(op.tocLine())) {
+            return tempByKey.get(op.tocLine());
+        }
+        String parent = op.parentTempId() != null ? "n" + alias.getOrDefault(op.parentTempId(), op.parentTempId())
+                : op.parentTopicId() == null ? "root" : "t" + op.parentTopicId();
+        return tempByParentTitle.get(parent + "|" + TocReconciler.normalize(op.title()));
+    }
+
+    private static void collectServer(TopicChangeOp op, String parent, Map<Integer, String> tempByKey,
+                                      Map<String, String> byParentTitle) {
+        if (op.tocLine() != null && op.tempId() != null) {
+            tempByKey.putIfAbsent(op.tocLine(), op.tempId());
+        }
+        if (op.tempId() != null) {
+            byParentTitle.putIfAbsent(parent + "|" + TocReconciler.normalize(op.title()), op.tempId());
+        }
+        if (op.children() != null) {
+            op.children().forEach(child -> collectServer(child, "n" + op.tempId(), tempByKey, byParentTitle));
+        }
     }
 
     private static void collectTitles(TopicChangeOp op, Set<String> out) {
@@ -282,6 +393,7 @@ public class ProjectTidyWorker {
                     .userRequestJson(job.getUserRequestJson())
                     .tocBasisJson(input.guidance() == null || input.guidance().toc() == null ? null
                             : writeJson(input.guidance().toc().basis()))
+                    .tocKeyVersion(com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot.KEY_VERSION)
                     .build();
 
             /*

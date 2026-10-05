@@ -828,7 +828,7 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 | `current` | 지금 쓰는 교재 `{title, author, publisher, isbn, edition, source USER|MATERIAL|WEB, materialId, version, web{revisionId, site, url, fetchedAt, isbn13, publishedDate}}` |
 | `syllabusClues[]` | 강의계획서 등에 적힌 교재(후보) `{materialId, filename, role MAIN|SUPPLEMENT|REFERENCE|UNKNOWN, title, author, publisher, isbn, edition, unit, quote, source RULE|MODEL, sameAsCurrent}` |
 | `lookup` | 웹 조회 `{lookupId, status, clueOrigin, query(보낸 단서), searchedWith, editions[], candidates[], failures[], clueOptions[], note, errorCode, createdAt, finishedAt, autoTidy, chosenRevisionId, reused}` — 단서가 없거나 꺼졌으면 null |
-| `toc` | 확보한 목차 + `kind MATERIAL|WEB`, `label`, `coverage`, `sourceUrl`, `fetchedAt` |
+| `toc` | 확보한 목차 + `kind MATERIAL|WEB`, `label`, `coverage`, `sourceUrl`, `fetchedAt`, `unread`(웹 목차 원문에서 목차 항목으로 읽지 못한 줄 수, 2026-10-06). `entries[].level`은 깊이(자르지 않음), 웹 목차의 `unit`은 원문 줄 번호(목차 항목 열쇠) |
 | `unlinkedTocs[]` | 교재가 정해져 있는데 어느 책인지 적히지 않아 저절로 쓰지 않은 업로드 목차 `{materialId, filename, entryCount}` |
 | `webLookupEnabled` | 교재 단서를 외부로 보내 찾는가 |
 

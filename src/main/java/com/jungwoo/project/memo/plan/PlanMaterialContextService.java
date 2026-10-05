@@ -354,7 +354,7 @@ public class PlanMaterialContextService {
 
         List<TopicLine> all = new ArrayList<>();
         for (TopicResponse root : topicService.getTopicTree(userId, courseId)) {
-            flatten(all, root, 0);
+            flatten(all, root, 0, null);
         }
 
         List<CourseAssignment> assignmentRows = assignmentService.findByCourses(userId, List.of(courseId));
@@ -591,15 +591,29 @@ public class PlanMaterialContextService {
         return out;
     }
 
-    private void flatten(List<TopicLine> out, TopicResponse node, int depth) {
-        out.add(new TopicLine(node.getTopicId(), node.getParentTopicId(), node.getTitle(), node.getSourceLocator(),
-                node.getSourceMaterialId(), node.getSourceMaterialFilename(), depth, node.getProgressStatus(),
-                node.getUserMark(), node.getLastStudiedAt(), false).withTocSeq(node.getSourceTocSeq()));
+    private void flatten(List<TopicLine> out, TopicResponse node, int depth, String parentTitle) {
+        out.add(new TopicLine(node.getTopicId(), node.getParentTopicId(), titleWithPath(node, parentTitle),
+                node.getSourceLocator(), node.getSourceMaterialId(), node.getSourceMaterialFilename(), depth,
+                node.getProgressStatus(), node.getUserMark(), node.getLastStudiedAt(), false)
+                .withTocSeq(node.getSourceTocSeq()));
         if (node.getChildren() != null) {
             for (TopicResponse child : node.getChildren()) {
-                flatten(out, child, depth + 1);
+                flatten(out, child, depth + 1, node.getTitle());
             }
         }
+    }
+
+    /**
+     * 목차에서 온 "요약"·"연습문제"·"실습 1-1"처럼 장마다 반복되는 묶음 제목은 부모 제목을 앞에 붙인다("Chapter 01 … › 연습문제") —
+     * 계획이 어느 장의 문제인지 가리킬 수 있게. 다른 토픽 제목은 그대로다.
+     */
+    static String titleWithPath(TopicResponse node, String parentTitle) {
+        String title = node.getTitle();
+        if (parentTitle == null || parentTitle.isBlank() || !com.jungwoo.project.memo.learning.TocTopics.isToc(node.getSourceLocator())
+                || com.jungwoo.project.memo.course.textbook.TocItemKind.of(title) == null) {
+            return title;
+        }
+        return parentTitle + " › " + title;
     }
 
     private List<PendingMaterial> pendingOf(Long userId, Long courseId, List<CourseMaterial> materials) {
@@ -629,6 +643,16 @@ public class PlanMaterialContextService {
             }
         }
         return out;
+    }
+
+    /** 이 구간에 연결된 학습 항목 전부(ACTIVE 연결). 계획 근거가 "이 본문은 어느 토픽의 것인가"를 하나로 줄이지 않게. */
+    public List<Long> linkedTopicIds(Long userId, MaterialSection section) {
+        if (userId == null || section == null || section.getMaterialId() == null) {
+            return List.of();
+        }
+        return topicLinkMapper.findActiveByMaterialId(section.getMaterialId(), userId).stream()
+                .filter(l -> java.util.Objects.equals(l.getSectionId(), section.getSectionId()))
+                .map(TopicMaterialLink::getTopicId).distinct().toList();
     }
 
     public List<String> rolesOf(MaterialSection section) {

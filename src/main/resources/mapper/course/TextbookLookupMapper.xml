@@ -165,6 +165,18 @@
          LIMIT #{limit}
     </select>
 
+    <!--
+      목차를 다시 구조화한 뒤: 과목마다 가장 최근 조회가 목차를 확보한 것(FOUND·판 선택)이고 자동 정리를 이미 마쳤거나 보냈으면 다시 본다.
+      다시 봐도 같은 목차 근거의 정리안이 있으면 "이미 함" — 중복 정리를 만들지 않는다(TextbookAutoTidy).
+    -->
+    <update id="reopenAutoTidyAfterTocRefresh">
+        UPDATE textbook_lookups l
+          JOIN (SELECT course_id, user_id, MAX(lookup_id) AS mx FROM textbook_lookups GROUP BY course_id, user_id) m
+            ON m.mx = l.lookup_id
+           SET l.auto_tidy_state = 'PENDING', l.auto_tidy_next_at = NULL
+         WHERE l.status IN ('FOUND', 'NEEDS_CHOICE') AND l.auto_tidy_state IN ('DONE', 'ENQUEUED')
+    </update>
+
     <update id="updateAutoTidy">
         UPDATE textbook_lookups SET auto_tidy_state = #{to}, tidy_job_id = COALESCE(#{tidyJobId}, tidy_job_id),
                auto_tidy_next_at = #{nextAt}

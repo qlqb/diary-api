@@ -109,7 +109,7 @@ public class TextbookService {
                 ? new TextbookReview.Toc("NOT_FOUND", null, null, 0, null, null, List.of(), null, null, null, null, null)
                 : new TextbookReview.Toc("FOUND", snapshot.materialId(), snapshot.filename(), snapshot.entries().size(),
                 snapshot.fromUnit(), snapshot.toUnit(), snapshot.entries(), snapshot.kind(), snapshot.label(),
-                snapshot.coverage(), snapshot.sourceUrl(), snapshot.fetchedAt());
+                snapshot.coverage(), snapshot.sourceUrl(), snapshot.fetchedAt(), snapshot.unread());
 
         TextbookLookup latest = lookupMapper.findLatestByCourse(courseId, userId);
         TextbookReview.Lookup lookup = latest == null || TextbookLookup.SUPERSEDED.equals(latest.getStatus())
@@ -332,7 +332,18 @@ public class TextbookService {
      */
     public record TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
                               List<TextbookExtractor.TocEntry> entries, TocResolver.Basis basis, String label,
-                              String kind, String sourceUrl, String fetchedAt, String coverage) {
+                              String kind, String sourceUrl, String fetchedAt, String coverage, String tocRawHash,
+                              int unread) {
+
+        /** 목차 항목 열쇠의 판. 2 = 웹은 원문 줄 번호, 업로드는 추출 순번. 그 전(NULL)은 구조화 목록 순번이었다. */
+        public static final int KEY_VERSION = 2;
+
+        public TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
+                           List<TextbookExtractor.TocEntry> entries, TocResolver.Basis basis, String label,
+                           String kind, String sourceUrl, String fetchedAt, String coverage) {
+            this(materialId, filename, fileHash, fromUnit, toUnit, entries, basis, label, kind, sourceUrl, fetchedAt,
+                    coverage, null, 0);
+        }
 
         /** 예전 모양(업로드 목차). 근거는 자료·해시만. */
         public TocSnapshot(Long materialId, String filename, String fileHash, Integer fromUnit, Integer toUnit,
@@ -344,6 +355,51 @@ public class TextbookService {
 
         public boolean isWeb() {
             return "WEB".equals(kind);
+        }
+
+        /** 열쇠의 종류: WEB(원문 해시 + 원문 줄) · MATERIAL(파일 해시 + 추출 순번). */
+        public String keyKind() {
+            return isWeb() ? "WEB" : "MATERIAL";
+        }
+
+        /** 열쇠가 기대는 원문. 웹은 목차 원문 해시, 업로드는 파일 해시. */
+        public String keyHash() {
+            return isWeb() ? tocRawHash : fileHash;
+        }
+
+        /** index번째(0부터) 항목의 열쇠. 웹은 원문 줄 번호, 업로드는 1부터의 순번. */
+        public int keyAt(int index) {
+            return isWeb() ? entries.get(index).unit() : index + 1;
+        }
+
+        /** 열쇠로 항목의 위치(0부터)를 찾는다. 없으면 -1. 순번으로 찾지 않는다(웹은 같은 순번이 다른 줄일 수 있다). */
+        public int indexOfKey(int key) {
+            if (entries == null) {
+                return -1;
+            }
+            if (!isWeb()) {
+                return key >= 1 && key <= entries.size() ? key - 1 : -1;
+            }
+            for (int i = 0; i < entries.size(); i++) {
+                if (entries.get(i).unit() == key) {
+                    return i;
+                }
+            }
+            return -1;
+        }
+
+        public TextbookExtractor.TocEntry entryByKey(int key) {
+            int i = indexOfKey(key);
+            return i < 0 ? null : entries.get(i);
+        }
+
+        /** 열쇠 → 표시 순번(1부터, 목차 안 위치). 화면의 "목차 N번째"에 쓴다. */
+        public java.util.Map<Integer, Integer> ordinalByKey() {
+            java.util.Map<Integer, Integer> out = new java.util.HashMap<>();
+            for (int i = 0; entries != null && i < entries.size(); i++) {
+                out.put(keyAt(i), i + 1);
+            }
+            return out;
         }
     }
 

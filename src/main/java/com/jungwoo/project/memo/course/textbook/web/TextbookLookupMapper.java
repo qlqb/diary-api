@@ -75,4 +75,7 @@ public interface TextbookLookupMapper {
                      @Param("limit") int limit);
 
     Integer findUsage(@Param("userId") Long userId, @Param("date") LocalDate date);
+
+    /** 목차를 다시 구조화한 뒤 과목별 최근 조회의 자동 정리를 다시 보게 한다. */
+    int reopenAutoTidyAfterTocRefresh();
 }
