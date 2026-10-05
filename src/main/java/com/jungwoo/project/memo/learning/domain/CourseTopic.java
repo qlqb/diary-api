@@ -43,8 +43,21 @@ public class CourseTopic {
     /** 목차에서 온 항목이 어느 책의 것인가(BookKey). 교재가 바뀐 뒤 이전 교재 항목을 새 교재 범위로 세지 않기 위해. */
     private String sourceTextbookKey;
 
-    /** 같은 교재 목차 안의 원본 순번(1부터). 트리 순서(orderIndex)와 달리 바뀌지 않는다 — 제목이 같은 단원을 구분한다. */
+    /**
+     * 같은 교재 목차 안의 원본 순번(1부터). 트리 순서(orderIndex)와 달리 바뀌지 않는다 — 제목이 같은 단원을 구분한다.
+     * (2026-10-06) 화면 표시용("목차 N번째")이다. 목차 항목과 짝을 찾을 때는 tocKey*를 쓴다(규칙이 바뀌면 순번은 달라진다).
+     */
     private Integer sourceTocSeq;
+
+    /**
+     * (2026-10-06) 목차 항목 열쇠. 만들 때 한 번 정하고 바꾸지 않는다.
+     * kind WEB = hash는 목차 원문 해시, line은 원문 줄 번호 · MATERIAL = hash는 파일 해시, line은 추출 순번.
+     */
+    private String tocKeyKind;
+    private String tocKeyHash;
+    private Integer tocKeyLine;
+    /** SET(열쇠 있음) · MISSING_SOURCE(목차에서 왔지만 열쇠를 확정 못 함) · null(목차 토픽이 아님). */
+    private String tocKeyState;
 
     private TopicStatus status;
 

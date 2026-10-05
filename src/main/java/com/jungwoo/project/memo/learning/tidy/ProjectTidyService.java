@@ -238,6 +238,12 @@ public class ProjectTidyService {
         if (currentToc == null) {
             return false;
         }
+        // 목차 항목 번호(tocLine)의 뜻이 바뀌기 전에 만든 안은 목차 작업을 지금 목차에 맞춰 읽을 수 없다 — 목차가 바뀐 것과 같다.
+        if (ops.stream().anyMatch(ProjectTidyService::anyFromToc) && !Integer.valueOf(
+                com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot.KEY_VERSION)
+                .equals(proposal.getTocKeyVersion())) {
+            return false;
+        }
         com.jungwoo.project.memo.course.textbook.TocResolver.Basis proposalBasis = readTocBasis(proposal.getTocBasisJson());
         if (proposalBasis != null) {
             return currentToc.basis().sameAs(proposalBasis);
@@ -656,7 +662,7 @@ public class ProjectTidyService {
                 throw new ConflictException(ErrorCode.TEXTBOOK_TOC_CHANGED);
             }
             tocProvenance = new TopicTreeEditor.TocProvenance(currentToc.isWeb() ? currentToc.basis().revisionId() : null,
-                    currentToc.basis().bookKey());
+                    currentToc.basis().bookKey(), currentToc.keyKind(), currentToc.keyHash(), currentToc.ordinalByKey());
         }
 
         // 고른 것이 없으면 트리 판을 올리지 않는다. 아무것도 바뀌지 않았는데 다른 정리안이

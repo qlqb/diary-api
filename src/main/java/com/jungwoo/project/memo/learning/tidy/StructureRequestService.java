@@ -257,6 +257,7 @@ public class StructureRequestService {
                 .opsJson(write(plan.ops()))
                 .scopeJson(write(ProjectTidyScope.empty(courseId, treeVersion)))
                 .origin(origin).userRequestJson(requestJson).model("REQUEST".equals(origin) ? modelName : null)
+                .tocKeyVersion(com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot.KEY_VERSION)
                 .build();
         try {
             tidyMapper.insertProposal(proposal);

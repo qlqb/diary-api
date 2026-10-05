@@ -138,7 +138,8 @@ public final class BookPageParser {
             }
         }
         String edition = editionOf(title, subtitle);
-        return new Parsed("yes24", title, authors, notes, publisher, isbn, date, edition, cutRaw(tocRaw), truncated);
+        return new Parsed("yes24", title, authors, notes, publisher, isbn, date, edition, cutRaw(tocRaw),
+                truncated || isCut(tocRaw));
     }
 
     // ===== 일반 =====
@@ -203,7 +204,7 @@ public final class BookPageParser {
             }
         }
         return new Parsed(site, title, List.copyOf(authors), List.of(), publisher, isbn, published,
-                editionOf(title, null), cutRaw(tocRaw), false);
+                editionOf(title, null), cutRaw(tocRaw), isCut(tocRaw));
     }
 
     record JsonLdBook(String name, List<String> authors, String publisher, String isbn, String datePublished) {
@@ -316,6 +317,11 @@ public final class BookPageParser {
             return null;
         }
         return v.length() > max ? v.substring(0, max) : v;
+    }
+
+    /** 원문이 저장 상한을 넘어 잘린다. 잘림은 목차 범위 표시(PARTIAL)에 반영해야 한다. */
+    public static boolean isCut(String raw) {
+        return raw != null && raw.length() > MAX_TOC_RAW_CHARS;
     }
 
     private static String cutRaw(String raw) {

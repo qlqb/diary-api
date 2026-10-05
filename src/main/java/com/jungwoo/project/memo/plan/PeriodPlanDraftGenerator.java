@@ -2449,7 +2449,9 @@ public class PeriodPlanDraftGenerator {
                         "photoTopicLink", photo ? photoLink : null,
                         // 모델 입력에 쓴 연결 상태 — 초안 최신성이 지금 DB 상태와 비교한다(생성 도중·뒤에 바뀐 연결).
                         "photoTopic", photo ? (photoState == null ? "NONE" : photoState) : null,
-                        "focusPhoto", focusPhoto ? Boolean.TRUE : null),
+                        "focusPhoto", focusPhoto ? Boolean.TRUE : null,
+                        // 이 구간에 연결된 학습 항목 전부 — 목차 연습문제 토픽의 본문인지 서버가 확인한다(TocTaskGuard).
+                        "linkedTopicIds", linkedTopics(r)),
                 text.toString(),
                 r.target().topicId(),
                 providedMaterial(r.material(), section.getMaterialId(), r.material().getOriginalFilename(), locator));
@@ -2461,6 +2463,12 @@ public class PeriodPlanDraftGenerator {
         sb.append("    \"\"\"\n");
         refBySection.put(section.getSectionId(), marked.refId());
         rendered.put(section.getSectionId(), body);
+    }
+
+    private List<Long> linkedTopics(PlanMaterialRetriever.Retrieved r) {
+        List<Long> ids = materialContextService.linkedTopicIds(
+                r.material() == null ? null : r.material().getUserId(), r.section());
+        return ids == null || ids.isEmpty() ? null : ids;
     }
 
     private record ScheduleLine(ProvenanceSourceType type, Long sourceId, String text, Long materialId) {

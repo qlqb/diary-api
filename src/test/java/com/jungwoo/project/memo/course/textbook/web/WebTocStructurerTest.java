@@ -59,7 +59,7 @@ class WebTocStructurerTest {
 
         WebTocStructurer.Structured s = WebTocStructurer.fromModelPicks(raw, picks, false);
 
-        assertThat(s.entries()).extracting(TextbookExtractor.TocEntry::title)
+        assertThat(s.entries()).extracting(e -> (e.number() == null ? "" : e.number() + " ") + e.title())
                 .containsExactly("Part I 기초", "배열과 리스트", "부록 A 정답");
         assertThat(s.entries()).extracting(TextbookExtractor.TocEntry::page).containsExactly(null, 12, 200);
         // 모델이 고른 결과는 규칙 확인이 아니다 — 페이지 전체라고 하지 않는다.

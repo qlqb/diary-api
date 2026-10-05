@@ -84,9 +84,19 @@ public record TextbookReview(
      * @param label    출처 한 줄(「파일」 목차 / 웹 목차(예스24 · 10/4 조회 · 페이지에 실린 목차 전체))
      * @param coverage WEB일 때 PAGE_FULL · PARTIAL · UNKNOWN
      */
+    /**
+     * @param unread 웹 목차 원문에서 목차 항목으로 읽지 못한 줄 수(머리 줄 제외). 조용히 버리지 않고 화면이 수를 보인다
+     */
     public record Toc(String status, Long materialId, String filename, int entryCount, Integer fromUnit, Integer toUnit,
                       List<TextbookExtractor.TocEntry> entries, String kind, String label, String coverage,
-                      String sourceUrl, String fetchedAt) {
+                      String sourceUrl, String fetchedAt, int unread) {
+
+        public Toc(String status, Long materialId, String filename, int entryCount, Integer fromUnit, Integer toUnit,
+                   List<TextbookExtractor.TocEntry> entries, String kind, String label, String coverage,
+                   String sourceUrl, String fetchedAt) {
+            this(status, materialId, filename, entryCount, fromUnit, toUnit, entries, kind, label, coverage, sourceUrl,
+                    fetchedAt, 0);
+        }
     }
 
     /**

@@ -210,7 +210,8 @@ public class TextbookLookupWorker {
                 searchedWith = linkIsbn != null ? "link+isbn" : "isbn";
                 for (TextbookWebRevision r : job.isForceRefresh() ? List.<TextbookWebRevision>of()
                         : store.byIsbn(isbn13, job.getUserId(), LocalDateTime.now().minusDays(pageCacheDays))) {
-                    revisions.put(r.getRevisionId(), r);
+                    TextbookWebRevision now = current(job, r, deadline);
+                    revisions.put(now.getRevisionId(), now);
                 }
                 if (revisions.values().stream().noneMatch(r -> r.getTocEntryCount() > 0) && linkIsbn == null) {
                     urls.add("https://www.aladin.co.kr/shop/wproduct.aspx?ISBN=" + isbn13);
@@ -408,7 +409,8 @@ public class TextbookLookupWorker {
             TextbookWebRevision cached = store.cached(target, job.getUserId(), notBefore);
             if (cached != null) {
                 if (WebEvidenceStore.asParsed(cached).hasIdentity()) {
-                    revisions.putIfAbsent(cached.getRevisionId(), cached);
+                    TextbookWebRevision now = current(job, cached, deadline);
+                    revisions.putIfAbsent(now.getRevisionId(), now);
                 } else {
                     failures.add(new LookupResult.Failure(SafePageFetcher.masked(target.url()), "NO_IDENTITY"));
                 }
@@ -428,21 +430,48 @@ public class TextbookLookupWorker {
                 failures.add(new LookupResult.Failure(SafePageFetcher.masked(target.url()), "NO_IDENTITY"));
                 continue;
             }
-            WebTocStructurer.Structured toc = WebTocStructurer.byRules(parsed.tocRaw(), parsed.tocTruncated());
-            // 모델 보조 구조화도 작업 기한 안에서만(기한이 지났으면 규칙 결과로 남기고 범위를 확인 못 함으로 둔다).
-            long remaining = (deadline - System.currentTimeMillis()) / 1000;
-            if (toc.entries().isEmpty() && WebTocStructurer.lines(parsed.tocRaw()).size() >= 2
-                    && remaining >= 5
-                    && modelAssist.isConfigured() && lookupService.reserveCalls(job.getUserId(), 1)) {
-                keepLease(job);
-                List<WebTocStructurer.Pick> picks = modelAssist.pickTocLines(job.getUserId(),
-                        WebTocStructurer.lines(parsed.tocRaw()), (int) remaining);
-                toc = WebTocStructurer.fromModelPicks(parsed.tocRaw(), picks, parsed.tocTruncated());
-            }
+            WebTocStructurer.Structured toc = structure(job, parsed.tocRaw(), parsed.tocTruncated(), deadline);
             TextbookWebRevision saved = store.save(target, parsed, toc, page.httpStatus(), LocalDateTime.now(),
                     job.getUserId());
             revisions.putIfAbsent(saved.getRevisionId(), saved);
         }
+    }
+
+    /**
+     * 목차 원문을 구조화한다. 규칙으로 먼저 읽고, 못 읽은 줄이 남으면(비율과 무관) 작업 기한·하루 호출 한도 안에서 모델에게
+     * 그 줄들의 번호와 깊이만 고르게 한다. 규칙이 읽은 항목은 바뀌지 않는다. 기한이 지났거나 한도면 규칙 결과로 남긴다.
+     */
+    private WebTocStructurer.Structured structure(TextbookLookup job, String tocRaw, boolean truncated, long deadline) {
+        WebTocStructurer.Structured toc = WebTocStructurer.byRules(tocRaw, truncated);
+        long remaining = (deadline - System.currentTimeMillis()) / 1000;
+        if (toc.unread() > 0 && WebTocStructurer.lines(tocRaw).size() >= 2 && remaining >= 5
+                && modelAssist.isConfigured() && lookupService.reserveCalls(job.getUserId(), 1)) {
+            keepLease(job);
+            List<WebTocStructurer.Pick> picks = modelAssist.pickTocLines(job.getUserId(), WebTocStructurer.lines(tocRaw),
+                    toc, (int) remaining);
+            toc = WebTocStructurer.withModelPicks(tocRaw, toc, picks, truncated);
+        }
+        return toc;
+    }
+
+    /**
+     * 옛 구조화 판으로 읽은 리비전이면 저장된 원문으로 다시 구조화한 리비전을 쓴다(페이지를 다시 받지 않는다). 이미 다시 읽은
+     * 리비전이 있으면 그것을 쓴다 — 같은 원문으로 모델을 다시 부르지 않는다. 원문이 없으면 그대로.
+     * 결과 표에 리비전이 들어가는 모든 자리(페이지 캐시·ISBN 캐시)가 이 길을 지난다.
+     */
+    private TextbookWebRevision current(TextbookLookup job, TextbookWebRevision revision, long deadline) {
+        if (!WebEvidenceStore.needsRestructure(revision)) {
+            return revision;
+        }
+        TextbookWebRevision done = store.restructuredOf(revision, job.getUserId());
+        if (done != null) {
+            return done;
+        }
+        WebTocStructurer.Structured toc = structure(job, revision.getTocRaw(), WebEvidenceStore.rawTruncated(revision),
+                deadline);
+        log.info("옛 목차 구조화 판 리비전을 저장된 원문으로 다시 읽음: revisionId={}, 항목 {} → {}", revision.getRevisionId(),
+                revision.getTocEntryCount(), toc.entries().size());
+        return store.saveRestructured(revision, toc, job.getUserId());
     }
 
     /** MATCH(사용자 링크는 LINK 포함) 후보를 판본(ISBN)마다 묶는다. 판 안에서는 목차를 가장 온전히 읽은 리비전이 대표다. */

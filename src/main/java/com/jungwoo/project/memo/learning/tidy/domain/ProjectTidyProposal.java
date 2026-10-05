@@ -49,6 +49,8 @@ public class ProjectTidyProposal {
      * 적용할 때 지금 근거와 다르면 목차에서 온 변경만 막는다. 목차를 쓰지 않은 안·옛 안은 null.
      */
     private String tocBasisJson;
+    /** (2026-10-06) ops의 tocLine이 어떤 열쇠인가. 2 = 목차 항목 열쇠(웹 원문 줄). NULL = 옛 정리안(구조화 목록 순번). */
+    private Integer tocKeyVersion;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private LocalDateTime resolvedAt;

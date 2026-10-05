@@ -34,6 +34,9 @@
         <result property="tocJson"       column="toc_json"/>
         <result property="tocEntryCount" column="toc_entry_count"/>
         <result property="tocCoverage"   column="toc_coverage"/>
+        <result property="tocVersion"    column="toc_version"/>
+        <result property="tocRawHash"    column="toc_raw_hash"/>
+        <result property="tocRawTruncated" column="toc_raw_truncated"/>
         <result property="createdAt"     column="created_at"/>
         <result property="url"           column="url"/>
         <result property="site"          column="site"/>
@@ -56,12 +59,20 @@
          WHERE page_id = #{pageId}
     </update>
 
+    <!-- 다시 구조화한 리비전을 최신으로: 옛 리비전이 아직 최신일 때만(그 사이 새로 받은 리비전을 덮지 않는다). 받은 시각은 그대로. -->
+    <update id="promoteRestructured">
+        UPDATE textbook_web_pages SET latest_revision_id = #{revisionId}
+         WHERE page_id = #{pageId} AND latest_revision_id = #{replacing}
+    </update>
+
     <insert id="insertRevisionIgnore" useGeneratedKeys="true" keyProperty="revisionId">
         INSERT IGNORE INTO textbook_web_revisions
             (page_id, content_hash, parser_version, fetched_at, http_status, isbn13, title, authors, publisher,
-             author_notes, published_date, edition, toc_raw, toc_json, toc_entry_count, toc_coverage)
+             author_notes, published_date, edition, toc_raw, toc_json, toc_entry_count, toc_coverage,
+             toc_version, toc_raw_hash, toc_raw_truncated)
         VALUES (#{pageId}, #{contentHash}, #{parserVersion}, #{fetchedAt}, #{httpStatus}, #{isbn13}, #{title}, #{authors},
-                #{publisher}, #{authorNotes}, #{publishedDate}, #{edition}, #{tocRaw}, #{tocJson}, #{tocEntryCount}, #{tocCoverage})
+                #{publisher}, #{authorNotes}, #{publishedDate}, #{edition}, #{tocRaw}, #{tocJson}, #{tocEntryCount}, #{tocCoverage},
+                #{tocVersion}, #{tocRawHash}, #{tocRawTruncated})
     </insert>
 
     <select id="findRevisionByContent" resultMap="revisionMap">
@@ -86,6 +97,31 @@
          WHERE <include refid="inScope"/>
            AND r.revision_id IN
         <foreach collection="revisionIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- 같은 페이지·같은 목차 원문을 지금 구조화 판으로 다시 읽은 리비전 중 최신(범위 안). 옛 판 리비전이 가리키는 새 구조. -->
+    <select id="findRestructured" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id
+         WHERE <include refid="inScope"/>
+           AND r.page_id = #{pageId} AND r.toc_raw_hash = #{tocRawHash} AND r.toc_version = #{tocVersion}
+         ORDER BY r.revision_id DESC
+         LIMIT 1
+    </select>
+
+    <!--
+      옛 구조화 판으로 읽은 리비전 중 다시 읽을 것: 지금 페이지 파서 판이고 원문이 있으며, 같은 페이지·같은 원문을 지금 구조화 판으로
+      읽은 리비전이 아직 없는 것. 범위를 걸지 않는다(서버 작업이 쓴다 — 결과는 같은 페이지의 리비전으로만 남는다).
+    -->
+    <select id="findNeedingRestructure" resultMap="revisionMap">
+        SELECT r.*, p.url, p.site, p.cache_scope_key
+          FROM textbook_web_revisions r JOIN textbook_web_pages p ON p.page_id = r.page_id
+         WHERE r.parser_version = #{parserVersion} AND r.toc_version &lt; #{tocVersion}
+           AND r.toc_raw IS NOT NULL AND r.toc_raw_hash IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM textbook_web_revisions n
+                            WHERE n.page_id = r.page_id AND n.toc_raw_hash = r.toc_raw_hash AND n.toc_version = #{tocVersion})
+         ORDER BY r.revision_id ASC
+         LIMIT #{limit}
     </select>
 
     <select id="findLatestByIsbn" resultMap="revisionMap">

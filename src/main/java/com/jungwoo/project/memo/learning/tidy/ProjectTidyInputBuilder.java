@@ -106,13 +106,25 @@ public class ProjectTidyInputBuilder {
                            com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
                            List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton,
                            /* 트리에 이전 교재의 목차 항목이 있으면 그 책 열쇠(교재가 바뀌었다). 없으면 null */
-                           String switchedFrom) {
-        public static final Guidance NONE = new Guidance(null, List.of(), null, List.of(), null);
+                           String switchedFrom,
+                           /* 트리가 있을 때 서버가 목차와 맞춰 본 결과(확실히 새 항목의 ADD 포함). 트리가 비었으면 NONE */
+                           TocReconciler.Result reconciled) {
+        public static final Guidance NONE = new Guidance(null, List.of(), null, List.of(), null, TocReconciler.Result.NONE);
 
         public Guidance(String request, List<Long> focus,
                         com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
                         List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton) {
-            this(request, focus, toc, skeleton, null);
+            this(request, focus, toc, skeleton, null, TocReconciler.Result.NONE);
+        }
+
+        public Guidance(String request, List<Long> focus,
+                        com.jungwoo.project.memo.course.textbook.TextbookService.TocSnapshot toc,
+                        List<com.jungwoo.project.memo.learning.structure.TopicChangeOp> skeleton, String switchedFrom) {
+            this(request, focus, toc, skeleton, switchedFrom, TocReconciler.Result.NONE);
+        }
+
+        public TocReconciler.Result reconciledOrNone() {
+            return reconciled == null ? TocReconciler.Result.NONE : reconciled;
         }
     }
 

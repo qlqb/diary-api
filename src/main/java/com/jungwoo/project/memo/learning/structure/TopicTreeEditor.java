@@ -74,7 +74,21 @@ public class TopicTreeEditor {
      * 목차에서 온 항목의 출처. 웹 목차면 리비전, 업로드 목차면 null(자료 출처는 op.materialId가 정한다). bookKey는 그 목차가
      * 어느 책의 것인지 — 교재가 바뀐 뒤 이전 교재 항목을 구분한다.
      */
-    public record TocProvenance(Long webRevisionId, String bookKey) {
+    public record TocProvenance(Long webRevisionId, String bookKey, String keyKind, String keyHash,
+                                java.util.Map<Integer, Integer> ordinalByKey) {
+
+        public TocProvenance(Long webRevisionId, String bookKey) {
+            this(webRevisionId, bookKey, null, null, java.util.Map.of());
+        }
+
+        /** 이 목차에서 열쇠 → 표시 순번(1부터). 모르면 열쇠 그대로(업로드 목차는 열쇠가 곧 순번이다). */
+        Integer ordinalOf(Integer key) {
+            if (key == null) {
+                return null;
+            }
+            Integer ordinal = ordinalByKey == null ? null : ordinalByKey.get(key);
+            return ordinal != null ? ordinal : "MATERIAL".equals(keyKind) ? key : null;
+        }
     }
 
     @Transactional
@@ -220,8 +234,12 @@ public class TopicTreeEditor {
                 .sourceLocator(op.locator() != null ? op.locator() : first == null ? null : first.locator())
                 .sourceWebRevisionId(mine == null ? null : mine.webRevisionId())
                 .sourceTextbookKey(mine == null ? null : mine.bookKey())
-                // 목차 항목이면 원본 순번(골격·정리안 ADD 모두 tocLine으로 넘긴다)
-                .sourceTocSeq(fromToc ? op.tocLine() : null)
+                // 목차 항목이면 표시용 순번과 열쇠(골격·정리안 ADD 모두 tocLine = 목차 항목 열쇠로 넘긴다). 열쇠는 이후 바꾸지 않는다.
+                .sourceTocSeq(!fromToc ? null : mine == null || mine.keyHash() == null ? op.tocLine() : mine.ordinalOf(op.tocLine()))
+                .tocKeyKind(keyed(fromToc, mine, op) ? mine.keyKind() : null)
+                .tocKeyHash(keyed(fromToc, mine, op) ? mine.keyHash() : null)
+                .tocKeyLine(keyed(fromToc, mine, op) ? op.tocLine() : null)
+                .tocKeyState(keyed(fromToc, mine, op) ? "SET" : null)
                 .status(TopicStatus.ACTIVE)
                 .build();
         topicMapper.insert(topic);
@@ -245,6 +263,11 @@ public class TopicTreeEditor {
                     sectionsById, origin, toc, fromToc);
         }
         return count;
+    }
+
+    /** 목차 항목 열쇠를 남길 수 있는가: 목차에서 왔고, 이번 적용의 목차 원문을 알고, 항목 열쇠가 있다. */
+    private static boolean keyed(boolean fromToc, TocProvenance toc, TopicChangeOp op) {
+        return fromToc && toc != null && toc.keyHash() != null && toc.keyKind() != null && op.tocLine() != null;
     }
 
     private int merge(Long userId, Long survivingId, List<Long> absorbedIds, List<String> notes) {

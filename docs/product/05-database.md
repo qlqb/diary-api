@@ -842,6 +842,21 @@ ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더
 - `user_contexts.topic_photo_id` — 사진 문맥으로 단원을 채운 기억의 사진. 사진 연결을 고치면 그 기억의 단원도 바뀐다.
 - `ai_usage_logs.feature`에 `CONSULT_PHOTO_READ`(사진 1장 = 1행, 비전 호출 전에 사용자 잠금 아래 기록).
 
+## 26. 목차 하위항목·목차 항목 열쇠 (2026-10-06)
+
+마이그레이션 `docs/sql/2026-10-06-toc-subitems.sql`(추가형·재실행 가능). 설계 17번 §11.
+
+| 표.열 | 뜻 |
+|---|---|
+| textbook_web_revisions.toc_version | 목차 구조화 규칙 판. 1 = 옛 규칙. 옛 판이면 저장된 원문으로 다시 읽은 새 리비전을 만든다(옛 행은 남김) |
+| textbook_web_revisions.toc_raw_hash | toc_raw(UTF-8) SHA-256. 마이그레이션이 `SHA2(toc_raw, 256)`로 채운다(서버 해시와 같다). 인덱스 `(page_id, toc_raw_hash, toc_version)` |
+| textbook_web_revisions.toc_raw_truncated | 받은 원문이 잘렸나. NULL = 기록 전(원문 길이가 저장 상한에 닿았으면 잘림으로 본다) |
+| course_topics.toc_key_kind / toc_key_hash / toc_key_line | 목차 항목 열쇠. WEB = 원문 해시·원문 줄, MATERIAL = 파일 해시·추출 순번. 만들 때 한 번 정하고 바꾸지 않는다 |
+| course_topics.toc_key_state | SET · MISSING_SOURCE(목차에서 왔지만 확정 못 함) · NULL(목차 토픽 아님). 서버 시작 때 `TocKeyBackfill`이 상태 없는 옛 목차 토픽을 한 번 채운다 |
+| project_tidy_proposals.toc_key_version | 2 = tocLine이 항목 열쇠. NULL = 옛 정리안(목차 작업은 적용하지 않음) |
+
+`course_topics.source_toc_seq`는 화면 표시용 순번("목차 N번째")으로 남는다.
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

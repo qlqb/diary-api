@@ -17,6 +17,10 @@
         <result property="sourceWebRevisionId" column="source_web_revision_id"/>
         <result property="sourceTextbookKey" column="source_textbook_key"/>
         <result property="sourceTocSeq" column="source_toc_seq"/>
+        <result property="tocKeyKind"   column="toc_key_kind"/>
+        <result property="tocKeyHash"   column="toc_key_hash"/>
+        <result property="tocKeyLine"   column="toc_key_line"/>
+        <result property="tocKeyState"  column="toc_key_state"/>
         <result property="status"          column="status"/>
         <result property="userMark"        column="user_mark"/>
         <result property="mergedIntoTopicId" column="merged_into_topic_id"/>
@@ -24,6 +28,20 @@
         <result property="createdAt"       column="created_at"/>
         <result property="updatedAt"       column="updated_at"/>
     </resultMap>
+
+    <!-- 목차 열쇠 일회 변환(TocKeyBackfill): 아직 상태가 없는 행만. 한 번 정한 열쇠는 바꾸지 않는다. -->
+    <update id="backfillTocKey">
+        UPDATE course_topics
+           SET toc_key_kind = #{kind}, toc_key_hash = #{hash}, toc_key_line = #{line}, toc_key_state = #{state}
+         WHERE topic_id = #{topicId} AND toc_key_state IS NULL
+    </update>
+
+    <select id="findTocKeyBackfillTargets" resultMap="courseTopicResultMap">
+        SELECT * FROM course_topics
+         WHERE toc_key_state IS NULL AND (source_toc_seq IS NOT NULL OR source_web_revision_id IS NOT NULL)
+         ORDER BY topic_id ASC
+         LIMIT #{limit}
+    </select>
 
     <update id="updateSourceTextbookKey">
         UPDATE course_topics SET source_textbook_key = #{newKey}
@@ -33,10 +51,12 @@
     <insert id="insert" useGeneratedKeys="true" keyProperty="topicId">
         INSERT INTO course_topics (
             user_id, course_id, parent_topic_id, title, order_index,
-            source_type, source_material_id, source_locator, source_web_revision_id, source_textbook_key, source_toc_seq, status
+            source_type, source_material_id, source_locator, source_web_revision_id, source_textbook_key, source_toc_seq,
+            toc_key_kind, toc_key_hash, toc_key_line, toc_key_state, status
         ) VALUES (
             #{userId}, #{courseId}, #{parentTopicId}, #{title}, #{orderIndex},
-            #{sourceType}, #{sourceMaterialId}, #{sourceLocator}, #{sourceWebRevisionId}, #{sourceTextbookKey}, #{sourceTocSeq}, #{status}
+            #{sourceType}, #{sourceMaterialId}, #{sourceLocator}, #{sourceWebRevisionId}, #{sourceTextbookKey}, #{sourceTocSeq},
+            #{tocKeyKind}, #{tocKeyHash}, #{tocKeyLine}, #{tocKeyState}, #{status}
         )
     </insert>
 
