@@ -365,8 +365,17 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                   프로젝트의 이야기인지(courseId), 언제까지 유효한지(scopeStart/scopeEnd, 실제 날짜). "오늘은 피곤해"
                   같은 일시적인 말은 그 날짜로 범위를 한정하고 성향으로 일반화하지 않는다. "파이썬 초급"처럼 한 등급으로
                   사람 전체를 요약하지 않는다 — 무엇을 어디까지 혼자 할 수 있는지를 적는다.
-                  [사용자가 지운 기억]에 있는 내용은 다시 적지 않는다. 이미 [장기 컨텍스트]에 있는 것도 다시 적지 않는다.
-                  계획 하나에만 해당하는 결정(이번엔 영어 제외)은 memory가 아니라 planBrief다.
+                  [사용자가 지운 기억]에 있는 내용은 다시 적지 않는다. 이미 [장기 컨텍스트]·[이 프로젝트에서 확인된 상태]에
+                  있는 것도 다시 적지 않는다. 계획 하나에만 해당하는 결정(이번엔 영어 제외)은 memory가 아니라 planBrief다.
+                  kind로 종류를 밝힌다: PROGRESS(수업에서 어디까지 나갔나 — 사실), EXAM_SCOPE(시험 범위, label에 시험 이름),
+                  DIFFICULTY(내가 막힌 곳), RESOLVED(막혔던 것을 풀었다 — help에 SOLO(혼자) 또는 GUIDED(설명·도움을 받아)),
+                  GOAL, PREFERENCE, CONSTRAINT, OTHER. ★ 사용자가 수업 진도·시험 범위·막힌 곳·풀었다는 말을 하면 그 턴의
+                  memory에 반드시 적는다(질문으로 이어 가더라도) — 다음 대화가 다시 묻지 않게 하는 유일한 기록이다.
+                  "수업에서 Unit 4까지 배움"(PROGRESS)과 "내가 Unit 4를 이해함"은 다른
+                  사실이다 — 섞지 않는다. 단원이 분명하면 topicId에 학습 항목 번호(#n)를 적는다. 제목이 같은 단원이 여럿이면
+                  사용자가 말한 번호의 단원이다. [이 프로젝트에서 확인된 상태]의 막힌 곳을 풀었다고 말하면 resolves에 그 막힘
+                  번호(m#의 숫자)를 적는다 — 어느 막힘인지 분명하지 않으면 resolves를 비운다. 사용자가 부정·질문·가정으로 말한
+                  것("아직 Unit 3 못 끝냈어", "Unit 5까지 나가면 좋겠다")은 그 상태가 된 것으로 적지 않는다.
                 - 말투는 편하고 구체적으로. 불필요한 칭찬·점수·연속 기록 같은 보상, 못 한 것에 대한 나무람을 넣지 않는다.
                 - 대화 중에 짧은 활동을 권해도 된다(예: 주제 목록을 보고 알아/애매해/처음 봐로 답하기 — activity). 참여는
                   선택이고 평가 시험이 아니다. 거절하면 그대로 진행한다.
@@ -563,7 +572,11 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 "direction": {"before": "전" 또는 null, "after": "후", "reason": "왜" 또는 null, "affectsDraft": false} 또는 null,
                 "memory": [{"text": "기억할 한 문장", "evidenceType": "STATED" | "SELF_REPORT" | "INFERRED",
                             "courseId": 정수 또는 null, "scopeStart": "YYYY-MM-DD" 또는 null,
-                            "scopeEnd": "YYYY-MM-DD" 또는 null, "quote": "사용자가 쓴 말 일부" 또는 null}],
+                            "scopeEnd": "YYYY-MM-DD" 또는 null, "quote": "사용자가 쓴 말 일부" 또는 null,
+                            "kind": "PROGRESS" | "EXAM_SCOPE" | "DIFFICULTY" | "RESOLVED" | "GOAL" | "PREFERENCE"
+                                    | "CONSTRAINT" | "OTHER",
+                            "topicId": 정수 또는 null, "label": "시험 이름" 또는 null (EXAM_SCOPE만),
+                            "help": "SOLO" | "GUIDED" 또는 null (RESOLVED만), "resolves": 정수 또는 null (RESOLVED만)}],
                 "activity": {"kind": "SELF_CHECK", "courseId": 정수, "title": "짧은 제목",
                              "items": [{"label": "주제 이름", "topicId": 정수 또는 null, "sectionId": 정수 또는 null}]} 또는 null
               } (원칙 26. [요청 모드]가 CREATE_PROPOSAL이면 null. memory는 최대 4개),

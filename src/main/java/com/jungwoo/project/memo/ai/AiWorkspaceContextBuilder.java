@@ -101,6 +101,58 @@ public class AiWorkspaceContextBuilder {
     private final com.jungwoo.project.memo.plan.PlanStrategyCodec planStrategyCodec;
     private final com.jungwoo.project.memo.ai.AiProposalMapper aiProposalMapper;
 
+    /** 프로젝트의 확인된 상태(학습 기억·교재·실제 수업 정정). 단위 테스트처럼 없을 수 있다 — 없으면 블록이 없다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.state.ProjectStateService projectStateService;
+
+    static final int GLOBAL_STATE_COURSES = 3;
+    static final int GLOBAL_STATE_LINES = 6;
+
+    /**
+     * [이 프로젝트에서 확인된 상태] — 화면 상태 블록의 3,500자 잘림과 따로 싣는 고정 블록(상한은 줄 수로 지킨다). 과목 대화는
+     * 그 과목 전체, 계획을 다루는 전역 대화는 기억이 있는 최근 과목 몇 개만 짧게. 실제로 실은 기억 id를 함께 돌려준다 —
+     * 장기 컨텍스트에서는 그 id만 뺀다.
+     */
+    public com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered projectStateBlock(AiConversation conversation, Long userId, RequestedAction requestedAction) {
+        if (projectStateService == null) {
+            return com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered.EMPTY;
+        }
+        String header = com.jungwoo.project.memo.ai.state.ProjectStateService.HEADER + "\n";
+        if (conversation.getCourseId() != null) {
+            com.jungwoo.project.memo.ai.state.ProjectStateService.State state = projectStateService.loadQuietly(userId, conversation.getCourseId());
+            com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered rendered = com.jungwoo.project.memo.ai.state.ProjectStateService.render(state, com.jungwoo.project.memo.ai.state.ProjectStateService.MAX_LINES, com.jungwoo.project.memo.ai.state.ProjectStateService.LineMarker.PLAIN);
+            return rendered.text().isEmpty() ? com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered.EMPTY
+                    : new com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered(header + rendered.text(), rendered.contextIds());
+        }
+        AiProposalTargetScope scope = conversation.getScope() != null ? conversation.getScope() : AiProposalTargetScope.TODAY;
+        boolean planning = requestedAction == RequestedAction.CREATE_PROPOSAL || scope == AiProposalTargetScope.PLAN
+                || scope == AiProposalTargetScope.PLANNING || scope == AiProposalTargetScope.MIXED
+                || scope == AiProposalTargetScope.EXECUTION;
+        if (!planning) {
+            return com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered.EMPTY;
+        }
+        // 기억이 있는 과목만, 가장 최근에 말한 과목부터 — 상한만큼만 읽는다(모든 과목의 상태를 읽고 버리지 않는다).
+        List<com.jungwoo.project.memo.ai.state.ProjectStateService.State> states = new ArrayList<>();
+        for (Long recentCourseId : projectStateService.recentFactCourseIds(userId, GLOBAL_STATE_COURSES)) {
+            com.jungwoo.project.memo.ai.state.ProjectStateService.State state = projectStateService.loadQuietly(userId, recentCourseId);
+            if (state != null && !state.facts().isEmpty()
+                    && !"ARCHIVED".equals(String.valueOf(state.status()))) {
+                states.add(state);
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        List<Long> ids = new ArrayList<>();
+        for (com.jungwoo.project.memo.ai.state.ProjectStateService.State state : states.stream().limit(GLOBAL_STATE_COURSES).toList()) {
+            com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered rendered = com.jungwoo.project.memo.ai.state.ProjectStateService.render(state, GLOBAL_STATE_LINES, com.jungwoo.project.memo.ai.state.ProjectStateService.LineMarker.PLAIN);
+            if (!rendered.text().isEmpty()) {
+                sb.append("== ").append(state.courseTitle()).append(" (#").append(state.courseId()).append(")\n")
+                        .append(rendered.text());
+                ids.addAll(rendered.contextIds());
+            }
+        }
+        return sb.isEmpty() ? com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered.EMPTY : new com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered(header + sb, ids);
+    }
+
     /** 교재 조회 상태(읽기만). 없는 환경(단위 테스트)에서는 싣지 않는다. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.course.textbook.web.TextbookLookupMapper textbookLookupMapper;
@@ -807,9 +859,9 @@ public class AiWorkspaceContextBuilder {
     private void appendTopicNode(StringBuilder sb, TopicResponse node, int depth) {
         sb.append("  ".repeat(depth)).append("- #").append(node.getTopicId()).append(' ')
                 .append(node.getTitle()).append(" [").append(progressLabel(node.getProgressStatus())).append("]");
-        if (node.getSourceLocator() != null && (node.getSourceLocator().startsWith("교재 p.")
-                || node.getSourceLocator().equals("교재 목차"))) {
-            sb.append(" (").append(node.getSourceLocator()).append(" — 목차 제목만 확인)");
+        if (com.jungwoo.project.memo.learning.TocTopics.isToc(node.getSourceLocator())) {
+            sb.append(" (").append(node.getSourceLocator())
+                    .append(com.jungwoo.project.memo.learning.TocTopics.suffix(node.getSourceTocSeq())).append(")");
         }
         sb.append("\n");
         if (node.getChildren() != null) {

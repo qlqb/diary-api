@@ -220,6 +220,8 @@ public class TopicTreeEditor {
                 .sourceLocator(op.locator() != null ? op.locator() : first == null ? null : first.locator())
                 .sourceWebRevisionId(mine == null ? null : mine.webRevisionId())
                 .sourceTextbookKey(mine == null ? null : mine.bookKey())
+                // 목차 항목이면 원본 순번(골격·정리안 ADD 모두 tocLine으로 넘긴다)
+                .sourceTocSeq(fromToc ? op.tocLine() : null)
                 .status(TopicStatus.ACTIVE)
                 .build();
         topicMapper.insert(topic);

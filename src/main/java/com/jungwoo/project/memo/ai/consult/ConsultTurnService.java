@@ -55,6 +55,16 @@ public class ConsultTurnService {
      */
     public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
                               String userMessage, ConsultOut out, ConsultView.Evidence evidence) {
+        return finish(userId, conversationId, userMessageId, assistantMessageId, userMessage, out, evidence, null, null);
+    }
+
+    /**
+     * @param saidAt          사용자 메시지 시각(기억의 순서 판단). null이면 지금
+     * @param courseId        과목 대화의 과목(과목을 적지 않은 진도·막힘에 쓴다). 없으면 null
+     */
+    public ConsultView finish(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
+                              String userMessage, ConsultOut out, ConsultView.Evidence evidence,
+                              java.time.LocalDateTime saidAt, Long courseId) {
         try {
             List<ConsultView.Understanding> understanding = new ArrayList<>();
             if (out != null && out.memory() != null && !out.memory().isEmpty()) {
@@ -64,12 +74,15 @@ public class ConsultTurnService {
                         continue;
                     }
                     ops.add(new UserContextService.AutoSave(m.text(), evidence(m.evidenceType()), m.courseId(),
-                            date(m.scopeStart()), date(m.scopeEnd()), m.quote()));
+                            date(m.scopeStart()), date(m.scopeEnd()), m.quote(),
+                            com.jungwoo.project.memo.ai.domain.FactKind.parse(m.kind()), m.topicId(), m.label(),
+                            m.help(), m.resolves()));
                 }
                 for (UserContextResponse saved : userContextService.autoSave(userId, userMessageId, userMessage, ops,
-                        MAX_MEMORY_PER_TURN)) {
+                        MAX_MEMORY_PER_TURN, saidAt, courseId)) {
                     understanding.add(new ConsultView.Understanding(String.valueOf(saved.getContextId()), "MEMORY",
-                            saved.getContent(), saved.getEvidenceType().name(), scopeLabel(saved), true));
+                            saved.getContent(), saved.getEvidenceType().name(), scopeLabel(saved), true,
+                            saved.getFactKind() == null ? null : saved.getFactKind().name(), saved.getTopicTitle()));
                 }
             }
             // 같은 말이 기억과 합의 양쪽에 남았으면 화면에는 한 번만 보인다(기억 쪽 — 바로 고칠 수 있다).

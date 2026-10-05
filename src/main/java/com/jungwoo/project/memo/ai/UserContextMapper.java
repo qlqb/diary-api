@@ -46,4 +46,22 @@ public interface UserContextMapper {
 
     int confirmIfStale(@Param("contextId") Long contextId, @Param("userId") Long userId,
                         @Param("confirmedAt") LocalDateTime confirmedAt);
+
+    List<UserContext> findActiveAndStaleByCourse(@Param("userId") Long userId, @Param("courseId") Long courseId);
+
+    int countWithdrawnByKey(@Param("userId") Long userId, @Param("courseId") Long courseId,
+                            @Param("topicId") Long topicId, @Param("contentKey") String contentKey);
+
+    List<UserContext> findLegacyWithdrawnByUserId(@Param("userId") Long userId);
+
+    int touchSaid(@Param("contextId") Long contextId, @Param("userId") Long userId,
+                  @Param("saidAt") LocalDateTime saidAt, @Param("sourceMessageId") Long sourceMessageId,
+                  @Param("scopeStart") java.time.LocalDate scopeStart, @Param("scopeEnd") java.time.LocalDate scopeEnd);
+
+    List<Long> findRecentFactCourseIds(@Param("userId") Long userId, @Param("limit") int limit);
+
+    int supersede(@Param("contextId") Long contextId, @Param("userId") Long userId);
+
+    int promoteToStated(@Param("contextId") Long contextId, @Param("userId") Long userId,
+                        @Param("saidAt") LocalDateTime saidAt, @Param("sourceMessageId") Long sourceMessageId);
 }

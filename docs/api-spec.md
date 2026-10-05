@@ -860,3 +860,50 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 - `GET /api/courses/{id}/learning-map`에 `textbook`(지금 교재 한 줄), `topics[].tocOrigin`(WEB·MATERIAL), `topics[].priorTextbook`.
 - `CourseResponse.textbookVersion`.
 - 정리 요청은 분석된 자료 구간이 없어도 교재 목차가 있으면 받는다(E409_033 완화).
+
+## Study Memory — 학습 기억·목차 기반 목표 (2026-10-05)
+
+설계 18번, 마이그레이션 `docs/sql/2026-10-05-study-memory.sql`.
+
+### `GET /api/courses/{courseId}/study-state`
+
+프로젝트 사실 카드. 상담·계획이 받는 "확인된 상태"와 같은 조회다(읽기 전용, 남의 과목은 404 `E404_011`).
+
+```json
+{
+  "courseId": 940,
+  "textbook": "「NEW English Conversation Arts 1」 · 형설출판사 — 사용자가 정함",
+  "facts": [{"contextId": 12, "kind": "DIFFICULTY", "label": null, "text": "have to 의문문이 헷갈린다",
+             "topicId": 503, "topicTitle": "Unit 3 …", "topicTocSeq": 3, "evidenceType": "STATED",
+             "sourceType": "CONSULT_AUTO", "sourceLabel": "사용자가 말함", "help": null, "saidAt": "2026-10-05T20:01:00"}],
+  "classProgress": [{"topicId": 501, "topicTitle": "Unit 1 …", "classSeq": 1, "weekNo": 2}],
+  "exclusions": [{"topicId": 512, "topicTitle": "Unit 12 …", "label": "중간고사"}],
+  "topics": [{"topicId": 501, "title": "Unit 1 …", "sourceTocSeq": 1}]
+}
+```
+
+`kind`: PROGRESS / EXAM_SCOPE / DIFFICULTY / RESOLVED / GOAL / PREFERENCE / CONSTRAINT / OTHER. 종류 없는 예전 기억은 여기 없다
+(`/api/contexts`에는 있다). 해결은 최근 30일만. `sourceLabel`은 서버 문구 그대로 보인다.
+
+### `/api/contexts` 변경
+
+- 목록 항목에 `factKind`, `factLabel`, `helpLevel`, `saidAt`, `topicTitle`(조회한 곳에서 채움 — 전역 목록은 비어 있을 수 있다).
+- `PATCH /api/contexts/{id}` `{content, kind?, topicId?, help?, label?}` — 생략 칸은 그대로, `topicId: 0`은 단원 연결 끊기, 그 과목의
+  단원이 아니면 400 `E400_001`. 고친 진도·시험 범위는 같은 과목의 다른 현재 값을 대체한다.
+- `POST /api/contexts/{id}/confirm` — 확인한 진도·시험 범위가 현재 값이 된다.
+
+### 상담 턴
+
+- 모델 출력 `consult.memory[]`에 `kind`, `topicId`, `label`(시험 이름), `help`(SOLO·GUIDED), `resolves`(막힘 번호). 검증은 설계 18번 §2.
+- 완료 이벤트의 `consult.understanding[]`에 `kind`, `topicTitle`.
+- 자료 원문을 실은 턴은 모델 기억을 버리고 사용자 발화만으로 다시 뽑는다(사용 기록 기능 `MEMORY_EXTRACT`, 상담 한도 미포함,
+  `ai.memory.daily-extract-limit` 기본 40, `ai.memory.extract-model` 기본 대화 모델, `ai.memory.extract-timeout-seconds` 15).
+
+### 계획 초안
+
+- 항목 응답 `learningGoal`(60자), `learningGoalBasis`(TOC_AI·MATERIAL_AI·USER — 서버 판정). `evidence_json`의 `goal`·`goalBasis`.
+- `origin` AI_PRACTICE는 "자료 원문 또는 목차 제목을 바탕으로 만든 연습"이다. 목차 항목만 인용한 연습·회수는 비어 있어도 AI_PRACTICE.
+- `plan_request_json.projectStates` — 생성 때 과목별 상태 지문. 지금과 다르면 `freshness`가 STALE("이 초안을 만든 뒤 프로젝트에서
+  기억하는 진도·막힌 곳이 바뀌었어요.").
+- `GET /api/courses/{id}/topics` 등 학습 항목 응답에 `sourceTocSeq`.
+

@@ -44,6 +44,9 @@ public final class PlanCatalogText {
         if (topic.firstUnlearned()) {
             sb.append(" · ← 첫 미학습");
         }
+        if (topic.stateNote() != null) {
+            sb.append(" · ").append(topic.stateNote());
+        }
         if (topic.priorTextbook()) {
             sb.append(" · 이전 교재 목차의 항목(지금 교재의 범위 아님)");
         }
@@ -59,7 +62,12 @@ public final class PlanCatalogText {
     public static String topicTitle(TopicLine topic) {
         StringBuilder sb = new StringBuilder(topic.title());
         if (topic.locator() != null && !topic.locator().isBlank()) {
-            sb.append(" (").append(topic.locator()).append(")");
+            sb.append(" (").append(topic.locator());
+            // 목차 항목은 원본 순번과 "제목만 확인"을 붙인다 — 제목이 같은 단원(Unit 1·Unit 10)을 구분하고, 본문을 본 듯 쓰지 않게.
+            if (topic.fromToc()) {
+                sb.append(com.jungwoo.project.memo.learning.TocTopics.suffix(topic.tocSeq()));
+            }
+            sb.append(")");
         }
         return sb.toString();
     }

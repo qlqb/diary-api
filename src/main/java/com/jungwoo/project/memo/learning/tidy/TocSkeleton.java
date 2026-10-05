@@ -43,13 +43,15 @@ final class TocSkeleton {
         List<Node> roots = new ArrayList<>();
         Deque<Node> stack = new ArrayDeque<>();
         int count = 0;
+        int seq = 0;
         for (TextbookExtractor.TocEntry entry : toc.entries()) {
+            seq++;
             int depth = entry.level() - minLevel;
             if (depth >= MAX_DEPTH || count >= MAX_NODES) {
                 continue;
             }
             count++;
-            Node node = new Node("t" + count, entry);
+            Node node = new Node("t" + count, entry, seq);
             while (!stack.isEmpty() && stack.peek().depth() >= depth) {
                 stack.pop();
             }
@@ -75,20 +77,25 @@ final class TocSkeleton {
         }
         TextbookExtractor.TocEntry e = node.entry;
         String title = (e.number() == null || e.number().isBlank() ? "" : e.number() + " ") + e.title();
+        String locator = e.page() == null ? "교재 목차" : "교재 p." + e.page();
+        // 원본 순번은 tocLine으로 남긴다 — 정리안 ADD(TocOps)와 같은 길로 저장돼 같은 제목의 단원이 구분된다.
         return new TopicChangeOp(top ? TopicChangeOp.ADD : null, node.tempId, null, null, null, title.trim(),
-                "SOURCE", e.page() == null ? "교재 목차" : "교재 p." + e.page(), List.of(), "SOURCE", null, null,
-                children.isEmpty() ? null : children, reason, null, null, null, materialId, null, "TOC");
+                "SOURCE", locator, List.of(), "SOURCE", null, null,
+                children.isEmpty() ? null : children, reason, null, null, null, materialId, null, "TOC")
+                .fromToc(node.seq, title.trim(), locator);
     }
 
     private static final class Node {
         final String tempId;
         final TextbookExtractor.TocEntry entry;
         final List<Node> children = new ArrayList<>();
+        final int seq;
         int depth;
 
-        Node(String tempId, TextbookExtractor.TocEntry entry) {
+        Node(String tempId, TextbookExtractor.TocEntry entry, int seq) {
             this.tempId = tempId;
             this.entry = entry;
+            this.seq = seq;
         }
 
         int depth() {

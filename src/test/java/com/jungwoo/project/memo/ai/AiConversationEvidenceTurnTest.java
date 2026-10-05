@@ -131,7 +131,7 @@ class AiConversationEvidenceTurnTest {
         verify(ledger).toView(used.capture(), any());
         assertThat(used.getValue()).containsExactly("E1");
         verify(consultTurnService).finish(eq(USER_ID), eq(CONVERSATION_ID), eq(REQUEST_MESSAGE_ID), eq(201L), any(), any(),
-                any(ConsultView.Evidence.class));
+                any(ConsultView.Evidence.class), any(), any());
         assertThat(sink.completed.responseType()).isEqualTo(AiResponseType.CHAT);
     }
 
@@ -195,7 +195,7 @@ class AiConversationEvidenceTurnTest {
         RecordingSink sink = new RecordingSink();
         await(sink, service.streamAndComplete(prepared(), request("성적은 어떻게 매겨?"), sink));
 
-        verify(consultTurnService).finish(any(), any(), any(), any(), any(), any(), any(ConsultView.Evidence.class));
+        verify(consultTurnService).finish(any(), any(), any(), any(), any(), any(), any(ConsultView.Evidence.class), any(), any());
     }
 
     @Test

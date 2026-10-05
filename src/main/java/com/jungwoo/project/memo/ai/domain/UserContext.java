@@ -26,6 +26,9 @@ public class UserContext {
 
     private String content;
 
+    /** 정규화한 본문 키(중복·철회 판정). 예전 행은 null. */
+    private String contentKey;
+
     private UserContextStatus status;
 
     private ContextSourceType sourceType;
@@ -33,6 +36,18 @@ public class UserContext {
     /** 근거 유형. 옛 행은 STATED(전부 사용자가 확정·승인한 것이다). */
     @Builder.Default
     private ContextEvidenceType evidenceType = ContextEvidenceType.STATED;
+
+    /** 종류. 예전 행은 null(종류 모름). */
+    private FactKind factKind;
+
+    /** EXAM_SCOPE의 시험 이름. 같은 과목·종류·이름끼리만 대체한다. */
+    private String factLabel;
+
+    /** RESOLVED의 도움 수준: SOLO / GUIDED. 사용자가 말한 것만. */
+    private String helpLevel;
+
+    /** 근거가 된 사용자 발화 시각(수동 수정은 수정 시각). 더 늦게 말한 것이 이긴다. 예전 행은 null. */
+    private LocalDateTime saidAt;
 
     /** 적용 범위. 전부 null이면 범위를 모르는(전반적인) 것이다. */
     private Long courseId;

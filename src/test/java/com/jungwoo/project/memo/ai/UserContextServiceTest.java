@@ -54,6 +54,9 @@ class UserContextServiceTest {
         when(courseMapper.findByUserIdAndStatus(USER, "ARCHIVED")).thenReturn(List.of());
         when(mapper.findActiveAndStaleByUserId(eq(USER), any())).thenAnswer(inv -> new ArrayList<>(rows));
         when(mapper.findWithdrawnByUserId(eq(USER), anyInt())).thenAnswer(inv -> new ArrayList<>(withdrawn));
+        // 본문 키 없는 예전 철회 행은 전부 읽어 비교한다.
+        when(mapper.findLegacyWithdrawnByUserId(USER)).thenAnswer(inv -> withdrawn.stream()
+                .filter(w -> w.getContentKey() == null).toList());
         doAnswer(inv -> {
             UserContext c = inv.getArgument(0);
             c.setContextId(nextId++);

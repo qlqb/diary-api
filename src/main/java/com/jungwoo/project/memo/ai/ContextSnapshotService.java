@@ -110,9 +110,23 @@ public class ContextSnapshotService {
     public String buildContextBlock(
             Long conversationId, Long userId, String summary, int contextBudgetChars, Long currentRequestMessageId
     ) {
+        return buildContextBlock(conversationId, userId, summary, contextBudgetChars, currentRequestMessageId,
+                java.util.Set.of());
+    }
+
+    /**
+     * @param shownElsewhere 이미 [이 프로젝트에서 확인된 상태]에 실린 기억 id — 장기 컨텍스트에 다시 싣지 않는다(실제로 실린
+     *                       것만 넘어온다. 그쪽에서 상한으로 빠진 기억은 여기 남는다)
+     */
+    public String buildContextBlock(
+            Long conversationId, Long userId, String summary, int contextBudgetChars, Long currentRequestMessageId,
+            java.util.Set<Long> shownElsewhere
+    ) {
         List<AiMessage> recent = aiMessageMapper.findRecentByConversationIdAndUserId(
                 conversationId, userId, recentMessageLimit, currentRequestMessageId);
-        List<UserContext> longTermContexts = userContextMapper.findActiveAndStaleByUserId(userId, longTermLimit);
+        List<UserContext> longTermContexts = userContextMapper
+                .findActiveAndStaleByUserId(userId, longTermLimit + shownElsewhere.size()).stream()
+                .filter(c -> !shownElsewhere.contains(c.getContextId())).limit(longTermLimit).toList();
 
         List<String> recentLines = renderLines(recent, this::renderRecentLine);
         List<String> longTermLines = renderLines(longTermContexts, this::renderLongTermLine);

@@ -120,21 +120,34 @@ public record PlanDraftAiResult(
              * 이 항목이 어디서 왔는가: SOURCE_TASK(자료 원문에 있는 과제·실습·문제) / AI_PRACTICE(모델이 만든 추가 연습) /
              * USER_REQUEST(사용자가 요청한 준비 작업). 서버는 SOURCE_TASK가 실제로 전달된 원문을 인용했는지 확인한다.
              */
-            String origin
+            String origin,
+            /**
+             * (2026-10-05) 이 항목으로 이루려는 학습 목표 한 줄. 근거 종류(목차 추론·자료·사용자)는 모델이 정하지 않는다 —
+             * 서버가 인용 근거로 정한다.
+             */
+            String goal
     ) {
+        public PlanDraftAiItem(String title, String description, String doneCriteria, String actionType,
+                               Integer expectedMinutes, String priority, Long courseId, String scheduledDate,
+                               String reason, List<String> refIds, String deadlineRefId, String targetCompleteAt,
+                               String reflects, String origin) {
+            this(title, description, doneCriteria, actionType, expectedMinutes, priority, courseId, scheduledDate,
+                    reason, refIds, deadlineRefId, targetCompleteAt, reflects, origin, null);
+        }
+
         public PlanDraftAiItem(String title, String description, String doneCriteria, String actionType,
                                Integer expectedMinutes, String priority, Long courseId, String scheduledDate,
                                String reason, List<String> refIds, String deadlineRefId, String targetCompleteAt,
                                String reflects) {
             this(title, description, doneCriteria, actionType, expectedMinutes, priority, courseId, scheduledDate,
-                    reason, refIds, deadlineRefId, targetCompleteAt, reflects, null);
+                    reason, refIds, deadlineRefId, targetCompleteAt, reflects, null, null);
         }
 
         /** 예전 스키마(행동·완료 기준·마감 참조 없음)로 만드는 생성자. 테스트 픽스처가 쓴다. */
         public PlanDraftAiItem(String title, String description, Integer expectedMinutes, String priority,
                                Long courseId, String scheduledDate, String reason, List<String> refIds) {
             this(title, description, null, null, expectedMinutes, priority, courseId, scheduledDate, reason, refIds,
-                    null, null, null, null);
+                    null, null, null, null, null);
         }
     }
 

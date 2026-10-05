@@ -40,7 +40,7 @@ class ConsultTurnServiceTest {
 
     @Test
     void 질문_카드와_이번_턴에_이해한_것과_바뀐_방향을_만들어_메시지에_붙여_저장한다() {
-        when(contexts.autoSave(eq(USER), eq(10L), anyString(), anyList(), anyInt())).thenReturn(List.of(
+        when(contexts.autoSave(eq(USER), eq(10L), anyString(), anyList(), anyInt(), any(), any())).thenReturn(List.of(
                 UserContextResponse.builder().contextId(91L).content("실습을 따라 했지만 혼자서는 시작하지 못한다")
                         .evidenceType(ContextEvidenceType.SELF_REPORT).courseTitle("파이썬 기초").build()));
         PlanBriefItem fromThisTurn = new PlanBriefItem(4, "TIME_BUDGET", "오늘 한 시간만", PlanBriefItem.SPEAKER_USER, true,

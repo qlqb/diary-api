@@ -481,7 +481,15 @@ public class PeriodPlanDraftGenerator {
      */
     public record Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
                          List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
-                         boolean selectionReused, Long briefId, Integer briefVersion) {
+                         boolean selectionReused, Long briefId, Integer briefVersion,
+                         /** 과목별 프로젝트 상태 지문(생성 때). 지금 지문과 다르면 초안이 오래된 것이다 */
+                         Map<Long, String> projectStates) {
+
+        public Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
+                      List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
+                      boolean selectionReused, Long briefId, Integer briefVersion) {
+            this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, Map.of());
+        }
     }
 
     public boolean isConfigured() {
@@ -578,8 +586,11 @@ public class PeriodPlanDraftGenerator {
         boolean firstAnchor = facts.purpose().allowsFirstUnlearnedAnchor();
         List<PlanMaterialContextService.CourseCatalog> catalogs = new ArrayList<>();
         for (Course course : courses) {
-            catalogs.add(materialContextService.build(spec.userId(), course.getCourseId(), course.getTitle(),
-                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(), firstAnchor));
+            com.jungwoo.project.memo.ai.state.ProjectStateService.State state = facts.projectStates().get(course.getCourseId());
+            // 확인된 수업 진도가 있으면 그것이 출발점이다 — 기록 기준 "첫 미학습"(목차 트리면 Unit 1)을 붙이지 않는다.
+            boolean anchor = firstAnchor && !hasConfirmedProgress(state);
+            catalogs.add(withStateFocus(materialContextService.build(spec.userId(), course.getCourseId(), course.getTitle(),
+                    excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(), anchor), state));
         }
         if (!requested.unscoped().isEmpty()) {
             catalogs.add(materialContextService.buildUnscoped(spec.userId(), requested.unscoped(),
@@ -608,6 +619,8 @@ public class PeriodPlanDraftGenerator {
         StringBuilder judgmentBasis = new StringBuilder("purpose:").append(facts.purpose().name());
         courses.forEach(c -> judgmentBasis.append("|tb").append(c.getCourseId()).append(':')
                 .append(com.jungwoo.project.memo.course.textbook.BookKey.of(c)));
+        // 진도·시험 범위·막힘을 고치면 같은 자료라도 다시 고른다(막힌 단원이 먼저 볼 후보가 된다).
+        stateFingerprints(facts).forEach((id, fp) -> judgmentBasis.append("|st").append(id).append(':').append(fp));
         EvidenceFingerprint fingerprint = EvidenceFingerprint.of(catalogs, availability.busyWindows(), capturedAt, spec.start(), spec.end(),
                 courses.stream().map(Course::getCourseId).toList(), spec.instruction(), excluded, requested.materialIds(),
                 judgmentBasis.toString());
@@ -636,7 +649,7 @@ public class PeriodPlanDraftGenerator {
                     : "\n" + spec.instruction());
             selection = materialSelector.select(new PlanMaterialSelector.Request(
                     spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), selectionInstruction,
-                    catalogs, contexts.stream().map(UserContext::getContent).toList(), requested.materials(),
+                    catalogs, selectionContexts(facts, contexts), requested.materials(),
                     requested.ambiguities(),
                     /*
                      * 펼친 선택은 선택적 호출이다. 이 시점에 첫 선택 호출은 아직 예산에 기록되지 않았으므로(선택이 끝난 뒤
@@ -779,7 +792,7 @@ public class PeriodPlanDraftGenerator {
                 finalStrategy, null, collector.build(), normalized.evidence(), summary,
                 new Extras(budgetSummary, snapshot, normalized.adjustments(), changesFromPrevious, reused,
                         facts.brief() == null ? null : facts.brief().briefId(),
-                        facts.brief() == null ? null : facts.brief().version()));
+                        facts.brief() == null ? null : facts.brief().version(), stateFingerprints(facts)));
     }
 
     // ===== 사용자가 말한 시간 =====
@@ -936,7 +949,107 @@ public class PeriodPlanDraftGenerator {
      * @param nextClasses 프로젝트 → 지금 이후 첫 수업(계획 종료 + 14일까지)
      */
     record Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
-                 PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose) {
+                 PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose,
+                 /** 과목별 확인된 상태(학습 기억·교재·실제 수업 정정). 읽지 못한 과목은 없다 */
+                 Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> projectStates) {
+
+        Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
+              PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose) {
+            this(history, nextClasses, transcript, brief, existing, purpose, Map.of());
+        }
+    }
+
+    /** 프로젝트 상태. 단위 테스트처럼 없을 수 있다 — 없으면 상태 블록 없이 예전처럼 만든다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.state.ProjectStateService projectStateService;
+
+    private Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> loadProjectStates(Long userId, List<Course> courses) {
+        Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> out = new java.util.LinkedHashMap<>();
+        if (projectStateService == null) {
+            return out;
+        }
+        for (Course course : courses) {
+            com.jungwoo.project.memo.ai.state.ProjectStateService.State state = projectStateService.loadQuietly(userId, course.getCourseId());
+            if (state != null) {
+                out.put(course.getCourseId(), state);
+            }
+        }
+        return out;
+    }
+
+    static boolean hasConfirmedProgress(com.jungwoo.project.memo.ai.state.ProjectStateService.State state) {
+        return state != null && state.facts().stream().anyMatch(f -> f.kind() == com.jungwoo.project.memo.ai.domain.FactKind.PROGRESS
+                && !f.inferred());
+    }
+
+    /**
+     * 프로젝트 기억의 막힌 곳·해결을 그 단원에 표시하고 판단에 남긴다(선택과 무관). 범위에서 뺀 단원·사용자가 뺀 단원은 이미
+     * 후보에 없으니 표시되지 않는다 — 제외가 앞선다. 추정은 표시하지 않는다.
+     */
+    static PlanMaterialContextService.CourseCatalog withStateFocus(PlanMaterialContextService.CourseCatalog catalog,
+                                                                    com.jungwoo.project.memo.ai.state.ProjectStateService.State state) {
+        if (catalog == null || state == null) {
+            return catalog;
+        }
+        Map<Long, String> notes = new HashMap<>();
+        java.time.format.DateTimeFormatter day = java.time.format.DateTimeFormatter.ofPattern("M/d");
+        for (com.jungwoo.project.memo.ai.state.ProjectStateService.Fact f : state.facts()) {
+            if (f.topicId() == null || f.inferred()) {
+                continue;
+            }
+            String when = f.saidAt() == null ? "" : "(" + day.format(f.saidAt()) + ")";
+            String note = switch (f.kind()) {
+                case DIFFICULTY -> "막힌 곳" + when + " — 먼저 볼 후보";
+                case RESOLVED -> ("GUIDED".equals(f.help()) ? "도움받아 해결" : "SOLO".equals(f.help()) ? "혼자 해결" : "해결")
+                        + when + ("SOLO".equals(f.help()) ? "" : " — 혼자 다시 해 보기 좋은 후보");
+                default -> null;
+            };
+            if (note != null) {
+                notes.merge(f.topicId(), note, (a, b) -> a); // 최근 것이 먼저 온다(상태는 최근 순)
+            }
+        }
+        if (notes.isEmpty()) {
+            return catalog;
+        }
+        return catalog.withTopics(catalog.topics().stream()
+                .map(t -> notes.containsKey(t.topicId()) ? t.withStateNote(notes.get(t.topicId())) : t).toList());
+    }
+
+    static Map<Long, String> stateFingerprints(Facts facts) {
+        Map<Long, String> out = new java.util.TreeMap<>();
+        facts.projectStates().forEach((id, st) -> out.put(id, st.fingerprint()));
+        return out;
+    }
+
+    /** 상태 블록에 실제로 실리는 기억 id — [사용자가 확인한 맥락]에서는 이것만 뺀다. */
+    static Set<Long> shownStateIds(Facts facts) {
+        Set<Long> ids = new java.util.HashSet<>();
+        facts.projectStates().values().forEach(st -> ids.addAll(
+                com.jungwoo.project.memo.ai.state.ProjectStateService.render(st, com.jungwoo.project.memo.ai.state.ProjectStateService.MAX_LINES, com.jungwoo.project.memo.ai.state.ProjectStateService.LineMarker.PLAIN).contextIds()));
+        return ids;
+    }
+
+    /**
+     * 자료 선택 단계에 주는 사용자 상태: 과목마다 같은 상태 블록(출처 라벨 포함) + 상태 블록에 없는 기억(근거 라벨 포함).
+     * 내용만 넘기면 AI 추정이 확인된 사실처럼 읽힌다.
+     */
+    static List<String> selectionContexts(Facts facts, List<UserContext> contexts) {
+        List<String> out = new ArrayList<>();
+        for (com.jungwoo.project.memo.ai.state.ProjectStateService.State st : facts.projectStates().values()) {
+            com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered r = com.jungwoo.project.memo.ai.state.ProjectStateService.render(st, com.jungwoo.project.memo.ai.state.ProjectStateService.MAX_LINES, com.jungwoo.project.memo.ai.state.ProjectStateService.LineMarker.PLAIN);
+            if (!r.text().isEmpty()) {
+                for (String line : r.text().split("\n")) {
+                    out.add(st.courseTitle() + " — " + line.replaceFirst("^- ", ""));
+                }
+            }
+        }
+        Set<Long> shown = shownStateIds(facts);
+        for (UserContext c : contexts) {
+            if (!shown.contains(c.getContextId())) {
+                out.add(c.getContent() + com.jungwoo.project.memo.ai.ContextSnapshotService.qualifier(c));
+            }
+        }
+        return out;
     }
 
     private static boolean newer(PlanBriefItem a, PlanBriefItem b) {
@@ -1010,7 +1123,7 @@ public class PeriodPlanDraftGenerator {
         }
         List<ExecutionItem> existing = executionItemMapper.findByUserIdAndPlanningRange(spec.userId(), spec.start(), spec.end());
         return new Facts(history, nextClasses, transcript == null ? List.of() : transcript, brief,
-                existing == null ? List.of() : existing, purposeOf(spec, brief));
+                existing == null ? List.of() : existing, purposeOf(spec, brief), loadProjectStates(spec.userId(), courses));
     }
 
     // ===== 선택 재사용·추가 읽기 =====
@@ -1414,7 +1527,8 @@ public class PeriodPlanDraftGenerator {
                   "refIds": ["s3"],
                   "deadlineRefId": "s9" 또는 null,
                   "targetCompleteAt": "YYYY-MM-DDTHH:mm" 또는 null,
-                  "origin": "SOURCE_TASK" | "AI_PRACTICE" | "USER_REQUEST"
+                  "origin": "SOURCE_TASK" | "AI_PRACTICE" | "USER_REQUEST",
+                  "goal": "이 항목으로 이루려는 학습 목표 한 줄(60자 이내)" 또는 null
                 }
               ],
               "existingItems": [{"refId": "s12", "action": "KEEP" | "REDUCE" | "MOVE" | "DROP",
@@ -1432,8 +1546,11 @@ public class PeriodPlanDraftGenerator {
               낮아서 미뤘다"고 쓰지 않는다 — 보지 못했으면 UNDECIDED이고 이유는 "보지 못함"이다. 자료 상태는 서버가 따로
               붙이므로 네가 추측해 적지 않는다.
             - origin: 자료 원문에 실제로 있는 과제·실습·문제를 하는 항목이면 SOURCE_TASK(그 원문 구간을 refIds에 넣는다),
-              원문을 바탕으로 네가 만든 추가 연습·회수·변형이면 AI_PRACTICE, 사용자가 직접 요청한 준비 작업이면 USER_REQUEST.
-              네가 만든 연습을 원문에 있는 문제처럼 쓰지 않는다.
+              원문이나 목차 제목을 바탕으로 네가 만든 추가 연습·회수·변형이면 AI_PRACTICE, 사용자가 직접 요청한 준비 작업이면
+              USER_REQUEST. 네가 만든 연습을 원문·교재에 있는 문제처럼 쓰지 않는다.
+            - goal: 이 항목으로 무엇을 할 수 있게 되는지 한 줄(예: "현재진행형으로 지금 하는 일 말하기"). 근거가 된 학습 항목·
+              구간·합의를 refIds에 넣는다 — 근거 없이 쓴 목표는 버려진다. 목차 제목만 아는 단원의 목표는 제목에서 추론한 것이며
+              서버가 그렇게 표시한다. 사용자가 정한 목표를 그대로 옮길 때만 그 목표의 문장을 쓴다.
             - 운영 안내(평가 비율·출결·연락처·수업 규칙·교재 안내)는 계획을 판단하는 배경이다. 시험 범위·마감·주차 주제는
               일정과 범위의 근거로 쓰되, 운영 안내 자체를 요약·정리·암기하는 항목은 사용자가 요청했을 때만 만든다
               (그때는 origin을 USER_REQUEST로 한다). 설명과 운영 안내가 섞인 구간에서는 학습 내용만 항목으로 만든다.
@@ -1683,12 +1800,12 @@ public class PeriodPlanDraftGenerator {
                 .append("deferred.refIds에 이 값만 쓴다.\n\n");
 
         sb.append(inputs.facts().purpose().promptRule()).append('\n')
-                .append("범위의 근거를 섞지 않는다: [교재 범위](목차)는 책이 다루는 범위이고, 강의계획서의 예정 진도, [실제 수업 진행], ")
-                .append("내 학습 기록(진행 중·학습 완료·실행 기록)은 각각 다른 사실이다. 목차에 있다는 이유만으로 계획 대상·시험 범위·")
-                .append("밀린 일로 보지 않는다. \"목차만 확인\"한 항목은 제목·쪽만 안다 — 대화문·문제 번호·정답을 교재 내용처럼 쓰지 않고, ")
-                .append("필요하면 그 단원의 사진·본문을 보라고 제안한다.\n\n");
+                .append(TOC_RULE).append('\n')
+                .append(STATE_RULE).append("\n\n");
 
-        appendUserContexts(sb, inputs.contexts(), collector);
+        Set<Long> shownInState = shownStateIds(inputs.facts());
+        appendUserContexts(sb, inputs.contexts().stream().filter(c -> !shownInState.contains(c.getContextId())).toList(),
+                collector);
 
         Facts facts = inputs.facts();
         /*
@@ -1906,6 +2023,7 @@ public class PeriodPlanDraftGenerator {
             if (scope != null) {
                 sb.append("  - ").append(scope).append('\n');
             }
+            appendProjectState(sb, inputs.facts().projectStates().get(courseId), collector);
             RoutineOccurrence next = inputs.facts().nextClasses().get(courseId);
             if (next != null) {
                 ProvenanceCollector.Marked marked = PlanPromptBlocks.markNextClass(next, courseId, collector);
@@ -2220,6 +2338,7 @@ public class PeriodPlanDraftGenerator {
                         "courseId", courseId,
                         "title", topic.title(),
                         "sourceLocator", topic.locator(),
+                        "tocSeq", topic.tocSeq(),
                         "progressStatus", topic.progress() == null ? null : topic.progress().name(),
                         "selectionReason", reason),
                 text,
@@ -2388,6 +2507,44 @@ public class PeriodPlanDraftGenerator {
         }
     }
 
+    /**
+     * 목차만 확인한 단원의 규칙. 제목이 표현·문법을 드러내면 추론 목표와 AI 연습을 만들 수 있다 — 단 교재 내용처럼 쓰지 않는다.
+     */
+    static final String TOC_RULE = "범위의 근거를 섞지 않는다: [교재 범위](목차)는 책이 다루는 범위이고, 강의계획서의 예정 진도, "
+            + "[실제 수업 진행], 내 학습 기록(진행 중·학습 완료·실행 기록)은 각각 다른 사실이다. 목차에 있다는 이유만으로 계획 대상·"
+            + "시험 범위·밀린 일로 보지 않는다. \"목차만 확인\"한 항목은 제목·쪽만 안다 — 대화문·문제 번호·정답·쪽 안의 내용을 교재 "
+            + "내용처럼 쓰지 않는다. 단 제목이 표현·문법을 드러내면(예: \"I'm doing my homework right now\" → 현재진행형) 그 단원의 "
+            + "학습 목표(goal)를 추론하고, 그 표현으로 말하기·쓰기 연습을 네가 만들어 제안할 수 있다(origin AI_PRACTICE — 교재 문제가 "
+            + "아니다). 본문이 필요한 활동이면 그 단원의 사진·본문을 올리라고 제안한다. 같은 교재 목차 안에서 제목이 같아도 번호·순번이 "
+            + "다르면 다른 단원이다 — 한 목표로 합치지 않고, 앞 단원의 기록을 뒤 단원에 옮기지 않는다.";
+
+    /** 프로젝트 상태 블록을 읽는 규칙. */
+    static final String STATE_RULE = "과목 아래 [이 프로젝트에서 확인된 상태]의 교재·수업 진도·시험 범위는 확인된 사실이다 — questions·"
+            + "missingInformation에 다시 넣지 않는다. 막힌 곳과 도움받아 해결한 단원은 복습·AI 연습 후보로 먼저 본다(범위에서 뺀 "
+            + "항목·사용자가 뺀 항목이 앞선다). \"AI 추정 — 확인 전\"은 사실이 아니다(가정으로만 쓰고 assumptions에 밝힌다). "
+            + "수업 진도(수업에서 나간 곳)와 막힘·해결(내 이해)을 섞지 않는다.";
+
+    /** 과목의 확인된 상태. 기억 줄마다 근거 번호를 붙인다(고치면 이 초안이 오래됨으로 보인다). */
+    private void appendProjectState(StringBuilder sb, com.jungwoo.project.memo.ai.state.ProjectStateService.State state, ProvenanceCollector collector) {
+        if (state == null) {
+            return;
+        }
+        com.jungwoo.project.memo.ai.state.ProjectStateService.Rendered rendered = com.jungwoo.project.memo.ai.state.ProjectStateService.render(state, com.jungwoo.project.memo.ai.state.ProjectStateService.MAX_LINES, (fact, line) -> collector.mark(
+                ProvenanceSourceType.USER_CONTEXT, fact.contextId(), null, fact.updatedAt(),
+                ProvenanceRepresentation.EXCERPT,
+                ProvenanceCollector.value("content", fact.text(), "kind", fact.kind().name(), "courseId", state.courseId(),
+                        "evidenceType", fact.evidenceType() == null ? null : fact.evidenceType().name(),
+                        "help", fact.help(), "topicId", fact.topicId(), "status", fact.status()),
+                line).text());
+        if (rendered.text().isEmpty()) {
+            return;
+        }
+        sb.append("  [이 프로젝트에서 확인된 상태] (괄호는 언제·누가 말했는지. m번호는 막힌 곳)\n");
+        for (String line : rendered.text().split("\n")) {
+            sb.append("    ").append(line).append('\n');
+        }
+    }
+
     private void appendUserContexts(StringBuilder sb, List<UserContext> contexts, ProvenanceCollector collector) {
         if (contexts == null || contexts.isEmpty()) {
             return;
@@ -2401,7 +2558,10 @@ public class PeriodPlanDraftGenerator {
                     ProvenanceSourceType.USER_CONTEXT, context.getContextId(), null, context.getUpdatedAt(),
                     ProvenanceRepresentation.EXCERPT,
                     ProvenanceCollector.value("content", context.getContent(),
-                            "status", context.getStatus() == null ? null : context.getStatus().name()),
+                            "status", context.getStatus() == null ? null : context.getStatus().name(),
+                            "kind", context.getFactKind() == null ? null : context.getFactKind().name(),
+                            "evidenceType", context.getEvidenceType() == null ? null : context.getEvidenceType().name(),
+                            "courseId", context.getCourseId(), "topicId", context.getTopicId()),
                     context.getContent() + com.jungwoo.project.memo.ai.ContextSnapshotService.qualifier(context) + stale)
                     .text()).append("\n");
         }

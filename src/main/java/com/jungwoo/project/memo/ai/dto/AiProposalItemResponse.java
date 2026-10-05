@@ -90,6 +90,10 @@ public class AiProposalItemResponse {
     /** 항목의 출처 유형(서버 검증 뒤): SOURCE_TASK / AI_PRACTICE / USER_REQUEST. 없으면 null. */
     private String origin;
 
+    /** (2026-10-05) 학습 목표 한 줄과 그 근거(서버 판정): TOC_AI / MATERIAL_AI / USER. 없으면 null. */
+    private String learningGoal;
+    private String learningGoalBasis;
+
     /**
      * (기간 계획의 새 항목) 시작 자료와 위치 — 이 항목이 인용한 첫 자료 구간. 모델이 새로 쓴 값이 아니라 인용 근거를
      * 지금의 자료와 대조한 것이다. 인용한 구간이 없으면 null.

@@ -106,6 +106,7 @@ public final class PlanResultNormalizer {
             totalUnknown += unknown;
 
             String origin = normalizeOrigin(raw.origin(), refs, byRef);
+            origin = practiceFromTocOnly(origin, raw.actionType(), refs, byRef);
             if (citesOnlyOperationalInfo(refs, byRef) && !ORIGIN_USER_REQUEST.equals(origin)) {
                 /*
                  * 운영 안내(평가 비율·연락처·수업 규칙)만 근거로 든 항목은 요청 없이 학습 항목이 되지 않는다. 판단 기준은 제목의
@@ -149,8 +150,11 @@ public final class PlanResultNormalizer {
                     deadline.at == null && deadline.date == null ? null : deadline.source));
 
             List<String> estimates = aiEstimates(raw, scheduled, deadline);
+            Long itemCourseId = resolveItemCourseId(raw.courseId(), allowedCourseIds, soleCourseId);
+            Goal goal = goalOf(raw.goal(), refs, byRef, itemCourseId, topicId);
             evidence.add(PlanItemEvidence.of(provenance.generationId(), refs, blankToNull(raw.reason()), estimates,
-                    List.of(), unknown + (deadline.unknownRef ? 1 : 0)).withOrigin(origin));
+                    List.of(), unknown + (deadline.unknownRef ? 1 : 0)).withOrigin(origin)
+                    .withGoal(goal == null ? null : goal.text(), goal == null ? null : goal.basis()));
         }
         if (totalUnknown > 0) {
             log.warn("계획 초안: 모델이 이번 회차에 없는 인용 {}건을 냈다. generationId={}", totalUnknown,
@@ -194,6 +198,116 @@ public final class PlanResultNormalizer {
             return origin;
         }
         return null;
+    }
+
+    // ===== 학습 목표 =====
+
+    public static final String GOAL_TOC_AI = "TOC_AI";
+    public static final String GOAL_MATERIAL_AI = "MATERIAL_AI";
+    public static final String GOAL_USER = "USER";
+    static final int MAX_GOAL_CHARS = 60;
+
+    record Goal(String text, String basis) {
+    }
+
+    /** 학습 항목이 교재 목차에서 왔는가(목차 제목·쪽만 확인한 항목). */
+    static boolean isTocTopic(ProvidedSource s) {
+        if (s == null || s.sourceType() != ProvenanceSourceType.TOPIC || s.providedValue() == null) {
+            return false;
+        }
+        Object locator = s.providedValue().get("sourceLocator");
+        return locator instanceof String l && (l.startsWith("교재 p.") || l.equals("교재 목차"));
+    }
+
+    /**
+     * 목표의 근거는 서버가 정한다(모델이 고르지 않는다).
+     * <ul>
+     *   <li>USER: 인용한 근거 중 사용자가 확인한 목표(수락된 합의 GOAL, 사용자가 말한·고친 GOAL 기억)가 있고, 목표 문장이 그
+     *       목표와 같은 내용일 때만. 모델이 바꾼 목표는 사용자 목표가 아니다.</li>
+     *   <li>MATERIAL_AI: 같은 과목의 자료 구간을 인용했다(자료를 보고 AI가 정한 목표).</li>
+     *   <li>TOC_AI: 같은 과목·같은 단원의 목차 항목만 인용했다(제목만 보고 추론).</li>
+     * </ul>
+     * 근거가 없거나 과목·단원이 항목과 다르면 목표를 버린다.
+     */
+    static Goal goalOf(String raw, List<String> refs, Map<String, ProvidedSource> byRef, Long itemCourseId, Long itemTopicId) {
+        String text = blankToNull(raw);
+        if (text == null) {
+            return null;
+        }
+        text = text.replaceAll("\\s+", " ").strip();
+        if (text.length() > MAX_GOAL_CHARS) {
+            text = text.substring(0, MAX_GOAL_CHARS);
+        }
+        String key = goalKey(text);
+        boolean material = false;
+        boolean toc = false;
+        for (String ref : refs) {
+            ProvidedSource s = byRef.get(ref);
+            if (s == null) {
+                continue;
+            }
+            Map<String, Object> v = s.providedValue() == null ? Map.of() : s.providedValue();
+            Object course = v.get("courseId");
+            boolean sameCourse = itemCourseId == null || course == null || itemCourseId.equals(toLong(course));
+            Object topicOfSource = v.get("topicId");
+            boolean sameTopic = itemTopicId == null || topicOfSource == null || itemTopicId.equals(toLong(topicOfSource));
+            if (sameCourse && sameTopic && s.sourceType() == ProvenanceSourceType.PLAN_BRIEF && "GOAL".equals(String.valueOf(v.get("kind")))
+                    && (Boolean.TRUE.equals(v.get("accepted")) || "USER".equals(String.valueOf(v.get("speaker"))))
+                    && sameGoal(key, v.get("text"))) {
+                return new Goal(text, GOAL_USER);
+            }
+            if (sameCourse && sameTopic && s.sourceType() == ProvenanceSourceType.USER_CONTEXT
+                    && "GOAL".equals(String.valueOf(v.get("kind")))
+                    && "STATED".equals(String.valueOf(v.get("evidenceType"))) && sameGoal(key, v.get("content"))) {
+                return new Goal(text, GOAL_USER);
+            }
+            if (s.sourceType() == ProvenanceSourceType.MATERIAL_SECTION && sameCourse) {
+                material = true;
+            }
+            if (isTocTopic(s) && sameCourse && (itemTopicId == null || itemTopicId.equals(s.sourceId()))) {
+                toc = true;
+            }
+        }
+        return material ? new Goal(text, GOAL_MATERIAL_AI) : toc ? new Goal(text, GOAL_TOC_AI) : null;
+    }
+
+    private static String goalKey(String s) {
+        return s == null ? "" : s.toLowerCase(Locale.ROOT).replaceAll("[\\s\\p{Punct}·…]+", "");
+    }
+
+    private static boolean sameGoal(String key, Object confirmed) {
+        String c = goalKey(confirmed == null ? null : String.valueOf(confirmed));
+        // 같은 문장이거나, 출력 목표가 확인된 목표 전체를 담을 때만(확인된 목표의 일부만 떼어 낸 것은 아니다).
+        return !c.isEmpty() && !key.isEmpty() && (key.equals(c) || key.contains(c));
+    }
+
+    private static Long toLong(Object v) {
+        if (v instanceof Number n) {
+            return n.longValue();
+        }
+        try {
+            return v == null ? null : Long.valueOf(String.valueOf(v));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * 목차 항목만 인용한(자료 원문 없음) 연습·회수 항목은 AI가 만든 연습이다 — 출처 유형이 비어 있어도 그렇게 표시한다.
+     * 교재 문제처럼 보이지 않게(목차만으로는 교재의 문제를 알 수 없다).
+     */
+    static String practiceFromTocOnly(String origin, String actionType, List<String> refs, Map<String, ProvidedSource> byRef) {
+        if (origin != null) {
+            return origin;
+        }
+        String action = actionType == null ? "" : actionType.trim().toUpperCase(Locale.ROOT);
+        if (!action.equals("PRACTICE") && !action.equals("RECALL")) {
+            return null;
+        }
+        boolean citesText = refs.stream().map(byRef::get)
+                .anyMatch(s -> s != null && s.sourceType() == ProvenanceSourceType.MATERIAL_SECTION);
+        boolean citesToc = refs.stream().map(byRef::get).anyMatch(PlanResultNormalizer::isTocTopic);
+        return !citesText && citesToc ? ORIGIN_AI_PRACTICE : null;
     }
 
     /** 인용한 근거가 구간뿐이고, 그 구간의 역할이 전부 운영 안내(ADMIN, 또는 ADMIN과 SCHEDULE)뿐인가. */

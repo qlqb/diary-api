@@ -43,6 +43,9 @@ public class CourseTopic {
     /** 목차에서 온 항목이 어느 책의 것인가(BookKey). 교재가 바뀐 뒤 이전 교재 항목을 새 교재 범위로 세지 않기 위해. */
     private String sourceTextbookKey;
 
+    /** 같은 교재 목차 안의 원본 순번(1부터). 트리 순서(orderIndex)와 달리 바뀌지 않는다 — 제목이 같은 단원을 구분한다. */
+    private Integer sourceTocSeq;
+
     private TopicStatus status;
 
     /**

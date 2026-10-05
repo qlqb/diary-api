@@ -9,15 +9,20 @@
         <id     property="contextId"            column="context_id"/>
         <result property="userId"               column="user_id"/>
         <result property="content"              column="content"/>
+        <result property="contentKey"           column="content_key"/>
         <result property="status"               column="status"/>
         <result property="sourceType"           column="source_type"/>
         <result property="evidenceType"         column="evidence_type"/>
+        <result property="factKind"             column="fact_kind"/>
+        <result property="factLabel"            column="fact_label"/>
         <result property="courseId"             column="course_id"/>
         <result property="topicId"              column="topic_id"/>
         <result property="sectionId"            column="section_id"/>
         <result property="scopeStart"           column="scope_start"/>
         <result property="scopeEnd"             column="scope_end"/>
         <result property="selfLevel"            column="self_level"/>
+        <result property="helpLevel"            column="help_level"/>
+        <result property="saidAt"               column="said_at"/>
         <result property="withdrawnAt"          column="withdrawn_at"/>
         <result property="sourceMessageId"      column="source_message_id"/>
         <result property="supersedesContextId"  column="supersedes_context_id"/>
@@ -30,33 +35,43 @@
         INSERT INTO user_contexts (
             user_id,
             content,
+            content_key,
             status,
             source_type,
             evidence_type,
+            fact_kind,
+            fact_label,
             course_id,
             topic_id,
             section_id,
             scope_start,
             scope_end,
             self_level,
+            help_level,
             source_message_id,
             supersedes_context_id,
-            confirmed_at
+            confirmed_at,
+            said_at
         ) VALUES (
             #{userId},
             #{content},
+            #{contentKey},
             #{status},
             #{sourceType},
             #{evidenceType},
+            #{factKind},
+            #{factLabel},
             #{courseId},
             #{topicId},
             #{sectionId},
             #{scopeStart},
             #{scopeEnd},
             #{selfLevel},
+            #{helpLevel},
             #{sourceMessageId},
             #{supersedesContextId},
-            #{confirmedAt}
+            #{confirmedAt},
+            #{saidAt}
         )
     </insert>
 
@@ -122,7 +137,8 @@
         UPDATE user_contexts
         SET evidence_type = 'STATED',
             status        = 'ACTIVE',
-            confirmed_at  = #{confirmedAt}
+            confirmed_at  = #{confirmedAt},
+            said_at       = #{confirmedAt}
         WHERE context_id = #{contextId}
           AND user_id    = #{userId}
           AND status IN ('ACTIVE', 'STALE')
@@ -146,6 +162,85 @@
         WHERE context_id = #{contextId}
           AND user_id    = #{userId}
           AND status     = 'STALE'
+    </update>
+
+    <!-- 한 과목의 살아 있는 기억(종류 있는 것·없는 것 모두). 프로젝트 상태·사실 카드가 읽는다. -->
+    <select id="findActiveAndStaleByCourse" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND course_id = #{courseId}
+          AND status IN ('ACTIVE', 'STALE')
+        ORDER BY COALESCE(said_at, updated_at) DESC, context_id DESC
+    </select>
+
+    <!-- 지운 기억과 같은 것이 이력 어디에든 있는가(과목·단원·본문 키). 예전 행(content_key NULL)은 따로 최근 것과 비교한다. -->
+    <select id="countWithdrawnByKey" resultType="int">
+        SELECT COUNT(*)
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND content_key = #{contentKey}
+          AND status = 'WITHDRAWN'
+          AND <choose><when test="courseId != null">course_id = #{courseId}</when><otherwise>course_id IS NULL</otherwise></choose>
+          AND <choose><when test="topicId != null">(topic_id = #{topicId} OR topic_id IS NULL)</when><otherwise>1 = 1</otherwise></choose>
+    </select>
+
+    <!-- 본문 키가 없는 예전 철회 행 전부. 키 없이 저장된 것은 서버가 같은 정규화로 비교한다. -->
+    <select id="findLegacyWithdrawnByUserId" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND status = 'WITHDRAWN'
+          AND content_key IS NULL
+    </select>
+
+    <!-- 대체: 옛 행을 SUPERSEDED로. 살아 있는 행만(이미 바뀐 것은 0행). -->
+    <update id="supersede">
+        UPDATE user_contexts
+        SET status = 'SUPERSEDED'
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+    </update>
+
+    <!-- 확인된 같은 내용을 다시 말했다 — 발화 시각만 새로 한다(늦게 끝난 옛 턴이 덮지 못하게). -->
+    <update id="touchSaid">
+        UPDATE user_contexts
+        SET said_at           = #{saidAt},
+            source_message_id = COALESCE(#{sourceMessageId}, source_message_id)
+            <if test="scopeStart != null or scopeEnd != null">
+            , scope_start = #{scopeStart}, scope_end = #{scopeEnd}
+            </if>
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+    </update>
+
+    <!-- 종류 있는 기억이 있는 과목, 최근에 말한 순(전역 상담이 상태를 실을 과목을 먼저 고른다). -->
+    <select id="findRecentFactCourseIds" resultType="long">
+        SELECT course_id
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND course_id IS NOT NULL
+          AND fact_kind IS NOT NULL
+          AND status IN ('ACTIVE', 'STALE')
+        GROUP BY course_id
+        ORDER BY MAX(COALESCE(said_at, updated_at)) DESC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 같은 내용의 AI 추정을 사용자가 직접 말했다 — 근거를 올리고 발화 시각을 새로 한다. -->
+    <update id="promoteToStated">
+        UPDATE user_contexts
+        SET evidence_type     = 'STATED',
+            status            = 'ACTIVE',
+            confirmed_at      = #{saidAt},
+            said_at           = #{saidAt},
+            source_message_id = COALESCE(#{sourceMessageId}, source_message_id)
+        WHERE context_id = #{contextId}
+          AND user_id    = #{userId}
+          AND evidence_type = 'INFERRED'
+          AND status IN ('ACTIVE', 'STALE')
     </update>
 
 </mapper>

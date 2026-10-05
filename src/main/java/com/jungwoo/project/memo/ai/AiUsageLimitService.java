@@ -52,6 +52,12 @@ public class AiUsageLimitService {
         }
     }
 
+    /** 한 기능의 호출 수(성공·실패 모두) — 상담 한도와 따로 세는 보조 호출의 상한에 쓴다. */
+    @Transactional(readOnly = true)
+    public int countSince(Long userId, String feature, LocalDateTime since) {
+        return aiUsageLogMapper.countByUserIdAndFeatureSince(userId, feature, since);
+    }
+
     /** Today 상담 전용 — feature는 항상 AI_CONSULTATION으로 고정된다. 기존 호출부를 그대로 유지한다. */
     @Transactional
     public void record(Long userId, Long conversationId, Long requestMessageId, String model,

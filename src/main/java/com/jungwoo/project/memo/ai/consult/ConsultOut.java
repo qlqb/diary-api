@@ -59,7 +59,12 @@ public record ConsultOut(QuestionOut question, DirectionOut direction, List<Memo
      */
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record MemoryOut(String text, String evidenceType, Long courseId, String scopeStart, String scopeEnd,
-                            String quote) {
+                            String quote, String kind, Long topicId, String label, String help, Long resolves) {
+
+        public MemoryOut(String text, String evidenceType, Long courseId, String scopeStart, String scopeEnd,
+                         String quote) {
+            this(text, evidenceType, courseId, scopeStart, scopeEnd, quote, null, null, null, null, null);
+        }
     }
 
     /** 선택 활동(예: 주제 목록을 보고 알아/애매해/처음 봐로 답하기). 필수가 아니다. */
