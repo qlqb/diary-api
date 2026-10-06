@@ -36,6 +36,18 @@ public class LearningEventWriter {
 
     public enum Result { UNCHANGED, WRITTEN, SKIPPED_EMPTY }
 
+    /**
+     * 이 origin에 이미 쓴 판이 있나(백필이 "실시간이 먼저 썼나"를 볼 때). origin 행을 잠근 채로 돌려준다 — 같은 트랜잭션에서 이어 쓰는
+     * 동안 실시간 경로가 끼지 않는다. 과목이 다르게 기록된 origin이면 이미 있는 것으로 본다(건드리지 않는다).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean written(EventOrigin origin) {
+        String kind = origin.kind().name();
+        mapper.upsertOrigin(origin.userId(), kind, origin.id(), origin.courseId());
+        LearningEventMapper.OriginRow row = mapper.lockOrigin(origin.userId(), kind, origin.id());
+        return row.courseId() != origin.courseId() || row.currentRevision() > 0;
+    }
+
     @Transactional(propagation = Propagation.MANDATORY)
     public Result write(EventOrigin origin, List<EventDraft> drafts) {
         List<Output> outputs = EventOutputs.normalize(drafts, objectMapper);

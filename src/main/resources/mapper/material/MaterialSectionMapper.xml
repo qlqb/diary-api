@@ -72,7 +72,8 @@
     </update>
 
     <update id="clearTextByMaterialId">
-        UPDATE material_sections SET excerpt = NULL, task_text = NULL, assignment_quote = NULL
+        UPDATE material_sections SET excerpt = NULL, task_text = NULL, assignment_quote = NULL,
+               display_title = '', section_label = NULL, date_candidates_json = NULL
          WHERE material_id = #{materialId} AND user_id = #{userId}
     </update>
 

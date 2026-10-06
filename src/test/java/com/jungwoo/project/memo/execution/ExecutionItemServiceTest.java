@@ -57,6 +57,9 @@ class ExecutionItemServiceTest {
     @Mock
     private ApplicationEventPublisher eventPublisher;
 
+    @Mock
+    private com.jungwoo.project.memo.learning.events.ExecutionEventRecorder learningEvents;
+
     @InjectMocks
     private ExecutionItemService service;
 

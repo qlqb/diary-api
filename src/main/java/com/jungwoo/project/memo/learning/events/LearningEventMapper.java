@@ -37,6 +37,9 @@ public interface LearningEventMapper {
     /** id로 이벤트와 "살아 있나"(현재 판이고 철회·대체되지 않음 — 조회와 같은 정의). 다른 사용자의 것은 나오지 않는다. */
     List<EventRefRow> findEventRefs(@Param("userId") long userId, @Param("ids") Collection<Long> ids);
 
+    /** 이벤트들의 대상(같은 사용자). */
+    List<LearningEvent> findEventsByIds(@Param("userId") long userId, @Param("ids") Collection<Long> ids);
+
     // ===== 검증 =====
 
     int countOwnedCourse(@Param("userId") long userId, @Param("courseId") long courseId);
@@ -52,6 +55,10 @@ public interface LearningEventMapper {
 
     List<MaterialRow> findMaterials(@Param("userId") long userId, @Param("courseId") long courseId,
                                     @Param("ids") Collection<Long> ids);
+
+    /** 그 사용자·과목의 수업 회차. */
+    List<Long> findSessionIds(@Param("userId") long userId, @Param("courseId") long courseId,
+                              @Param("ids") Collection<Long> ids);
 
     List<Long> findOwnedBookRefs(@Param("userId") long userId, @Param("ids") Collection<Long> ids);
 

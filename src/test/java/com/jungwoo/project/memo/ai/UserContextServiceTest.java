@@ -160,6 +160,8 @@ class UserContextServiceTest {
         UserContext old = UserContext.builder().contextId(3L).userId(USER).courseId(1L).topicId(11L)
                 .content("스택 — 처음 본다고 답함").status(UserContextStatus.ACTIVE).build();
         when(mapper.findActiveSelfChecks(USER, 1L)).thenReturn(List.of(old));
+        when(courseMapper.findByIdAndUserIdForUpdate(1L, USER))
+                .thenReturn(com.jungwoo.project.memo.course.domain.Course.builder().courseId(1L).userId(USER).build());
 
         int saved = service.saveSelfChecks(USER, 1L, List.of(
                 new UserContextService.SelfCheck("스택", 11L, null, "unsure", "push/pop은 알아"),

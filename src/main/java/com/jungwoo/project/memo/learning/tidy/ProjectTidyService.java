@@ -579,8 +579,11 @@ public class ProjectTidyService {
      * <p>맨 끝의 조건부 전이({@code resolveProposalIfOpen})는 그 위의 둘째 자물쇠다 — 잠금이
      * 어떤 이유로든 먼저 풀렸다면 0행이 되고, 그러면 이 트랜잭션 전체가 롤백된다. 트리 수정만
      * 남고 상태가 뒤처지는 상태는 만들어지지 않는다.
+     *
+     * <p>READ_COMMITTED(2026-10-06): 정정을 적용한 뒤 학습 이벤트를 과목 잠금 아래 일반 읽기로 맞춘다 — 잠금을 기다린 뒤 최신 커밋을 봐야
+     * 같은 과목의 다른 정정(범위 제외 해제)을 덮지 않는다. 이 메서드의 판단은 원래부터 잠금 읽기(정리안·자료·연결·과목)에 기댄다.
      */
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public ProjectTidyResponse apply(Long userId, Long proposalId, ProjectTidyRequests.Apply request) {
         ProjectTidyProposal proposal = tidyMapper.findProposalByIdForUpdate(proposalId, userId);
         if (proposal == null) {

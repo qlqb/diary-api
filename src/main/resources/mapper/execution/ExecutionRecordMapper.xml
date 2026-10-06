@@ -89,6 +89,12 @@
         WHERE execution_record_id = #{executionRecordId} AND user_id = #{userId}
     </select>
 
+    <select id="lockByIdAndUserId" resultMap="executionRecordResultMap">
+        SELECT * FROM execution_records
+        WHERE execution_record_id = #{executionRecordId} AND user_id = #{userId}
+        FOR UPDATE
+    </select>
+
     <!-- 사용자가 자기 기록의 "어떻게 했나"를 고친다. 결과(완료·부분)·시간·분량은 여기서 바꾸지 않는다. -->
     <update id="updateReflection">
         UPDATE execution_records

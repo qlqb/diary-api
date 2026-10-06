@@ -144,6 +144,12 @@ public class UserContextService {
                 .sourceMessageId(current.getSourceMessageId()).supersedesContextId(contextId)
                 .confirmedAt(now).saidAt(now).build();
         userContextMapper.insert(next);
+        if (memoryEvents != null) {
+            // 고친 행이 막힘을 닫은 해결이었으면(종류를 바꿨다 되돌린 경우 포함) 연결을 새 행으로. 연결이 없으면 아무 일도 없다.
+            // 새 행이 해결이 아니면 해결 이벤트만 내려가고, 막힘은 STUCK을 유지한다.
+            memoryEvents.resolverReplaced(userId, contextId, next.getContextId());
+        }
+        syncEvents(userId, current.getCourseId());
         UserContext saved = userContextMapper.findByIdAndUserId(next.getContextId(), userId);
         // 옛 id를 근거로 든 초안이 오래된 것이다.
         return new Change(toResponse(saved, courseTitles(userId)), draftsCiting(userId, contextId));
@@ -168,6 +174,7 @@ public class UserContextService {
                 }
             }
         }
+        syncEvents(userId, current.getCourseId());
         return new Change(toResponse(userContextMapper.findByIdAndUserId(contextId, userId), courseTitles(userId)),
                 draftsCiting(userId, contextId));
     }
@@ -184,6 +191,7 @@ public class UserContextService {
             throw new ConflictException(ErrorCode.CONTEXT_ALREADY_CHANGED);
         }
         current.setStatus(UserContextStatus.WITHDRAWN);
+        syncEvents(userId, current.getCourseId());
         return new Change(toResponse(current, courseTitles(userId)), draftsCiting(userId, contextId));
     }
 
@@ -404,8 +412,9 @@ public class UserContextService {
                     saved.add(touched);
                 }
                 // 같은 해결을 다시 말해도 새로 가리킨 막힘은 닫는다.
-                if (target != null && !target.getContextId().equals(same.getContextId())) {
-                    userContextMapper.supersede(target.getContextId(), userId);
+                if (target != null && !target.getContextId().equals(same.getContextId())
+                        && userContextMapper.supersede(target.getContextId(), userId) > 0) {
+                    linkResolution(userId, target.getContextId(), same.getContextId());
                 }
                 continue;
             }
@@ -438,8 +447,10 @@ public class UserContextService {
                     }
                 }
             }
+            boolean closedTarget = false;
             if (target != null && userContextMapper.supersede(target.getContextId(), userId) > 0) {
                 supersedes = target.getContextId();
+                closedTarget = true;
             }
 
             LocalDate start = op.scopeStart();
@@ -456,6 +467,9 @@ public class UserContextService {
                     .confirmedAt(type == ContextEvidenceType.INFERRED ? null : LocalDateTime.now())
                     .saidAt(said).build();
             userContextMapper.insert(row);
+            if (closedTarget) {
+                linkResolution(userId, target.getContextId(), row.getContextId());
+            }
             UserContextResponse response = toResponse(userContextMapper.findByIdAndUserId(row.getContextId(), userId), titles);
             if (response != null && topicId != null) {
                 com.jungwoo.project.memo.learning.domain.CourseTopic t = topicOf(userId, courseId, topicId);
@@ -463,6 +477,7 @@ public class UserContextService {
             }
             saved.add(response);
         }
+        courses.forEach(c -> syncEvents(userId, c));
         return saved;
     }
 
@@ -579,6 +594,26 @@ public class UserContextService {
         courseMapper.findByIdAndUserIdForUpdate(courseId, userId);
     }
 
+    /** 학습 이벤트(설계 20번). 기억을 바꾼 트랜잭션 끝에서 그 과목의 기억 이벤트를 다시 맞춘다(과목 잠금 아래). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.MemoryEventRecorder memoryEvents;
+
+    void setMemoryEvents(com.jungwoo.project.memo.learning.events.MemoryEventRecorder memoryEvents) {
+        this.memoryEvents = memoryEvents;
+    }
+
+    private void syncEvents(Long userId, Long courseId) {
+        if (memoryEvents != null && courseId != null) {
+            memoryEvents.syncCourse(userId, courseId);
+        }
+    }
+
+    private void linkResolution(Long userId, Long difficultyId, Long resolverId) {
+        if (memoryEvents != null && difficultyId != null && resolverId != null) {
+            memoryEvents.linkResolution(userId, difficultyId, resolverId);
+        }
+    }
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.learning.CourseTopicMapper topicMapper;
 
@@ -627,9 +662,11 @@ public class UserContextService {
     public record SelfCheck(String label, Long topicId, Long sectionId, String level, String note) {
     }
 
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public int saveSelfChecks(Long userId, Long courseId, List<SelfCheck> items) {
-        if (!courseTitles(userId).containsKey(courseId)) {
+        // 과목 행을 먼저 잠근다(트랜잭션의 첫 읽기) — 같은 과목의 점검이 동시에 와도 뒤 요청이 앞 요청의 새 점검을 보고 대체한다.
+        if (courseId == null || courseMapper.findByIdAndUserIdForUpdate(courseId, userId) == null
+                || !courseTitles(userId).containsKey(courseId)) {
             throw new NotFoundException(ErrorCode.COURSE_NOT_FOUND);
         }
         List<UserContext> previous = userContextMapper.findActiveSelfChecks(userId, courseId);
@@ -663,6 +700,7 @@ public class UserContextService {
                     .confirmedAt(LocalDateTime.now()).build());
             saved++;
         }
+        syncEvents(userId, courseId);
         return saved;
     }
 

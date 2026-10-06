@@ -58,6 +58,17 @@ public class LearningEventValidator {
             o.payloadSources().forEach(s -> known.add(s.identity()));
         }
 
+        // 해결은 막힘의 원천을 그대로 잇는다 — 막힘이 가리키던 원천은 기존 참조다(연결을 끊은 뒤에도 해결을 저장할 수 있게).
+        Set<Long> resolvedStucks = new LinkedHashSet<>();
+        outputs.forEach(o -> resolvedStucks.addAll(o.liveStuckRefs()));
+        if (!resolvedStucks.isEmpty()) {
+            for (LearningEvent e : mapper.findEventsByIds(userId, resolvedStucks)) {
+                if (Objects.equals(e.getCourseId(), courseId)) {
+                    known.add(e.getObjectKind() + "|" + e.getObjectRef());
+                }
+            }
+        }
+
         List<SourceRef> refs = new ArrayList<>();
         Set<Long> topicIds = new LinkedHashSet<>();
         Set<Long> eventIds = new LinkedHashSet<>();
@@ -104,6 +115,7 @@ public class LearningEventValidator {
         Map<Long, List<SourceRef>> sections = new HashMap<>();
         Map<Long, List<SourceRef>> materials = new HashMap<>();
         List<SourceRef> toc = new ArrayList<>();
+        java.util.Set<Long> sessions = new LinkedHashSet<>();
         for (SourceRef r : refs) {
             switch (r.kind()) {
                 case COURSE -> {
@@ -114,8 +126,17 @@ public class LearningEventValidator {
                 case SECTION -> sections.computeIfAbsent(idOf(r, "s"), k -> new ArrayList<>()).add(r);
                 case MATERIAL -> materials.computeIfAbsent(idOf(r, "m"), k -> new ArrayList<>()).add(r);
                 case TOC_ENTRY -> toc.add(r);
+                case SESSION -> {
+                    if (r.from() != null || r.to() != null) {
+                        throw new InvalidEventException("수업 회차에는 범위를 두지 않는다");
+                    }
+                    sessions.add(idOf(r, "c"));
+                }
                 default -> throw new InvalidEventException("아직 기록할 수 없는 원천 종류: " + r.kind());
             }
+        }
+        if (!sessions.isEmpty() && mapper.findSessionIds(userId, courseId, sessions).size() != sessions.size()) {
+            throw new InvalidEventException("그 과목의 수업 회차가 아니다");
         }
         if (!sections.isEmpty()) {
             Map<Long, LearningEventMapper.SectionRow> found = new HashMap<>();

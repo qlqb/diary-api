@@ -15,6 +15,9 @@ public interface ExecutionRecordMapper {
 
     ExecutionRecord findByIdAndUserId(@Param("executionRecordId") Long executionRecordId, @Param("userId") Long userId);
 
+    /** 같은 행을 잠가 읽는다(회고 수정). */
+    ExecutionRecord lockByIdAndUserId(@Param("executionRecordId") Long executionRecordId, @Param("userId") Long userId);
+
     int updateReflection(@Param("executionRecordId") Long executionRecordId, @Param("userId") Long userId,
                          @Param("supportLevel") String supportLevel, @Param("stuckStep") String stuckStep,
                          @Param("blockerKind") String blockerKind, @Param("note") String note);

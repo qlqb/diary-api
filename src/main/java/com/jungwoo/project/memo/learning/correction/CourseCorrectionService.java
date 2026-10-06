@@ -41,6 +41,7 @@ public class CourseCorrectionService {
     private final CourseTopicMapper topicMapper;
     private final CourseMapper courseMapper;
     private final MaterialWeekService materialWeekService;
+    private final com.jungwoo.project.memo.learning.events.CorrectionEventRecorder learningEvents;
 
     public record Applied(int classChanges, int materialWeeks, int scopeExclusions) {
     }
@@ -68,6 +69,10 @@ public class CourseCorrectionService {
                 default -> {
                 }
             }
+        }
+        if (klass + scopes > 0) {
+            // 학습 이벤트(설계 20번) — 정리안 적용이 이미 과목 행을 잠갔다.
+            learningEvents.syncCourse(userId, courseId);
         }
         if (klass + weeks + scopes > 0) {
             log.info("실제 수업·범위 정정 적용: courseId={}, class={}, materialWeek={}, scope={}",
@@ -142,11 +147,16 @@ public class CourseCorrectionService {
     }
 
     /** 범위 제외를 푼다(사용자 조작). 기록·트리는 그대로다. */
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public CorrectionsView removeExclusion(Long userId, Long courseId, Long exclusionId) {
+        // 정리안 적용과 같은 잠금(과목 행) — 학습 이벤트를 맞추는 동안 같은 과목의 다른 정정이 끼지 않게.
+        if (courseMapper.findByIdAndUserIdForUpdate(courseId, userId) == null) {
+            throw new NotFoundException(ErrorCode.COURSE_NOT_FOUND);
+        }
         if (mapper.removeExclusion(exclusionId, courseId, userId) == 0) {
             throw new NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
         }
+        learningEvents.syncCourse(userId, courseId);
         return view(userId, courseId);
     }
 

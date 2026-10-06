@@ -145,6 +145,11 @@
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
     </select>
 
+    <select id="findEventsByIds" resultMap="eventResultMap">
+        SELECT * FROM learning_events WHERE user_id = #{userId} AND event_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
     <select id="countOwnedCourse" resultType="int">
         SELECT COUNT(*) FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
     </select>
@@ -217,6 +222,11 @@
                        WHERE l.material_id = m.material_id AND l.course_id = #{courseId} AND l.user_id = #{userId}) AS linked
         FROM course_materials m
         WHERE m.user_id = #{userId} AND m.material_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findSessionIds" resultType="long">
+        SELECT session_id FROM class_sessions WHERE user_id = #{userId} AND course_id = #{courseId} AND session_id IN
         <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
     </select>
 

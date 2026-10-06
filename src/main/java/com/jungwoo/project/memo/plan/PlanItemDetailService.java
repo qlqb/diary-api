@@ -276,6 +276,49 @@ public class PlanItemDetailService {
         return groundingOf(userId, item).sections();
     }
 
+    /**
+     * 항목이 실제로 인용한 자료 구간·학습 항목(회차 스냅샷 순서). 보강·상태 필터 없이 인용 그대로.
+     *
+     * @param refBySection 구간 → 인용 ref
+     */
+    public record Citations(List<Long> sectionIds, List<Long> topicIds, Map<Long, String> refBySection) {
+        static final Citations NONE = new Citations(List.of(), List.of(), Map.of());
+    }
+
+    /** 실행 조각을 만든 제안 항목이 인용한 것. 직접 만든 항목이면 빈 값. 학습 이벤트의 원천이 이것을 쓴다. */
+    public Citations citationsOfExecutionItem(Long userId, Long executionItemId) {
+        AiProposalItem item = originOf(userId, executionItemId);
+        if (item == null) {
+            return Citations.NONE;
+        }
+        PlanItemEvidence evidence = provenanceCodec.evidenceFromJson(item.getEvidenceJson());
+        AiProposal proposal = aiProposalMapper.findByIdAndUserId(item.getProposalId(), userId);
+        PlanProvenance provenance = proposal == null ? null : provenanceCodec.fromJson(proposal.getPlanProvenanceJson());
+        return cited(evidence, provenance);
+    }
+
+    private static Citations cited(PlanItemEvidence evidence, PlanProvenance provenance) {
+        if (evidence == null || provenance == null || evidence.refIds() == null || provenance.providedSources() == null) {
+            return Citations.NONE;
+        }
+        Set<Long> sectionIds = new LinkedHashSet<>();
+        Set<Long> topicIds = new LinkedHashSet<>();
+        Map<Long, String> refBySection = new LinkedHashMap<>();
+        Set<String> refs = new LinkedHashSet<>(evidence.refIds());
+        for (ProvidedSource source : provenance.providedSources()) {
+            if (!refs.contains(source.refId()) || source.sourceId() == null) {
+                continue;
+            }
+            if (source.sourceType() == ProvenanceSourceType.MATERIAL_SECTION) {
+                sectionIds.add(source.sourceId());
+                refBySection.put(source.sourceId(), source.refId());
+            } else if (source.sourceType() == ProvenanceSourceType.TOPIC) {
+                topicIds.add(source.sourceId());
+            }
+        }
+        return new Citations(List.copyOf(sectionIds), List.copyOf(topicIds), refBySection);
+    }
+
     record Grounding(String title, String description, String reason, List<MaterialSection> sections,
                      Map<Long, String> refBySection, String version) {
     }
@@ -291,23 +334,10 @@ public class PlanItemDetailService {
         PlanItemEvidence evidence = provenanceCodec.evidenceFromJson(item.getEvidenceJson());
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(item.getProposalId(), userId);
         PlanProvenance provenance = proposal == null ? null : provenanceCodec.fromJson(proposal.getPlanProvenanceJson());
-        Set<Long> sectionIds = new LinkedHashSet<>();
-        Set<Long> topicIds = new LinkedHashSet<>();
-        Map<Long, String> refBySection = new LinkedHashMap<>();
-        if (evidence != null && provenance != null && evidence.refIds() != null) {
-            Set<String> refs = new LinkedHashSet<>(evidence.refIds());
-            for (ProvidedSource source : provenance.providedSources()) {
-                if (!refs.contains(source.refId()) || source.sourceId() == null) {
-                    continue;
-                }
-                if (source.sourceType() == ProvenanceSourceType.MATERIAL_SECTION) {
-                    sectionIds.add(source.sourceId());
-                    refBySection.put(source.sourceId(), source.refId());
-                } else if (source.sourceType() == ProvenanceSourceType.TOPIC) {
-                    topicIds.add(source.sourceId());
-                }
-            }
-        }
+        Citations cited = cited(evidence, provenance);
+        Set<Long> sectionIds = new LinkedHashSet<>(cited.sectionIds());
+        Set<Long> topicIds = new LinkedHashSet<>(cited.topicIds());
+        Map<Long, String> refBySection = new LinkedHashMap<>(cited.refBySection());
         if (sectionIds.isEmpty() && !topicIds.isEmpty()) {
             for (TopicMaterialLink link : topicLinkMapper.findActiveByTopicIds(new ArrayList<>(topicIds), userId)) {
                 if (link.getSectionId() != null && link.getSectionId() != TopicMaterialLink.WHOLE_MATERIAL) {
