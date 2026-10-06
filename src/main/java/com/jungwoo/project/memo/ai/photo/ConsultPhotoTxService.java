@@ -71,6 +71,10 @@ public class ConsultPhotoTxService {
     private final UserContextMapper userContextMapper;
     private final ConsultPhotoUploadMapper uploadMapper;
 
+    /** 학습 이벤트(설계 20번) — 사진 단원을 따라 바뀐 기억의 이벤트를 다시 맞춘다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.MemoryEventRecorder memoryEvents;
+
     /**
      * 읽은 사진을 자료·연결·본문 단위·사진 구간·단원 추정 연결로 한 번에 저장하고 업로드 행을 READ로 끝낸다.
      * 대화가 보관됐거나 과목이 바뀌었으면 저장하지 않는다(호출자가 파일을 지운다).
@@ -194,6 +198,9 @@ public class ConsultPhotoTxService {
             topicLinkMapper.activateAsUser(topicId, materialId, section.getSectionId(), userId);
         }
         int moved = userContextMapper.retargetPhotoTopic(userId, materialId, topicId);
+        if (moved > 0 && memoryEvents != null) {
+            memoryEvents.syncCourse(userId, courseId);
+        }
         log.info("상담 사진 단원 정함: userId={}, materialId={}, topicId={}, 따라 바뀐 기억={}", userId, materialId, topicId, moved);
     }
 

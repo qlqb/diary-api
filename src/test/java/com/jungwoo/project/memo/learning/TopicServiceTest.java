@@ -55,6 +55,9 @@ class TopicServiceTest {
     @Mock
     private TopicLearningEventMapper topicLearningEventMapper;
 
+    @Mock
+    private com.jungwoo.project.memo.learning.events.TopicEventRecorder learningEvents;
+
     @InjectMocks
     private TopicService service;
 

@@ -31,6 +31,10 @@ public class MaterialTxService {
     private final MaterialSectionMapper materialSectionMapper;
     private final MaterialAnalysisJobMapper analysisJobMapper;
 
+    /** 학습 이벤트(설계 20번) — 자료를 과목에 연결하면 RELEASED. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.MaterialEventRecorder materialEvents;
+
     /**
      * 자료 원본과 (courseId가 주어졌으면) 그 프로젝트 연결을 한 트랜잭션에 만든다.
      *
@@ -62,6 +66,9 @@ public class MaterialTxService {
                     .courseId(courseId)
                     .materialType(materialType)
                     .build());
+            if (materialEvents != null) {
+                materialEvents.linked(material.getUserId(), material.getMaterialId(), courseId);
+            }
         }
         return material;
     }

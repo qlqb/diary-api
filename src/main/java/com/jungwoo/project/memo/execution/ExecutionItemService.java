@@ -57,6 +57,7 @@ public class ExecutionItemService {
     private final ExecutionItemEventMapper executionItemEventMapper;
     private final ExecutionRecordMapper executionRecordMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.jungwoo.project.memo.learning.events.ExecutionEventRecorder learningEvents;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
     // ===== 조회 =====
@@ -200,13 +201,15 @@ public class ExecutionItemService {
     @Transactional
     public com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse updateReflection(
             Long userId, Long executionRecordId, com.jungwoo.project.memo.execution.dto.ExecutionRecordReflectionRequest request) {
-        ExecutionRecord record = executionRecordMapper.findByIdAndUserId(executionRecordId, userId);
+        // 잠가서 읽는다 — 같은 기록을 동시에 고쳐도 학습 이벤트의 판이 마지막 커밋과 맞는다.
+        ExecutionRecord record = executionRecordMapper.lockByIdAndUserId(executionRecordId, userId);
         if (record == null) {
             throw new com.jungwoo.project.memo.common.exception.NotFoundException(ErrorCode.ENTITY_NOT_FOUND);
         }
         String note = request.getNote() == null || request.getNote().isBlank() ? null : request.getNote().trim();
         executionRecordMapper.updateReflection(executionRecordId, userId, supportLevelOf(request.getSupportLevel()),
                 stuckStepOf(request.getStuckStep()), blockerKindOf(request.getBlockerKind()), note);
+        learningEvents.record(userId, executionRecordId);
         ExecutionRecord updated = executionRecordMapper.findByIdAndUserId(executionRecordId, userId);
         return com.jungwoo.project.memo.execution.dto.ExecutionRecordResponse.builder()
                 .executionRecordId(updated.getExecutionRecordId())
@@ -255,6 +258,9 @@ public class ExecutionItemService {
             // 리스너(TopicService.recordExecutionCompleted)가 IN_PROGRESS/복습 여부만 갱신한다.
             eventPublisher.publishEvent(new ExecutionItemCompletedEvent(executionItemId, userId, item.getTopicId()));
         }
+        // 학습 이벤트(시도·막힘) — 같은 트랜잭션. 완료는 활동 수행이지 이해 확정이 아니다.
+        // 진도 행(리스너, 동기) 다음에 쓴다 — 토픽 경로·백필과 같은 잠금 순서(진도 → 교재 별칭 → origin).
+        learningEvents.record(userId, record.getExecutionRecordId());
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }
@@ -834,7 +840,7 @@ public class ExecutionItemService {
 
         ExecutionItem remaining = createRemainderItem(item, userId, percent);
 
-        executionRecordMapper.insert(ExecutionRecord.builder()
+        ExecutionRecord partialRecord = ExecutionRecord.builder()
                 .userId(userId)
                 .executionItemId(executionItemId)
                 .outcome(ExecutionRecordOutcome.PARTIAL)
@@ -845,7 +851,8 @@ public class ExecutionItemService {
                 .supportLevel(supportLevelOf(request.getSupportLevel()))
                 .stuckStep(stuckStepOf(request.getStuckStep()))
                 .remainingExecutionItemId(remaining.getExecutionItemId())
-                .build());
+                .build();
+        executionRecordMapper.insert(partialRecord);
 
         // 이 조각에 대한 이번 시도는 끝났다 — 남은 분량은 위에서 만든 새 조각이 들고 있다.
         int updated = executionItemMapper.updateStatusWithVersion(
@@ -853,6 +860,7 @@ public class ExecutionItemService {
         if (updated != 1) {
             throw new ConflictException(ErrorCode.VERSION_CONFLICT);
         }
+        learningEvents.record(userId, partialRecord.getExecutionRecordId());
         insertEvent(executionItemId, userId, ExecutionEventType.REDUCED, ExecutionEventActorType.USER,
                 "일부 수행: " + percent + "%",
                 toJson(Map.of("status", item.getStatus())),

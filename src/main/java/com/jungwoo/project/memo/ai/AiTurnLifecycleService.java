@@ -250,6 +250,9 @@ public class AiTurnLifecycleService {
      * 예외를 던지고, 이 트랜잭션 전체(선점·ASSISTANT 메시지·Proposal 포함)가 함께 롤백된다 —
      * "AI 응답 실패인데 후보만 저장되는" 또는 그 반대 상태가 생기지 않는다.
      */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.PhotoTurnEventRecorder photoTurnEvents;
+
     @Transactional
     public TurnCompletionResult completeTurnSuccess(
             Long conversationId, Long userId, Long requestMessageId,
@@ -289,6 +292,10 @@ public class AiTurnLifecycleService {
                             + "(연결 종료 등으로 먼저 종료됐을 수 있음) — 늦은 성공 결과를 저장하지 않는다",
                     requestMessageId);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (photoTurnEvents != null) {
+            // 학습 이벤트(설계 20번): 사진을 붙여 같이 공부한 턴이 성공으로 끝났다 — 같은 트랜잭션.
+            photoTurnEvents.turnCompleted(userId, requestMessageId);
         }
 
         AiMessage assistantMessage = AiMessage.builder()
@@ -361,6 +368,10 @@ public class AiTurnLifecycleService {
         if (claimed != 1) {
             log.warn("기간 계획 턴 성공 처리 중단: requestMessageId={}가 더 이상 PROCESSING이 아님", requestMessageId);
             throw new ServiceUnavailableException(ErrorCode.AI_GENERATION_FAILED);
+        }
+        if (photoTurnEvents != null) {
+            // 학습 이벤트(설계 20번): 사진을 붙여 같이 공부한 턴이 성공으로 끝났다 — 같은 트랜잭션.
+            photoTurnEvents.turnCompleted(userId, requestMessageId);
         }
 
         AiMessage assistantMessage = AiMessage.builder()

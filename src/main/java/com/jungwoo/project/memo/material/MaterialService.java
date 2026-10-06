@@ -57,6 +57,10 @@ public class MaterialService {
     private final MaterialAnalysisJobService analysisJobService;
     private final TopicChangeProposalService topicChangeProposalService;
 
+    /** 학습 이벤트(설계 20번) — 자료를 과목에 연결하면 RELEASED. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.MaterialEventRecorder materialEvents;
+
     /**
      * 업로드 순서가 중요하다: 파일 저장 -> 텍스트 추출 -> [트랜잭션: material + link INSERT].
      *
@@ -258,6 +262,9 @@ public class MaterialService {
                 .materialType(materialType)
                 .build();
         materialLinkMapper.insert(link);
+        if (materialEvents != null) {
+            materialEvents.linked(userId, materialId, courseId);
+        }
         log.info("자료 연결: userId={}, materialId={}, courseId={}, type={}",
                 userId, materialId, courseId, materialType);
         enqueueLinkIfContentReady(userId, materialId, courseId);
@@ -282,6 +289,9 @@ public class MaterialService {
         MaterialLink link = getRequiredLink(userId, materialId, courseId);
         materialLinkMapper.updateMaterialType(materialId, courseId, userId, materialType);
         link.setMaterialType(materialType);
+        if (materialEvents != null) {
+            materialEvents.linked(userId, materialId, courseId);
+        }
         log.info("자료 역할 변경: userId={}, materialId={}, courseId={}, type={}",
                 userId, materialId, courseId, materialType);
         return MaterialLinkResponse.of(link, course.getTitle());

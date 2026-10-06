@@ -1,0 +1,78 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.textbook.TextbookRefMapper">
+
+    <resultMap id="aliasRowMap" type="com.jungwoo.project.memo.course.textbook.TextbookRefMapper$AliasRow">
+        <constructor>
+            <arg column="book_ref_id" javaType="java.lang.Long"/>
+            <arg column="book_key" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="courseBookMap" type="com.jungwoo.project.memo.course.textbook.TextbookRefMapper$CourseBook">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="textbook_title" javaType="java.lang.String"/>
+            <arg column="textbook_isbn" javaType="java.lang.String"/>
+            <arg column="textbook_edition" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="userKeyMap" type="com.jungwoo.project.memo.course.textbook.TextbookRefMapper$UserKey">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <arg column="book_key" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findAlias" resultMap="aliasRowMap">
+        SELECT book_ref_id, book_key FROM textbook_ref_aliases
+        WHERE user_id = #{userId} AND book_key_hash = #{bookKeyHash}
+    </select>
+
+    <select id="findAliasLocked" resultMap="aliasRowMap">
+        SELECT book_ref_id, book_key FROM textbook_ref_aliases
+        WHERE user_id = #{userId} AND book_key_hash = #{bookKeyHash}
+        LOCK IN SHARE MODE
+    </select>
+
+    <insert id="insertRef" useGeneratedKeys="true" keyProperty="bookRefId">
+        INSERT INTO textbook_refs (user_id) VALUES (#{userId})
+    </insert>
+
+    <insert id="insertAliasIgnore">
+        INSERT IGNORE INTO textbook_ref_aliases (user_id, book_key_hash, book_key, book_ref_id)
+        VALUES (#{userId}, #{bookKeyHash}, #{bookKey}, #{bookRefId})
+    </insert>
+
+    <update id="moveAliases">
+        UPDATE textbook_ref_aliases SET book_ref_id = #{toRefId}
+        WHERE user_id = #{userId} AND book_ref_id = #{fromRefId}
+    </update>
+
+    <delete id="deleteRef">
+        DELETE FROM textbook_refs WHERE user_id = #{userId} AND book_ref_id = #{bookRefId}
+    </delete>
+
+    <select id="countEventsUsingRef" resultType="int">
+        SELECT COUNT(*) FROM learning_events
+        WHERE user_id = #{userId} AND (object_ref LIKE CONCAT(#{refPrefix}, '%') OR payload LIKE CONCAT('%"', #{refPrefix}, '%'))
+    </select>
+
+    <select id="findCourseBooks" resultMap="courseBookMap">
+        SELECT user_id, course_id, textbook_title, textbook_isbn, textbook_edition FROM courses
+        WHERE (textbook_title IS NOT NULL AND textbook_title &lt;&gt; '') OR (textbook_isbn IS NOT NULL AND textbook_isbn &lt;&gt; '')
+        ORDER BY user_id, course_id
+    </select>
+
+    <select id="findStoredBookKeys" resultMap="userKeyMap">
+        SELECT DISTINCT user_id, source_textbook_key AS book_key FROM course_topics WHERE source_textbook_key IS NOT NULL
+        UNION
+        SELECT DISTINCT user_id, textbook_toc_book_key AS book_key FROM courses WHERE textbook_toc_book_key IS NOT NULL
+        ORDER BY user_id
+    </select>
+
+</mapper>

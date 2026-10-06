@@ -1,0 +1,262 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.events.EventSourceMapper">
+
+    <resultMap id="topicRowMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$TopicRow">
+        <constructor>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="toc_key_state" javaType="java.lang.String"/>
+            <arg column="toc_key_hash" javaType="java.lang.String"/>
+            <arg column="toc_key_line" javaType="java.lang.Integer"/>
+            <arg column="source_textbook_key" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="topicSectionMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$TopicSection">
+        <constructor>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="section_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="executionFactsMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$ExecutionFacts">
+        <constructor>
+            <arg column="execution_record_id" javaType="java.lang.Long"/>
+            <arg column="execution_item_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="outcome" javaType="java.lang.String"/>
+            <arg column="completion_percent" javaType="java.lang.Integer"/>
+            <arg column="support_level" javaType="java.lang.String"/>
+            <arg column="blocker_kind" javaType="java.lang.String"/>
+            <arg column="stuck_step" javaType="java.lang.String"/>
+            <arg column="ended_at" javaType="java.time.LocalDateTime"/>
+            <arg column="recorded_at" javaType="java.time.LocalDateTime"/>
+            <arg column="created_at" javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="contextRowMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$ContextRow">
+        <constructor>
+            <arg column="context_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="source_type" javaType="java.lang.String"/>
+            <arg column="evidence_type" javaType="java.lang.String"/>
+            <arg column="fact_kind" javaType="java.lang.String"/>
+            <arg column="fact_label" javaType="java.lang.String"/>
+            <arg column="help_level" javaType="java.lang.String"/>
+            <arg column="self_level" javaType="java.lang.String"/>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="topic_photo_id" javaType="java.lang.Long"/>
+            <arg column="section_id" javaType="java.lang.Long"/>
+            <arg column="said_at" javaType="java.time.LocalDateTime"/>
+            <arg column="confirmed_at" javaType="java.time.LocalDateTime"/>
+            <arg column="created_at" javaType="java.time.LocalDateTime"/>
+            <arg column="source_message_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="resolutionLinkMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$ResolutionLink">
+        <constructor>
+            <arg column="difficulty_context_id" javaType="java.lang.Long"/>
+            <arg column="resolver_context_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="topicStateMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$TopicState">
+        <constructor>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="user_mark" javaType="java.lang.String"/>
+            <arg column="topic_progress_id" javaType="java.lang.Long"/>
+            <arg column="status" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="exclusionRowMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$ExclusionRow">
+        <constructor>
+            <arg column="exclusion_id" javaType="java.lang.Long"/>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="label" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="created_at" javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="classRowMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$ClassRow">
+        <constructor>
+            <arg column="progress_id" javaType="java.lang.Long"/>
+            <arg column="topic_id" javaType="java.lang.Long"/>
+            <arg column="class_seq" javaType="java.lang.Integer"/>
+            <arg column="week_no" javaType="java.lang.Integer"/>
+            <arg column="created_at" javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findExclusions" resultMap="exclusionRowMap">
+        SELECT exclusion_id, topic_id, label, status, created_at FROM course_scope_exclusions
+        WHERE user_id = #{userId} AND course_id = #{courseId} ORDER BY exclusion_id
+    </select>
+
+    <select id="findClassRows" resultMap="classRowMap">
+        SELECT progress_id, topic_id, class_seq, week_no, created_at FROM topic_class_progress
+        WHERE user_id = #{userId} AND course_id = #{courseId} ORDER BY progress_id
+    </select>
+
+    <select id="findCourseOfMessage" resultType="long">
+        SELECT c.course_id FROM ai_messages m
+        JOIN ai_conversations c ON c.conversation_id = m.conversation_id AND c.user_id = m.user_id
+        WHERE m.user_id = #{userId} AND m.message_id = #{messageId}
+    </select>
+
+    <select id="findPhotosOfMessage" resultType="long">
+        SELECT material_id FROM ai_message_photos WHERE user_id = #{userId} AND message_id = #{messageId}
+        ORDER BY material_id
+    </select>
+
+    <resultMap id="materialLinkRowMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$MaterialLinkRow">
+        <constructor>
+            <arg column="link_id" javaType="java.lang.Long"/>
+            <arg column="material_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="material_type" javaType="java.lang.String"/>
+            <arg column="linked_at" javaType="java.time.LocalDateTime"/>
+            <arg column="origin" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findMaterialLink" resultMap="materialLinkRowMap">
+        SELECT l.link_id, l.material_id, l.course_id, l.material_type, l.linked_at, m.origin
+        FROM material_links l
+        JOIN course_materials m ON m.material_id = l.material_id AND m.user_id = l.user_id
+        WHERE l.user_id = #{userId} AND l.link_id = #{linkId}
+    </select>
+
+    <select id="findMaterialLinkId" resultType="long">
+        SELECT link_id FROM material_links
+        WHERE user_id = #{userId} AND material_id = #{materialId} AND course_id = #{courseId}
+    </select>
+
+    <select id="findTopicState" resultMap="topicStateMap">
+        SELECT t.topic_id, t.course_id, t.user_mark, p.topic_progress_id, p.status
+        FROM course_topics t
+        LEFT JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = t.user_id
+        WHERE t.user_id = #{userId} AND t.topic_id = #{topicId}
+    </select>
+
+    <select id="findTopics" resultMap="topicRowMap">
+        SELECT topic_id, toc_key_state, toc_key_hash, toc_key_line, source_textbook_key FROM course_topics
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND topic_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findTopicSections" resultMap="topicSectionMap">
+        SELECT topic_id, section_id FROM topic_material_links
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND status = 'ACTIVE' AND section_id &lt;&gt; 0
+          AND topic_id IN
+        <foreach collection="topicIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY topic_id, section_id
+    </select>
+
+    <select id="findPhotoSection" resultType="long">
+        SELECT section_id FROM material_sections
+        WHERE user_id = #{userId} AND material_id = #{materialId}
+        ORDER BY section_id LIMIT 1
+    </select>
+
+    <select id="findCurrentOutputs" resultMap="com.jungwoo.project.memo.learning.events.LearningEventMapper.eventResultMap">
+        SELECT e.* FROM learning_events e
+        JOIN learning_event_origins o
+          ON o.user_id = e.user_id AND o.origin_kind = e.origin_kind AND o.origin_id = e.origin_id
+         AND o.current_revision = e.origin_revision
+        WHERE e.user_id = #{userId} AND e.origin_kind = #{originKind} AND e.origin_id = #{originId}
+        ORDER BY e.output_no
+    </select>
+
+    <select id="findCurrentOutputsOfCourse" resultMap="com.jungwoo.project.memo.learning.events.LearningEventMapper.eventResultMap">
+        SELECT e.* FROM learning_events e
+        JOIN learning_event_origins o
+          ON o.user_id = e.user_id AND o.origin_kind = e.origin_kind AND o.origin_id = e.origin_id
+         AND o.current_revision = e.origin_revision
+        WHERE e.user_id = #{userId} AND e.course_id = #{courseId} AND e.origin_kind = #{originKind}
+        ORDER BY e.origin_id, e.output_no
+    </select>
+
+    <resultMap id="originRevisionMap" type="com.jungwoo.project.memo.learning.events.EventSourceMapper$OriginRevision">
+        <constructor>
+            <arg column="origin_id" javaType="java.lang.Long"/>
+            <arg column="current_revision" javaType="java.lang.Integer"/>
+        </constructor>
+    </resultMap>
+
+    <select id="findOriginRevisions" resultMap="originRevisionMap">
+        SELECT origin_id, current_revision FROM learning_event_origins
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND origin_kind = #{originKind}
+    </select>
+
+    <select id="findOriginIdsOfCourse" resultType="long">
+        SELECT origin_id FROM learning_event_origins
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND origin_kind = #{originKind} AND current_revision &gt; 0
+    </select>
+
+    <select id="findExecutionFacts" resultMap="executionFactsMap">
+        SELECT r.execution_record_id, r.execution_item_id, i.course_id, i.topic_id, r.outcome, r.completion_percent,
+               r.support_level, r.blocker_kind, r.stuck_step, r.ended_at, r.recorded_at, r.created_at
+        FROM execution_records r
+        JOIN execution_items i ON i.execution_item_id = r.execution_item_id AND i.user_id = r.user_id
+        WHERE r.user_id = #{userId} AND r.execution_record_id = #{recordId}
+    </select>
+
+    <select id="findEventContexts" resultMap="contextRowMap">
+        SELECT context_id, course_id, status, source_type, evidence_type, fact_kind, fact_label, help_level, self_level,
+               topic_id, topic_photo_id, section_id, said_at, confirmed_at, created_at, source_message_id
+        FROM user_contexts
+        WHERE user_id = #{userId} AND course_id = #{courseId}
+          AND (fact_kind IN ('PROGRESS', 'EXAM_SCOPE', 'DIFFICULTY', 'RESOLVED') OR source_type = 'SELF_CHECK')
+        ORDER BY context_id
+    </select>
+
+    <select id="findResolutionLinks" resultMap="resolutionLinkMap">
+        SELECT l.difficulty_context_id, l.resolver_context_id FROM learning_resolution_links l
+        JOIN user_contexts c ON c.context_id = l.difficulty_context_id AND c.user_id = l.user_id
+        WHERE l.user_id = #{userId} AND c.course_id = #{courseId}
+        ORDER BY l.difficulty_context_id
+    </select>
+
+    <insert id="upsertResolutionLink">
+        INSERT INTO learning_resolution_links (difficulty_context_id, resolver_context_id, user_id)
+        VALUES (#{difficultyId}, #{resolverId}, #{userId})
+        ON DUPLICATE KEY UPDATE resolver_context_id = VALUES(resolver_context_id)
+    </insert>
+
+    <select id="findResolverSeeds" resultMap="resolutionLinkMap">
+        SELECT r.supersedes_context_id AS difficulty_context_id, r.context_id AS resolver_context_id
+        FROM user_contexts r
+        JOIN user_contexts d ON d.context_id = r.supersedes_context_id AND d.user_id = r.user_id AND d.fact_kind = 'DIFFICULTY'
+        WHERE r.user_id = #{userId} AND r.course_id = #{courseId} AND r.fact_kind = 'RESOLVED'
+          AND NOT EXISTS (SELECT 1 FROM learning_resolution_links l
+                          WHERE l.user_id = r.user_id AND l.difficulty_context_id = r.supersedes_context_id)
+        ORDER BY r.context_id
+    </select>
+
+    <select id="findEditSuccessor" resultType="long">
+        SELECT context_id FROM user_contexts
+        WHERE user_id = #{userId} AND supersedes_context_id = #{contextId} AND source_type = 'USER_EDITED'
+        ORDER BY context_id LIMIT 1
+    </select>
+
+    <insert id="insertResolutionLinkIgnore">
+        INSERT IGNORE INTO learning_resolution_links (difficulty_context_id, resolver_context_id, user_id)
+        VALUES (#{difficultyId}, #{resolverId}, #{userId})
+    </insert>
+
+    <update id="moveResolutionLinks">
+        UPDATE learning_resolution_links SET resolver_context_id = #{toResolverId}
+        WHERE user_id = #{userId} AND resolver_context_id = #{fromResolverId}
+    </update>
+
+
+</mapper>

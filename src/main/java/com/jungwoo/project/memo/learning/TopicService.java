@@ -49,6 +49,7 @@ public class TopicService {
     private final CourseTopicMapper courseTopicMapper;
     private final TopicProgressMapper topicProgressMapper;
     private final TopicLearningEventMapper topicLearningEventMapper;
+    private final com.jungwoo.project.memo.learning.events.TopicEventRecorder learningEvents;
     private final TopicMaterialLinkMapper topicMaterialLinkMapper;
     private final MaterialSectionMapper materialSectionMapper;
 
@@ -227,6 +228,7 @@ public class TopicService {
                 .toStatus(newStatus)
                 .note("사용자가 학습 화면에서 직접 변경")
                 .build());
+        learningEvents.progressChanged(userId, topicId);
         log.info("topic 진행 상태 변경: userId={}, topicId={}, {} -> {}", userId, topicId, before.getStatus(), newStatus);
         return topicProgressMapper.findByUserIdAndTopicId(userId, topicId);
     }
@@ -238,9 +240,9 @@ public class TopicService {
      * 여기는 "이미 알고 있는가"다 — 앱을 쓰기 전부터 알던 내용은 progress로 표현할 방법이
      * 없다. 그래서 둘을 한 컬럼에 합치지 않았고, 여기서도 progress를 건드리지 않는다.
      *
-     * <p>학습 이벤트를 남기지 않는다. TopicLearningEvent는 진행 상태의 전이를 기록하는
+     * <p>토픽 학습 이벤트(TopicLearningEvent)를 남기지 않는다. 그것은 진행 상태의 전이를 기록하는
      * 자리이고, 익숙함 표식은 전이가 아니라 사용자의 진술이다. 섞으면 회고에서 "언제
-     * 학습했는가"를 세는 값이 오염된다.
+     * 학습했는가"를 세는 값이 오염된다. 원천 학습 이벤트(설계 20번)에는 「이미 알아요」만 자기 평가로 남는다.
      *
      * @param userMark null이면 표식을 지운다("모른다"로 되돌린다)
      */
@@ -248,6 +250,7 @@ public class TopicService {
     public TopicResponse updateUserMark(Long userId, Long topicId, TopicUserMark userMark) {
         getOwnedTopic(userId, topicId);
         courseTopicMapper.updateUserMark(topicId, userId, userMark);
+        learningEvents.markChanged(userId, topicId);
         CourseTopic updated = courseTopicMapper.findByIdAndUserId(topicId, userId);
         log.info("topic 익숙함 표식: userId={}, topicId={}, mark={}", userId, topicId, userMark);
         return TopicResponse.of(updated, topicProgressMapper.findByUserIdAndTopicId(userId, topicId),

@@ -857,6 +857,33 @@ ops_json의 작업에 `afterTopicId`·`week`·`materialId`·`label`·`by`가 더
 
 `course_topics.source_toc_seq`는 화면 표시용 순번("목차 N번째")으로 남는다.
 
+## 27. 학습 이벤트 로그·교재 식별자 (2026-10-06, 1단계 A)
+
+마이그레이션 `docs/sql/2026-10-06-learning-events.sql`(새 표만·재실행 가능). 설계 20번, 계획 `docs/handoff/learning-events-stage1-plan-2026-10-06.md`.
+
+| 표 | 뜻 |
+|---|---|
+| learning_event_origins | 원본(실행 기록·기억 행 …) 하나의 지금 판. PK (user_id, origin_kind, origin_id). course_id는 처음 쓸 때 정하고 바꾸지 않는다. 출력 0개도 판이다 |
+| learning_events | 원천을 가리키는 이벤트(쌓기만). UNIQUE (user_id, origin_kind, origin_id, origin_revision, output_no). 살아 있는 이벤트 = origin 현재 판의 행 − 살아 있는 RETRACTED의 대상. payload는 `{"v":1,…}`(원문 없음), object_ref `s:`·`m:`·`t:{ref}:{hash}:{line}`·`c:`·`-` |
+| textbook_refs / textbook_ref_aliases | 바뀌지 않는 교재 식별자와 그 책의 BookKey 별칭(ISBN 키·제목 키). 별칭 PK (user_id, book_key_hash) + 전체 키 비교. 운영 중 같은 책의 키가 이미 다른 식별자에 있으면 합치지 않고 `learning_event_meta.textbook_ref_conflicts`를 올린다. 서버 시작 때 `TextbookRefSeeder`가 한 번 채운다 |
+| learning_resolution_links | 막힘 기억 행 → 그것을 닫은 해결 기억 행(1단계 B가 쓴다) |
+| learning_event_meta | `textbook_refs_seeded`·`cutover_at`·`textbook_ref_conflicts` |
+
+쓰기는 `LearningEventWriter` 하나로만(원본과 같은 트랜잭션, 참조 검증 `LearningEventValidator`).
+
+1단계 C — 마이그레이션 `docs/sql/2026-10-06-class-sessions.sql`(추가형).
+
+| 표.열 | 뜻 |
+|---|---|
+| class_sessions | 시간표(routines)를 펼친 수업 한 번. UNIQUE (routine_id, source_date) — 원래 날짜가 열쇠라 시간표·보강을 고쳐도 같은 회차. 처음 필요할 때(수업 확인·일정 예외) 만들고 그때의 시각(start_at·end_at)을 스냅샷으로 남긴다. course_id도 만들 때의 값 |
+| courses.class_prompt_enabled | 1(기본) = 수업 후·주간 확인을 묻는다. 0 = 그 과목은 묻지 않는다 |
+
+1단계 E — 마이그레이션 `docs/sql/2026-10-06-learning-event-backfill.sql`.
+
+| 표 | 뜻 |
+|---|---|
+| learning_event_backfill | 원본 종류(EXECUTION_RECORD·USER_CONTEXT·CORRECTION·TOPIC·MATERIAL_LINK)마다 진행 위치(last_id), 끝남(done), 보고(report: processed·written·skipped·unmapped), lease(lease_owner·lease_until). 한 건 처리와 진행 위치는 같은 트랜잭션, lease를 쥔 서버만 올린다 |
+
 ## 16. 보안
 
 - 실제 이메일·일기·비밀번호 해시가 포함된 덤프를 Git에 올리지 않는다.

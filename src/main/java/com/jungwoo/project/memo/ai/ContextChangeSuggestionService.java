@@ -173,7 +173,7 @@ public class ContextChangeSuggestionService {
      * 상태가 바뀌어(다른 후보가 먼저 적용되는 등) 안전하게 전이할 수 없으면 conflict로 처리하고
      * 조용히 덮어쓰지 않는다.
      */
-    @Transactional
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     public ContextSuggestionResponse apply(Long suggestionId, Long userId) {
         AiContextChangeSuggestion suggestion = suggestionMapper.findByIdAndUserIdForUpdate(suggestionId, userId);
         if (suggestion == null) {
@@ -187,7 +187,15 @@ public class ContextChangeSuggestionService {
         }
 
         LocalDateTime now = LocalDateTime.now();
+        // 과목이 있는 기억을 바꾸면 기억 쓰기와 같은 잠금(과목 행)을 잡고, 끝에서 그 과목의 학습 이벤트를 다시 맞춘다.
+        Long courseId = courseOfTarget(suggestion, userId);
+        if (courseId != null && courseMapper != null) {
+            courseMapper.findByIdAndUserIdForUpdate(courseId, userId);
+        }
         Long resultingContextId = executeOperation(suggestion, userId, now);
+        if (courseId != null && memoryEvents != null) {
+            memoryEvents.syncCourse(userId, courseId);
+        }
 
         int marked = suggestionMapper.markApplied(suggestionId, userId, now, resultingContextId);
         if (marked == 0) {
@@ -224,6 +232,20 @@ public class ContextChangeSuggestionService {
         userContextMapper.insert(created);
         log.info("사용자 확인 맥락 저장: userId={}, contextId={}", userId, created.getContextId());
         return created;
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.course.CourseMapper courseMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.MemoryEventRecorder memoryEvents;
+
+    private Long courseOfTarget(AiContextChangeSuggestion suggestion, Long userId) {
+        if (suggestion.getTargetContextId() == null) {
+            return null;
+        }
+        UserContext target = userContextMapper.findByIdAndUserId(suggestion.getTargetContextId(), userId);
+        return target == null ? null : target.getCourseId();
     }
 
     /** 연산별로 user_contexts를 실제로 바꾸고 결과 context_id를 반환한다. 안전하게 전이 못 하면 conflict. */

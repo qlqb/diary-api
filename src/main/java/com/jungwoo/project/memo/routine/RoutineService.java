@@ -168,6 +168,10 @@ public class RoutineService {
 
     // ===== 예외 =====
 
+    /** 학습 이벤트(설계 20번): 이미 있는 수업 회차에 휴강·이동을 남긴다(루틴 잠금 아래, 같은 트랜잭션). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.events.session.ClassSessionService classSessions;
+
     @Transactional
     public RoutineExceptionResponse addException(Long userId, Long routineId,
                                                  RoutineExceptionSaveRequest request) {
@@ -181,6 +185,9 @@ public class RoutineService {
             // uq_routine_exceptions. 한 날짜에 규칙은 하나여야 한다 — "쉬면서 동시에 옮긴다"는
             // 없다. 덮어쓰지 않고 거부해, 기존 예외를 사용자가 직접 고치게 한다.
             throw new ConflictException(ErrorCode.ROUTINE_EXCEPTION_DATE_TAKEN);
+        }
+        if (classSessions != null) {
+            classSessions.exceptionChanged(userId, routineId, exception.getRoutineExceptionId());
         }
         log.info("반복 일정 예외 추가: userId={}, routineId={}, date={}, type={}",
                 userId, routineId, request.getExceptionDate(), request.getType());
@@ -204,20 +211,27 @@ public class RoutineService {
         } catch (DuplicateKeyException ex) {
             throw new ConflictException(ErrorCode.ROUTINE_EXCEPTION_DATE_TAKEN);
         }
+        if (classSessions != null) {
+            classSessions.exceptionChanged(userId, routineId, routineExceptionId);
+        }
         log.info("반복 일정 예외 수정: userId={}, routineId={}, exceptionId={}",
                 userId, routineId, routineExceptionId);
         return RoutineExceptionResponse.of(updated);
     }
 
     /**
-     * 삭제는 부모를 잠그지 않는다. 예외를 지우는 것은 무효 상태를 만들지 않기 때문이다 —
-     * 잠금이 지키려는 것은 "새로 저장한 값이 곧바로 무효가 되는" 경우뿐이다.
+     * 예외를 지우는 것은 무효 상태를 만들지 않는다. 다만 그 예외가 남긴 수업 회차의 휴강·이동 표시를 지우기 전에 내려야 해서
+     * (학습 이벤트) 회차 생성과 같은 부모 행 잠금을 잡는다.
      */
     @Transactional
     public void deleteException(Long userId, Long routineId, Long routineExceptionId) {
+        lock(userId, routineId);
         RoutineException existing = routineExceptionMapper.findByIdAndUserId(routineExceptionId, userId);
         if (existing == null || !existing.getRoutineId().equals(routineId)) {
             throw new NotFoundException(ErrorCode.ROUTINE_EXCEPTION_NOT_FOUND);
+        }
+        if (classSessions != null) {
+            classSessions.exceptionRemoving(userId, routineId, routineExceptionId);
         }
         routineExceptionMapper.deleteByIdAndRoutineId(routineExceptionId, routineId);
         log.info("반복 일정 예외 삭제: userId={}, routineId={}, exceptionId={}",

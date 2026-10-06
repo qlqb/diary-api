@@ -385,14 +385,19 @@ class RoutineServiceTest {
                 .findByIdAndUserIdForUpdate(ROUTINE_ID, USER_ID);
     }
 
+    /**
+     * 예외 삭제도 부모를 잠근다(2026-10-06, 학습 이벤트 1단계). 지우기 전에 그 예외가 남긴 수업 회차의 휴강·이동 표시를 내리는데,
+     * 같은 날 회차를 만드는 수업 확인(부모 잠금 → 그날 예외 읽기)과 직렬화하지 않으면 지운 예외의 휴강이 남을 수 있다.
+     */
     @Test
-    void 예외_삭제는_부모를_잠그지_않는다() {
+    void 예외_삭제도_부모를_잠근다() {
+        lockedRoutine(DayOfWeek.THURSDAY);
         when(routineExceptionMapper.findByIdAndUserId(101L, USER_ID))
                 .thenReturn(exception(101L, LocalDate.of(2026, 9, 24)));
 
         service.deleteException(USER_ID, ROUTINE_ID, 101L);
 
-        verify(routineMapper, never()).findByIdAndUserIdForUpdate(anyLong(), anyLong());
+        verify(routineMapper).findByIdAndUserIdForUpdate(ROUTINE_ID, USER_ID);
         verify(routineExceptionMapper).deleteByIdAndRoutineId(101L, ROUTINE_ID);
     }
 

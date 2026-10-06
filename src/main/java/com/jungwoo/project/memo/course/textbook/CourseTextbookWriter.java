@@ -40,6 +40,7 @@ public class CourseTextbookWriter {
     private final CourseMapper courseMapper;
     private final com.jungwoo.project.memo.learning.CourseTopicMapper topicMapper;
     private final ApplicationEventPublisher events;
+    private final TextbookRefService refService;
 
     public record Values(String title, String author, String publisher, String isbn, String edition) {
 
@@ -111,6 +112,15 @@ public class CourseTextbookWriter {
             // 같은 책의 식별을 보강했다(예: 제목만 알던 책에 ISBN). 그 책의 목차에서 온 항목을 이전 교재로 오판하지 않게 열쇠를 옮긴다.
             topicMapper.updateSourceTextbookKey(locked.getCourseId(), locked.getUserId(), oldKey, newKey);
         }
+        // 이 책의 ISBN 키·제목 키를 같은 교재 식별자로(학습 이벤트는 키가 아니라 식별자를 가리킨다 — 설계 20번 §5.1).
+        // 같은 책의 식별을 바꾼 것이면 이전 키의 식별자를 잇는다(판을 채워 제목 키가 바뀌어도 같은 교재).
+        if (sameBook) {
+            refService.continueBook(locked.getUserId(),
+                    TextbookRefService.keysOf(before.title(), before.isbn(), before.edition()),
+                    after.title(), after.isbn(), after.edition());
+        } else {
+            refService.ensureBook(locked.getUserId(), after.title(), after.isbn(), after.edition());
+        }
         locked.setTextbookVersion(current + 1);
         log.info("교재 칸 변경: courseId={}, source={}, sameBook={}, version={}", locked.getCourseId(), source, sameBook,
                 current + 1);
@@ -162,6 +172,8 @@ public class CourseTextbookWriter {
         if (rows != 1) {
             throw new ConflictException(ErrorCode.TEXTBOOK_VERSION_CHANGED);
         }
+        refService.ensureBook(locked.getUserId(), locked.getTextbookTitle(), locked.getTextbookIsbn(),
+                locked.getTextbookEdition());
         locked.setTextbookVersion(current + 1);
         events.publishEvent(new TextbookChangedEvent(locked.getUserId(), locked.getCourseId(), current + 1));
     }

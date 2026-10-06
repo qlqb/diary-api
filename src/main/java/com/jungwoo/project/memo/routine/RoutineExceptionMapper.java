@@ -22,6 +22,9 @@ public interface RoutineExceptionMapper {
 
     List<RoutineException> findByRoutineId(@Param("routineId") Long routineId);
 
+    /** 그 루틴의 그 원래 날짜 예외(없으면 null). */
+    RoutineException findByRoutineIdAndDate(@Param("routineId") Long routineId, @Param("exceptionDate") LocalDate exceptionDate);
+
     /**
      * 전개 1단계용. 원본 발생일(exception_date)이 창 안인 예외들 — 그 날짜의 발생분을
      * 건너뛰는 데 쓴다.

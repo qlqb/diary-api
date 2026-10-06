@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.events.LearningEventMetaMapper">
+
+    <select id="find" resultType="string">
+        SELECT meta_value FROM learning_event_meta WHERE meta_key = #{key}
+    </select>
+
+    <insert id="insertIgnore">
+        INSERT IGNORE INTO learning_event_meta (meta_key, meta_value) VALUES (#{key}, #{value})
+    </insert>
+
+    <insert id="increment">
+        INSERT INTO learning_event_meta (meta_key, meta_value) VALUES (#{key}, '1')
+        ON DUPLICATE KEY UPDATE meta_value = CAST(CAST(meta_value AS UNSIGNED) + 1 AS CHAR)
+    </insert>
+
+</mapper>
