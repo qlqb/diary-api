@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper">
+
+    <resultMap id="rowMap" type="com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper$Row">
+        <constructor>
+            <arg column="message_id" javaType="java.lang.Long"/>
+            <arg column="material_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insert">
+        INSERT IGNORE INTO ai_message_photos (message_id, material_id, user_id, conversation_id)
+        VALUES (#{messageId}, #{materialId}, #{userId}, #{conversationId})
+    </insert>
+
+    <select id="findByConversation" resultMap="rowMap">
+        SELECT message_id, material_id
+          FROM ai_message_photos
+         WHERE conversation_id = #{conversationId} AND user_id = #{userId}
+         ORDER BY message_id, material_id
+    </select>
+
+    <select id="findActivePhotoIds" resultType="long">
+        SELECT p.material_id
+          FROM ai_message_photos p
+          JOIN course_materials cm ON cm.material_id = p.material_id AND cm.user_id = p.user_id AND cm.status = 'ACTIVE'
+         WHERE p.conversation_id = #{conversationId} AND p.user_id = #{userId}
+           AND p.message_id = (SELECT MAX(q.message_id) FROM ai_message_photos q
+                                WHERE q.conversation_id = #{conversationId} AND q.user_id = #{userId}
+                                  AND q.message_id &lt;= #{uptoMessageId})
+         ORDER BY p.material_id
+    </select>
+
+    <select id="findPhotoIdsUpTo" resultType="long">
+        SELECT p.material_id
+          FROM ai_message_photos p
+          JOIN course_materials cm ON cm.material_id = p.material_id AND cm.user_id = p.user_id AND cm.status = 'ACTIVE'
+         WHERE p.conversation_id = #{conversationId} AND p.user_id = #{userId} AND p.message_id &lt;= #{uptoMessageId}
+         ORDER BY p.message_id DESC, p.material_id
+    </select>
+
+    <select id="findConversationOfMessage" resultType="long">
+        SELECT conversation_id FROM ai_messages WHERE message_id = #{messageId} AND user_id = #{userId}
+    </select>
+
+</mapper>

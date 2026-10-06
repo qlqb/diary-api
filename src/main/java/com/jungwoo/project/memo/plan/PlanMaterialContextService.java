@@ -1,0 +1,724 @@
+package com.jungwoo.project.memo.plan;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jungwoo.project.memo.assignment.CourseAssignmentService;
+import com.jungwoo.project.memo.assignment.domain.AssignmentConfirmStatus;
+import com.jungwoo.project.memo.assignment.domain.CourseAssignment;
+import com.jungwoo.project.memo.learning.TopicMaterialLinkMapper;
+import com.jungwoo.project.memo.learning.TopicService;
+import com.jungwoo.project.memo.learning.domain.TopicMaterialLink;
+import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
+import com.jungwoo.project.memo.learning.domain.TopicUserMark;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import com.jungwoo.project.memo.material.CourseMaterialMapper;
+import com.jungwoo.project.memo.material.MaterialSectionMapper;
+import com.jungwoo.project.memo.material.analysis.MaterialAnalysisJobService;
+import com.jungwoo.project.memo.material.domain.AnalysisJobKind;
+import com.jungwoo.project.memo.material.domain.CourseMaterial;
+import com.jungwoo.project.memo.material.domain.ExtractionStatus;
+import com.jungwoo.project.memo.material.domain.MaterialAnalysisJob;
+import com.jungwoo.project.memo.material.domain.MaterialSection;
+import com.jungwoo.project.memo.material.domain.SectionRole;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * 계획 생성이 프로젝트마다 읽는 "자료·진도" 목록(카탈로그). <b>고르지 않는다.</b>
+ *
+ * <p>2026-09-15까지 여기서 서버가 후보를 골랐다(반드시 포함 + 트리 순서 글자 예산, 그 전에는 과목당 45줄). 역할 순위와
+ * 토픽당 구간 2개, 미연결 구간 8개·실행 역할만 같은 규칙 때문에 모델이 보기도 전에 후보가 사라졌다. 지금은:
+ * <ul>
+ *   <li>후보 = 표식(KNOWN/DEFER)과 이번만 제외를 뺀 학습 항목 전부 + 프로젝트에 연결된 자료의 현재 구간 전부
+ *       (토픽 연결 여부·역할과 무관). 이번 요청에서 지정한 자료가 프로젝트에 연결돼 있지 않아도 그 자료의 구간은 후보다.</li>
+ *   <li>판단에 반드시 필요한 사실(진행 중·첫 미학습·확정 과제의 마감과 완료·사용자 수정)은 따로 모은다 —
+ *       선택 결과와 무관하게 계획 호출에 들어간다. 실행 항목으로 넣으라는 뜻은 아니다.</li>
+ *   <li>무엇을 볼지는 {@link com.jungwoo.project.memo.plan.selection.PlanMaterialSelector}의 모델 호출이 고르고,
+ *       예산은 호출별 토큰 추정으로 관리한다(묶음 접기·펼치기).</li>
+ * </ul>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class PlanMaterialContextService {
+
+    static final int EXCERPT_CHARS = 90;
+
+    private static final TypeReference<List<String>> STRINGS = new TypeReference<>() {
+    };
+
+    private final TopicService topicService;
+    private final TopicMaterialLinkMapper topicLinkMapper;
+    private final MaterialSectionMapper sectionMapper;
+    private final CourseMaterialMapper courseMaterialMapper;
+    private final CourseAssignmentService assignmentService;
+    private final MaterialAnalysisJobService analysisJobService;
+    private final ObjectMapper objectMapper;
+
+    /**
+     * 학습 항목 한 줄의 현재 사실.
+     *
+     * @param firstUnlearned   표식·제외를 뺀 뒤 트리 순서로 첫 NOT_STARTED 항목
+     * @param assignmentDue    연결된 확정·미완료 과제 중 가장 이른 마감
+     * @param assignmentLinked 확정·미완료 과제가 연결돼 있다(마감이 없어도 true)
+     */
+    public record TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                            String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                            TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                            LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook,
+                            /** (2026-10-05) 같은 교재 목차 안의 원본 순번. 목차에서 오지 않았으면 null */
+                            Integer tocSeq,
+                            /**
+                             * (2026-10-05) 프로젝트 기억에서 온 표시(막힌 곳·도움받아 해결). 있으면 선택과 무관하게 판단에 남는다 —
+                             * 막혔던 단원이 목록에 없으면 계획이 그 단원을 가리킬 수 없다(실호출 재현).
+                             */
+                            String stateNote) {
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook, Integer tocSeq) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, tocSeq, null);
+        }
+
+        public TopicLine withStateNote(String note) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook,
+                    tocSeq, note);
+        }
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked, boolean priorTextbook) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, null);
+        }
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned,
+                         LocalDate assignmentDue, boolean assignmentLinked) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress, mark,
+                    lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, false, null);
+        }
+
+        TopicLine withPriorTextbook(boolean prior) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, prior, tocSeq,
+                    stateNote);
+        }
+
+        public TopicLine withTocSeq(Integer seq) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, firstUnlearned, assignmentDue, assignmentLinked, priorTextbook, seq,
+                    stateNote);
+        }
+
+        /** 교재 목차에서 온 항목인가(제목·쪽만 확인). */
+        public boolean fromToc() {
+            return com.jungwoo.project.memo.learning.TocTopics.isToc(locator);
+        }
+
+        public TopicLine(Long topicId, Long parentTopicId, String title, String locator, Long sourceMaterialId,
+                         String sourceMaterialFilename, int depth, TopicProgressStatus progress,
+                         TopicUserMark mark, LocalDateTime lastStudiedAt, boolean firstUnlearned) {
+            this(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename, depth, progress,
+                    mark, lastStudiedAt, firstUnlearned, null, false);
+        }
+
+        /** 판단에 반드시 남아야 하는 항목(선택 결과와 무관). */
+        public boolean requiredFact() {
+            return progress == TopicProgressStatus.IN_PROGRESS || firstUnlearned || assignmentLinked || stateNote != null;
+        }
+
+        TopicLine with(boolean first, LocalDate due, boolean assignment) {
+            return new TopicLine(topicId, parentTopicId, title, locator, sourceMaterialId, sourceMaterialFilename,
+                    depth, progress, mark, lastStudiedAt, first, due, assignment, priorTextbook, tocSeq, stateNote);
+        }
+    }
+
+    /**
+     * 자료 구간 한 줄.
+     *
+     * @param topicIds            이 구간이 연결된 후보 학습 항목(표식·제외된 항목은 뺀다). 비어 있으면 미연결
+     * @param completedAssignment 이 구간에서 나온 과제를 사용자가 완료했다
+     * @param openAssignment      이 구간에서 나온 확정·미완료 과제가 있다
+     * @param requested           이번 요청에서 사용자가 지정한 자료(또는 구간)다
+     * @param photoLink           상담 사진 구간의 단원 연결: GUESSED(서버 추정) / CONFIRMED(사용자 확인) / null(사진 아님·연결 없음)
+     * @param focus               막힌·도움받아 해결한 단원의 사진 본문 — 접어도 항상 보이고, 선택에서 빠지면 서버가 보탠다
+     * @param syllabus            이 프로젝트가 강의계획서(SYLLABUS)로 연결한 자료의 구간. 일정·범위의 근거이지 학습 본문이 아니다
+     */
+    public record SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
+                              List<Long> topicIds, boolean completedAssignment, boolean openAssignment,
+                              boolean requested, String photoLink, boolean focus,
+                              /** 상담 사진 구간의 실제 연결 상태(후보 필터와 무관, PlanProvenancePhoto.state 형식). 사진 아니면 null */
+                              String photoState, boolean syllabus) {
+
+        public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
+                           List<Long> topicIds, boolean completedAssignment, boolean openAssignment, boolean requested) {
+            this(section, material, roles, topicIds, completedAssignment, openAssignment, requested, null, false, null, false);
+        }
+
+        public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles) {
+            this(section, material, roles, List.of(), false, false, false);
+        }
+
+        /** 상담에서 올린 교재 사진의 구간(글자 읽기 결과). */
+        public boolean photo() {
+            return material != null && material.isConsultPhoto();
+        }
+
+        public SectionLine withFocus() {
+            return new SectionLine(section, material, roles, topicIds, completedAssignment, openAssignment, requested,
+                    photoLink, true, photoState, syllabus);
+        }
+
+        public SectionLine withTopics(List<Long> ids) {
+            return new SectionLine(section, material, roles, ids, completedAssignment, openAssignment, requested,
+                    photoLink, focus, photoState, syllabus);
+        }
+
+        public String roleLabels() {
+            return roles.stream().map(SectionRole::parseOne).filter(Objects::nonNull)
+                    .map(SectionRole::label).distinct().collect(Collectors.joining("/"));
+        }
+    }
+
+    public record AssignmentLine(CourseAssignment assignment, MaterialSection section, CourseMaterial material) {
+    }
+
+    /** 승인 전 구조 제안의 노드 하나. nodeId는 "p{proposalId}:{tempId}" — 학습 항목 id가 아니다. */
+    public record ProposedGroup(String nodeId, String title) {
+    }
+
+    public record PendingMaterial(Long materialId, String filename, String state, Long courseId) {
+    }
+
+    /** 사용자 수정으로 후보에서 빠진 항목. reason: KNOWN / DEFER / THIS_TIME. */
+    public record ExcludedTopic(Long topicId, String title, String reason) {
+    }
+
+    /**
+     * 한 프로젝트의 카탈로그.
+     *
+     * @param topics       후보 학습 항목(트리 순서)
+     * @param sections     후보 구간(자료 → 위치 순)
+     * @param excluded     사용자 수정으로 빠진 항목(표식·이번만 제외)
+     * @param open         확정·미완료 과제
+     * @param completed    완료한 과제(구간 식별 포함 — 개수만 넘기지 않는다)
+     * @param unconfirmed  아직 과제인지 확인하지 않은 후보
+     * @param materials    이 프로젝트의 자료(요청 지정 자료 포함)
+     */
+    /** 자료↔프로젝트 연결(자료 역할). 없으면(단위 테스트) 강의계획서 표시 없이 동작한다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.material.MaterialLinkMapper materialLinkMapper;
+
+    public void setMaterialLinkMapper(com.jungwoo.project.memo.material.MaterialLinkMapper mapper) {
+        this.materialLinkMapper = mapper;
+    }
+
+    /**
+     * 강의계획서로 연결된 자료 id. 역할은 "이 프로젝트가 이 자료를 무엇으로 쓰는가"라 프로젝트 연결을 본다.
+     * 프로젝트에 연결되지 않은 지정 자료(courseId 없음·다른 프로젝트 소속)는 어느 프로젝트에서든 강의계획서면 그렇게 본다.
+     *
+     * <p>표시가 없으면 강의계획서의 주차표("스택과 큐의 구현 및 응용")가 같은 단원의 강의 슬라이드보다 요청 낱말에 더 잘
+     * 맞아, 선택·계획이 강의계획서를 학습 본문으로 골랐다(2026-10-07 실호출, ch05 스택 슬라이드가 있는데 계획서 p.3·p.4 인용).
+     */
+    private Set<Long> syllabusMaterialIds(Long userId, Long courseId, Collection<Long> materialIds) {
+        if (materialLinkMapper == null || materialIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> out = new HashSet<>();
+        Set<Long> seen = new HashSet<>();
+        if (courseId != null) {
+            for (com.jungwoo.project.memo.material.domain.MaterialLink link : materialLinkMapper.findByCourseIdAndUserId(courseId, userId)) {
+                seen.add(link.getMaterialId());
+                if (link.getMaterialType() == com.jungwoo.project.memo.material.domain.MaterialType.SYLLABUS) {
+                    out.add(link.getMaterialId());
+                }
+            }
+        }
+        for (Long id : materialIds) {
+            if (seen.contains(id)) {
+                continue;
+            }
+            if (materialLinkMapper.findByMaterialIdAndUserId(id, userId).stream()
+                    .anyMatch(l -> l.getMaterialType() == com.jungwoo.project.memo.material.domain.MaterialType.SYLLABUS)) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
+    /** 승인 전 구조 제안의 읽기 전용 색인. 없으면(단위 테스트) 색인 없이 자료별 묶음으로 보인다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.structure.ProposedTopicIndex proposedTopicIndex;
+
+    public void setProposedTopicIndex(com.jungwoo.project.memo.learning.structure.ProposedTopicIndex index) {
+        this.proposedTopicIndex = index;
+    }
+
+    /**
+     * 학습 항목에 연결되지 않은 구간만 제안 노드로 묶는다. 이미 승인된 구조가 있는 구간은 그 구조가 우선이다.
+     * 아무것도 쓰지 않는다 — 승인 전 제안을 읽었다고 학습 항목이나 진도가 생기지 않는다.
+     */
+    private Map<Long, ProposedGroup> proposedGroups(Long userId, Long courseId, Map<Long, CourseMaterial> materials,
+                                                    List<SectionLine> sections) {
+        if (proposedTopicIndex == null || courseId == null || sections.stream().noneMatch(s -> s.topicIds().isEmpty())) {
+            return Map.of();
+        }
+        Map<Long, com.jungwoo.project.memo.learning.structure.ProposedTopicIndex.Node> bySection =
+                proposedTopicIndex.forCourse(userId, courseId, materials).bySection();
+        Map<Long, ProposedGroup> out = new HashMap<>();
+        for (SectionLine line : sections) {
+            var node = line.topicIds().isEmpty() ? bySection.get(line.section().getSectionId()) : null;
+            if (node != null && node.title() != null) {
+                out.put(line.section().getSectionId(), new ProposedGroup(node.nodeId(), node.title()));
+            }
+        }
+        return out;
+    }
+
+    public record CourseCatalog(Long courseId, String courseTitle, List<TopicLine> topics, List<SectionLine> sections,
+                                List<ExcludedTopic> excluded, List<AssignmentLine> open,
+                                List<AssignmentLine> completed, List<AssignmentLine> unconfirmed,
+                                List<PendingMaterial> pending, List<CourseMaterial> materials, int totalTopics,
+                                /**
+                                 * 구간 → 승인 전 구조 제안의 노드(읽기 전용 색인). 학습 항목에 연결되지 않은 구간을 목록에서
+                                 * 주제로 묶어 보여 주는 데만 쓴다. 학습 항목 id가 아니다.
+                                 */
+                                Map<Long, ProposedGroup> proposedBySection) {
+
+        public CourseCatalog(Long courseId, String courseTitle, List<TopicLine> topics, List<SectionLine> sections,
+                             List<ExcludedTopic> excluded, List<AssignmentLine> open, List<AssignmentLine> completed,
+                             List<AssignmentLine> unconfirmed, List<PendingMaterial> pending,
+                             List<CourseMaterial> materials, int totalTopics) {
+            this(courseId, courseTitle, topics, sections, excluded, open, completed, unconfirmed, pending, materials,
+                    totalTopics, Map.of());
+        }
+
+        /** 학습 항목만 바꾼 사본(프로젝트 기억 표시를 붙일 때). */
+        public CourseCatalog withTopics(List<TopicLine> newTopics) {
+            return new CourseCatalog(courseId, courseTitle, newTopics, sections, excluded, open, completed, unconfirmed,
+                    pending, materials, totalTopics, proposedBySection);
+        }
+
+        public List<TopicLine> requiredTopics() {
+            return topics.stream().filter(TopicLine::requiredFact).toList();
+        }
+
+        public List<SectionLine> sectionsOf(Long topicId) {
+            return sections.stream().filter(s -> s.topicIds().contains(topicId)).toList();
+        }
+
+        public List<SectionLine> unlinkedSections() {
+            return sections.stream().filter(s -> s.topicIds().isEmpty()).toList();
+        }
+
+        public int candidateCount() {
+            return topics.size() + sections.size();
+        }
+    }
+
+    /**
+     * @param courseId              대상 프로젝트
+     * @param excludeTopicIds       이번만 제외
+     * @param requestedMaterialIds  이번 요청에서 지정한 자료(검증된 것만). 프로젝트에 연결돼 있지 않아도 구간은 후보가 된다
+     * @param requestedSectionIds   이번 요청에서 지정한 구간
+     */
+    /** 사용자가 정정한 시험·계획 범위 제외. 없는 환경(단위 테스트)에서는 쓰지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper correctionMapper;
+
+    /** 이전 교재 항목 판별용. 없는 환경(단위 테스트)에서는 쓰지 않는다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.course.CourseMapper courseMapper;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.learning.CourseTopicMapper courseTopicMapper;
+
+    /**
+     * 지금 교재와 다른 책의 목차에서 온 항목. 교재를 바꿔도 이전 항목·기록은 지우지 않지만, 새 교재의 범위로 세지 않는다.
+     * 교재 칸이 비어 있으면 비교할 기준이 없으므로 없다.
+     */
+    private Set<Long> priorTextbookTopics(Long userId, Long courseId) {
+        if (courseMapper == null || courseTopicMapper == null) {
+            return Set.of();
+        }
+        com.jungwoo.project.memo.course.domain.Course course = courseMapper.findByIdAndUserId(courseId, userId);
+        String current = com.jungwoo.project.memo.course.textbook.BookKey.of(course);
+        if (current == null) {
+            return Set.of();
+        }
+        Set<Long> out = new HashSet<>();
+        for (com.jungwoo.project.memo.learning.domain.CourseTopic t : courseTopicMapper.findActiveByCourseIdAndUserId(courseId, userId)) {
+            if (t.getSourceTextbookKey() != null && !t.getSourceTextbookKey().equals(current)) {
+                out.add(t.getTopicId());
+            }
+        }
+        return out;
+    }
+
+    @Transactional(readOnly = true)
+    public CourseCatalog build(Long userId, Long courseId, String courseTitle, Set<Long> excludeTopicIds,
+                               Collection<Long> requestedMaterialIds, Collection<Long> requestedSectionIds) {
+        return build(userId, courseId, courseTitle, excludeTopicIds, requestedMaterialIds, requestedSectionIds, true);
+    }
+
+    /**
+     * @param firstUnlearnedAnchor "← 첫 미학습"(기록 기준 첫 항목)을 붙일지. 복습·시험 목적이면 false — 수업 진행·시험 범위가
+     *                             근거라 기록이 없다는 것만으로 1단원부터 시작하지 않는다
+     */
+    @Transactional(readOnly = true)
+    public CourseCatalog build(Long userId, Long courseId, String courseTitle, Set<Long> excludeTopicIds,
+                               Collection<Long> requestedMaterialIds, Collection<Long> requestedSectionIds,
+                               boolean firstUnlearnedAnchor) {
+        Set<Long> excludedIds = excludeTopicIds == null ? Set.of() : excludeTopicIds;
+        Set<Long> requestedMaterials = requestedMaterialIds == null ? Set.of() : new HashSet<>(requestedMaterialIds);
+        Set<Long> requestedSections = requestedSectionIds == null ? Set.of() : new HashSet<>(requestedSectionIds);
+
+        List<TopicLine> all = new ArrayList<>();
+        for (TopicResponse root : topicService.getTopicTree(userId, courseId)) {
+            flatten(all, root, 0, null);
+        }
+
+        List<CourseAssignment> assignmentRows = assignmentService.findByCourses(userId, List.of(courseId));
+        List<TopicMaterialLink> courseLinks = topicLinkMapper.findActiveByCourseId(courseId, userId);
+        Map<Long, LocalDate> dueByTopic = new HashMap<>();
+        Set<Long> openTopicIds = new HashSet<>();
+        /*
+         * 과제가 가리키는 학습 항목: 과제 행의 topicId, 그리고 과제 구간(sectionId)에 연결된 학습 항목.
+         * 자동 분석이 만든 과제는 구간만 갖는 경우가 많다 — topicId만 보면 "첫 미학습"이 사실 과제 제출 항목인데도
+         * 과제 표시 없이 실려, 모델이 과제를 대신 수행하는 항목을 만들었다(2026-09-15 실호출).
+         */
+        Map<Long, List<Long>> linkedTopicsBySection = new HashMap<>();
+        for (TopicMaterialLink link : courseLinks) {
+            if (link.getSectionId() != null && link.getSectionId() != TopicMaterialLink.WHOLE_MATERIAL) {
+                linkedTopicsBySection.computeIfAbsent(link.getSectionId(), k -> new ArrayList<>()).add(link.getTopicId());
+            }
+        }
+        for (CourseAssignment a : assignmentRows) {
+            if (a.getConfirmStatus() != AssignmentConfirmStatus.CONFIRMED || a.isCompleted()) {
+                continue;
+            }
+            Set<Long> topics = new HashSet<>();
+            if (a.getTopicId() != null) {
+                topics.add(a.getTopicId());
+            }
+            if (a.getSectionId() != null) {
+                topics.addAll(linkedTopicsBySection.getOrDefault(a.getSectionId(), List.of()));
+            }
+            LocalDate due = a.dueDay();
+            for (Long topicId : topics) {
+                openTopicIds.add(topicId);
+                if (due != null) {
+                    dueByTopic.merge(topicId, due, (x, y) -> x.isBefore(y) ? x : y);
+                }
+            }
+        }
+
+        List<TopicLine> candidates = new ArrayList<>();
+        List<ExcludedTopic> excluded = new ArrayList<>();
+        boolean firstMarked = false;
+        // 이전 교재의 목차에서 온 항목: 지금 교재의 범위로 세지 않는다(기록은 그대로, 후보에는 남되 표시한다).
+        Set<Long> priorTextbookTopicIds = priorTextbookTopics(userId, courseId);
+        /*
+         * 사용자가 정정한 범위 제외("이번 시험에는 이 단원이 빠져"). 그 항목과 하위 항목을 후보에서 뺀다 — 학습 완료로 보지
+         * 않고(진도는 그대로), 트리에서 지우지도 않는다. 사유에 어느 시험·계획의 범위인지 남긴다. 화면에서 풀 수 있다.
+         */
+        Map<Long, String> scope = new HashMap<>();
+        if (correctionMapper != null) {
+            for (var row : correctionMapper.findActiveExclusions(courseId, userId)) {
+                scope.put(row.getTopicId(), row.getLabel() == null ? "" : row.getLabel());
+            }
+        }
+        for (TopicLine line : all) {
+            String scopeLabel = scope.get(line.topicId());
+            if (scopeLabel == null && line.parentTopicId() != null) {
+                scopeLabel = scope.get(line.parentTopicId());
+            }
+            if (scopeLabel != null) {
+                scope.putIfAbsent(line.topicId(), scopeLabel);
+                excluded.add(new ExcludedTopic(line.topicId(), line.title(),
+                        scopeLabel.isBlank() ? "SCOPE" : "SCOPE:" + scopeLabel));
+                continue;
+            }
+            if (line.mark() == TopicUserMark.KNOWN || line.mark() == TopicUserMark.DEFER) {
+                excluded.add(new ExcludedTopic(line.topicId(), line.title(), line.mark().name()));
+                continue;
+            }
+            if (excludedIds.contains(line.topicId())) {
+                excluded.add(new ExcludedTopic(line.topicId(), line.title(), "THIS_TIME"));
+                continue;
+            }
+            boolean priorTextbook = priorTextbookTopicIds.contains(line.topicId());
+            boolean first = firstUnlearnedAnchor && !priorTextbook && !firstMarked
+                    && line.progress() == TopicProgressStatus.NOT_STARTED;
+            if (first) {
+                firstMarked = true;
+            }
+            candidates.add(line.with(first, dueByTopic.get(line.topicId()), openTopicIds.contains(line.topicId()))
+                    .withPriorTextbook(priorTextbook));
+        }
+        Set<Long> candidateTopicIds = candidates.stream().map(TopicLine::topicId).collect(Collectors.toSet());
+        Set<Long> excludedTopicIds = excluded.stream().map(ExcludedTopic::topicId).collect(Collectors.toSet());
+
+        // 자료: 프로젝트에 연결된 것 + 이번 요청에서 지정한 것(연결 여부와 무관, 호출자가 소유·범위를 검증했다).
+        Map<Long, CourseMaterial> materials = new LinkedHashMap<>();
+        for (CourseMaterial m : courseMaterialMapper.findByCourseIdAndUserId(courseId, userId)) {
+            materials.put(m.getMaterialId(), m);
+        }
+        for (Long requested : requestedMaterials) {
+            if (!materials.containsKey(requested)) {
+                CourseMaterial m = courseMaterialMapper.findByIdAndUserId(requested, userId);
+                if (m != null) {
+                    materials.put(m.getMaterialId(), m);
+                }
+            }
+        }
+
+        Set<Long> syllabusIds = syllabusMaterialIds(userId, courseId, materials.keySet());
+        Map<Long, List<Long>> topicsBySection = new HashMap<>();
+        Map<Long, Boolean> linkedOnlyToExcluded = new HashMap<>();
+        // 상담 사진 구간의 단원 연결 상태(추정·확인). 선택 목록·최종 입력·근거 기록에 그대로 실린다.
+        Map<Long, String> photoLinks = new HashMap<>();
+        for (TopicMaterialLink link : courseLinks) {
+            if (link.getSectionId() != null && link.getSectionId() != TopicMaterialLink.WHOLE_MATERIAL
+                    && candidateTopicIds.contains(link.getTopicId())) {
+                photoLinks.merge(link.getSectionId(),
+                        link.getOrigin() == com.jungwoo.project.memo.learning.domain.TopicLinkOrigin.PHOTO_GUESS
+                                ? "GUESSED" : "CONFIRMED", (a, b) -> "GUESSED".equals(a) ? a : b);
+            }
+        }
+        for (TopicMaterialLink link : courseLinks) {
+            if (link.getSectionId() == null || link.getSectionId() == TopicMaterialLink.WHOLE_MATERIAL) {
+                continue;
+            }
+            if (candidateTopicIds.contains(link.getTopicId())) {
+                topicsBySection.computeIfAbsent(link.getSectionId(), k -> new ArrayList<>()).add(link.getTopicId());
+                linkedOnlyToExcluded.put(link.getSectionId(), false);
+            } else if (excludedTopicIds.contains(link.getTopicId())) {
+                linkedOnlyToExcluded.putIfAbsent(link.getSectionId(), true);
+            }
+        }
+
+        Map<Long, List<CourseAssignment>> assignmentsBySection = new HashMap<>();
+        for (CourseAssignment a : assignmentRows) {
+            if (a.getSectionId() != null) {
+                assignmentsBySection.computeIfAbsent(a.getSectionId(), k -> new ArrayList<>()).add(a);
+            }
+        }
+
+        List<SectionLine> sections = new ArrayList<>();
+        Map<Long, MaterialSection> sectionById = new HashMap<>();
+        if (!materials.isEmpty()) {
+            for (MaterialSection section : sectionMapper.findActiveByMaterialIds(new ArrayList<>(materials.keySet()), userId)) {
+                CourseMaterial material = materials.get(section.getMaterialId());
+                if (material == null || section.getExcerpt() == null
+                        || !Objects.equals(material.getFileHash(), section.getFileHash())) {
+                    continue; // 삭제된 자료(발췌가 비어 있다)나 옛 해시 구간은 후보가 아니다.
+                }
+                sectionById.put(section.getSectionId(), section);
+                boolean requested = requestedMaterials.contains(material.getMaterialId())
+                        || requestedSections.contains(section.getSectionId());
+                if (Boolean.TRUE.equals(linkedOnlyToExcluded.get(section.getSectionId())) && !requested) {
+                    continue; // 사용자가 안다고/이번만 뺀 항목에만 연결된 구간. 요청 지정 자료면 남긴다.
+                }
+                List<CourseAssignment> mine = assignmentsBySection.getOrDefault(section.getSectionId(), List.of());
+                boolean completed = mine.stream().anyMatch(a -> a.getConfirmStatus() == AssignmentConfirmStatus.CONFIRMED
+                        && a.isCompleted());
+                boolean open = mine.stream().anyMatch(a -> a.getConfirmStatus() == AssignmentConfirmStatus.CONFIRMED
+                        && !a.isCompleted());
+                sections.add(new SectionLine(section, material, roles(section),
+                        List.copyOf(topicsBySection.getOrDefault(section.getSectionId(), List.of())),
+                        completed, open, requested, photoLinks.get(section.getSectionId()), false,
+                        material.isConsultPhoto()
+                                ? com.jungwoo.project.memo.plan.PlanProvenancePhoto.state(courseLinks, section.getSectionId())
+                                : null,
+                        syllabusIds.contains(material.getMaterialId())));
+            }
+        }
+
+        List<AssignmentLine> open = new ArrayList<>();
+        List<AssignmentLine> completed = new ArrayList<>();
+        List<AssignmentLine> unconfirmed = new ArrayList<>();
+        for (CourseAssignment a : assignmentRows) {
+            AssignmentConfirmStatus status = a.getConfirmStatus();
+            if (status == AssignmentConfirmStatus.NOT_ASSIGNMENT || status == AssignmentConfirmStatus.DUPLICATE) {
+                continue;
+            }
+            MaterialSection section = a.getSectionId() == null ? null : sectionById.get(a.getSectionId());
+            if (section == null && a.getSectionId() != null) {
+                section = sectionMapper.findByIdAndUserId(a.getSectionId(), userId);
+            }
+            AssignmentLine line = new AssignmentLine(a, section,
+                    a.getMaterialId() == null ? null : materials.get(a.getMaterialId()));
+            if (status != AssignmentConfirmStatus.CONFIRMED) {
+                unconfirmed.add(line);
+            } else if (a.isCompleted()) {
+                completed.add(line);
+            } else {
+                open.add(line);
+            }
+        }
+
+        List<CourseMaterial> materialList = new ArrayList<>(materials.values());
+        return new CourseCatalog(courseId, courseTitle, candidates, sections, excluded, open, completed, unconfirmed,
+                pendingOf(userId, courseId, materialList), materialList, all.size(),
+                proposedGroups(userId, courseId, materials, sections));
+    }
+
+    /**
+     * 대상 프로젝트 어디에도 연결되지 않은 지정 자료의 카탈로그(학습 항목 없음). 호출자가 소유·범위를 검증했다 —
+     * 이번 요청에서 사용자가 이 자료를 직접 지정한 경우만 여기로 온다.
+     */
+    @Transactional(readOnly = true)
+    public CourseCatalog buildUnscoped(Long userId, Collection<Long> materialIds, Collection<Long> requestedMaterialIds,
+                                       Collection<Long> requestedSectionIds) {
+        Set<Long> requestedMaterials = requestedMaterialIds == null ? Set.of() : new HashSet<>(requestedMaterialIds);
+        Set<Long> requestedSections = requestedSectionIds == null ? Set.of() : new HashSet<>(requestedSectionIds);
+        Map<Long, CourseMaterial> materials = new LinkedHashMap<>();
+        for (Long id : materialIds) {
+            CourseMaterial m = courseMaterialMapper.findByIdAndUserId(id, userId);
+            if (m != null) {
+                materials.put(m.getMaterialId(), m);
+            }
+        }
+        Set<Long> syllabusIds = syllabusMaterialIds(userId, null, materials.keySet());
+        List<SectionLine> sections = new ArrayList<>();
+        if (!materials.isEmpty()) {
+            for (MaterialSection section : sectionMapper.findActiveByMaterialIds(new ArrayList<>(materials.keySet()), userId)) {
+                CourseMaterial material = materials.get(section.getMaterialId());
+                if (material == null || section.getExcerpt() == null
+                        || !Objects.equals(material.getFileHash(), section.getFileHash())) {
+                    continue;
+                }
+                boolean requested = requestedMaterials.contains(material.getMaterialId())
+                        || requestedSections.contains(section.getSectionId());
+                sections.add(new SectionLine(section, material, roles(section), List.of(), false, false, requested,
+                        null, false, null, syllabusIds.contains(material.getMaterialId())));
+            }
+        }
+        List<CourseMaterial> list = new ArrayList<>(materials.values());
+        return new CourseCatalog(null, null, List.of(), sections, List.of(), List.of(), List.of(), List.of(),
+                pendingOf(userId, null, list), list, 0);
+    }
+
+    /** 대상 프로젝트 전체의 미반영 자료. 응답의 pendingMaterials. */
+    @Transactional(readOnly = true)
+    public List<PendingMaterial> pendingMaterials(Long userId, List<Long> courseIds) {
+        List<PendingMaterial> out = new ArrayList<>();
+        Set<Long> seen = new HashSet<>();
+        for (Long courseId : courseIds == null ? List.<Long>of() : courseIds) {
+            for (PendingMaterial pending : pendingOf(userId, courseId,
+                    courseMaterialMapper.findByCourseIdAndUserId(courseId, userId))) {
+                if (seen.add(pending.materialId())) {
+                    out.add(pending);
+                }
+            }
+        }
+        return out;
+    }
+
+    private void flatten(List<TopicLine> out, TopicResponse node, int depth, String parentTitle) {
+        out.add(new TopicLine(node.getTopicId(), node.getParentTopicId(), titleWithPath(node, parentTitle),
+                node.getSourceLocator(), node.getSourceMaterialId(), node.getSourceMaterialFilename(), depth,
+                node.getProgressStatus(), node.getUserMark(), node.getLastStudiedAt(), false)
+                .withTocSeq(node.getSourceTocSeq()));
+        if (node.getChildren() != null) {
+            for (TopicResponse child : node.getChildren()) {
+                flatten(out, child, depth + 1, node.getTitle());
+            }
+        }
+    }
+
+    /**
+     * 목차에서 온 "요약"·"연습문제"·"실습 1-1"처럼 장마다 반복되는 묶음 제목은 부모 제목을 앞에 붙인다("Chapter 01 … › 연습문제") —
+     * 계획이 어느 장의 문제인지 가리킬 수 있게. 다른 토픽 제목은 그대로다.
+     */
+    static String titleWithPath(TopicResponse node, String parentTitle) {
+        String title = node.getTitle();
+        if (parentTitle == null || parentTitle.isBlank() || !com.jungwoo.project.memo.learning.TocTopics.isToc(node.getSourceLocator())
+                || com.jungwoo.project.memo.course.textbook.TocItemKind.of(title) == null) {
+            return title;
+        }
+        return parentTitle + " › " + title;
+    }
+
+    private List<PendingMaterial> pendingOf(Long userId, Long courseId, List<CourseMaterial> materials) {
+        if (materials.isEmpty()) {
+            return List.of();
+        }
+        Map<Long, MaterialAnalysisJob> latestContent = new HashMap<>();
+        for (MaterialAnalysisJob job : analysisJobService.findByMaterials(userId,
+                materials.stream().map(CourseMaterial::getMaterialId).toList())) {
+            if (job.getJobKind() != AnalysisJobKind.CONTENT) {
+                continue;
+            }
+            latestContent.merge(job.getMaterialId(), job,
+                    (a, b) -> a.getJobId() > b.getJobId() ? a : b);
+        }
+        List<PendingMaterial> out = new ArrayList<>();
+        for (CourseMaterial material : materials) {
+            if (material.getExtractionStatus() != ExtractionStatus.SUCCESS) {
+                continue; // 추출 실패는 "분석 중"이 아니다. 자료 화면이 따로 말한다.
+            }
+            MaterialAnalysisJob job = latestContent.get(material.getMaterialId());
+            boolean usable = job != null && job.getStatus() != null && job.getStatus().hasUsableResult()
+                    && Objects.equals(job.getFileHash(), material.getFileHash());
+            if (!usable) {
+                out.add(new PendingMaterial(material.getMaterialId(), material.getOriginalFilename(),
+                        job == null ? "QUEUED" : job.getStatus().name(), courseId));
+            }
+        }
+        return out;
+    }
+
+    /** 이 구간에 연결된 학습 항목 전부(ACTIVE 연결). 계획 근거가 "이 본문은 어느 토픽의 것인가"를 하나로 줄이지 않게. */
+    public List<Long> linkedTopicIds(Long userId, MaterialSection section) {
+        if (userId == null || section == null || section.getMaterialId() == null) {
+            return List.of();
+        }
+        return topicLinkMapper.findActiveByMaterialId(section.getMaterialId(), userId).stream()
+                .filter(l -> java.util.Objects.equals(l.getSectionId(), section.getSectionId()))
+                .map(TopicMaterialLink::getTopicId).distinct().toList();
+    }
+
+    public List<String> rolesOf(MaterialSection section) {
+        return roles(section);
+    }
+
+    List<String> roles(MaterialSection section) {
+        try {
+            return section.getRolesJson() == null ? List.of() : objectMapper.readValue(section.getRolesJson(), STRINGS);
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    /** 프롬프트 한 줄용 짧은 설명. 원문 발췌가 아니라 목록 설명이다 — 원문은 선택 뒤 조회한다. */
+    public static String shortExcerpt(String excerpt) {
+        if (excerpt == null) {
+            return null;
+        }
+        String flat = excerpt.replaceAll("\\s+", " ").trim();
+        return flat.length() <= EXCERPT_CHARS ? flat : flat.substring(0, EXCERPT_CHARS) + "…";
+    }
+}

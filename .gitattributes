@@ -1,3 +1,9 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+
+# 셸 스크립트는 LF로 받는다. core.autocrlf=true인 곳에서 CRLF로 체크아웃되면
+# Git Bash가 `$'\r': command not found`로 죽는다 — 훅이 조용히 안 도는 게 아니라
+# 매 푸시마다 깨진다.
+*.sh text eol=lf
+.githooks/* text eol=lf

@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.CourseMaterialMapper">
+
+    <resultMap id="courseMaterialResultMap" type="com.jungwoo.project.memo.material.domain.CourseMaterial">
+        <id     property="materialId"       column="material_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="storedFilename"   column="stored_filename"/>
+        <result property="storagePath"      column="storage_path"/>
+        <result property="contentType"      column="content_type"/>
+        <result property="sizeBytes"        column="size_bytes"/>
+        <result property="pageCount"        column="page_count"/>
+        <result property="fileHash"         column="file_hash"/>
+        <result property="extractionStatus" column="extraction_status"/>
+        <result property="extractedText"    column="extracted_text"/>
+        <result property="extractionError"  column="extraction_error"/>
+        <result property="extractionWarning" column="extraction_warning"/>
+        <result property="documentTitle"    column="document_title"/>
+        <result property="documentTitleRead" column="document_title_read"/>
+        <result property="sourceArchiveName" column="source_archive_name"/>
+        <result property="sourceEntryPath"  column="source_entry_path"/>
+        <result property="status"           column="status"/>
+        <result property="origin"           column="origin"/>
+        <result property="sourceConversationId" column="source_conversation_id"/>
+        <result property="originalExpiresAt" column="original_expires_at"/>
+        <result property="originalRemovedAt" column="original_removed_at"/>
+        <result property="originalRemovedReason" column="original_removed_reason"/>
+        <result property="originalPurgedAt" column="original_purged_at"/>
+        <result property="createdAt"        column="created_at"/>
+        <result property="updatedAt"        column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="materialId">
+        INSERT INTO course_materials (
+            user_id, original_filename, stored_filename, storage_path,
+            content_type, size_bytes, page_count, file_hash, extraction_status, extracted_text, extraction_error,
+            extraction_warning, document_title, document_title_read, source_archive_name, source_entry_path,
+            origin, source_conversation_id, original_expires_at
+        ) VALUES (
+            #{userId}, #{originalFilename}, #{storedFilename}, #{storagePath},
+            #{contentType}, #{sizeBytes}, #{pageCount}, #{fileHash}, #{extractionStatus}, #{extractedText}, #{extractionError},
+            #{extractionWarning}, #{documentTitle}, #{documentTitleRead}, #{sourceArchiveName}, #{sourceEntryPath},
+            #{origin}, #{sourceConversationId}, #{originalExpiresAt}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </select>
+
+    <!--
+      상담 근거용 메타데이터. extracted_text(문서 전체 원문)는 싣지 않는다 — 매 상담 턴마다 모든 자료의 본문을 읽지 않기
+      위해서다. 원문 단위가 없는 옛 자료만 그 본문이 필요하고, 그때는 findByIdAndUserId로 하나씩 읽는다.
+    -->
+    <sql id="materialMetaColumns">
+        material_id, user_id, original_filename, stored_filename, storage_path, content_type, size_bytes, page_count,
+        file_hash, extraction_status, NULL AS extracted_text, extraction_error, extraction_warning, document_title,
+        document_title_read, source_archive_name, source_entry_path, status, origin, source_conversation_id,
+        original_expires_at, original_removed_at, original_removed_reason, original_purged_at, created_at, updated_at
+    </sql>
+
+    <select id="findMetaByUserId" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+    </select>
+
+    <select id="findMetaByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- 추출 원문이 비어 있지 않은 활성 자료 id. 원문 단위가 없는 옛 자료를 읽을 수 있는지 본문 없이 판단한다. -->
+    <select id="findIdsWithExtractedTextByUserId" resultType="long">
+        SELECT material_id FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+          AND extracted_text IS NOT NULL AND CHAR_LENGTH(TRIM(extracted_text)) &gt; 0
+    </select>
+
+    <select id="findByIdsAndUserIdIncludingDeleted" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      검증과 쓰기 사이에 자료가 사라지지 않게 잠근다. 같은 순간의 자료 삭제(markDeleted)는
+      이 행의 UPDATE라 우리 트랜잭션이 끝날 때까지 기다린다.
+    -->
+    <select id="findByIdsAndUserIdForUpdate" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId}
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        FOR UPDATE
+    </select>
+
+    <!--
+      §4 호환: statement id와 시그니처(courseId, userId)는 그대로 둔다 — 단계 3의 "기존 API
+      겉보기 무변화" 게이트가 이 이름에 걸려 있다. 내부만 course_id 직접 참조에서
+      material_links JOIN으로 바뀐다.
+    -->
+    <select id="findByCourseIdAndUserId" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        JOIN material_links l ON l.material_id = cm.material_id AND l.course_id = #{courseId}
+        WHERE cm.user_id = #{userId} AND cm.status = 'ACTIVE'
+        ORDER BY cm.created_at DESC
+    </select>
+
+    <select id="findAllByUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        ORDER BY created_at DESC
+    </select>
+
+    <!--
+      연결 제안 apply의 사전 검증용 잠금. 이 잠금이 지키는 불변식은 "같은 자료로 중복
+      프로젝트를 만들지 않는다"이지 "자료당 링크 1개"가 아니다 — 자료와 프로젝트는 N:M이고
+      여러 링크는 정상이다.
+
+      ORDER BY를 FOR UPDATE와 함께 두는 이유는 잠금 획득 순서를 materialId 오름차순으로
+      고정하기 위해서다. 두 요청이 서로 다른 순서로 같은 행들을 잠그면 데드락이 난다.
+    -->
+    <select id="lockActiveByIdsAndUserId" resultMap="courseMaterialResultMap">
+        SELECT * FROM course_materials
+        WHERE user_id = #{userId} AND status = 'ACTIVE'
+        AND material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id
+        FOR UPDATE
+    </select>
+
+    <update id="markDeleted">
+        UPDATE course_materials
+        SET status = 'DELETED', extracted_text = NULL,
+            <!-- 상담 사진이면 원본 접근도 같은 순간 막는다. 파일 삭제가 실패해도 정리 작업이 이 표시로 다시 지운다. -->
+            original_removed_at = IF(origin IS NULL, original_removed_at, COALESCE(original_removed_at, NOW())),
+            original_removed_reason = IF(origin IS NULL, original_removed_reason, COALESCE(original_removed_reason, 'USER'))
+        WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!-- 이 대화에 올린 활성 상담 사진(오래된 것부터). -->
+    <select id="findPhotosByConversation" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE user_id = #{userId} AND source_conversation_id = #{conversationId}
+          AND origin = 'CONSULT_PHOTO' AND status = 'ACTIVE'
+        ORDER BY material_id
+    </select>
+
+    <!-- 원본 접근 차단. 이미 차단된 행은 그대로 둔다(처음 차단한 사유·시각을 지킨다). -->
+    <update id="markOriginalRemoved">
+        UPDATE course_materials
+           SET original_removed_at = #{now}, original_removed_reason = #{reason}
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+           AND origin = 'CONSULT_PHOTO' AND original_removed_at IS NULL
+    </update>
+
+    <!-- 만료 처리: 만료 시각이 지났는데 아직 차단 표시가 없는 사진. 조건부라 두 정리 작업이 겹쳐도 한 번만 바뀐다. -->
+    <update id="markExpiredOriginals">
+        UPDATE course_materials
+           SET original_removed_at = #{now}, original_removed_reason = 'EXPIRED'
+         WHERE origin = 'CONSULT_PHOTO' AND original_removed_at IS NULL
+           AND original_expires_at IS NOT NULL AND original_expires_at &lt;= #{now}
+         ORDER BY material_id
+         LIMIT #{limit}
+    </update>
+
+    <!-- 차단됐는데 디스크 파일을 아직 못 지운 사진(자료 전체 삭제 포함). -->
+    <select id="findUnpurgedOriginals" resultMap="courseMaterialResultMap">
+        SELECT <include refid="materialMetaColumns"/> FROM course_materials
+        WHERE origin = 'CONSULT_PHOTO' AND original_purged_at IS NULL AND original_removed_at IS NOT NULL
+        ORDER BY material_id
+        LIMIT #{limit}
+    </select>
+
+    <update id="markOriginalPurged">
+        UPDATE course_materials SET original_purged_at = #{now}
+         WHERE material_id = #{materialId} AND original_purged_at IS NULL
+    </update>
+
+    <!--
+      재추출 결과 반영. 원본은 그대로 두고 추출 관련 열만 바꾼다 — 같은 materialId·같은 파일이라
+      이미 달린 연결·확정 내용은 건드리지 않는다.
+    -->
+    <update id="updateExtraction">
+        UPDATE course_materials
+           SET extraction_status = #{extractionStatus},
+               extracted_text = #{extractedText},
+               extraction_error = #{extractionError},
+               extraction_warning = #{extractionWarning},
+               page_count = #{pageCount},
+               document_title = #{documentTitle},
+               document_title_read = 1
+         WHERE material_id = #{materialId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </update>
+
+    <!-- 옛 자료의 속성 제목을 한 번만 채운다. 이미 읽은 행(업로드·재추출이 채운 것)은 덮지 않는다. -->
+    <update id="fillDocumentTitle">
+        UPDATE course_materials
+           SET document_title = #{documentTitle}, document_title_read = 1
+         WHERE material_id = #{materialId} AND user_id = #{userId} AND document_title_read = 0
+    </update>
+
+    <update id="updatePageCount">
+        UPDATE course_materials SET page_count = #{pageCount}
+         WHERE material_id = #{materialId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      자동 분석 등록 대상: 추출에 성공한 ACTIVE 자료 중 현재 파일 해시·분석판의 CONTENT 작업이
+      없는 것. file_hash가 NULL인 옛 자료는 서비스가 먼저 해시를 채운 뒤 다시 걸린다.
+      폴러가 틱마다 상한(limit)만큼 집어 간다 — 한 번에 전부 등록하면 첫 틱이 길어진다.
+    -->
+    <select id="findAnalysisBacklog" resultMap="courseMaterialResultMap">
+        SELECT cm.* FROM course_materials cm
+        WHERE cm.status = 'ACTIVE' AND cm.extraction_status = 'SUCCESS'
+          AND cm.origin IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM material_analysis_jobs j
+               WHERE j.material_id = cm.material_id AND j.job_kind = 'CONTENT'
+                 AND j.course_id = 0
+                 AND j.analysis_version = #{analysisVersion}
+                 AND (cm.file_hash IS NULL OR j.file_hash = cm.file_hash))
+        ORDER BY cm.material_id ASC
+        LIMIT #{limit}
+    </select>
+
+    <!-- 해시가 없던 옛 자료에 디스크에서 계산한 해시를 채운다. 값이 이미 있으면 건드리지 않는다. -->
+    <update id="fillFileHashIfMissing">
+        UPDATE course_materials SET file_hash = #{fileHash}
+         WHERE material_id = #{materialId} AND file_hash IS NULL
+    </update>
+
+</mapper>

@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.CourseMapper">
+
+    <resultMap id="courseResultMap" type="com.jungwoo.project.memo.course.domain.Course">
+        <id     property="courseId"          column="course_id"/>
+        <result property="userId"            column="user_id"/>
+        <result property="title"             column="title"/>
+        <result property="groupLabel"        column="group_label"/>
+        <result property="textbookTitle"     column="textbook_title"/>
+        <result property="textbookAuthor"    column="textbook_author"/>
+        <result property="textbookPublisher" column="textbook_publisher"/>
+        <result property="textbookIsbn"      column="textbook_isbn"/>
+        <result property="textbookEdition"   column="textbook_edition"/>
+        <result property="textbookInfoSource" column="textbook_info_source"/>
+        <result property="textbookInfoMaterialId" column="textbook_info_material_id"/>
+        <result property="textbookInfoUpdatedAt" column="textbook_info_updated_at"/>
+        <result property="textbookVersion"   column="textbook_version"/>
+        <result property="textbookWebRevisionId" column="textbook_web_revision_id"/>
+        <result property="textbookTocMaterialId" column="textbook_toc_material_id"/>
+        <result property="textbookTocFileHash" column="textbook_toc_file_hash"/>
+        <result property="textbookTocBookKey" column="textbook_toc_book_key"/>
+        <result property="textbookWebLookupEnabled" column="textbook_web_lookup_enabled"/>
+        <result property="status"            column="status"/>
+        <result property="topicTreeVersion"  column="topic_tree_version"/>
+        <result property="createdAt"         column="created_at"/>
+        <result property="updatedAt"         column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="courseId">
+        INSERT INTO courses (
+            user_id, title, group_label, textbook_title, textbook_author, textbook_publisher, textbook_isbn, status
+        ) VALUES (
+            #{userId}, #{title}, #{groupLabel}, #{textbookTitle}, #{textbookAuthor}, #{textbookPublisher},
+            #{textbookIsbn}, #{status}
+        )
+    </insert>
+
+    <select id="findByIdAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <select id="findByUserIdAndStatus" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE user_id = #{userId} AND status = #{status} ORDER BY created_at DESC
+    </select>
+
+    <select id="findByIdsAndUserId" resultMap="courseResultMap">
+        SELECT * FROM courses
+        WHERE user_id = #{userId}
+        AND course_id IN
+        <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!--
+      프로젝트 카드 요약. topic 트리 전체를 가져와 프론트에서 세지 않도록 서버가 한 번에
+      계산한다. 진행 중 주제는 order_index가 가장 앞선 것 하나만 고른다.
+    -->
+    <select id="findSummaryCounts" resultType="com.jungwoo.project.memo.course.dto.CourseSummaryCounts">
+        SELECT
+            c.course_id AS courseId,
+            (SELECT COUNT(*) FROM course_topics t
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE') AS topicCount,
+            (SELECT COUNT(*) FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'LEARNED') AS learnedTopicCount,
+            (SELECT t.title FROM course_topics t
+               JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = c.user_id
+              WHERE t.course_id = c.course_id AND t.status = 'ACTIVE'
+                AND p.status = 'IN_PROGRESS'
+              ORDER BY t.order_index ASC, t.topic_id ASC
+              LIMIT 1) AS currentTopicTitle
+        FROM courses c
+        WHERE c.user_id = #{userId}
+        <if test="courseId != null">
+            AND c.course_id = #{courseId}
+        </if>
+    </select>
+
+    <!--
+      교재 칸의 유일한 쓰기(CourseTextbookWriter). 호출하는 쪽이 행을 잠그고(findByIdAndUserIdForUpdate) 판을 대조한 뒤
+      다섯 칸의 최종 값을 정해 부른다 — 여기서는 받은 값을 그대로 쓰고 판을 1 올린다.
+      clearTocLink가 참이면 사용자가 이었던 목차 자료 연결을 푼다(교재 식별이 바뀌었다 — 다른 책의 목차를 쓰지 않게).
+    -->
+    <update id="writeTextbook">
+        UPDATE courses
+        SET textbook_title     = #{textbookTitle},
+            textbook_author    = #{textbookAuthor},
+            textbook_publisher = #{textbookPublisher},
+            textbook_isbn      = #{textbookIsbn},
+            textbook_edition   = #{textbookEdition},
+            textbook_info_source = #{source},
+            textbook_info_material_id = #{materialId},
+            textbook_web_revision_id = #{webRevisionId},
+            textbook_info_updated_at = NOW(),
+            <if test="clearTocLink">
+            textbook_toc_material_id = NULL,
+            textbook_toc_file_hash = NULL,
+            textbook_toc_book_key = NULL,
+            </if>
+            <if test="!clearTocLink">
+            <!-- 같은 책이면 이어 둔 목차는 그대로이고, 책 열쇠만 보강된 식별(예: ISBN 추가)로 옮긴다 -->
+            textbook_toc_book_key = CASE WHEN textbook_toc_material_id IS NULL THEN NULL ELSE #{bookKey} END,
+            </if>
+            textbook_version = textbook_version + 1
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_version = #{currentVersion}
+    </update>
+
+    <!-- "이 목차가 지금 교재의 것"이라는 사용자 연결. 판을 올린다(목차 근거가 바뀌었다). -->
+    <update id="writeTextbookTocLink">
+        UPDATE courses
+        SET textbook_toc_material_id = #{materialId},
+            textbook_toc_file_hash = #{fileHash},
+            textbook_toc_book_key = #{bookKey},
+            textbook_version = textbook_version + 1
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_version = #{currentVersion}
+    </update>
+
+    <update id="moveTextbookWebRevision">
+        UPDATE courses SET textbook_web_revision_id = #{revisionId}
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND textbook_web_revision_id = #{expected}
+    </update>
+
+    <update id="updateTextbookWebLookupEnabled">
+        UPDATE courses SET textbook_web_lookup_enabled = #{enabled}
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateBasics">
+        UPDATE courses
+        SET title       = COALESCE(#{title}, title),
+            group_label = #{groupLabel}
+        WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <update id="updateStatus">
+        UPDATE courses SET status = #{status} WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <!--
+      학습 구조 변경의 낙관적 잠금. 변경안은 만들 때 본 topic_tree_version을 들고 있다가
+      적용 직전에 이 UPDATE로 대조한다 — 영향 행이 0이면 그 사이 트리가 바뀐 것이고 적용하지
+      않는다. 같은 트랜잭션 안에서 트리를 바꾸는 코드는 반드시 이걸 먼저 부른다.
+    -->
+    <update id="bumpTopicTreeVersion">
+        UPDATE courses
+           SET topic_tree_version = topic_tree_version + 1
+         WHERE course_id = #{courseId} AND user_id = #{userId}
+           AND topic_tree_version = #{expectedVersion}
+    </update>
+
+    <!-- 버전 대조 없이 올린다. 기존 append 경로(분석 apply)처럼 "바꿨다"는 사실만 남길 때. -->
+    <update id="incrementTopicTreeVersion">
+        UPDATE courses
+           SET topic_tree_version = topic_tree_version + 1
+         WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <select id="findByIdAndUserIdForUpdate" resultMap="courseResultMap">
+        SELECT * FROM courses WHERE course_id = #{courseId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+</mapper>

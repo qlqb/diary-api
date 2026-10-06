@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.correction.CourseCorrectionMapper">
+
+    <resultMap id="classMap" type="com.jungwoo.project.memo.learning.correction.TopicClassProgress">
+        <id     property="progressId" column="progress_id"/>
+        <result property="userId"     column="user_id"/>
+        <result property="courseId"   column="course_id"/>
+        <result property="topicId"    column="topic_id"/>
+        <result property="classSeq"   column="class_seq"/>
+        <result property="weekNo"     column="week_no"/>
+        <result property="note"       column="note"/>
+    </resultMap>
+
+    <resultMap id="exclusionMap" type="com.jungwoo.project.memo.learning.correction.CourseScopeExclusion">
+        <id     property="exclusionId" column="exclusion_id"/>
+        <result property="userId"      column="user_id"/>
+        <result property="courseId"    column="course_id"/>
+        <result property="topicId"     column="topic_id"/>
+        <result property="label"       column="label"/>
+        <result property="status"      column="status"/>
+        <result property="createdAt"   column="created_at"/>
+    </resultMap>
+
+    <select id="findClassProgress" resultMap="classMap">
+        SELECT p.* FROM topic_class_progress p
+        JOIN course_topics t ON t.topic_id = p.topic_id AND t.user_id = p.user_id AND t.status = 'ACTIVE'
+        WHERE p.course_id = #{courseId} AND p.user_id = #{userId}
+        ORDER BY p.class_seq IS NULL, p.class_seq, p.week_no IS NULL, p.week_no, p.topic_id
+    </select>
+
+    <insert id="upsertClassProgress" useGeneratedKeys="true" keyProperty="progressId">
+        INSERT INTO topic_class_progress (user_id, course_id, topic_id, class_seq, week_no, source, note)
+        VALUES (#{userId}, #{courseId}, #{topicId}, #{classSeq}, #{weekNo}, 'USER', #{note})
+        ON DUPLICATE KEY UPDATE
+            class_seq = COALESCE(VALUES(class_seq), class_seq),
+            week_no   = COALESCE(VALUES(week_no), week_no),
+            note      = COALESCE(VALUES(note), note)
+    </insert>
+
+    <update id="updateClassSeq">
+        UPDATE topic_class_progress SET class_seq = #{classSeq}
+        WHERE course_id = #{courseId} AND user_id = #{userId} AND topic_id = #{topicId}
+    </update>
+
+    <delete id="deleteClassProgress">
+        DELETE FROM topic_class_progress WHERE course_id = #{courseId} AND user_id = #{userId} AND topic_id = #{topicId}
+    </delete>
+
+    <select id="findActiveExclusions" resultMap="exclusionMap">
+        SELECT e.* FROM course_scope_exclusions e
+        JOIN course_topics t ON t.topic_id = e.topic_id AND t.user_id = e.user_id AND t.status = 'ACTIVE'
+        WHERE e.course_id = #{courseId} AND e.user_id = #{userId} AND e.status = 'ACTIVE'
+        ORDER BY e.created_at, e.exclusion_id
+    </select>
+
+    <select id="findActiveExclusionsForCourses" resultMap="exclusionMap">
+        SELECT e.* FROM course_scope_exclusions e
+        JOIN course_topics t ON t.topic_id = e.topic_id AND t.user_id = e.user_id AND t.status = 'ACTIVE'
+        WHERE e.user_id = #{userId} AND e.status = 'ACTIVE'
+          AND e.course_id IN
+        <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <insert id="upsertExclusion" useGeneratedKeys="true" keyProperty="exclusionId">
+        INSERT INTO course_scope_exclusions (user_id, course_id, topic_id, label, status)
+        VALUES (#{userId}, #{courseId}, #{topicId}, #{label}, 'ACTIVE')
+        ON DUPLICATE KEY UPDATE status = 'ACTIVE', removed_at = NULL
+    </insert>
+
+    <update id="removeExclusion">
+        UPDATE course_scope_exclusions SET status = 'REMOVED', removed_at = NOW()
+        WHERE exclusion_id = #{exclusionId} AND course_id = #{courseId} AND user_id = #{userId} AND status = 'ACTIVE'
+    </update>
+
+    <!-- 구조 변경이 닿는 기록. 계획·오늘에 남은 항목, 끝낸 항목, 자기평가·기억, 진도 상태. 읽기만 한다. -->
+    <select id="countTopicRecords" resultType="com.jungwoo.project.memo.learning.correction.TopicRecordCount">
+        SELECT t.topic_id AS topicId,
+               (SELECT COUNT(*) FROM execution_items e WHERE e.topic_id = t.topic_id AND e.user_id = t.user_id
+                   AND e.is_deleted = 0 AND e.status IN ('PLANNED', 'HOLD')) AS openItems,
+               (SELECT COUNT(*) FROM execution_items e WHERE e.topic_id = t.topic_id AND e.user_id = t.user_id
+                   AND e.is_deleted = 0 AND e.status = 'DONE') AS doneItems,
+               (SELECT COUNT(*) FROM user_contexts c WHERE c.topic_id = t.topic_id AND c.user_id = t.user_id
+                   AND c.status IN ('ACTIVE', 'STALE')) AS contexts,
+               (SELECT p.status FROM topic_progress p WHERE p.topic_id = t.topic_id AND p.user_id = t.user_id
+                   ORDER BY p.topic_progress_id DESC LIMIT 1) AS progress
+        FROM course_topics t
+        WHERE t.user_id = #{userId} AND t.topic_id IN
+        <foreach collection="topicIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+</mapper>

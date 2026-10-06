@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  계획 생성의 실제 전달 기록(plan_generation_traces). 소유권은 user_id 조건이 유일한 방어선이다(FK 없음).
+  프롬프트 전문에는 자료 원문이 들어 있다 — 자료 삭제 시 purgeTextByMaterial로 전문만 지운다.
+-->
+<mapper namespace="com.jungwoo.project.memo.plan.trace.PlanGenerationTraceMapper">
+
+    <resultMap id="traceResultMap" type="com.jungwoo.project.memo.plan.trace.PlanGenerationTrace">
+        <id     property="traceId"         column="trace_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="generationId"    column="generation_id"/>
+        <result property="callKind"        column="call_kind"/>
+        <result property="callOrder"       column="call_order"/>
+        <result property="apiCommit"       column="api_commit"/>
+        <result property="modelName"       column="model_name"/>
+        <result property="estimatedTokens" column="estimated_tokens"/>
+        <result property="systemPrompt"    column="system_prompt"/>
+        <result property="userPrompt"      column="user_prompt"/>
+        <result property="promptSha256"    column="prompt_sha256"/>
+        <result property="textPurgedAt"    column="text_purged_at"/>
+        <result property="shownJson"       column="shown_json"/>
+        <result property="materialIds"     column="material_ids"/>
+        <result property="createdAt"       column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="traceId">
+        INSERT INTO plan_generation_traces
+            (user_id, generation_id, call_kind, call_order, api_commit, model_name, estimated_tokens,
+             system_prompt, user_prompt, prompt_sha256, shown_json, material_ids)
+        VALUES
+            (#{userId}, #{generationId}, #{callKind}, #{callOrder}, #{apiCommit}, #{modelName}, #{estimatedTokens},
+             #{systemPrompt}, #{userPrompt}, #{promptSha256}, #{shownJson}, #{materialIds})
+    </insert>
+
+    <select id="findByGenerationIdAndUserId" resultMap="traceResultMap">
+        SELECT * FROM plan_generation_traces
+         WHERE user_id = #{userId}
+           AND generation_id = #{generationId}
+         ORDER BY call_order, trace_id
+    </select>
+
+    <update id="purgeTextByMaterial">
+        UPDATE plan_generation_traces
+           SET system_prompt = NULL,
+               user_prompt = NULL,
+               text_purged_at = NOW()
+         WHERE user_id = #{userId}
+           AND text_purged_at IS NULL
+           AND material_ids LIKE CONCAT('%', #{materialToken}, '%')
+    </update>
+
+    <delete id="deleteOlderThan">
+        DELETE FROM plan_generation_traces WHERE created_at &lt; #{before}
+    </delete>
+
+</mapper>

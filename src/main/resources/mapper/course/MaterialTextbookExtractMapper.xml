@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.course.textbook.MaterialTextbookExtractMapper">
+
+    <resultMap id="extractResultMap" type="com.jungwoo.project.memo.course.textbook.MaterialTextbookExtract">
+        <id     property="extractId"        column="extract_id"/>
+        <result property="userId"           column="user_id"/>
+        <result property="materialId"       column="material_id"/>
+        <result property="fileHash"         column="file_hash"/>
+        <result property="extractorVersion" column="extractor_version"/>
+        <result property="bookJson"         column="book_json"/>
+        <result property="tocJson"          column="toc_json"/>
+        <result property="tocEntryCount"    column="toc_entry_count"/>
+        <result property="clueJson"         column="clue_json"/>
+        <result property="createdAt"        column="created_at"/>
+    </resultMap>
+
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="extractId">
+        INSERT IGNORE INTO material_textbook_extracts
+            (user_id, material_id, file_hash, extractor_version, book_json, toc_json, toc_entry_count, clue_json)
+        VALUES (#{userId}, #{materialId}, #{fileHash}, #{extractorVersion}, #{bookJson}, #{tocJson}, #{tocEntryCount},
+                #{clueJson})
+    </insert>
+
+    <select id="find" resultMap="extractResultMap">
+        SELECT * FROM material_textbook_extracts
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+          AND extractor_version = #{extractorVersion} AND user_id = #{userId}
+    </select>
+
+    <!-- 지금 파일(해시가 같은)의 추출만. 파일이 바뀐 옛 행과 지운 자료는 빼고 본다. -->
+    <select id="findCurrent" resultMap="extractResultMap">
+        SELECT e.* FROM material_textbook_extracts e
+        JOIN course_materials m ON m.material_id = e.material_id AND m.file_hash = e.file_hash
+             AND m.status = 'ACTIVE' AND m.user_id = e.user_id
+        WHERE e.user_id = #{userId} AND e.extractor_version = #{extractorVersion}
+          AND e.material_id IN
+        <foreach collection="materialIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <!-- 모델 보조 단서는 한 번만 쓴다(같은 파일·판). 규칙이 머리만 본 자리(SIGNAL)만 채운다 — 이미 읽은 값은 덮지 않는다. -->
+    <update id="updateClueJsonIfEmpty">
+        UPDATE material_textbook_extracts SET clue_json = #{clueJson}
+         WHERE extract_id = #{extractId} AND user_id = #{userId}
+           AND (clue_json IS NULL OR JSON_VALUE(clue_json, '$.source') = 'SIGNAL')
+    </update>
+</mapper>

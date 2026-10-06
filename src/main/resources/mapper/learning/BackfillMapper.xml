@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.events.backfill.BackfillMapper">
+
+    <resultMap id="progressMap" type="com.jungwoo.project.memo.learning.events.backfill.BackfillMapper$Progress">
+        <constructor>
+            <arg column="source" javaType="java.lang.String"/>
+            <arg column="last_id" javaType="java.lang.Long"/>
+            <arg column="done" javaType="java.lang.Boolean"/>
+            <arg column="report" javaType="java.lang.String"/>
+            <arg column="lease_owner" javaType="java.lang.String"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="unitMap" type="com.jungwoo.project.memo.learning.events.backfill.BackfillMapper$Unit">
+        <constructor>
+            <arg column="id" javaType="java.lang.Long"/>
+            <arg column="user_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="ensureRow">
+        INSERT IGNORE INTO learning_event_backfill (source) VALUES (#{source})
+    </insert>
+
+    <select id="find" resultMap="progressMap">
+        SELECT source, last_id, done, report, lease_owner FROM learning_event_backfill WHERE source = #{source}
+    </select>
+
+    <update id="acquire">
+        UPDATE learning_event_backfill
+        SET lease_owner = #{owner}, lease_until = DATE_ADD(NOW(), INTERVAL #{minutes} MINUTE)
+        WHERE source = #{source} AND done = 0
+          AND (lease_owner IS NULL OR lease_until IS NULL OR lease_until &lt; NOW() OR lease_owner = #{owner})
+    </update>
+
+    <update id="advance">
+        UPDATE learning_event_backfill
+        SET last_id = #{lastId}, report = #{report}, lease_until = DATE_ADD(NOW(), INTERVAL #{minutes} MINUTE)
+        WHERE source = #{source} AND lease_owner = #{owner} AND lease_until &gt;= NOW()
+    </update>
+
+    <update id="finish">
+        UPDATE learning_event_backfill SET done = 1, report = #{report}, lease_owner = NULL, lease_until = NULL
+        WHERE source = #{source} AND lease_owner = #{owner} AND lease_until &gt;= NOW()
+    </update>
+
+    <select id="lockTopic" resultType="long">
+        SELECT t.topic_id FROM course_topics t WHERE t.topic_id = #{topicId} AND t.user_id = #{userId} FOR UPDATE
+    </select>
+
+    <select id="lockTopicProgress" resultType="long">
+        SELECT topic_progress_id FROM topic_progress WHERE topic_id = #{topicId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+    <select id="lockMaterialLink" resultType="long">
+        SELECT link_id FROM material_links WHERE link_id = #{linkId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+    <!-- 판 0 = 기록기가 원천을 찾지 못해 아무것도 쓰지 않았다(전환 전 원본은 직접 원천만 쓴다). 살아 있는 행만 센다. -->
+    <select id="countUnwrittenContexts" resultType="long">
+        SELECT COUNT(*) FROM user_contexts c
+        LEFT JOIN learning_event_origins o
+          ON o.user_id = c.user_id AND o.origin_kind = 'USER_CONTEXT' AND o.origin_id = c.context_id
+        WHERE c.user_id = #{userId} AND c.course_id = #{courseId} AND c.created_at &lt; #{before}
+          -- 기록기 대상과 같게: 살아 있는 행 + 해결 연결이 있는 대체된 막힘(STUCK을 유지한다)
+          AND (c.status IN ('ACTIVE', 'STALE')
+               OR (c.fact_kind = 'DIFFICULTY' AND c.status = 'SUPERSEDED'
+                   AND EXISTS (SELECT 1 FROM learning_resolution_links k
+                               WHERE k.user_id = c.user_id AND k.difficulty_context_id = c.context_id)))
+          AND (c.fact_kind IN ('PROGRESS', 'EXAM_SCOPE', 'DIFFICULTY', 'RESOLVED') OR c.source_type = 'SELF_CHECK')
+          AND COALESCE(o.current_revision, 0) = 0
+          -- 막힘에 이어진 해결 기억은 자기 origin이 아니라 RESOLUTION(막힘 id)에 쓴다
+          AND NOT EXISTS (SELECT 1 FROM learning_resolution_links l
+                          JOIN learning_event_origins r ON r.user_id = l.user_id AND r.origin_kind = 'RESOLUTION'
+                           AND r.origin_id = l.difficulty_context_id AND r.current_revision &gt; 0
+                          WHERE l.user_id = c.user_id AND l.resolver_context_id = c.context_id)
+    </select>
+
+    <select id="countUnwrittenCorrections" resultType="long">
+        SELECT
+          (SELECT COUNT(*) FROM course_scope_exclusions x
+            LEFT JOIN learning_event_origins o
+              ON o.user_id = x.user_id AND o.origin_kind = 'SCOPE_EXCLUSION' AND o.origin_id = x.exclusion_id
+            WHERE x.user_id = #{userId} AND x.course_id = #{courseId} AND x.created_at &lt; #{before}
+              AND x.status = 'ACTIVE' AND COALESCE(o.current_revision, 0) = 0)
+        + (SELECT COUNT(*) FROM topic_class_progress p
+            LEFT JOIN learning_event_origins o
+              ON o.user_id = p.user_id AND o.origin_kind = 'CLASS_PROGRESS' AND o.origin_id = p.progress_id
+            WHERE p.user_id = #{userId} AND p.course_id = #{courseId} AND p.created_at &lt; #{before}
+              AND COALESCE(o.current_revision, 0) = 0)
+    </select>
+
+    <select id="sumRevisions" resultType="long">
+        SELECT COALESCE(SUM(current_revision), 0) FROM learning_event_origins
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND origin_kind IN
+        <foreach collection="kinds" item="k" open="(" separator="," close=")">#{k}</foreach>
+    </select>
+
+    <select id="nextRecords" resultMap="unitMap">
+        SELECT execution_record_id AS id, user_id FROM execution_records
+        WHERE execution_record_id &gt; #{afterId} AND created_at &lt; #{before}
+          AND (#{onlyUser} IS NULL OR user_id = #{onlyUser})
+        ORDER BY execution_record_id LIMIT #{limit}
+    </select>
+
+    <select id="nextContextCourses" resultMap="unitMap">
+        SELECT course_id AS id, MIN(user_id) AS user_id FROM user_contexts
+        WHERE course_id &gt; #{afterId} AND created_at &lt; #{before}
+          AND (#{onlyUser} IS NULL OR user_id = #{onlyUser})
+          AND (fact_kind IN ('PROGRESS', 'EXAM_SCOPE', 'DIFFICULTY', 'RESOLVED') OR source_type = 'SELF_CHECK')
+        GROUP BY course_id ORDER BY course_id LIMIT #{limit}
+    </select>
+
+    <select id="nextCorrectionCourses" resultMap="unitMap">
+        SELECT course_id AS id, MIN(user_id) AS user_id FROM (
+            SELECT course_id, user_id FROM course_scope_exclusions WHERE course_id &gt; #{afterId} AND created_at &lt; #{before}
+            UNION ALL
+            SELECT course_id, user_id FROM topic_class_progress WHERE course_id &gt; #{afterId} AND created_at &lt; #{before}
+        ) c WHERE (#{onlyUser} IS NULL OR user_id = #{onlyUser}) GROUP BY course_id ORDER BY course_id LIMIT #{limit}
+    </select>
+
+    <select id="nextTopics" resultMap="unitMap">
+        SELECT t.topic_id AS id, t.user_id FROM course_topics t
+        LEFT JOIN topic_progress p ON p.topic_id = t.topic_id AND p.user_id = t.user_id
+        WHERE t.topic_id &gt; #{afterId} AND (#{onlyUser} IS NULL OR t.user_id = #{onlyUser})
+          AND ((p.status = 'LEARNED' AND p.created_at &lt; #{before}) OR (t.user_mark = 'KNOWN' AND t.created_at &lt; #{before}))
+        ORDER BY t.topic_id LIMIT #{limit}
+    </select>
+
+    <select id="nextLinks" resultMap="unitMap">
+        SELECT link_id AS id, user_id FROM material_links
+        WHERE link_id &gt; #{afterId} AND linked_at &lt; #{before}
+          AND (#{onlyUser} IS NULL OR user_id = #{onlyUser})
+        ORDER BY link_id LIMIT #{limit}
+    </select>
+
+
+</mapper>
