@@ -161,9 +161,7 @@ learning_events
 - **백필과 실시간이 같은 origin 체계를 쓴다.** 백필도 `origin_kind=EXECUTION_RECORD, origin_id=record_id`처럼 원본 행을 가리키므로, 백필 뒤
   실시간 기록이나 백필 재실행이 같은 사실을 두 번 만들지 않는다.
 - 한 원본이 여러 원천을 가리키면 `output_no`로 나눈다. 번호는 원천 식별자를 정렬한 순서로 매겨 재실행해도 같다.
-- **판 저장:** 원본 표에 `event_revision INT NOT NULL DEFAULT 0` 열을 더한다(`execution_records`, `user_contexts`, `course_scope_exclusions`).
-  원본을 바꾸는 쓰기는 그 행을 잠그고(`SELECT … FOR UPDATE`, 지금 18번이 과목 행을 먼저 잠그는 경로는 그 순서 그대로: 과목 → 원본 행) 판을 올린
-  뒤 같은 트랜잭션에서 이벤트를 쓴다. 백필도 같은 잠금으로 그 시점의 판을 읽는다.
+- **판 저장:** 원본 표마다 열을 더하지 않고 `learning_event_origins`(origin별 현재 판) 한 표에 둔다(계획 단계에서 정함). 원본을 바꾸는 쓰기는 기존 잠금(과목 → 원본 행) 뒤에 origin 행을 잠그고 같은 트랜잭션에서 이벤트를 쓴다. 백필도 같은 순서로 잠근다.
 - **판 단위 대체:** 같은 origin에서는 **가장 높은 판의 출력만 살아 있다.** 새 판의 출력 수가 줄면(막힌 단계를 지움 → STUCK 없음) 이전 판의
   STUCK은 판 규칙으로 자동으로 빠진다. SUPERSEDES 이벤트는 origin이 다른 대체(추정 기억 → 사용자 확인 입력)에만 쓴다.
 - 원본이 없는 입력(수업 후 입력, 주간 확인)은 요청마다 클라이언트 요청 키를 origin_id로 쓴다(`CLASS_PROMPT` + 요청 키).

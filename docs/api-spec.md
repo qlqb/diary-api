@@ -950,3 +950,19 @@ NONE(화면이 단원을 묻는다). `topics`는 바꾸기 선택지.
 - 초안이 읽은 사진의 단원 연결이 바뀌면(생성 도중 포함) `freshness` STALE("이 초안이 참고한 교재 사진의 단원이 바뀌었어요.").
 - 상담 사진이 후보에 있으면 `plan_generation_traces.user_prompt`에 전문을 남기지 않는다.
 
+## Learning Events — 학습 이벤트 로그 (2026-10-06, 1단계)
+
+설계 `docs/product/20-learning-events.md`. 1단계는 이벤트가 쌓이는지 확인하는 조회만 둔다.
+
+### `GET /api/courses/{courseId}/learning-events?after=0&limit=50`
+
+과목의 살아 있는 이벤트(origin 현재 판, 철회 제외), event_id 오름차순. 본인 과목만(아니면 404 `COURSE_NOT_FOUND`). limit 1~200.
+원천 참조·구조화된 의미만 싣는다 — 자료 제목·본문·기억 글은 없다.
+
+```json
+[{"eventId":1,"originKind":"EXECUTION_RECORD","originId":10,"actor":"ME","verb":"ATTEMPTED","objectKind":"SECTION",
+  "objectRef":"s:123","objectFrom":null,"objectTo":null,"topicId":7,
+  "payload":{"v":1,"outcome":"DONE_UNGRADED","supportLevel":"UNKNOWN","hasStuckStep":false},
+  "evidence":"LOGGED","confidence":null,"claimAt":null,"claimSeq":null,"occurredAt":"2026-10-06T10:00:00","recordedAt":"…"}]
+```
+

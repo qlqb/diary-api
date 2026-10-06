@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.events.LearningEventMapper">
+
+    <resultMap id="eventResultMap" type="com.jungwoo.project.memo.learning.events.LearningEvent">
+        <id     property="eventId"        column="event_id"/>
+        <result property="userId"         column="user_id"/>
+        <result property="courseId"       column="course_id"/>
+        <result property="originKind"     column="origin_kind"/>
+        <result property="originId"       column="origin_id"/>
+        <result property="originRevision" column="origin_revision"/>
+        <result property="outputNo"       column="output_no"/>
+        <result property="actor"          column="actor"/>
+        <result property="verb"           column="verb"/>
+        <result property="objectKind"     column="object_kind"/>
+        <result property="objectRef"      column="object_ref"/>
+        <result property="objectFrom"     column="object_from"/>
+        <result property="objectTo"       column="object_to"/>
+        <result property="topicId"        column="topic_id"/>
+        <result property="payload"        column="payload"/>
+        <result property="evidence"       column="evidence"/>
+        <result property="confidence"     column="confidence"/>
+        <result property="claimAt"        column="claim_at"/>
+        <result property="claimSeq"       column="claim_seq"/>
+        <result property="occurredAt"     column="occurred_at"/>
+        <result property="recordedAt"     column="recorded_at"/>
+    </resultMap>
+
+    <resultMap id="originRowMap" type="com.jungwoo.project.memo.learning.events.LearningEventMapper$OriginRow">
+        <constructor>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="current_revision" javaType="java.lang.Integer"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="originOwnerMap" type="com.jungwoo.project.memo.learning.events.LearningEventMapper$OriginOwner">
+        <constructor>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="eventRefMap" type="com.jungwoo.project.memo.learning.events.LearningEventMapper$EventRefRow">
+        <constructor>
+            <arg column="event_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="verb" javaType="java.lang.String"/>
+            <arg column="live" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="sectionRowMap" type="com.jungwoo.project.memo.learning.events.LearningEventMapper$SectionRow">
+        <constructor>
+            <arg column="section_id" javaType="java.lang.Long"/>
+            <arg column="printed_page_start" javaType="java.lang.Integer"/>
+            <arg column="printed_page_end" javaType="java.lang.Integer"/>
+            <arg column="linked" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="materialRowMap" type="com.jungwoo.project.memo.learning.events.LearningEventMapper$MaterialRow">
+        <constructor>
+            <arg column="material_id" javaType="java.lang.Long"/>
+            <arg column="linked" javaType="java.lang.Boolean"/>
+        </constructor>
+    </resultMap>
+
+    <select id="lockOrigin" resultMap="originRowMap">
+        SELECT course_id, current_revision FROM learning_event_origins
+        WHERE user_id = #{userId} AND origin_kind = #{originKind} AND origin_id = #{originId}
+        FOR UPDATE
+    </select>
+
+    <select id="findOrigin" resultMap="originRowMap">
+        SELECT course_id, current_revision FROM learning_event_origins
+        WHERE user_id = #{userId} AND origin_kind = #{originKind} AND origin_id = #{originId}
+    </select>
+
+    <insert id="upsertOrigin">
+        INSERT INTO learning_event_origins (user_id, origin_kind, origin_id, course_id, current_revision)
+        VALUES (#{userId}, #{originKind}, #{originId}, #{courseId}, 0)
+        ON DUPLICATE KEY UPDATE current_revision = current_revision
+    </insert>
+
+    <update id="updateOriginRevision">
+        UPDATE learning_event_origins SET current_revision = #{revision}
+        WHERE user_id = #{userId} AND origin_kind = #{originKind} AND origin_id = #{originId}
+    </update>
+
+    <select id="lockOutputs" resultMap="eventResultMap">
+        SELECT * FROM learning_events
+        WHERE user_id = #{userId} AND origin_kind = #{originKind} AND origin_id = #{originId}
+          AND origin_revision = #{revision}
+        ORDER BY output_no
+        FOR UPDATE
+    </select>
+
+    <insert id="insertEvents">
+        INSERT INTO learning_events (
+            user_id, course_id, origin_kind, origin_id, origin_revision, output_no, actor, verb, object_kind, object_ref,
+            object_from, object_to, topic_id, payload, evidence, confidence, claim_at, claim_seq, occurred_at
+        ) VALUES
+        <foreach collection="events" item="e" separator=",">
+            (#{e.userId}, #{e.courseId}, #{e.originKind}, #{e.originId}, #{e.originRevision}, #{e.outputNo}, #{e.actor},
+             #{e.verb}, #{e.objectKind}, #{e.objectRef}, #{e.objectFrom}, #{e.objectTo}, #{e.topicId}, #{e.payload},
+             #{e.evidence}, #{e.confidence}, #{e.claimAt}, #{e.claimSeq}, #{e.occurredAt})
+        </foreach>
+    </insert>
+
+    <select id="findLive" resultMap="eventResultMap">
+        SELECT e.* FROM learning_events e
+        JOIN learning_event_origins o
+          ON o.user_id = e.user_id AND o.origin_kind = e.origin_kind AND o.origin_id = e.origin_id
+         AND o.current_revision = e.origin_revision
+        WHERE e.user_id = #{userId} AND e.course_id = #{courseId} AND e.event_id &gt; #{afterId}
+          AND e.verb &lt;&gt; 'RETRACTED'
+          AND NOT EXISTS (
+              SELECT 1 FROM learning_events c
+              JOIN learning_event_origins co
+                ON co.user_id = c.user_id AND co.origin_kind = c.origin_kind AND co.origin_id = c.origin_id
+               AND co.current_revision = c.origin_revision
+              WHERE c.user_id = e.user_id AND c.course_id = e.course_id AND c.verb IN ('RETRACTED', 'SUPERSEDES')
+                AND JSON_VALUE(c.payload, '$.target') = e.event_id)
+        ORDER BY e.event_id
+        LIMIT #{limit}
+    </select>
+
+
+    <select id="findEventRefs" resultMap="eventRefMap">
+        SELECT e.event_id, e.course_id, e.verb,
+               (o.current_revision IS NOT NULL AND o.current_revision = e.origin_revision
+                AND NOT EXISTS (
+                    SELECT 1 FROM learning_events c
+                    JOIN learning_event_origins co
+                      ON co.user_id = c.user_id AND co.origin_kind = c.origin_kind AND co.origin_id = c.origin_id
+                     AND co.current_revision = c.origin_revision
+                    WHERE c.user_id = e.user_id AND c.course_id = e.course_id AND c.verb IN ('RETRACTED', 'SUPERSEDES')
+                      AND JSON_VALUE(c.payload, '$.target') = e.event_id)) AS live
+        FROM learning_events e
+        LEFT JOIN learning_event_origins o
+          ON o.user_id = e.user_id AND o.origin_kind = e.origin_kind AND o.origin_id = e.origin_id
+        WHERE e.user_id = #{userId} AND e.event_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="countOwnedCourse" resultType="int">
+        SELECT COUNT(*) FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <select id="findOriginOwner" resultMap="originOwnerMap">
+        <choose>
+            <when test="originKind == 'EXECUTION_RECORD'">
+                SELECT r.user_id, i.course_id FROM execution_records r
+                JOIN execution_items i ON i.execution_item_id = r.execution_item_id
+                WHERE r.execution_record_id = #{originId}
+            </when>
+            <when test="originKind == 'TOPIC_PROGRESS'">
+                SELECT p.user_id, t.course_id FROM topic_progress p
+                JOIN course_topics t ON t.topic_id = p.topic_id
+                WHERE p.topic_progress_id = #{originId}
+            </when>
+            <when test="originKind == 'TOPIC_MARK'">
+                SELECT user_id, course_id FROM course_topics WHERE topic_id = #{originId}
+            </when>
+            <when test="originKind == 'USER_CONTEXT' or originKind == 'RESOLUTION'">
+                SELECT user_id, course_id FROM user_contexts WHERE context_id = #{originId}
+            </when>
+            <when test="originKind == 'SCOPE_EXCLUSION'">
+                SELECT user_id, course_id FROM course_scope_exclusions WHERE exclusion_id = #{originId}
+            </when>
+            <when test="originKind == 'CLASS_PROGRESS'">
+                SELECT user_id, course_id FROM topic_class_progress WHERE progress_id = #{originId}
+            </when>
+            <when test="originKind == 'MESSAGE_PHOTO'">
+                SELECT m.user_id, c.course_id FROM ai_messages m
+                JOIN ai_conversations c ON c.conversation_id = m.conversation_id
+                WHERE m.message_id = #{originId}
+            </when>
+            <when test="originKind == 'MATERIAL_LINK'">
+                SELECT user_id, course_id FROM material_links WHERE link_id = #{originId}
+            </when>
+            <when test="originKind == 'CLASS_INPUT'">
+                SELECT user_id, course_id FROM class_sessions WHERE session_id = #{originId}
+            </when>
+            <when test="originKind == 'SCHEDULE_EXCEPTION'">
+                SELECT r.user_id, r.course_id FROM routine_exceptions x
+                JOIN routines r ON r.routine_id = x.routine_id
+                WHERE x.routine_exception_id = #{originId}
+            </when>
+            <otherwise>
+                SELECT NULL AS user_id, NULL AS course_id FROM DUAL WHERE 1 = 0
+            </otherwise>
+        </choose>
+    </select>
+
+    <select id="findTopicIdsInCourse" resultType="long">
+        SELECT topic_id FROM course_topics
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND topic_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findSections" resultMap="sectionRowMap">
+        SELECT s.section_id, s.printed_page_start, s.printed_page_end,
+               EXISTS (SELECT 1 FROM material_links l
+                       WHERE l.material_id = s.material_id AND l.course_id = #{courseId} AND l.user_id = #{userId}) AS linked
+        FROM material_sections s
+        JOIN course_materials m ON m.material_id = s.material_id AND m.user_id = #{userId}
+        WHERE s.user_id = #{userId} AND s.section_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findMaterials" resultMap="materialRowMap">
+        SELECT m.material_id,
+               EXISTS (SELECT 1 FROM material_links l
+                       WHERE l.material_id = m.material_id AND l.course_id = #{courseId} AND l.user_id = #{userId}) AS linked
+        FROM course_materials m
+        WHERE m.user_id = #{userId} AND m.material_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findOwnedBookRefs" resultType="long">
+        SELECT book_ref_id FROM textbook_refs WHERE user_id = #{userId} AND book_ref_id IN
+        <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="countTocEntryInCourse" resultType="int">
+        SELECT COUNT(*) FROM course_topics t
+        JOIN textbook_ref_aliases a
+          ON a.user_id = t.user_id AND a.book_key_hash = SHA2(t.source_textbook_key, 256)
+         AND a.book_key = t.source_textbook_key AND a.book_ref_id = #{bookRefId}
+        WHERE t.user_id = #{userId} AND t.course_id = #{courseId}
+          AND t.toc_key_state = 'SET' AND t.toc_key_hash = #{keyHash} AND t.toc_key_line = #{keyLine}
+    </select>
+
+</mapper>
