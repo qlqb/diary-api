@@ -5,6 +5,7 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.course.CourseMapper;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventActorType;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
@@ -56,6 +57,7 @@ public class ExecutionItemService {
     private final ExecutionItemMapper executionItemMapper;
     private final ExecutionItemEventMapper executionItemEventMapper;
     private final ExecutionRecordMapper executionRecordMapper;
+    private final CourseMapper courseMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
@@ -124,6 +126,7 @@ public class ExecutionItemService {
                 request.getScheduledStartAt(), request.getScheduledEndAt());
         validatePlacement(placementType, request.getScheduledDate(),
                 request.getScheduledStartAt(), request.getScheduledEndAt());
+        requireOwnedCourse(userId, request.getCourseId());
 
         ExecutionItem item = ExecutionItem.builder()
                 .userId(userId)
@@ -776,11 +779,25 @@ public class ExecutionItemService {
 
     /**
      * 프로젝트 대화에서 만든 제안을 적용한 직후, 생성된 실행 조각에 그 프로젝트를 연결한다.
-     * linkTopic과 같은 이유로 존재 확인 없이 갱신한다.
+     * 실행 조각 쪽은 linkTopic과 같은 이유로 존재 확인 없이 갱신하지만, 과목은 사용자 소유인지
+     * 먼저 본다 — 항목의 courseId는 모델 출력에서 올 수 있고, 남의 과목을 가리키면 그 과목의
+     * "관련 실행"에 내 조각이 섞인다.
      */
     @Transactional
     public void linkCourse(Long executionItemId, Long userId, Long courseId) {
+        requireOwnedCourse(userId, courseId);
         executionItemMapper.updateCourseId(executionItemId, userId, courseId);
+    }
+
+    /**
+     * 요청이 지정한 과목이 이 사용자 것인지 확인한다. null은 "과목 없음"이라 그대로 통과한다.
+     * 과목은 소프트 삭제가 없으므로(보관만 있다) 사용자 조건으로 찾으면 충분하다. 남의 과목과
+     * 없는 과목을 구분하지 않고 같은 404로 돌려준다 — 다른 과목 서비스(CourseService.getOwned)와 같다.
+     */
+    private void requireOwnedCourse(Long userId, Long courseId) {
+        if (courseId != null && courseMapper.findByIdAndUserId(courseId, userId) == null) {
+            throw new NotFoundException(ErrorCode.COURSE_NOT_FOUND);
+        }
     }
 
     /**
