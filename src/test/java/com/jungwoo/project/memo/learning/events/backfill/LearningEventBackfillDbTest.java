@@ -122,6 +122,23 @@ class LearningEventBackfillDbTest {
     }
 
     @Test
+    void 원천_없는_막힘이_철회된_해결에_대체돼도_미대응으로_센다() throws Exception {
+        // 토픽 없는 막힘 → 해결(나중에 철회). 연결은 복원되고 막힘은 기록 대상이지만 원천이 없어 이벤트가 없다
+        long difficulty = insert("INSERT INTO user_contexts (user_id, content, status, source_type, evidence_type, fact_kind, "
+                + "course_id, said_at, created_at) VALUES (?, '합성 막힘2', 'SUPERSEDED', 'CONSULT_AUTO', 'STATED', 'DIFFICULTY', "
+                + "?, ?, ?)", USER, courseId, OLD, OLD);
+        insert("INSERT INTO user_contexts (user_id, content, status, source_type, evidence_type, fact_kind, course_id, "
+                + "supersedes_context_id, said_at, created_at) VALUES (?, '합성 해결2', 'WITHDRAWN', 'CONSULT_AUTO', 'STATED', "
+                + "'RESOLVED', ?, ?, ?, ?)", USER, courseId, difficulty, OLD, OLD);
+
+        Map<LearningEventBackfill.Source, Map<String, Long>> report = backfill.runOnce("t7", later(), USER);
+
+        assertThat(report.get(LearningEventBackfill.Source.USER_CONTEXT)).containsEntry("unmapped", 1L);
+        assertThat(queryLong("SELECT COUNT(*) FROM learning_event_origins WHERE user_id = ? AND origin_kind = 'USER_CONTEXT' "
+                + "AND origin_id = ? AND current_revision > 0", USER, difficulty)).isZero();
+    }
+
+    @Test
     void 원천을_찾지_못한_기억은_미대응으로_센다() throws Exception {
         // 토픽도 원천도 없는 옛 진도 진술 — 직접 가리킨 원천이 없어 이벤트를 만들지 않는다
         insert("INSERT INTO user_contexts (user_id, content, status, source_type, evidence_type, fact_kind, course_id, "

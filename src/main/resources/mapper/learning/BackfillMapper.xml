@@ -65,7 +65,11 @@
         LEFT JOIN learning_event_origins o
           ON o.user_id = c.user_id AND o.origin_kind = 'USER_CONTEXT' AND o.origin_id = c.context_id
         WHERE c.user_id = #{userId} AND c.course_id = #{courseId} AND c.created_at &lt; #{before}
-          AND c.status IN ('ACTIVE', 'STALE')
+          -- 기록기 대상과 같게: 살아 있는 행 + 해결 연결이 있는 대체된 막힘(STUCK을 유지한다)
+          AND (c.status IN ('ACTIVE', 'STALE')
+               OR (c.fact_kind = 'DIFFICULTY' AND c.status = 'SUPERSEDED'
+                   AND EXISTS (SELECT 1 FROM learning_resolution_links k
+                               WHERE k.user_id = c.user_id AND k.difficulty_context_id = c.context_id)))
           AND (c.fact_kind IN ('PROGRESS', 'EXAM_SCOPE', 'DIFFICULTY', 'RESOLVED') OR c.source_type = 'SELF_CHECK')
           AND COALESCE(o.current_revision, 0) = 0
           -- 막힘에 이어진 해결 기억은 자기 origin이 아니라 RESOLUTION(막힘 id)에 쓴다
