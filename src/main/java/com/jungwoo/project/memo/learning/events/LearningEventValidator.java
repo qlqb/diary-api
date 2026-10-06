@@ -106,8 +106,12 @@ public class LearningEventValidator {
             }
             throw new InvalidEventException("원본이 없다: " + origin.kind());
         }
-        if (!Objects.equals(owner.userId(), origin.userId()) || !Objects.equals(owner.courseId(), origin.courseId())) {
-            throw new InvalidEventException("원본의 사용자·과목이 다르다: " + origin.kind());
+        if (!Objects.equals(owner.userId(), origin.userId())) {
+            throw new InvalidEventException("원본의 사용자가 다르다: " + origin.kind());
+        }
+        // 내리기만 할 때는 과목을 묻지 않는다 — 원본의 과목이 바뀌었어도(루틴의 과목 변경) 기록할 때의 과목으로 내릴 수 있어야 한다
+        if (!noOutputs && !Objects.equals(owner.courseId(), origin.courseId())) {
+            throw new InvalidEventException("원본의 과목이 다르다: " + origin.kind());
         }
     }
 

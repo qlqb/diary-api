@@ -9,6 +9,7 @@ import com.jungwoo.project.memo.learning.events.EventVocabulary.ObjectKind;
 import com.jungwoo.project.memo.learning.events.EventVocabulary.OriginKind;
 import com.jungwoo.project.memo.learning.events.EventVocabulary.Verb;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +36,7 @@ import java.util.Set;
  * </ul>
  * 호출자는 그 과목 행을 잠근 뒤 부른다(기억 쓰기의 기존 잠금) — 과목 하나의 동기화는 한 번에 하나다.
  */
+@Slf4j
 @Component
 @RequiredArgsConstructor
 public class MemoryEventRecorder {
@@ -45,6 +47,11 @@ public class MemoryEventRecorder {
     private final EventSync sync;
     private final EventCutover cutover;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void restoreLinksOf(long userId, long courseId) {
+        restoreLinks(userId, courseId);
+    }
 
     /** 막힘 → 그 막힘을 닫은 해결 기억(같은 트랜잭션). */
     @Transactional(propagation = Propagation.MANDATORY)
@@ -68,6 +75,7 @@ public class MemoryEventRecorder {
         if (courseId == null || eventMapper.countOwnedCourse(userId, courseId) != 1) {
             return;
         }
+        restoreLinks(userId, courseId);
         List<ContextRow> rows = sourceMapper.findEventContexts(userId, courseId);
         Map<Long, Long> resolverOf = new java.util.TreeMap<>();
         sourceMapper.findResolutionLinks(userId, courseId).forEach(l -> resolverOf.put(l.difficultyId(), l.resolverId()));
@@ -91,6 +99,35 @@ public class MemoryEventRecorder {
             List<EventDraft> drafts = difficulty == null || resolverId == null ? List.of()
                     : resolvedOf(userId, difficulty, byId.get(resolverId));
             sync.apply(new EventOrigin(userId, courseId, OriginKind.RESOLUTION, difficultyId), drafts, resolutions);
+        }
+    }
+
+    /**
+     * 해결 연결이 없던 때(이 기능 전)의 해결 기억도 연결한다: 막힘을 가리키는 해결 기억에서 출발해, 사용자가 고쳐 대체한 행을 따라가 지금 행에
+     * 잇는다. 이미 있는 연결은 그대로 둔다. 동기화마다 돌아서, 실시간 수정과 백필 중 무엇이 먼저든 결과가 같다.
+     */
+    void restoreLinks(long userId, long courseId) {
+        for (EventSourceMapper.ResolutionLink seed : sourceMapper.findResolverSeeds(userId, courseId)) {
+            long resolver = seed.resolverId();
+            java.util.Set<Long> seen = new java.util.HashSet<>();
+            boolean cycle = false;
+            while (true) {
+                if (!seen.add(resolver)) {
+                    cycle = true;
+                    break;
+                }
+                Long next = sourceMapper.findEditSuccessor(userId, resolver);
+                if (next == null) {
+                    break;
+                }
+                resolver = next;
+            }
+            if (cycle) {
+                // 사슬 중간 행을 잇면 INSERT IGNORE 때문에 영영 고쳐지지 않는다 — 잇지 않고 남긴다
+                log.warn("해결 연결 복원: 수정 사슬이 순환해 건너뜀(difficultyId={})", seed.difficultyId());
+                continue;
+            }
+            sourceMapper.insertResolutionLinkIgnore(userId, seed.difficultyId(), resolver);
         }
     }
 

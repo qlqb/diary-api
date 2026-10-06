@@ -43,6 +43,10 @@
            AND r.is_deleted = 0
     </select>
 
+    <select id="findByRoutineIdAndDate" resultMap="routineExceptionResultMap">
+        SELECT * FROM routine_exceptions WHERE routine_id = #{routineId} AND exception_date = #{exceptionDate}
+    </select>
+
     <select id="findByRoutineId" resultMap="routineExceptionResultMap">
         SELECT * FROM routine_exceptions
          WHERE routine_id = #{routineId}

@@ -162,6 +162,72 @@ public class RoutineOccurrenceService {
     }
 
     /**
+     * 과목 수업 한 번 — <b>원래 날짜</b> 기준(학습 이벤트의 수업 회차, 설계 20번 §5.1).
+     *
+     * @param cancelled   그날 SKIP(휴강)
+     * @param moved       MOVED(보강) — 시각은 목적지
+     * @param exceptionId 그날의 예외(없으면 null)
+     */
+    public record ClassSlot(Long routineId, Long courseId, LocalDate sourceDate, LocalDateTime startAt,
+                            LocalDateTime endAt, boolean cancelled, boolean moved, Long exceptionId) {
+    }
+
+    /**
+     * 과목 수업들을 원래 날짜 창으로 펼친다. 전개({@link #expand})와 달리 SKIP한 날도 cancelled로 내고, MOVED는 목적지가 창 밖이어도
+     * 원래 날짜로 낸다. 수업 확인 목록 같은 읽기용.
+     */
+    @Transactional(readOnly = true)
+    public List<ClassSlot> classSlots(Long userId, Long courseId, LocalDate from, LocalDate to) {
+        if (from == null || to == null || to.isBefore(from) || courseId == null) {
+            return List.of();
+        }
+        Map<Long, Map<LocalDate, RoutineException>> exceptions = new HashMap<>();
+        for (RoutineException e : routineExceptionMapper.findByUserIdAndExceptionDateRange(userId, from, to)) {
+            exceptions.computeIfAbsent(e.getRoutineId(), k -> new HashMap<>()).put(e.getExceptionDate(), e);
+        }
+        List<ClassSlot> out = new ArrayList<>();
+        for (Routine routine : routineReader.findAllWithWeekdays(userId)) {
+            if (!courseId.equals(routine.getCourseId())) {
+                continue;
+            }
+            for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
+                ClassSlot slot = slotOf(routine, date,
+                        exceptions.getOrDefault(routine.getRoutineId(), Map.of()).get(date));
+                if (slot != null) {
+                    out.add(slot);
+                }
+            }
+        }
+        out.sort(Comparator.comparing(ClassSlot::sourceDate).thenComparing(ClassSlot::startAt)
+                .thenComparing(ClassSlot::routineId));
+        return out;
+    }
+
+    /** 이 루틴의 원래 날짜 date가 수업일이면 그 한 번(규칙에 없는 날이면 null). exception은 그날의 예외(없으면 null). */
+    public static ClassSlot slotOf(Routine routine, LocalDate date, RoutineException exception) {
+        if (routine.getCourseId() == null || date.isBefore(routine.getEffectiveFrom())
+                || (routine.getEffectiveUntil() != null && date.isAfter(routine.getEffectiveUntil()))
+                || routine.getDaysOfWeek() == null || !routine.getDaysOfWeek().contains(date.getDayOfWeek())) {
+            return null;
+        }
+        LocalDate day = date;
+        LocalTime start = routine.getStartTime();
+        LocalTime end = routine.getEndTime();
+        boolean moved = exception != null && exception.getType() == RoutineExceptionType.MOVED
+                && exception.getMovedDate() != null;
+        boolean cancelled = exception != null && exception.getType() == RoutineExceptionType.SKIP;
+        if (moved) {
+            day = exception.getMovedDate();
+            start = exception.getMovedStartTime() != null ? exception.getMovedStartTime() : start;
+            end = exception.getMovedEndTime() != null ? exception.getMovedEndTime() : end;
+        }
+        LocalDateTime startAt = LocalDateTime.of(day, start);
+        LocalDateTime endAt = end.isAfter(start) ? LocalDateTime.of(day, end) : LocalDateTime.of(day.plusDays(1), end);
+        return new ClassSlot(routine.getRoutineId(), routine.getCourseId(), date, startAt, endAt, cancelled, moved,
+                exception == null ? null : exception.getRoutineExceptionId());
+    }
+
+    /**
      * endTime이 startTime보다 이르거나 같으면 다음 날이다. 근무표의 CL = 15~00이 실제 사례다.
      *
      * <p>창 밖으로 삐져나가는 부분을 잘라내지 않는다. 잘라내면 일요일 새벽에 배치가 된다.

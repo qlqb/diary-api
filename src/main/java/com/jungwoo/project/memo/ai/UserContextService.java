@@ -144,6 +144,10 @@ public class UserContextService {
                 .sourceMessageId(current.getSourceMessageId()).supersedesContextId(contextId)
                 .confirmedAt(now).saidAt(now).build();
         userContextMapper.insert(next);
+        if (memoryEvents != null && current.getCourseId() != null) {
+            // 연결이 생기기 전의 해결 기억이면 먼저 잇는다(지금은 고친 행이 아직 사슬의 끝이다)
+            memoryEvents.restoreLinksOf(userId, current.getCourseId());
+        }
         if (memoryEvents != null) {
             // 고친 행이 막힘을 닫은 해결이었으면(종류를 바꿨다 되돌린 경우 포함) 연결을 새 행으로. 연결이 없으면 아무 일도 없다.
             // 새 행이 해결이 아니면 해결 이벤트만 내려가고, 막힘은 STUCK을 유지한다.

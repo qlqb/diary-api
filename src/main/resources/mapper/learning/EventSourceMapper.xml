@@ -232,6 +232,27 @@
         ON DUPLICATE KEY UPDATE resolver_context_id = VALUES(resolver_context_id)
     </insert>
 
+    <select id="findResolverSeeds" resultMap="resolutionLinkMap">
+        SELECT r.supersedes_context_id AS difficulty_context_id, r.context_id AS resolver_context_id
+        FROM user_contexts r
+        JOIN user_contexts d ON d.context_id = r.supersedes_context_id AND d.user_id = r.user_id AND d.fact_kind = 'DIFFICULTY'
+        WHERE r.user_id = #{userId} AND r.course_id = #{courseId} AND r.fact_kind = 'RESOLVED'
+          AND NOT EXISTS (SELECT 1 FROM learning_resolution_links l
+                          WHERE l.user_id = r.user_id AND l.difficulty_context_id = r.supersedes_context_id)
+        ORDER BY r.context_id
+    </select>
+
+    <select id="findEditSuccessor" resultType="long">
+        SELECT context_id FROM user_contexts
+        WHERE user_id = #{userId} AND supersedes_context_id = #{contextId} AND source_type = 'USER_EDITED'
+        ORDER BY context_id LIMIT 1
+    </select>
+
+    <insert id="insertResolutionLinkIgnore">
+        INSERT IGNORE INTO learning_resolution_links (difficulty_context_id, resolver_context_id, user_id)
+        VALUES (#{difficultyId}, #{resolverId}, #{userId})
+    </insert>
+
     <update id="moveResolutionLinks">
         UPDATE learning_resolution_links SET resolver_context_id = #{toResolverId}
         WHERE user_id = #{userId} AND resolver_context_id = #{fromResolverId}

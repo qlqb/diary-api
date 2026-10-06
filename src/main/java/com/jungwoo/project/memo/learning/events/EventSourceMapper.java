@@ -52,6 +52,15 @@ public interface EventSourceMapper {
     int upsertResolutionLink(@Param("userId") long userId, @Param("difficultyId") long difficultyId,
                              @Param("resolverId") long resolverId);
 
+    /** 막힘을 가리키는 해결 기억(supersedes_context_id) 중 아직 연결이 없는 것 — 연결 복원의 출발점. */
+    List<ResolutionLink> findResolverSeeds(@Param("userId") long userId, @Param("courseId") long courseId);
+
+    /** 사용자가 고쳐서 이 행을 대체한 행(USER_EDITED). 없으면 null. */
+    Long findEditSuccessor(@Param("userId") long userId, @Param("contextId") long contextId);
+
+    int insertResolutionLinkIgnore(@Param("userId") long userId, @Param("difficultyId") long difficultyId,
+                                   @Param("resolverId") long resolverId);
+
     int moveResolutionLinks(@Param("userId") long userId, @Param("fromResolverId") long fromResolverId,
                             @Param("toResolverId") long toResolverId);
 

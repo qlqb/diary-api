@@ -250,8 +250,6 @@ public class ExecutionItemService {
                 .stuckStep(stuckStepOf(request.getStuckStep()))
                 .build();
         executionRecordMapper.insert(record);
-        // 학습 이벤트(시도·막힘) — 같은 트랜잭션. 완료는 활동 수행이지 이해 확정이 아니다.
-        learningEvents.record(userId, record.getExecutionRecordId());
 
         log.info("실행 조각 완료: executionItemId={}, userId={}", executionItemId, userId);
 
@@ -260,6 +258,9 @@ public class ExecutionItemService {
             // 리스너(TopicService.recordExecutionCompleted)가 IN_PROGRESS/복습 여부만 갱신한다.
             eventPublisher.publishEvent(new ExecutionItemCompletedEvent(executionItemId, userId, item.getTopicId()));
         }
+        // 학습 이벤트(시도·막힘) — 같은 트랜잭션. 완료는 활동 수행이지 이해 확정이 아니다.
+        // 진도 행(리스너, 동기) 다음에 쓴다 — 토픽 경로·백필과 같은 잠금 순서(진도 → 교재 별칭 → origin).
+        learningEvents.record(userId, record.getExecutionRecordId());
 
         return ExecutionItemResponse.from(executionItemMapper.findByIdAndUserId(executionItemId, userId));
     }

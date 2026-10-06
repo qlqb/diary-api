@@ -156,6 +156,21 @@ class ExecutionItemServiceTest {
     }
 
     @Test
+    void complete_updatesTopicProgressBeforeLearningEvent() {
+        // 잠금 순서(진도 → 교재 별칭 → origin)를 토픽 경로·백필과 맞춘다
+        ExecutionItem item = plannedItem(0L);
+        item.setTopicId(77L);
+        when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);
+        when(executionItemMapper.completeWithVersion(ITEM_ID, USER_ID, 0L)).thenReturn(1);
+
+        service.complete(ITEM_ID, USER_ID, ExecutionItemCompleteRequest.builder().version(0L).build());
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(eventPublisher, learningEvents);
+        order.verify(eventPublisher).publishEvent(any(ExecutionItemCompletedEvent.class));
+        order.verify(learningEvents).record(org.mockito.ArgumentMatchers.eq(USER_ID), any());
+    }
+
+    @Test
     void complete_doesNotPublishLearningFeedbackEvent_whenItemHasNoTopic() {
         ExecutionItem item = plannedItem(0L);
         when(executionItemMapper.findByIdAndUserId(ITEM_ID, USER_ID)).thenReturn(item);

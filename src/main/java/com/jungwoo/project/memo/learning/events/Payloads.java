@@ -151,10 +151,10 @@ public final class Payloads {
         }
     }
 
-    /** 회차 이동(보강). movedTo = 옮긴 날짜(yyyy-MM-dd). */
-    public record SessionMoved(int v, String movedTo) implements EventPayload {
-        public SessionMoved(String movedTo) {
-            this(V, movedTo);
+    /** 회차 이동(보강). movedTo = 옮긴 날짜(yyyy-MM-dd), startAt·endAt = 옮긴 시각(ISO). */
+    public record SessionMoved(int v, String movedTo, String startAt, String endAt) implements EventPayload {
+        public SessionMoved(String movedTo, String startAt, String endAt) {
+            this(V, movedTo, startAt, endAt);
         }
     }
 }
