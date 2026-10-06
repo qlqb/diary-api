@@ -72,6 +72,9 @@ public final class PlanCatalogText {
         return sb.toString();
     }
 
+    /** 강의계획서 구간 표시. 선택·더 읽기·계획 입력이 같은 문장을 쓴다. */
+    public static final String SYLLABUS_MARK = " · 강의계획서(일정·범위 확인용 — 학습 본문 아님)";
+
     /** 후보 구간 한 줄의 본문(핸들·들여쓰기 제외). */
     public static String sectionText(SectionLine line, Map<Long, String> topicHandles, boolean withFilename) {
         MaterialSection s = line.section();
@@ -83,6 +86,9 @@ public final class PlanCatalogText {
         }
         if (withFilename && line.material() != null) {
             sb.append(" · 자료 ").append(line.material().getOriginalFilename());
+        }
+        if (line.syllabus()) {
+            sb.append(SYLLABUS_MARK);
         }
         if (s.getTaskText() != null) {
             sb.append(" · 수행: ").append(cut(flat(s.getTaskText()), MAX_TASK_CHARS));

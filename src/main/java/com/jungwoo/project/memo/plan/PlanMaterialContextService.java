@@ -163,16 +163,17 @@ public class PlanMaterialContextService {
      * @param requested           이번 요청에서 사용자가 지정한 자료(또는 구간)다
      * @param photoLink           상담 사진 구간의 단원 연결: GUESSED(서버 추정) / CONFIRMED(사용자 확인) / null(사진 아님·연결 없음)
      * @param focus               막힌·도움받아 해결한 단원의 사진 본문 — 접어도 항상 보이고, 선택에서 빠지면 서버가 보탠다
+     * @param syllabus            이 프로젝트가 강의계획서(SYLLABUS)로 연결한 자료의 구간. 일정·범위의 근거이지 학습 본문이 아니다
      */
     public record SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
                               List<Long> topicIds, boolean completedAssignment, boolean openAssignment,
                               boolean requested, String photoLink, boolean focus,
                               /** 상담 사진 구간의 실제 연결 상태(후보 필터와 무관, PlanProvenancePhoto.state 형식). 사진 아니면 null */
-                              String photoState) {
+                              String photoState, boolean syllabus) {
 
         public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles,
                            List<Long> topicIds, boolean completedAssignment, boolean openAssignment, boolean requested) {
-            this(section, material, roles, topicIds, completedAssignment, openAssignment, requested, null, false, null);
+            this(section, material, roles, topicIds, completedAssignment, openAssignment, requested, null, false, null, false);
         }
 
         public SectionLine(MaterialSection section, CourseMaterial material, List<String> roles) {
@@ -186,12 +187,12 @@ public class PlanMaterialContextService {
 
         public SectionLine withFocus() {
             return new SectionLine(section, material, roles, topicIds, completedAssignment, openAssignment, requested,
-                    photoLink, true, photoState);
+                    photoLink, true, photoState, syllabus);
         }
 
         public SectionLine withTopics(List<Long> ids) {
             return new SectionLine(section, material, roles, ids, completedAssignment, openAssignment, requested,
-                    photoLink, focus, photoState);
+                    photoLink, focus, photoState, syllabus);
         }
 
         public String roleLabels() {
@@ -225,6 +226,47 @@ public class PlanMaterialContextService {
      * @param unconfirmed  아직 과제인지 확인하지 않은 후보
      * @param materials    이 프로젝트의 자료(요청 지정 자료 포함)
      */
+    /** 자료↔프로젝트 연결(자료 역할). 없으면(단위 테스트) 강의계획서 표시 없이 동작한다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.material.MaterialLinkMapper materialLinkMapper;
+
+    public void setMaterialLinkMapper(com.jungwoo.project.memo.material.MaterialLinkMapper mapper) {
+        this.materialLinkMapper = mapper;
+    }
+
+    /**
+     * 강의계획서로 연결된 자료 id. 역할은 "이 프로젝트가 이 자료를 무엇으로 쓰는가"라 프로젝트 연결을 본다.
+     * 프로젝트에 연결되지 않은 지정 자료(courseId 없음·다른 프로젝트 소속)는 어느 프로젝트에서든 강의계획서면 그렇게 본다.
+     *
+     * <p>표시가 없으면 강의계획서의 주차표("스택과 큐의 구현 및 응용")가 같은 단원의 강의 슬라이드보다 요청 낱말에 더 잘
+     * 맞아, 선택·계획이 강의계획서를 학습 본문으로 골랐다(2026-10-07 실호출, ch05 스택 슬라이드가 있는데 계획서 p.3·p.4 인용).
+     */
+    private Set<Long> syllabusMaterialIds(Long userId, Long courseId, Collection<Long> materialIds) {
+        if (materialLinkMapper == null || materialIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<Long> out = new HashSet<>();
+        Set<Long> seen = new HashSet<>();
+        if (courseId != null) {
+            for (com.jungwoo.project.memo.material.domain.MaterialLink link : materialLinkMapper.findByCourseIdAndUserId(courseId, userId)) {
+                seen.add(link.getMaterialId());
+                if (link.getMaterialType() == com.jungwoo.project.memo.material.domain.MaterialType.SYLLABUS) {
+                    out.add(link.getMaterialId());
+                }
+            }
+        }
+        for (Long id : materialIds) {
+            if (seen.contains(id)) {
+                continue;
+            }
+            if (materialLinkMapper.findByMaterialIdAndUserId(id, userId).stream()
+                    .anyMatch(l -> l.getMaterialType() == com.jungwoo.project.memo.material.domain.MaterialType.SYLLABUS)) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
     /** 승인 전 구조 제안의 읽기 전용 색인. 없으면(단위 테스트) 색인 없이 자료별 묶음으로 보인다. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.learning.structure.ProposedTopicIndex proposedTopicIndex;
@@ -452,6 +494,7 @@ public class PlanMaterialContextService {
             }
         }
 
+        Set<Long> syllabusIds = syllabusMaterialIds(userId, courseId, materials.keySet());
         Map<Long, List<Long>> topicsBySection = new HashMap<>();
         Map<Long, Boolean> linkedOnlyToExcluded = new HashMap<>();
         // 상담 사진 구간의 단원 연결 상태(추정·확인). 선택 목록·최종 입력·근거 기록에 그대로 실린다.
@@ -508,7 +551,8 @@ public class PlanMaterialContextService {
                         completed, open, requested, photoLinks.get(section.getSectionId()), false,
                         material.isConsultPhoto()
                                 ? com.jungwoo.project.memo.plan.PlanProvenancePhoto.state(courseLinks, section.getSectionId())
-                                : null));
+                                : null,
+                        syllabusIds.contains(material.getMaterialId())));
             }
         }
 
@@ -557,6 +601,7 @@ public class PlanMaterialContextService {
                 materials.put(m.getMaterialId(), m);
             }
         }
+        Set<Long> syllabusIds = syllabusMaterialIds(userId, null, materials.keySet());
         List<SectionLine> sections = new ArrayList<>();
         if (!materials.isEmpty()) {
             for (MaterialSection section : sectionMapper.findActiveByMaterialIds(new ArrayList<>(materials.keySet()), userId)) {
@@ -567,7 +612,8 @@ public class PlanMaterialContextService {
                 }
                 boolean requested = requestedMaterials.contains(material.getMaterialId())
                         || requestedSections.contains(section.getSectionId());
-                sections.add(new SectionLine(section, material, roles(section), List.of(), false, false, requested));
+                sections.add(new SectionLine(section, material, roles(section), List.of(), false, false, requested,
+                        null, false, null, syllabusIds.contains(material.getMaterialId())));
             }
         }
         List<CourseMaterial> list = new ArrayList<>(materials.values());

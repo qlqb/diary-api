@@ -1590,6 +1590,9 @@ public class PeriodPlanDraftGenerator {
             - 운영 안내(평가 비율·출결·연락처·수업 규칙·교재 안내)는 계획을 판단하는 배경이다. 시험 범위·마감·주차 주제는
               일정과 범위의 근거로 쓰되, 운영 안내 자체를 요약·정리·암기하는 항목은 사용자가 요청했을 때만 만든다
               (그때는 origin을 USER_REQUEST로 한다). 설명과 운영 안내가 섞인 구간에서는 학습 내용만 항목으로 만든다.
+            - "강의계획서" 표시가 붙은 구간은 범위·일정의 근거다. 학습 항목의 refIds에는 그 내용을 실제로 담은 강의자료·교재
+              구간을 먼저 적는다 — 첫 번째 인용이 사용자가 여는 "시작 자료"가 된다. 강의계획서는 범위 근거로 뒤에 붙일 수 있다.
+              그 단원의 강의자료·교재 구간을 받지 못했으면 moreEvidence로 더 읽거나, 자료가 없다고 assumptions에 적는다.
             - 자료가 있다는 것, 수업에서 다뤘다는 것, 사용자가 해 봤다는 것, 이해했다는 것은 서로 다른 사실이다. 입력에 없는
               것을 가정하지 않는다 — 모르면 assumptions나 questions에 적는다. "기록 없음"은 "안 배움"이 아니다.
             - [일정 후보]는 자료에서 읽은 날짜일 뿐 확정된 시간표·마감이 아니다. 범위를 가늠하는 데 쓰되 확정 마감처럼
@@ -2173,7 +2176,8 @@ public class PeriodPlanDraftGenerator {
             boolean focusPhoto = FocusPhotos.isFocus(r.target().sectionId(), inputs.catalogs());
             appendRetrievedSection(sb, courseId, r, focusPhoto ? focusCap(inputs.cap()) : inputs.cap(),
                     completedAssignment, openAssignment, collector, refBySection, rendered,
-                    line == null ? null : line.photoLink(), line == null ? null : line.photoState(), focusPhoto);
+                    line == null ? null : line.photoLink(), line == null ? null : line.photoState(), focusPhoto,
+                    line != null && line.syllabus());
         }
         if (droppedChanged > 0) {
             sb.append("  (고른 구간 중 ").append(droppedChanged)
@@ -2245,6 +2249,7 @@ public class PeriodPlanDraftGenerator {
                     .append(section.getDisplayTitle())
                     .append(locator.isBlank() ? "" : " (" + locator + ")")
                     .append(s.line().material() == null ? "" : " · 자료 " + s.line().material().getOriginalFilename())
+                    .append(s.line().syllabus() ? PlanCatalogText.SYLLABUS_MARK : "")
                     .append('\n');
         }
     }
@@ -2395,7 +2400,7 @@ public class PeriodPlanDraftGenerator {
                                         boolean completedAssignment, boolean openAssignment,
                                         ProvenanceCollector collector, Map<Long, String> refBySection,
                                         Map<Long, PlanMaterialRetriever.Rendered> rendered, String photoLink,
-                                        String photoState, boolean focusPhoto) {
+                                        String photoState, boolean focusPhoto, boolean syllabus) {
         boolean photo = r.material() != null && r.material().isConsultPhoto();
         MaterialSection section = r.section();
         PlanMaterialRetriever.Rendered body = PlanMaterialRetriever.render(r, cap);
@@ -2410,6 +2415,9 @@ public class PeriodPlanDraftGenerator {
             text.append(" (").append(locator).append(")");
         }
         text.append(" · 자료 ").append(r.material().getOriginalFilename());
+        if (syllabus) {
+            text.append(PlanCatalogText.SYLLABUS_MARK);
+        }
         if (section.getTaskText() != null) {
             text.append(" · 수행: ").append(PlanMaterialContextService.shortExcerpt(section.getTaskText()));
         }
