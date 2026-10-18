@@ -58,12 +58,8 @@ import java.util.List;
 @RequiredArgsConstructor
 public class AvailabilityEstimateService {
 
-    /**
-     * 후보를 만들 수 있는 하루 상한 창. 요일로 나누지 않는다 — 평일과 주말의 차이는 수업과
-     * 근무가 hardBusy로 만들어 내는 것이지, 이 상수가 미리 정할 것이 아니다.
-     */
-    private static final LocalTime BASE_CANDIDATE_WINDOW_START = LocalTime.of(9, 0);
-    private static final LocalTime BASE_CANDIDATE_WINDOW_END = LocalTime.of(23, 0);
+    /** 하루의 끝(자정)을 적는 값. LocalTime은 24:00을 담지 못해 문자열로 받는다. */
+    static final String END_OF_DAY = "24:00";
 
     private final ExecutionItemMapper executionItemMapper;
     private final RoutineOccurrenceService routineOccurrenceService;
@@ -72,6 +68,17 @@ public class AvailabilityEstimateService {
 
     @Value("${scheduling.availability.default-time-zone:Asia/Seoul}")
     private String defaultTimeZoneId = "Asia/Seoul";
+
+    /**
+     * 후보를 만들 수 있는 하루 상한 창(HH:mm). 요일로 나누지 않는다 — 평일과 주말의 차이는 수업과
+     * 근무가 hardBusy로 만들어 내는 것이지, 이 값이 미리 정할 것이 아니다.
+     * 끝은 "24:00"(자정)까지 쓸 수 있다. 자정을 넘기는 창은 만들지 않는다 — 다음 날 새벽은 그날의 창이 아니다.
+     */
+    @Value("${scheduling.availability.day-start:09:00}")
+    private String dayStart = "09:00";
+
+    @Value("${scheduling.availability.day-end:" + END_OF_DAY + "}")
+    private String dayEnd = END_OF_DAY;
 
     public AvailabilityEstimateResult estimate(
             Long userId, LocalDate horizonStart, LocalDate horizonEnd,
@@ -201,11 +208,18 @@ public class AvailabilityEstimateService {
      * subtract 한 곳에서만 일어난다. 이 메서드는 "무엇을 후보로 만들 수 있는가"의 상한만 준다.
      */
     private List<AvailabilityWindow> baseCandidateWindows(LocalDate horizonStart, LocalDate horizonEnd) {
+        LocalTime start = LocalTime.parse(dayStart);
+        boolean untilMidnight = END_OF_DAY.equals(dayEnd);
+        LocalTime end = untilMidnight ? null : LocalTime.parse(dayEnd);
+        if (!untilMidnight && !start.isBefore(end)) {
+            throw new IllegalStateException("scheduling.availability.day-start(" + dayStart
+                    + ")는 day-end(" + dayEnd + ")보다 앞이어야 합니다");
+        }
         List<AvailabilityWindow> windows = new ArrayList<>();
         for (LocalDate d = horizonStart; !d.isAfter(horizonEnd); d = d.plusDays(1)) {
             windows.add(new AvailabilityWindow(
-                    LocalDateTime.of(d, BASE_CANDIDATE_WINDOW_START),
-                    LocalDateTime.of(d, BASE_CANDIDATE_WINDOW_END),
+                    LocalDateTime.of(d, start),
+                    untilMidnight ? d.plusDays(1).atStartOfDay() : LocalDateTime.of(d, end),
                     AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW,
                     "구체적인 근거가 없어 하루 기본 시간대에서 확정 일정을 뺀 시간이에요"));
         }

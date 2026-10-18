@@ -582,7 +582,7 @@ class PlanProvenanceIntegrationTest {
 
     /**
      * 미리보기 기본 창(오늘부터 7일) 안에 들어오는 계획: 내일부터 7일, 30분 항목 하나. 이 사용자는
-     * 막힌 시간이 없으므로 기본 시간대(09~23시)에서 반드시 배치된다.
+     * 막힌 시간이 없으므로 기본 시간대(09~24시)에서 반드시 배치된다.
      */
     private Fixture givenPlaceableProposal() {
         String generationId = "gen-test-" + System.nanoTime();

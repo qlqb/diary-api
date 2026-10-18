@@ -67,7 +67,7 @@ class AvailabilityEstimateServiceTest {
 
     @Test
     void excludesExistingTimeFixedItems_fromAvailabilityWindows() {
-        // 기본 창(09:00-23:00) 안에 있는 기존 고정 일정
+        // 기본 창(09:00-24:00) 안에 있는 기존 고정 일정
         ExecutionItem fixed = ExecutionItem.builder()
                 .executionItemId(10L).userId(USER_ID)
                 .placementType(PlacementType.TIME_FIXED)
@@ -228,7 +228,7 @@ class AvailabilityEstimateServiceTest {
     @Test
     void excludesCommitments_fromAvailabilityWindows() {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
-        // 기본 창(09:00-23:00) 안에 있는 약속
+        // 기본 창(09:00-24:00) 안에 있는 약속
         when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
                 .thenReturn(List.of(commitment("친구 약속",
                         LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0)),
@@ -285,7 +285,7 @@ class AvailabilityEstimateServiceTest {
         // 같은 구간을 두 번 빼는 개념이 아니다 — 20:00부터 기본 창 끝까지는 그대로 남아야 한다.
         boolean keepsRemainder = result.windows().stream()
                 .anyMatch(w -> w.startAt().equals(end)
-                        && w.endAt().equals(LocalDateTime.of(HORIZON_START, LocalTime.of(23, 0))));
+                        && w.endAt().equals(HORIZON_START.plusDays(1).atStartOfDay()));
         assertThat(keepsRemainder).isTrue();
     }
 
@@ -385,7 +385,41 @@ class AvailabilityEstimateServiceTest {
         assertThat(result.windows().stream()
                 .filter(w -> w.startAt().toLocalDate().equals(tuesday))
                 .map(w -> w.startAt().toLocalTime() + "~" + w.endAt().toLocalTime()))
-                .containsExactly("09:00~14:00", "16:50~18:00");
+                .containsExactly("09:00~14:00", "16:50~18:00", "23:00~00:00");
+    }
+
+    @Test
+    void 기본_창은_자정까지이고_자정을_넘기지_않는다() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        assertThat(result.windows()).allSatisfy(w ->
+                assertThat(w.endAt()).isBeforeOrEqualTo(w.startAt().toLocalDate().plusDays(1).atStartOfDay()));
+        LocalDate tomorrow = HORIZON_START.plusDays(1);
+        assertThat(result.windows()).anySatisfy(w -> {
+            assertThat(w.startAt()).isEqualTo(LocalDateTime.of(tomorrow, LocalTime.of(9, 0)));
+            assertThat(w.endAt()).isEqualTo(tomorrow.plusDays(1).atStartOfDay());
+        });
+    }
+
+    @Test
+    void 하루_창의_시작과_끝은_설정으로_바꾼다() {
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "dayStart", "07:30");
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "dayEnd", "22:00");
+
+        AvailabilityEstimateResult result = service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of());
+
+        LocalDate tomorrow = HORIZON_START.plusDays(1);
+        assertThat(hasWindow(result, tomorrow, LocalTime.of(7, 30), LocalTime.of(22, 0))).isTrue();
+
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "dayEnd", "07:00");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.estimate(
+                USER_ID, HORIZON_START, HORIZON_END, List.of(), List.of()))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     /** 근거도 일정도 없으면 주말은 기본 창 하나 그대로다. 요일로 창을 나누지 않는다. */
@@ -402,7 +436,7 @@ class AvailabilityEstimateServiceTest {
                     .singleElement()
                     .satisfies(w -> {
                         assertThat(w.startAt().toLocalTime()).isEqualTo(LocalTime.of(9, 0));
-                        assertThat(w.endAt().toLocalTime()).isEqualTo(LocalTime.of(23, 0));
+                        assertThat(w.endAt()).isEqualTo(weekendDay.plusDays(1).atStartOfDay());
                         assertThat(w.confidence()).isEqualTo(AvailabilityConfidence.LOW);
                     });
         }

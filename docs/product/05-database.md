@@ -329,7 +329,7 @@ serverCalculations[] calculationId · kind · providedToModel · inputRefIds · 
   "그때 준 값"으로 저장된다.
 - `serverCalculations`는 출처가 아니다. 가용시간 추정과 학습 예산은 서버가 만든 값이고, 원본
   일정과 같은 목록에 두면 사용자가 추정을 확정된 사실로 읽는다. `inputLineage`는 그 계산의
-  입력이 전부 남았는지(COMPLETE) 일부인지(PARTIAL)를 구분한다 — 하루 기본 창(09~23시)과 현재
+  입력이 전부 남았는지(COMPLETE) 일부인지(PARTIAL)를 구분한다 — 하루 기본 창(설정값, 기본 09~24시)과 현재
   시각은 가리킬 원본 행이 없어 가용시간 추정은 항상 PARTIAL이다.
 - `evidence_json`을 `original_payload`에 넣지 않는다. 그쪽은 사용자가 고친 값이
   `edited_payload`로 다시 쓰이는 자리다. 컬럼을 나눠 두면 "클라이언트가 서버 소유 값을

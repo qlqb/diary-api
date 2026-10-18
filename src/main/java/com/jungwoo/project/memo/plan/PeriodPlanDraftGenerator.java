@@ -1499,7 +1499,7 @@ public class PeriodPlanDraftGenerator {
         return Math.toIntExact(total);
     }
 
-    public static final String CONFIDENCE_ALL_DEFAULT = "기본 시간대(09~23시에서 확정 일정을 뺀 시간)를 사용한 추정";
+    public static final String CONFIDENCE_ALL_DEFAULT = "기본 시간대(하루 기본 창에서 확정 일정을 뺀 시간)를 사용한 추정";
     public static final String CONFIDENCE_PARTLY_DEFAULT = "일부는 기본 시간대를 사용한 추정";
     public static final String CONFIDENCE_CONFIRMED = "사용자가 확인한 시간 기준";
 
@@ -1973,7 +1973,7 @@ public class PeriodPlanDraftGenerator {
                 ProvenanceSourceType.COMMITMENT,
                 ProvenanceSourceType.EXECUTION_ITEM_FIXED));
 
-        String note = "하루 기본 창(09~23시)과 현재 시각은 서버 상수·시계에서 와 가리킬 원본 행이 없다";
+        String note = "하루 기본 창(scheduling.availability.day-start·day-end)과 현재 시각은 서버 상수·시계에서 와 가리킬 원본 행이 없다";
         if (busyTruncated) {
             note = note + ". 프롬프트 줄 상한에 걸려 일부 일정은 모델 입력에도 출처 목록에도 실리지 않았다";
         }

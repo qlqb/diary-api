@@ -1028,10 +1028,18 @@ public class AiWorkspaceContextBuilder {
                     .append(window.startAt().toLocalDate().getDayOfWeek()
                             .getDisplayName(TextStyle.SHORT, Locale.KOREAN)).append(' ')
                     .append(window.startAt().format(TIME_FMT)).append('~')
-                    .append(window.endAt().format(TIME_FMT))
+                    .append(endLabel(window))
                     .append(" (").append(minutes).append("분)\n");
         }
         sb.append("합계 약 ").append(totalMinutes).append("분.\n\n");
+    }
+
+    /** 자정에 끝나는 창은 "00:00"이 아니라 "24:00"으로 적는다 — "21:00~00:00"은 하루 시작으로 읽힌다. */
+    private static String endLabel(AvailabilityWindow window) {
+        LocalDateTime end = window.endAt();
+        return end.toLocalTime().equals(java.time.LocalTime.MIDNIGHT)
+                && end.toLocalDate().isAfter(window.startAt().toLocalDate())
+                ? "24:00" : end.format(TIME_FMT);
     }
 
     /**

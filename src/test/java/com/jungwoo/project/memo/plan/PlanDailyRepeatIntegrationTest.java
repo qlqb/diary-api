@@ -107,7 +107,7 @@ class PlanDailyRepeatIntegrationTest {
 
         // 셋째 날은 하루 종일 다른 일정으로 막는다.
         LocalDate blocked = start.plusDays(2);
-        insertTimeFixed(TITLE_PREFIX + "종일 행사", blocked, blocked.atTime(9, 0), blocked.atTime(23, 0));
+        insertTimeFixed(TITLE_PREFIX + "종일 행사", blocked, blocked.atTime(9, 0), blocked.plusDays(1).atStartOfDay());
 
         PlanPlacementResponse placed = planPlacementService.place(userId(), plan.getPlanVersionId(), start);
 
