@@ -43,10 +43,14 @@ class RequestScopeFlowTest {
         assertThat(f.selectionPrompts().get(0)).contains("[이번 요청의 범위").contains("S1.P1 판다스 실습");
         assertThat(f.planPrompts().get(0)).contains("[요청 범위]").contains("S1.P2 붓꽃·타이타닉");
 
+        // 2단계: 선택이 앞부분(판다스 실습)을 하나도 고르지 않아 서버가 그 자료의 구간을 보충해 원문을 실었다.
+        assertThat(f.planPrompts().get(0)).contains("원문-판다스");
+
         ScopeReport report = generated.extras().scopeReport();
         assertThat(report.status()).isEqualTo("EXTRACTED");
+        // 원문은 실렸지만 계획 항목이 그 부분을 다루지 않았다 — 확보와 반영은 따로 판정된다.
         assertThat(report.parts()).extracting(ScopeReport.PartState::reflection).containsExactly("UNHANDLED", "ITEM");
-        assertThat(report.parts().get(0).acquisition()).isEqualTo("SHOWN_NOT_SELECTED");
+        assertThat(report.parts().get(0).acquisition()).isIn("DELIVERED_UNIT", "EXCERPT_ONLY");
         assertThat(report.requiredUnmet()).isTrue();
         assertThat(report.completion()).isEqualTo("NOT_COMPLETE");
     }

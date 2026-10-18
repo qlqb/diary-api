@@ -104,6 +104,27 @@
         </if>
     </select>
 
+    <!--
+        (2026-10-18) 계획 생성용: 이번 요청에 유효한 맥락만 조회한 뒤 상한을 둔다. 다른 프로젝트 한정, 기간이 계획과 겹치지 않는
+        맥락은 조회 단계에서 뺀다 — 거르기 전에 자르면 무관한 맥락이 유효한 맥락을 밀어낸다. 프로젝트·기간이 없는 전역 맥락은 남는다.
+    -->
+    <select id="findActiveAndStaleForPlan" resultMap="userContextResultMap">
+        SELECT *
+        FROM user_contexts
+        WHERE user_id = #{userId}
+          AND status IN ('ACTIVE', 'STALE')
+          AND (course_id IS NULL
+            <if test="courseIds != null and courseIds.size() > 0">
+               OR course_id IN
+               <foreach collection="courseIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+            </if>
+          )
+          AND (scope_end IS NULL OR scope_end &gt;= #{start})
+          AND (scope_start IS NULL OR scope_start &lt;= #{end})
+        ORDER BY updated_at DESC
+        LIMIT #{limit}
+    </select>
+
     <update id="updateStatusIfIn">
         UPDATE user_contexts
         SET status = #{toStatus}

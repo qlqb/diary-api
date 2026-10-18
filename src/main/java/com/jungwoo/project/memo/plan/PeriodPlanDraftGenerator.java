@@ -605,7 +605,10 @@ public class PeriodPlanDraftGenerator {
                 spec.courseIds() != null && !spec.courseIds().isEmpty(), spec.requestedMaterialIds(),
                 spec.requestedSectionIds(), spec.instruction());
         Set<Long> excluded = spec.excludedTopicIdSet();
-        List<UserContext> contexts = loadUserContexts(spec.userId());
+        Set<Long> planCourseIds = courses.stream().map(Course::getCourseId).collect(Collectors.toSet());
+        // 조회에서 과목·기간으로 거른 뒤 자른다. 서버 쪽에서 한 번 더 같은 규칙을 적용한다(다른 경로로 읽은 맥락이 섞여도 같게).
+        List<UserContext> contexts = relevantContexts(loadUserContexts(spec.userId(), planCourseIds, spec.start(), spec.end()),
+                planCourseIds, spec.start(), spec.end());
         Facts facts = collectFacts(spec, courses, capturedAt, opts);
         // 목적이 정해져야 "기록 기준 첫 항목"을 출발점으로 표시할지 정한다(복습·시험은 진도·시험 범위가 근거다).
         boolean firstAnchor = facts.purpose().allowsFirstUnlearnedAnchor();
@@ -725,6 +728,13 @@ public class PeriodPlanDraftGenerator {
 
         // 막힌·도움받아 해결한 단원의 사진 본문은 선택 모델이 고르지 않아도 읽는다(C).
         selection = FocusPhotos.withFocusSections(selection, catalogs);
+        // 요청 범위의 부분인데 고른 구간이 하나도 없으면 그 부분 자료의 대표 구간을 보충한다(2단계).
+        int beforeCoverage = selection.sections().size();
+        selection = com.jungwoo.project.memo.plan.scope.ScopeCoverage.supplement(selection, scopes, catalogs);
+        if (selection.sections().size() > beforeCoverage) {
+            log.info("요청 범위 보충: 구간 {}개를 더 읽는다. workflowId={}", selection.sections().size() - beforeCoverage,
+                    generationId);
+        }
 
         // ===== 3. 서버 원문 조회 =====
         opts.stage(PlanGenerationProgress.Stage.RETRIEVING);
@@ -859,6 +869,34 @@ public class PeriodPlanDraftGenerator {
     }
 
     // ===== 요청 범위(2026-10-18) =====
+
+    /**
+     * 근거가 확인된 범위의 부분마다, 그 부분만의 자료(다른 부분과 함께 쓰지 않는 자료)에서 원문이 실린 첫 구간. 입력 예산을 줄일 때
+     * 마지막까지 남긴다.
+     */
+    static Set<Long> scopeAnchors(PlanInputs inputs) {
+        Set<Long> keep = new java.util.HashSet<>();
+        if (inputs.scopes() == null || inputs.scopes().isEmpty()) {
+            return keep;
+        }
+        Map<Long, Integer> partsPerMaterial = com.jungwoo.project.memo.plan.scope.ScopeCoverage.partsPerMaterial(inputs.scopes());
+        for (var scope : inputs.scopes()) {
+            if (!scope.verified()) {
+                continue;
+            }
+            for (var part : scope.parts()) {
+                for (PlanMaterialRetriever.Retrieved r : inputs.retrieved()) {
+                    Long material = r.material() == null ? null : r.material().getMaterialId();
+                    if (r.outcome().retrieved() && material != null && part.materialIds().contains(material)
+                            && partsPerMaterial.getOrDefault(material, 0) <= 1) {
+                        keep.add(r.target().sectionId());
+                        break;
+                    }
+                }
+            }
+        }
+        return keep;
+    }
 
     private PlanMaterialContextService.CourseCatalog catalogOf(Spec spec, Course course,
                                                                com.jungwoo.project.memo.ai.state.ProjectStateService.State state,
@@ -1632,9 +1670,11 @@ public class PeriodPlanDraftGenerator {
         while (prompt.estimatedTokens() > planInputTokenBudget) {
             // 뒤에서부터 뺀다 — 초점 사진 구간을 앞에 두어 다른 원문을 다 뺀 뒤에야 빠지게 한다.
             Set<Long> focus = FocusPhotos.sectionIds(inputs.catalogs());
+            // 요청 범위의 부분마다 원문 하나는 마지막까지 남긴다(2단계) — 뒤에서부터 빼면 6주차처럼 한 부분이 통째로 빠졌다.
+            Set<Long> keep = scopeAnchors(inputs);
             List<Long> still = inputs.retrieved().stream().filter(r -> r.outcome().retrieved())
                     .map(r -> r.target().sectionId()).filter(id -> !budgetDropped.contains(id))
-                    .sorted(Comparator.comparingInt(id -> focus.contains(id) ? 0 : 1)).toList();
+                    .sorted(Comparator.comparingInt(id -> focus.contains(id) ? 0 : keep.contains(id) ? 1 : 2)).toList();
             if (still.isEmpty()) {
                 log.warn("계획 초안: 원문을 모두 빼도 입력 예산을 넘는다(판단 사실·일정이 크다). 추정={}/{} 상한={}",
                         prompt.estimatedTokens(), planInputTokenBudget, planMaxInputTokens);
@@ -2802,9 +2842,32 @@ public class PeriodPlanDraftGenerator {
         }
     }
 
-    private List<UserContext> loadUserContexts(Long userId) {
+    /**
+     * (2026-10-18) 이번 요청에 유효한 맥락만. 다른 프로젝트 한정 맥락과 기간이 이번 계획과 겹치지 않는 맥락은 싣지 않는다 — 예전에는
+     * 자료구조(#934) 자기평가와 10/03 한정 조건이 다른 과목 계획 입력에 섞였다. 프로젝트·기간이 없는 전역 맥락(예: "금요일 밤은 비움")은 둔다.
+     */
+    static List<UserContext> relevantContexts(List<UserContext> contexts, Set<Long> courseIds, LocalDate start, LocalDate end) {
+        List<UserContext> out = new ArrayList<>();
+        for (UserContext c : contexts == null ? List.<UserContext>of() : contexts) {
+            if (c == null) {
+                continue;
+            }
+            boolean otherProject = c.getCourseId() != null && !courseIds.contains(c.getCourseId());
+            boolean outOfPeriod = (c.getScopeEnd() != null && start != null && c.getScopeEnd().isBefore(start))
+                    || (c.getScopeStart() != null && end != null && c.getScopeStart().isAfter(end));
+            if (!otherProject && !outOfPeriod) {
+                out.add(c);
+            }
+        }
+        return out;
+    }
+
+    static final int CONTEXT_LIMIT = 20;
+
+    private List<UserContext> loadUserContexts(Long userId, Set<Long> courseIds, LocalDate start, LocalDate end) {
         try {
-            List<UserContext> contexts = userContextMapper.findActiveAndStaleByUserId(userId, 20);
+            List<UserContext> contexts = userContextMapper.findActiveAndStaleForPlan(userId, courseIds, start, end,
+                    CONTEXT_LIMIT);
             return contexts == null ? List.of() : contexts;
         } catch (Exception e) {
             return List.of();

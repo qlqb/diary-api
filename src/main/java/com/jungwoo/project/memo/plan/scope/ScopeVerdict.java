@@ -61,15 +61,8 @@ public final class ScopeVerdict {
             return incomplete ? new ScopeReport(status, List.of(), List.of(), false, List.of(), List.of(),
                     Completion.UNKNOWN.name(), true) : empty;
         }
-        // 한 자료가 여러 부분에 걸치면(같은 PDF의 Navigation·SQLite) 그 자료의 구간 인용만으로는 어느 부분인지 모른다.
-        Map<Long, Integer> partsPerMaterial = new java.util.HashMap<>();
-        for (RequestScope s : scopes) {
-            for (RequestScope.Part p : s.parts()) {
-                for (Long m : Set.copyOf(p.materialIds())) {
-                    partsPerMaterial.merge(m, 1, Integer::sum);
-                }
-            }
-        }
+        // 한 자료가 확인된 여러 부분에 걸치면(같은 PDF의 Navigation·SQLite) 그 자료의 구간 인용만으로는 어느 부분인지 모른다.
+        Map<Long, Integer> partsPerMaterial = ScopeCoverage.partsPerMaterial(scopes);
         List<PartState> states = new ArrayList<>();
         List<String> remaining = new ArrayList<>();
         List<String> needsConfirm = new ArrayList<>();

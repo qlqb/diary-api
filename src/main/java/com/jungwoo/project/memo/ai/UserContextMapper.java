@@ -28,6 +28,16 @@ public interface UserContextMapper {
     List<UserContext> findActiveAndStaleByUserId(@Param("userId") Long userId, @Param("limit") Integer limit);
 
     /**
+     * 계획 생성용(2026-10-18): 대상 프로젝트(또는 프로젝트 없음)이고 기간이 [start, end]와 겹치는(또는 기간 없음) 맥락만, 최근 순
+     * limit개. 거른 뒤에 자른다.
+     */
+    List<UserContext> findActiveAndStaleForPlan(@Param("userId") Long userId,
+                                                @Param("courseIds") java.util.Collection<Long> courseIds,
+                                                @Param("start") java.time.LocalDate start,
+                                                @Param("end") java.time.LocalDate end,
+                                                @Param("limit") int limit);
+
+    /**
      * fromStatuses에 포함될 때만 toStatus로 바꾼다(가드된 전이). 이미 다른 상태로 바뀌었으면
      * 0을 반환한다 — 호출부가 conflict로 처리한다.
      */
