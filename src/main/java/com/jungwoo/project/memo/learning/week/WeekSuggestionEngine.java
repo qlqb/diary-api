@@ -130,7 +130,7 @@ public final class WeekSuggestionEngine {
             "문제", "과제", "정리", "이번", "오늘", "주차", "학생", "교수", "예제", "연습", "복습", "요약", "추가",
             "구축", "하기", "관련", "이론", "기본", "방법", "학습", "과목", "프로그래밍");
     private static final Set<String> STOP_LATIN = Set.of(
-            "pdf", "ppt", "pptx", "hwp", "sh", "ipynb", "the", "and", "for", "lab", "part", "ch", "chap", "week");
+            "pdf", "ppt", "pptx", "hwp", "sh", "ipynb", "cpp", "cc", "cxx", "hpp", "the", "and", "for", "lab", "part", "ch", "chap", "week");
 
     private WeekSuggestionEngine() {
     }

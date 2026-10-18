@@ -1,5 +1,12 @@
 # 99. Change Log
 
+## 2026-10-18 — C++ 소스·헤더를 자료로 올릴 수 있다
+
+설계 15번 §4-3.
+
+- `.cpp`·`.cc`·`.cxx`·`.h`·`.hpp`를 `.sh`와 같은 실행하지 않는 텍스트 자료로 받는다(`PlainTextExtractor`, 60줄 블록, `text/plain`). ZIP 안의 C++ 파일도 같다.
+- 화면의 파일 선택·형식 안내·형식 이름(CPP·H 등)에 반영했다.
+
 ## 2026-10-06 — 학습 진도를 원천을 가리키는 이벤트로 쌓기 시작한다(이벤트 기반 학습 진도 1단계)
 
 설계 20번, DB 05번 §27, API `api-spec.md`(Learning Events), 마이그레이션 `docs/sql/2026-10-06-learning-events.sql`·

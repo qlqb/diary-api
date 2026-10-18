@@ -68,6 +68,7 @@ public class AnalysisEstimator {
     private static final Map<String, Double> DEFAULT_CHARS_PER_BYTE = Map.ofEntries(
             Map.entry("txt", 1.0), Map.entry("md", 1.0), Map.entry("csv", 0.8),
             Map.entry("json", 0.8), Map.entry("py", 1.0), Map.entry("sh", 1.0),
+            Map.entry("cpp", 1.0), Map.entry("cc", 1.0), Map.entry("cxx", 1.0), Map.entry("h", 1.0), Map.entry("hpp", 1.0),
             Map.entry("ipynb", 0.5), Map.entry("docx", 0.06), Map.entry("hwpx", 0.04),
             Map.entry("hwp", 0.03), Map.entry("pptx", 0.015), Map.entry("pdf", 0.03),
             Map.entry("xlsx", 0.05));

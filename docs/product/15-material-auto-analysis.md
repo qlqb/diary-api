@@ -163,6 +163,8 @@ courses.topic_tree_version / course_topics.merged_into_topic_id, review_note / c
   바이너리 시그니처(PDF·OLE·ZIP·ELF·PE)면 거절한다. ZIP 안의 `.sh`도 같은 경로다(같은 묶음의 미지원 파일은 이유와 함께 남는다).
   저장 content type은 `text/plain`이고 파일 응답에 `X-Content-Type-Options: nosniff`를 붙인다. 문서 안의 지시문은 다른 자료와 같이
   모델 프롬프트에서 데이터로 취급된다.
+- **C++ 소스·헤더(`.cpp`·`.cc`·`.cxx`·`.h`·`.hpp`)도 같은 경로다**(2026-10-18). 컴파일·실행하지 않고 `.sh`와 똑같이 60줄 블록으로
+  읽는다. 저장 content type은 `text/plain`, 확장자만 바꾼 실행 파일(PE·ELF)은 거절한다. 다른 언어 소스(`.py` 등)는 아직 받지 않는다.
 
 ## 5. 토픽 연결과 구조 변경안
 

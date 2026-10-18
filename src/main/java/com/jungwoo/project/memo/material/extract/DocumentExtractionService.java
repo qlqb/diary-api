@@ -17,7 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 /**
- * 파일 하나를 한 번만 읽어 {@link ExtractedDocument}를 만든다(IPYNB·HWP·HWPX).
+ * 파일 하나를 한 번만 읽어 {@link ExtractedDocument}를 만든다(IPYNB·HWP·HWPX·SH·C++).
  *
  * <p>PDF·PPTX는 기존 경로(TextExtractionService / MaterialTextUnitService)를 그대로 쓴다. 이미
  * 동작하는 추출을 형식 추가를 이유로 다시 쓰지 않는다.
@@ -30,7 +30,7 @@ import java.util.concurrent.TimeoutException;
 @RequiredArgsConstructor
 public class DocumentExtractionService {
 
-    private static final Set<String> EXTENSIONS = Set.of("ipynb", "hwp", "hwpx", "sh");
+    private static final Set<String> EXTENSIONS = Set.of("ipynb", "hwp", "hwpx", "sh", "cpp", "cc", "cxx", "h", "hpp");
 
     /** 평문 자료 읽기. 상태가 없어 주입하지 않는다. 읽기만 하고 아무것도 실행하지 않는다. */
     private final PlainTextExtractor plainTextExtractor = new PlainTextExtractor();
@@ -64,7 +64,7 @@ public class DocumentExtractionService {
             case "ipynb" -> notebookExtractor.extract(readAll(file));
             case "hwp" -> hwpExtractor.extract(file);
             case "hwpx" -> hwpxExtractor.extract(file);
-            case "sh" -> plainTextExtractor.extract(readAll(file));
+            case "sh", "cpp", "cc", "cxx", "h", "hpp" -> plainTextExtractor.extract(readAll(file));
             default -> throw new DocumentExtractionException(DocumentExtractionException.Reason.CORRUPTED,
                     "읽는 방법을 모르는 형식이에요: " + ext);
         });

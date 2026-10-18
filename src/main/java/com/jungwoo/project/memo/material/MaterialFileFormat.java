@@ -30,7 +30,16 @@ public enum MaterialFileFormat {
      * 셸 스크립트. <b>실행하지 않는 텍스트 자료</b>로만 읽는다(PlainTextExtractor). 평문에는 시그니처가 없어 앞머리에
      * NUL 바이트가 없는지만 본다 — 실제로 글자로 풀리는지는 추출 단계가 판단한다.
      */
-    SH("sh", "text/plain", Signature.TEXT);
+    SH("sh", "text/plain", Signature.TEXT),
+    /**
+     * C++ 소스·헤더. .sh와 같이 <b>컴파일·실행하지 않는 텍스트 자료</b>로만 읽는다(PlainTextExtractor). 확장자가 여럿이라
+     * 형식도 여럿이고, 저장 content type은 브라우저가 소스를 다른 형식으로 해석하지 않게 모두 text/plain이다.
+     */
+    CPP("cpp", "text/plain", Signature.TEXT),
+    CC("cc", "text/plain", Signature.TEXT),
+    CXX("cxx", "text/plain", Signature.TEXT),
+    H("h", "text/plain", Signature.TEXT),
+    HPP("hpp", "text/plain", Signature.TEXT);
 
     /** 시그니처 확인에 읽는 앞머리 길이. ipynb는 BOM·공백 뒤의 '{'를 봐야 해서 넉넉히 읽는다. */
     public static final int HEADER_BYTES = 64;
