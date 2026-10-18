@@ -80,4 +80,31 @@ class RequestScopeFlowTest {
         assertThat(generated.extras().scopeReport().completion()).isEqualTo("UNKNOWN");
         assertThat(f.planPrompts().get(0)).doesNotContain("[요청 범위]");
     }
+    @Test
+    void 범위_추출_응답이_구분자를_빼먹어도_본문에서_범위를_읽는다() {
+        PlanSelectionFixture f = new PlanSelectionFixture();
+        f.enableScopes();
+        f.scopeWithoutDelimiter = true;
+        f.course(1, "자료구조");
+        f.material(10, "a.pdf", 1L);
+        f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
+        f.scopeAnswer = prompt -> "범위를 뽑았어요.\n{\"scopes\":[{\"course\":\"c1\",\"role\":\"REQUIRED\",\"quote\":\"스택까지\","
+                + "\"parts\":[{\"label\":\"스택\",\"materials\":[\"d1\"]}]}]}";
+        f.selectionAnswer = prompt -> selection(java.util.List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")),
+                java.util.List.of(), java.util.List.of());
+        f.planAnswer = prompt -> "{\"title\":\"t\",\"items\":[{\"title\":\"스택\",\"description\":\"한다 · 완료: 끝\","
+                + "\"expectedMinutes\":30,\"priority\":\"MUST\",\"courseId\":1,\"reason\":\"r\",\"refIds\":[\""
+                + refOf(prompt, "스택 개념") + "\"]}]}";
+
+        Generated generated = f.generate(f.spec("자료구조는 스택까지 공부", null),
+                com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
+
+        ScopeReport report = generated.extras().scopeReport();
+        assertThat(report.status()).isEqualTo("EXTRACTED");
+        assertThat(report.scopes()).singleElement().satisfies(s -> {
+            assertThat(s.verified()).isTrue();
+            assertThat(s.parts()).extracting(com.jungwoo.project.memo.plan.scope.RequestScope.Part::label).containsExactly("스택");
+        });
+        assertThat(report.parts().get(0).reflection()).isEqualTo("ITEM");
+    }
 }

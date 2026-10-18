@@ -179,4 +179,45 @@ class ScopeVerdictTest {
         // Navigation을 미룬 것이 SQLite까지 미룬 것으로 번지지 않는다.
         assertThat(report.parts()).extracting(ScopeReport.PartState::reflection).containsExactly("DEFERRED", "UNHANDLED");
     }
+    @Test
+    void 과목_전체를_미룬_이유는_그_과목_범위의_부분에_이어지고_다른_과목에는_번지지_않는다() {
+        RequestScope net = scope("S1", NET, RequestScope.OPTIONAL, true,
+                part("S1.P1", "2주차", List.of(245L), false, false), part("S1.P2", "6주차", List.of(460L), false, false));
+        RequestScope app = scope("S2", APP, RequestScope.OPTIONAL, true, part("S2.P1", "Navigation", List.of(), false, true));
+        RequestScope netNamed = new RequestScope("S1", NET, "네트워크프로그래밍", RequestScope.OPTIONAL, "목표", "범위", "q", "q", true,
+                net.parts());
+        RequestScope appNamed = new RequestScope("S2", APP, "스마트앱프로젝트", RequestScope.OPTIONAL, "목표", "범위", "q", "q", true,
+                app.parts());
+        ScopeReport report = ScopeVerdict.judge(ScopeReport.EXTRACTED, List.of(netNamed, appNamed), SECTION_MATERIAL, Set.of(),
+                Map.of(), Map.of(), Map.of(), List.of(),
+                List.of(new ScopeVerdict.DeferredRef("네트워크프로그래밍", "오늘 남은 60분에 넣기 어렵다", List.of())));
+
+        assertThat(report.parts()).extracting(ScopeReport.PartState::reflection)
+                .containsExactly("DEFERRED", "DEFERRED", "UNHANDLED");
+        assertThat(report.parts().get(0).note()).isEqualTo("오늘 남은 60분에 넣기 어렵다");
+    }
+    @Test
+    void 서버가_정한_과목_제외_이유는_과목_id로_그_범위의_부분에_이어진다() {
+        RequestScope app = new RequestScope("S1", APP, "스마트앱프로젝트", RequestScope.OPTIONAL, "목표", "범위", "q", "q", true,
+                List.of(part("S1.P1", "Navigation", List.of(441L), false, false), part("S1.P2", "SQLite", List.of(), true, false)));
+        RequestScope net = new RequestScope("S2", NET, "네트워크프로그래밍", RequestScope.OPTIONAL, "목표", "범위", "q", "q", true,
+                List.of(part("S2.P1", "2주차", List.of(245L), false, false)));
+        ScopeReport report = ScopeVerdict.judge(ScopeReport.EXTRACTED, false, List.of(app, net), SECTION_MATERIAL, Set.of(),
+                Map.of(), Map.of(), Map.of(), Map.of(), List.of(),
+                List.of(new ScopeVerdict.DeferredRef("스마트앱프로젝트의 Navigation·SQLite 전체", "다음 기간", List.of())),
+                Map.of(APP, "60분 예산에서 우선 과목을 먼저 다룬다"));
+
+        assertThat(report.parts()).extracting(ScopeReport.PartState::reflection)
+                .containsExactly("DEFERRED", "DEFERRED", "UNHANDLED"); // 네트워크는 제외되지 않았다
+        assertThat(report.parts().get(0).note()).contains("이 과목을 뺐다").contains("60분 예산");
+    }
+    @Test
+    void 특정_부분을_인용한_미룸은_제목이_과목명이어도_다른_부분으로_번지지_않는다() {
+        RequestScope net = new RequestScope("S1", NET, "네트워크프로그래밍", RequestScope.OPTIONAL, "목표", "범위", "q", "q", true,
+                List.of(part("S1.P1", "2주차", List.of(245L), false, false), part("S1.P2", "6주차", List.of(460L), false, false)));
+        ScopeReport report = ScopeVerdict.judge(ScopeReport.EXTRACTED, false, List.of(net), SECTION_MATERIAL, Set.of(),
+                Map.of(), Map.of(), Map.of(), Map.of("s2", "S1.P2"), List.of(),
+                List.of(new ScopeVerdict.DeferredRef("네트워크프로그래밍", "6주차는 내일", List.of("s2"))), Map.of());
+        assertThat(report.parts()).extracting(ScopeReport.PartState::reflection).containsExactly("UNHANDLED", "DEFERRED");
+    }
 }

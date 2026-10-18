@@ -852,8 +852,14 @@ public class PeriodPlanDraftGenerator {
                 Map.of("projects", objectMapper.convertValue(outcomes, List.class),
                         "apiCommit", traceService == null || traceService.commit() == null ? "" : traceService.commit()));
 
+        Map<Long, String> courseExclusions = new LinkedHashMap<>();
+        for (com.jungwoo.project.memo.plan.domain.ProjectOutcome o : outcomes) {
+            if (o.courseId() != null && o.disposition() != null && o.disposition().name().startsWith("EXCLUDED")) {
+                courseExclusions.put(o.courseId(), o.reason() == null ? o.disposition().name() : o.reason());
+            }
+        }
         com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport = judgeScopes(scopeResult, catalogs, selection, inputs,
-                prompt, normalized, ai);
+                prompt, normalized, ai, courseExclusions);
         List<String> modelReasons = new ArrayList<>();
         if (normalized.strategy().changes() != null) {
             normalized.strategy().changes().forEach(c -> {
@@ -1050,7 +1056,8 @@ public class PeriodPlanDraftGenerator {
     private com.jungwoo.project.memo.plan.scope.ScopeReport judgeScopes(
             com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result scopeResult,
             List<PlanMaterialContextService.CourseCatalog> catalogs, PlanMaterialSelector.Result selection,
-            PlanInputs inputs, PlanPrompt prompt, PlanResultNormalizer.Normalized normalized, PlanDraftAiResult ai) {
+            PlanInputs inputs, PlanPrompt prompt, PlanResultNormalizer.Normalized normalized, PlanDraftAiResult ai,
+            Map<Long, String> courseExclusions) {
         Map<Long, Long> sectionMaterial = new LinkedHashMap<>();
         for (var c : catalogs) {
             for (var line : c.sections()) {
@@ -1110,13 +1117,14 @@ public class PeriodPlanDraftGenerator {
         if (ai.strategy() != null && ai.strategy().deferred() != null) {
             for (PlanDraftAiResult.DeferredOut d : ai.strategy().deferred()) {
                 if (d != null) {
-                    deferred.add(new com.jungwoo.project.memo.plan.scope.ScopeVerdict.DeferredRef(d.reason(), d.refIds()));
+                    deferred.add(new com.jungwoo.project.memo.plan.scope.ScopeVerdict.DeferredRef(d.title(), d.reason(),
+                            d.refIds()));
                 }
             }
         }
         return com.jungwoo.project.memo.plan.scope.ScopeVerdict.judge(scopeResult.status(), scopeResult.incomplete(),
                 scopeResult.scopes(), sectionMaterial, shown, selectedNotIn, deliveredFull, refToSection, refToPart, items,
-                deferred);
+                deferred, courseExclusions);
     }
 
     // ===== 사용자가 말한 시간 =====

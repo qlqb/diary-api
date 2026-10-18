@@ -125,6 +125,8 @@ public class PlanSelectionFixture {
     public Function<String, String> selectionAnswer = prompt -> emptySelection();
     /** (2026-10-18) 요청 범위 추출 응답. {@link #enableScopes()}를 부르면 생성기가 범위 추출을 한다. */
     public Function<String, String> scopeAnswer = prompt -> "{\"scopes\":[]}";
+    /** 범위 추출 응답을 구분자 없이 보낸다(모델이 형식을 빼먹은 경우). */
+    public boolean scopeWithoutDelimiter;
     public String planJson = planWithOneItem("s1");
     /** 계획 호출의 답을 프롬프트로 정하고 싶을 때. null이면 planJson. 호출마다 불린다(추가 읽기 2회차 포함). */
     public Function<String, String> planAnswer = null;
@@ -172,7 +174,9 @@ public class PlanSelectionFixture {
             String user = inv.getArgument(1);
             calls.add(new String[]{system, user});
             if (isScope(system)) {
-                return structured(scopeAnswer.apply(user));
+                return scopeWithoutDelimiter
+                        ? Flux.just(new ChatResponse(List.of(new Generation(new AssistantMessage(scopeAnswer.apply(user))))))
+                        : structured(scopeAnswer.apply(user));
             }
             if (isSelection(system)) {
                 if (selectionError != null) {

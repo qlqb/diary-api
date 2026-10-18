@@ -973,14 +973,22 @@ public class AiConversationService {
                 continue;
             }
             /*
-             * 원문 속 지시가 사용자 진술을 흉내 내지 못하게 ADD는 후보로만 남긴다. 근거 구절(quote)도 뗀다 — 사용자 메시지의
-             * 아무 구절이나 붙여 "사용자 요청을 정리함"으로 유효해지는 길을 막는다. 시간대(from·until)는 그대로 둔다.
+             * 원문 속 지시가 사용자 진술을 흉내 내지 못하게 ADD의 작성자는 AI로 둔다(사용자 작성·승인이 되지 않는다).
+             * 근거 구절(quote)은 text가 그 사용자 문장을 그대로 옮긴 경우에만 남긴다 — 사용자의 실제 문장을 근거로 붙이고 뜻을 바꾼
+             * 해석("네트워크도 준비해 줘" → "네트워크 제외")이 유효해지는 길을 막는다. 근거를 남기는 항목은 분류(kind)도 OTHER로
+             * 중립화한다 — 문장은 그대로여도 EXCLUDE로 분류하면 뜻이 바뀐다. 연결 대상(과목·항목·실행)도 비운다.
+             * 사용자가 말한 범위는 자료 본문을 보지 않는 범위 추출(SCOPE)이 원문에서 따로 확정한다(초안 4453 대응).
              */
             if ("ADD".equals(kind)) {
-                op = new com.jungwoo.project.memo.ai.brief.PlanBriefOp(op.op(), op.id(), op.kind(), op.text(),
-                        com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_ASSISTANT, op.scope(), op.topicId(),
-                        op.courseId(), op.executionItemId(), op.periodStart(), op.periodEnd(), op.minutes(), op.per(),
-                        op.from(), op.until(), null);
+                com.jungwoo.project.memo.ai.brief.PlanBriefService.UserBasis basis =
+                        com.jungwoo.project.memo.ai.brief.PlanBriefService.verifyQuote(op.quote(),
+                                List.of(new com.jungwoo.project.memo.ai.brief.PlanBriefService.UserUtterance(0L, said)));
+                boolean sameWords = basis != null
+                        && com.jungwoo.project.memo.ai.brief.PlanBriefService.verbatim(op.text(), basis.sentence());
+                op = new com.jungwoo.project.memo.ai.brief.PlanBriefOp(op.op(), op.id(), sameWords ? "OTHER" : op.kind(),
+                        op.text(), com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_ASSISTANT, op.scope(), null,
+                        null, null, op.periodStart(), op.periodEnd(), op.minutes(), op.per(),
+                        op.from(), op.until(), sameWords ? op.quote() : null);
             }
             out.add(op);
         }

@@ -29,8 +29,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * 계획 생성 ① — 사용자 원문에서 이번 요청의 과목별 범위를 뽑는다(SCOPE 호출). 자료를 고르거나 계획을 만들지 않는다.
@@ -79,20 +77,24 @@ public class PlanScopeExtractor {
             - boundary: 시작·끝·제외를 원문 그대로 요약(예 "붓꽃·타이타닉까지", "2·3·6·7주차, 7주차는 56번 장표까지, AWS 서비스 암기·설치 절차 제외").
             - parts: 그 범위를 독립적으로 확인할 수 있는 단위로 나눈다. 주차·장·주제가 여럿이면 하나씩("2주차", "3주차"…,
               "Navigation", "RecyclerView", "SQLite", "이벤트 처리").
-              · "…까지"처럼 끝만 말하고 시작을 말하지 않았으면, 아래 자료 목록의 순서에서 그 과목의 첫 학습 자료부터 끝 자료까지를
-                누적 범위로 보고 자료마다 part를 만든다(강의계획서·과목 소개처럼 학습 본문이 아닌 자료는 넣지 않는다). 순서를 정할 수
-                없으면 part 하나를 "경계 미확인: …"으로 둔다.
+              · "…까지"처럼 끝만 말하고 시작을 말하지 않았으면, 그 과목의 첫 학습 자료부터 끝 자료까지를 누적 범위로 보고 자료마다
+                part를 만든다(강의계획서·과목 소개처럼 학습 본문이 아닌 자료는 넣지 않는다). 자료 목록은 올린 순서다 — 파일명의
+                주차·번호와 강의계획서의 주차 순서로 수업 순서를 판단하고, 번호가 없는 자료도 내용(예 "파이썬 기초"는 넘파이 앞)으로
+                자리를 정한다. 순서를 정할 수 없으면 part 하나를 "경계 미확인: …"으로 둔다.
               · materials: 그 부분을 다루는 자료의 핸들(d번호)을 아래 목록에서만 고른다. 파일명에 버전·복사 표시(_v5, (1))가
                 붙어 있어도 같은 주차·제목이면 그 자료다. 같은 주차에 판이 여럿이면 모두 적는다(최신을 추정해 하나만 고르지 않는다).
               · 목록에 그 부분의 자료가 없으면 materials는 []이고 noMaterial=true.
               · 사용자가 따로 가진 자료로 한다고 말했으면(예 "책에 표시해 놨어", "시험 때 주는 PDF") userMaterial=true.
             - 과목을 알 수 없는 범위는 course를 null로 둔다.
 
-            출력은 JSON 객체 하나만:
+            응답 형식(반드시 지킨다):
+            1) 뽑은 범위를 한 문장으로.
+            2) 다음 줄에 정확히: %s
+            3) 그 아래 JSON 객체 하나:
             {"scopes":[{"course":"c1"|null,"role":"REQUIRED"|"OPTIONAL","goal":"…","boundary":"…","quote":"사용자 원문 구절",
               "parts":[{"label":"…","materials":["d3"],"noMaterial":false,"userMaterial":false}]}]}
             사용자가 범위를 하나도 말하지 않았으면 {"scopes":[]}.
-            """;
+            """.formatted(AiStreamParser.DELIMITER);
 
     /**
      * @param instruction  이번 요청의 사용자 원문(서버가 사용자 메시지로 만든 지시문). 근거 구절은 여기서만 확인한다
@@ -178,25 +180,17 @@ public class PlanScopeExtractor {
         return new Registry(courses, materials, materialCourse, omitted);
     }
 
-    private static final Pattern LEADING_NUMBER = Pattern.compile("^\\s*(\\d{1,3}(?:\\.\\d{1,2})?)");
-
-    /** 파일명 앞 번호(주차·장) 순, 번호가 없으면 올린 순서. 모델이 누적 범위의 순서를 볼 수 있게 한다. */
+    /**
+     * 올린 순서. 파일명 앞 번호로 다시 정렬하지 않는다 — 번호 없는 자료(예 "파이썬기초_S")가 맨 뒤로 밀려 "…까지" 누적 범위에서
+     * 빠졌다(4단계 실호출). 수업 순서는 대개 올린 순서와 같고, 주차·번호는 파일명에 보이므로 모델이 함께 판단한다.
+     */
     static List<CourseMaterial> ordered(List<CourseMaterial> materials) {
         if (materials == null) {
             return List.of();
         }
         return materials.stream().filter(m -> m != null && m.getMaterialId() != null)
-                .sorted(Comparator.comparingDouble((CourseMaterial m) -> leadingNumber(m.getOriginalFilename()))
-                        .thenComparing(CourseMaterial::getMaterialId))
+                .sorted(Comparator.comparing(CourseMaterial::getMaterialId))
                 .toList();
-    }
-
-    static double leadingNumber(String filename) {
-        if (filename == null) {
-            return Double.MAX_VALUE;
-        }
-        Matcher m = LEADING_NUMBER.matcher(filename);
-        return m.find() ? Double.parseDouble(m.group(1)) : Double.MAX_VALUE;
     }
 
     static String prompt(Request request, Registry registry) {
@@ -264,7 +258,9 @@ public class PlanScopeExtractor {
             throw new IllegalStateException("범위 추출 출력이 상한에서 잘렸다");
         }
         record(request, lastUsage.get(), UsageResultStatus.SUCCESS, null);
-        return parser.finish().structuredJson();
+        AiStreamParser.Result result = parser.finish();
+        // 구분자를 빼먹은 응답도 버리지 않는다 — 본문 전체에서 JSON 객체를 찾는다(파싱·검증은 같다).
+        return result.structuredJson() != null ? result.structuredJson() : result.reply();
     }
 
     private void record(Request request, Usage usage, UsageResultStatus status, String errorCode) {
@@ -353,7 +349,7 @@ public class PlanScopeExtractor {
             String role = RequestScope.OPTIONAL.equalsIgnoreCase(text(s, "role")) ? RequestScope.OPTIONAL : RequestScope.REQUIRED;
             out.add(new RequestScope(scopeId, course == null ? null : course.courseId(),
                     course == null ? null : course.courseTitle(), role, cut(text(s, "goal"), MAX_GOAL_CHARS), boundary,
-                    cut(quote, 200), basis == null ? null : basis.sentence(), basis != null, List.copyOf(parts)));
+                    cut(quote, 600), basis == null ? null : basis.sentence(), basis != null, List.copyOf(parts)));
         }
         return new Parsed(out, dropped);
     }

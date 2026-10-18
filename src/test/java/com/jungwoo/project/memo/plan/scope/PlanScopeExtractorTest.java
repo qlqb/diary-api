@@ -37,14 +37,15 @@ class PlanScopeExtractorTest {
             catalog(939L, "스마트앱프로젝트", material(441L, "6.어댑터뷰.pdf")));
 
     @Test
-    void 자료는_번호_순으로_보이고_핸들은_이번에_보여_준_같은_과목_자료만_인정한다() {
+    void 자료는_올린_순서로_보이고_핸들은_이번에_보여_준_같은_과목_자료만_인정한다() {
         PlanScopeExtractor.Registry registry = PlanScopeExtractor.registry(catalogs);
         String prompt = PlanScopeExtractor.prompt(new PlanScopeExtractor.Request(1L, "g", SAID, List.of(), catalogs), registry);
-        assertThat(prompt.indexOf("2.리눅스")).isLessThan(prompt.indexOf("06.네트워크")).isLessThan(prompt.indexOf("07.소켓"));
+        // 올린 순서(id 순): 2.리눅스(245) → 07.소켓(459) → 06.네트워크(460). 번호로 다시 정렬하지 않는다.
+        assertThat(prompt.indexOf("2.리눅스")).isLessThan(prompt.indexOf("07.소켓")).isLessThan(prompt.indexOf("06.네트워크"));
 
         String json = """
                 {"scopes":[{"course":"c1","role":"OPTIONAL","goal":"필기시험","boundary":"2·6·7주차","quote":"7주차 56번 장표까지",
-                  "parts":[{"label":"2주차","materials":["d1"]},{"label":"6주차","materials":["d2","d4"]},{"label":"7주차","materials":["d3"]}]},
+                  "parts":[{"label":"2주차","materials":["d1"]},{"label":"6주차","materials":["d3","d4"]},{"label":"7주차","materials":["d2"]}]},
                  {"course":"c2","role":"REQUIRED","goal":"PDF 보고 코드 빈칸","quote":"pdf에 나오는거 보고 코드 채울 수 있으면 돼",
                   "parts":[{"label":"SQLite","materials":[],"noMaterial":true},{"label":"RecyclerView","materials":["d4","d1"]}]},
                  {"course":"c9","role":"REQUIRED","quote":"지어낸 말","parts":[]}]}
@@ -102,5 +103,12 @@ class PlanScopeExtractorTest {
                 {"scopes":[{"course":"c1","quote":"코드 채울 수 있으면 돼","parts":[{"label":"SQLite","materials":[],"noMaterial":true}]}]}
                 """, bigRegistry, SAID).scopes().get(0).parts().get(0);
         assertThat(sqlite.noMaterial()).isFalse();
+    }
+    @Test
+    void 응답은_구분자_형식을_요구하고_구분자를_빼먹어도_본문에서_JSON을_찾는다() {
+        // 4단계 실호출에서 드러난 회귀: 형식 지시가 없어 구조화 JSON을 읽지 못했다(픽스처는 구분자를 대신 붙여 줘 놓쳤다).
+        assertThat(PlanScopeExtractor.SYSTEM_PROMPT).contains(com.jungwoo.project.memo.ai.AiStreamParser.DELIMITER);
+        PlanScopeExtractor.Registry registry = PlanScopeExtractor.registry(catalogs);
+        assertThat(extractor.parse("범위를 뽑았어요.\n{\"scopes\":[]}", registry, SAID)).isNotNull();
     }
 }

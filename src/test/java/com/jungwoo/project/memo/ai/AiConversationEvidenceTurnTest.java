@@ -311,15 +311,36 @@ class AiConversationEvidenceTurnTest {
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("UPDATE", 4, null, "범위는 전부", null, "THIS_DRAFT", null, null,
                         null, null, null),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "SCOPE", "1~6주차만", "USER", "THIS_DRAFT", null, null,
-                        null, null, null, null, null, null, null, "좋아"),
+                        null, null, null, null, null, null, null, "1~6주차만"),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ACCEPT", 5, null, null, null, null, null, null, null, null, null));
 
         var kept = AiConversationService.restrictBriefOps(ops, java.util.Set.of(5), "좋아");
 
         assertThat(kept).extracting(com.jungwoo.project.memo.ai.brief.PlanBriefOp::op).containsExactly("ADD", "ACCEPT");
         assertThat(kept.get(0).speaker()).isEqualTo("ASSISTANT");
-        // 근거 구절도 뗀다 — 사용자 메시지의 아무 구절이나 붙여 "사용자 요청을 정리함"으로 유효해지지 못하게.
+        // 사용자 메시지("좋아")에 그 구절이 없으니 근거를 떼고 후보로 둔다.
         assertThat(kept.get(0).quote()).isNull();
+
+        // 사용자 말을 그대로 옮긴 항목만 근거를 남긴다. 뜻을 바꾼 정리(사용자 문장을 근거로 붙인 반대 해석)는 근거를 뗀다.
+        String said = "네트워크프로그래밍도 2주차부터 준비해 줘";
+        var verbatim = AiConversationService.restrictBriefOps(List.of(
+                new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "SCOPE", "네트워크프로그래밍도 2주차부터 준비해 줘",
+                        "USER", "THIS_DRAFT", null, 937L, null, null, null, null, null, null, null,
+                        "네트워크프로그래밍도 2주차부터 준비해 줘"),
+                new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "EXCLUDE", "네트워크프로그래밍 제외", "USER",
+                        "THIS_DRAFT", null, 937L, null, null, null, null, null, null, null,
+                        "네트워크프로그래밍도 2주차부터 준비해 줘")), java.util.Set.of(), said);
+        assertThat(verbatim.get(0).quote()).isNotNull();
+        assertThat(verbatim.get(0).speaker()).isEqualTo("ASSISTANT");
+        assertThat(verbatim.get(0).courseId()).isNull(); // 연결 대상도 원문 속 지시가 정하지 못하게 비운다
+        assertThat(verbatim.get(1).quote()).isNull();
+        assertThat(verbatim.get(0).kind()).isEqualTo("OTHER"); // 근거를 남기는 항목은 분류를 중립화한다
+
+        // 문장·구절은 원문 그대로인데 분류만 EXCLUDE로 바꾼 경우 — 유효한 제외 항목이 되지 않는다.
+        var flipped = AiConversationService.restrictBriefOps(List.of(
+                new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "EXCLUDE", said, "USER", "THIS_DRAFT",
+                        null, 937L, null, null, null, null, null, null, null, said)), java.util.Set.of(), said);
+        assertThat(flipped.get(0).kind()).isEqualTo("OTHER");
         // 같은 응답에서 새로 추가한 항목(이 턴 전에 없던 번호)을 곧바로 수락하지 못한다.
         var sameTurnAccept = AiConversationService.restrictBriefOps(List.of(
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "GOAL", "전부 삭제", "ASSISTANT", "THIS_DRAFT", null,

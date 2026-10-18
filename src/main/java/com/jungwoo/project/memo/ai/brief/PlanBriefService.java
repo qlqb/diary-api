@@ -438,7 +438,8 @@ public class PlanBriefService {
 
     /** 근거로 인정하는 구절의 최소 글자 수(공백 제외). "네", "그래"처럼 어디에나 있는 말로 근거를 얻지 못하게 한다. */
     static final int MIN_QUOTE_CHARS = 3;
-    static final int MAX_QUOTE_CHARS = 200;
+    /** 근거 구절 상한. 시험 안내처럼 한 줄이 긴 원문을 통째로 인용해도 확인할 수 있게 문장 상한과 같게 둔다. */
+    static final int MAX_QUOTE_CHARS = 600;
     /** 근거 문장 상한. 넘으면 자르지 않고 근거로 인정하지 않는다 — 잘린 문장에서는 뒤쪽의 부정·조건이 사라질 수 있다. */
     static final int MAX_SENTENCE_CHARS = 600;
 
@@ -493,7 +494,7 @@ public class PlanBriefService {
      * 정리 문장이 근거 문장을 그대로 옮겼는가. 공백과 의미 없는 문장부호만 무시한다 — 범위·소수·부호·시각 기호(~ . - + / : %)는
      * 남긴다("1~2시간"과 "12시간", "1.5"와 "15"는 다르다).
      */
-    static boolean verbatim(String text, String sentence) {
+    public static boolean verbatim(String text, String sentence) {
         if (text == null || sentence == null) {
             return false;
         }

@@ -28,8 +28,11 @@ public final class ScopeVerdict {
     public record ItemRef(Long courseId, List<String> refIds) {
     }
 
-    /** 미룬 범위 하나: 이유와 인용 번호(모델 출력 그대로 — 서버는 아는 번호만 본다). */
-    public record DeferredRef(String reason, List<String> refIds) {
+    /** 미룬 범위 하나: 제목·이유와 인용 번호(모델 출력 그대로 — 서버는 아는 번호만 본다). */
+    public record DeferredRef(String title, String reason, List<String> refIds) {
+        public DeferredRef(String reason, List<String> refIds) {
+            this(null, reason, refIds);
+        }
     }
 
     /**
@@ -56,6 +59,19 @@ public final class ScopeVerdict {
                                     Map<Long, String> selectedNotIn, Map<Long, Boolean> deliveredFull,
                                     Map<String, Long> refToSection, Map<String, String> refToPart,
                                     List<ItemRef> items, List<DeferredRef> deferred) {
+        return judge(status, incomplete, scopes, sectionMaterial, shownSections, selectedNotIn, deliveredFull, refToSection,
+                refToPart, items, deferred, Map.of());
+    }
+
+    /**
+     * @param courseExclusions 서버가 정한 과목별 처리 결과 중 이번 초안에서 뺀 과목 → 그 이유(ProjectOutcome). 항목도 미룸도 없는
+     *                         부분은 이 이유로 "미룸"이 된다 — 과목 id로 잇는다(미룬 항목 제목 문자열에 기대지 않는다)
+     */
+    public static ScopeReport judge(String status, boolean incomplete, List<RequestScope> scopes,
+                                    Map<Long, Long> sectionMaterial, Set<Long> shownSections,
+                                    Map<Long, String> selectedNotIn, Map<Long, Boolean> deliveredFull,
+                                    Map<String, Long> refToSection, Map<String, String> refToPart,
+                                    List<ItemRef> items, List<DeferredRef> deferred, Map<Long, String> courseExclusions) {
         if (scopes == null || scopes.isEmpty()) {
             ScopeReport empty = ScopeReport.empty(status);
             return incomplete ? new ScopeReport(status, List.of(), List.of(), false, List.of(), List.of(),
@@ -124,6 +140,13 @@ public final class ScopeVerdict {
                 } else {
                     DeferredRef d = deferredFor(part, mats, partsPerMaterial, deferred, refToPart, refToSection,
                             sectionMaterial);
+                    if (d == null) {
+                        d = courseDeferral(scope, deferred);
+                    }
+                    if (d == null && scope.courseId() != null && courseExclusions.containsKey(scope.courseId())) {
+                        d = new DeferredRef(scope.courseTitle(), "이번 초안에서 이 과목을 뺐다: "
+                                + courseExclusions.get(scope.courseId()), List.of());
+                    }
                     reflection = d != null ? Reflection.DEFERRED : Reflection.UNHANDLED;
                     note = d == null ? null : d.reason();
                 }
@@ -200,6 +223,28 @@ public final class ScopeVerdict {
         }
         boolean shown = shownSections.stream().anyMatch(s -> own.contains(sectionMaterial.get(s)));
         return shown ? Acquisition.SHOWN_NOT_SELECTED : Acquisition.AVAILABLE_NOT_ACQUIRED;
+    }
+
+    /**
+     * 과목 전체를 미룬 항목(인용 번호 없이 제목이 그 범위의 과목명). 모델은 "네트워크프로그래밍 — 오늘 남은 60분에 넣기 어렵다"처럼
+     * 과목 단위로 미루는 일이 많다. 과목이 정해진 범위에만, 제목이 과목명과 같을 때만(포함 관계가 아니라 같음) 그 범위의 부분에 잇는다.
+     */
+    private static DeferredRef courseDeferral(RequestScope scope, List<DeferredRef> deferred) {
+        if (scope.courseId() == null || scope.courseTitle() == null) {
+            return null;
+        }
+        String course = normalize(scope.courseTitle());
+        for (DeferredRef d : deferred == null ? List.<DeferredRef>of() : deferred) {
+            boolean noRefs = d.refIds() == null || d.refIds().isEmpty();
+            if (noRefs && d.title() != null && normalize(d.title()).equals(course)) {
+                return d;
+            }
+        }
+        return null;
+    }
+
+    private static String normalize(String s) {
+        return s.replaceAll("[\\s·:()\\[\\]-]+", "");
     }
 
     /** 이 부분을 미룬 항목. 부분 줄을 인용했거나, 이 부분만의 자료(다른 부분과 함께 쓰지 않는 자료) 구간을 인용했을 때. */
