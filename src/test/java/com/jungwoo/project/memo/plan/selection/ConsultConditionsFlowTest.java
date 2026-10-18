@@ -190,4 +190,39 @@ class ConsultConditionsFlowTest {
         return "{\"title\":\"" + title + "\",\"description\":\"한다 · 완료: 끝\",\"expectedMinutes\":" + minutes
                 + ",\"priority\":\"" + priority + "\",\"courseId\":1,\"reason\":\"r\",\"refIds\":[\"" + ref + "\"]}";
     }
+
+    @Test
+    void 밤_12시까지_한다고_하면_강도_비율이_아니라_그_시간대의_남는_시간을_채운다() {
+        // 기본 창 09:00~24:25(925분). 강도 NORMAL이면 600분이었는데, "밤 12시까지"면 09:00~24:00 900분을 채운다.
+        PlanSelectionFixture f = new PlanSelectionFixture();
+        f.course(1, "자료구조");
+        f.material(10, "a.pdf", 1L);
+        f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
+        PlanBriefItem time = new PlanBriefItem(1, "TIME_BUDGET", "밤 12시까지 공부할게 (쓸 수 있는 시간 하루 · ~24:00)",
+                PlanBriefItem.SPEAKER_USER, true, false, false, PlanBriefItem.SCOPE_THIS_DRAFT, 10L, 10L, null, null, null,
+                null, 1, List.of(), LocalDateTime.of(2026, 9, 13, 9, 0));
+        when(f.briefService.load(anyLong(), any())).thenReturn(new PlanBriefService.View(5L, 77L, 3, List.of(time), null));
+        f.selectionAnswer = prompt -> selection(List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")), List.of(), List.of());
+        f.planAnswer = prompt -> "{\"title\":\"t\",\"items\":[" + item("스택 핵심 회수", refOf(prompt, "스택 개념"), 60, "MUST") + "]}";
+
+        Generated generated = f.generate(f.spec("스택 위주로", new com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Origin(
+                77L, null, "req-1", null, null)), com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
+
+        assertThat(generated.targetMinutes()).isEqualTo(900);
+        assertThat(f.planPrompt()).contains("[사용자가 말한 시간]").contains("~24:00").contains("900분");
+    }
+
+    @Test
+    void 말한_분이_시간대의_남는_시간보다_크면_남는_시간까지만_잡는다() {
+        List<com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow> windows = List.of(
+                new com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow(START.atTime(14, 0), START.plusDays(1).atStartOfDay(),
+                        com.jungwoo.project.memo.scheduling.domain.AvailabilitySource.DEFAULT_INFERENCE,
+                        com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence.LOW, "기본"));
+        PlanBriefService.TimeBudget evening = new PlanBriefService.TimeBudget(300, true, java.time.LocalTime.of(20, 0), "24:00");
+        assertThat(com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.userTimeOf(evening, windows, 600, 1)).isEqualTo(240);
+
+        PlanBriefService.TimeBudget hour = new PlanBriefService.TimeBudget(60, false);
+        assertThat(com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.userTimeOf(hour, windows, 600, 1)).isEqualTo(60);
+        assertThat(com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.userTimeOf(null, windows, 600, 1)).isNull();
+    }
 }

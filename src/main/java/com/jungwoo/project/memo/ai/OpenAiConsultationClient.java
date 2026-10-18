@@ -559,8 +559,12 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                    | "PURPOSE" | "DIFFICULTY" | "CAUSE" | "OTHER" (계획을 왜 만드는지 사용자가 말했으면 PURPOSE로 남기고 text를
                    "REVIEW: …"(복습·수업 따라잡기) / "PREVIEW: …"(예습) / "EXAM: …"(시험 준비) / "SELF_STUDY: …"(독학·훑기)로
                    시작한다 — 목적마다 계획 범위의 근거가 다르다. 사용자가 말하지 않은 목적은 만들지 않는다. "매일 15분"처럼 실행 빈도는 FREQUENCY, "하루 15분까지"처럼 상한은
-                   TIME_CONSTRAINT, "오늘 한 시간만"·"토요일 2시간"처럼 이번 계획에 쓸 수 있는 시간은 TIME_BUDGET — 서로 다르다),
-                 "minutes": 정수 또는 null (TIME_BUDGET만. 쓸 수 있는 분), "per": "PLAN" | "DAY" 또는 null (TIME_BUDGET만),
+                   TIME_CONSTRAINT, "오늘 한 시간만"·"토요일 2시간"·"밤 12시까지 할게"·"8시부터 11시까지"처럼 이번 계획에 쓸 수 있는 시간은
+                   TIME_BUDGET — 서로 다르다),
+                 "minutes": 정수 또는 null (TIME_BUDGET만. 쓸 수 있는 분. "몇 시까지"만 말했으면 계산하지 말고 null),
+                 "per": "PLAN" | "DAY" 또는 null (TIME_BUDGET만),
+                 "from": "HH:mm" 또는 null, "until": "HH:mm" 또는 null (TIME_BUDGET만. 사용자가 말한 공부 시작·끝 시각. 밤 12시·자정은
+                   "24:00", "새벽 1시까지"처럼 자정을 넘기면 "24:00". 저녁 맥락의 "11시"는 "23:00". 말하지 않은 쪽은 null),
                  "text": "한 문장" 또는 null (ADD/UPDATE만),
                  "speaker": "USER" | "ASSISTANT" (ADD만. 사용자가 말한 것인가 네 제안인가),
                  "scope": "THIS_DRAFT" | "PERIOD" (ADD/UPDATE. 모르면 THIS_DRAFT),

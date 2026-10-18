@@ -295,4 +295,43 @@ class PlanBriefServiceTest {
         return PlanBrief.builder().briefId(1L).userId(USER).conversationId(CONV).version(version).status("OPEN")
                 .items(items).build();
     }
+
+    @Test
+    void 쓸_수_있는_시간에_끝_시각만_말하면_시간대_꼬리표로_남고_다시_읽힌다() {
+        PlanBriefOp untilMidnight = new PlanBriefOp("ADD", null, "TIME_BUDGET", "오늘 밤 12시까지 공부할게", "USER",
+                "THIS_DRAFT", null, null, null, null, null, null, null, null, "00:00");
+        String text = PlanBriefService.withTimeBudget("오늘 밤 12시까지 공부할게", untilMidnight);
+        assertThat(text).isEqualTo("오늘 밤 12시까지 공부할게 (쓸 수 있는 시간 하루 · ~24:00)");
+
+        PlanBriefService.TimeBudget budget = PlanBriefService.timeBudgetOf(List.of(said(text)));
+        assertThat(budget.minutes()).isNull();
+        assertThat(budget.hasWindow()).isTrue();
+        assertThat(budget.windowEndOn(LocalDate.of(2026, 10, 18))).isEqualTo(LocalDateTime.of(2026, 10, 19, 0, 0));
+        assertThat(budget.windowLabel()).isEqualTo("~24:00");
+    }
+
+    @Test
+    void 분과_시간대를_함께_말하면_둘_다_남고_예전_꼬리표도_그대로_읽힌다() {
+        PlanBriefOp both = new PlanBriefOp("ADD", null, "TIME_BUDGET", "8시부터 11시까지 3시간", "USER", "THIS_DRAFT",
+                null, null, null, null, null, 180, "DAY", "20:00", "23:00");
+        String text = PlanBriefService.withTimeBudget("8시부터 11시까지 3시간", both);
+        assertThat(text).endsWith("(쓸 수 있는 시간 180분 · 하루 · 20:00~23:00)");
+        PlanBriefService.TimeBudget budget = PlanBriefService.timeBudgetOf(List.of(said(text)));
+        assertThat(budget.minutes()).isEqualTo(180);
+        assertThat(budget.windowLabel()).isEqualTo("20:00~23:00");
+
+        PlanBriefService.TimeBudget old = PlanBriefService.timeBudgetOf(List.of(said("오늘 한 시간만 (쓸 수 있는 시간 60분 · 계획 전체)")));
+        assertThat(old.minutes()).isEqualTo(60);
+        assertThat(old.hasWindow()).isFalse();
+
+        // 분도 시간대도 못 읽으면 꼬리표를 붙이지 않는다.
+        PlanBriefOp nothing = new PlanBriefOp("ADD", null, "TIME_BUDGET", "오늘 좀 할게", "USER", "THIS_DRAFT",
+                null, null, null, null, null, null, null, "아침", "밤");
+        assertThat(PlanBriefService.withTimeBudget("오늘 좀 할게", nothing)).isEqualTo("오늘 좀 할게");
+    }
+
+    private static PlanBriefItem said(String text) {
+        return new PlanBriefItem(1, "TIME_BUDGET", text, PlanBriefItem.SPEAKER_USER, true, false, false,
+                PlanBriefItem.SCOPE_THIS_DRAFT, 1L, 1L, null, null, null, null, 1, List.of(), LocalDateTime.now());
+    }
 }

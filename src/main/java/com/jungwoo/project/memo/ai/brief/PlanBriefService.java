@@ -427,28 +427,95 @@ public class PlanBriefService {
 
     // ===== 쓸 수 있는 시간 =====
 
-    private static final java.util.regex.Pattern TIME_BUDGET_TAG =
-            java.util.regex.Pattern.compile("\\(쓸 수 있는 시간 (\\d{1,4})분 · (계획 전체|하루)\\)$");
+    /**
+     * 꼬리표: "(쓸 수 있는 시간 60분 · 하루)", "(쓸 수 있는 시간 하루 · ~24:00)", "(쓸 수 있는 시간 240분 · 하루 · 20:00~24:00)".
+     * 분과 시간대 중 하나는 있다. 시간대만 있으면 그 안에서 남는 시간이 쓸 수 있는 시간이다.
+     */
+    private static final java.util.regex.Pattern TIME_BUDGET_TAG = java.util.regex.Pattern.compile(
+            "\\(쓸 수 있는 시간 (?:(\\d{1,4})분 · )?(계획 전체|하루)(?: · (\\d{2}:\\d{2})?~(\\d{2}:\\d{2}))?\\)$");
 
-    /** 사용자가 말한 시간. per가 DAY면 하루 기준이다. */
-    public record TimeBudget(int minutes, boolean perDay) {
-        /** 기간 전체로 환산한 분. */
-        public int totalFor(int days) {
-            return perDay ? minutes * Math.max(1, days) : minutes;
+    /**
+     * 사용자가 말한 시간. per가 DAY면 하루 기준이다.
+     *
+     * @param minutes 쓸 수 있는 분. 시간대만 말했으면 null(그 안에서 남는 시간을 쓴다)
+     * @param from    공부를 시작할 수 있는 시각. 없으면 null
+     * @param until   공부를 끝낼 시각(HH:mm, "24:00"은 자정). 없으면 null
+     */
+    public record TimeBudget(Integer minutes, boolean perDay, java.time.LocalTime from, String until) {
+        public TimeBudget(int minutes, boolean perDay) {
+            this(minutes, perDay, null, null);
+        }
+
+        /** 기간 전체로 환산한 분. 분을 말하지 않았으면 null. */
+        public Integer totalFor(int days) {
+            return minutes == null ? null : perDay ? minutes * Math.max(1, days) : minutes;
+        }
+
+        /** "몇 시부터·몇 시까지"를 말했는가. */
+        public boolean hasWindow() {
+            return from != null || until != null;
+        }
+
+        /** 그날 공부할 수 있는 구간의 시작. 시작을 말하지 않았으면 그날 0시(기본 창이 대신 자른다). */
+        public java.time.LocalDateTime windowStartOn(LocalDate day) {
+            return from == null ? day.atStartOfDay() : day.atTime(from);
+        }
+
+        /** 그날 공부할 수 있는 구간의 끝. 끝을 말하지 않았으면 다음 날 0시. */
+        public java.time.LocalDateTime windowEndOn(LocalDate day) {
+            return until == null || "24:00".equals(until) ? day.plusDays(1).atStartOfDay()
+                    : day.atTime(java.time.LocalTime.parse(until));
+        }
+
+        /** "20:00~24:00"·"~24:00"처럼 사람이 읽는 시간대. 없으면 null. */
+        public String windowLabel() {
+            return hasWindow() ? (from == null ? "" : from.toString()) + "~" + (until == null ? "24:00" : until) : null;
+        }
+    }
+
+    /** "HH:mm" 시각. until이면 24:00(자정)도 받는다. 형식이 틀리면 null. */
+    static String clockTime(String value, boolean until) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        String v = value.trim();
+        if (until && "24:00".equals(v)) {
+            return v;
+        }
+        try {
+            java.time.LocalTime t = java.time.LocalTime.parse(v.length() == 4 ? "0" + v : v);
+            if (until && t.equals(java.time.LocalTime.MIDNIGHT)) {
+                return "24:00"; // "밤 12시까지"를 00:00으로 적었다
+            }
+            return t.toString();
+        } catch (Exception e) {
+            return null;
         }
     }
 
     /**
-     * TIME_BUDGET 합의의 분(minutes)을 문장 끝에 읽을 수 있는 꼬리표로 붙여 저장한다 — 합의 항목은 문장이 원본이고, 같은
-     * 문장에서 서버가 값을 다시 읽는다(별도 필드를 두면 문장과 값이 어긋난 채 남을 수 있다). 사용자에게도 그대로 보인다.
+     * TIME_BUDGET 합의의 분(minutes)과 시간대(from~until)를 문장 끝에 읽을 수 있는 꼬리표로 붙여 저장한다 — 합의 항목은 문장이
+     * 원본이고, 같은 문장에서 서버가 값을 다시 읽는다(별도 필드를 두면 문장과 값이 어긋난 채 남을 수 있다). 사용자에게도 그대로 보인다.
      */
     static String withTimeBudget(String text, PlanBriefOp op) {
-        if (text == null || !"TIME_BUDGET".equals(kindOf(op.kind())) || op.minutes() == null
-                || op.minutes() < 5 || op.minutes() > 9999 || TIME_BUDGET_TAG.matcher(text).find()) {
+        if (text == null || !"TIME_BUDGET".equals(kindOf(op.kind())) || TIME_BUDGET_TAG.matcher(text).find()) {
             return text;
         }
-        boolean perDay = "DAY".equalsIgnoreCase(op.per());
-        String tagged = text + " (쓸 수 있는 시간 " + op.minutes() + "분 · " + (perDay ? "하루" : "계획 전체") + ")";
+        boolean minutesGiven = op.minutes() != null && op.minutes() >= 5 && op.minutes() <= 9999;
+        String from = clockTime(op.from(), false);
+        String until = clockTime(op.until(), true);
+        if (from != null && until != null && !"24:00".equals(until) && from.compareTo(until) >= 0) {
+            from = null; // 앞뒤가 뒤집힌 시간대는 끝만 믿는다
+        }
+        boolean windowGiven = from != null || until != null;
+        if (!minutesGiven && !windowGiven) {
+            return text;
+        }
+        // 시간대만 말했으면 "오늘 밤 12시까지"처럼 하루 기준이다.
+        boolean perDay = "DAY".equalsIgnoreCase(op.per()) || !minutesGiven;
+        String tagged = text + " (쓸 수 있는 시간 " + (minutesGiven ? op.minutes() + "분 · " : "")
+                + (perDay ? "하루" : "계획 전체")
+                + (windowGiven ? " · " + (from == null ? "" : from) + "~" + (until == null ? "24:00" : until) : "") + ")";
         return tagged.length() > MAX_TEXT_CHARS ? text : tagged;
     }
 
@@ -461,7 +528,8 @@ public class PlanBriefService {
             }
             java.util.regex.Matcher m = TIME_BUDGET_TAG.matcher(item.text());
             if (m.find()) {
-                found = new TimeBudget(Integer.parseInt(m.group(1)), "하루".equals(m.group(2)));
+                found = new TimeBudget(m.group(1) == null ? null : Integer.parseInt(m.group(1)), "하루".equals(m.group(2)),
+                        m.group(3) == null ? null : java.time.LocalTime.parse(m.group(3)), m.group(4));
             }
         }
         return found;

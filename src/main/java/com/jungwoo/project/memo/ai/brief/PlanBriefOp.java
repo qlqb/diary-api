@@ -33,16 +33,28 @@ public record PlanBriefOp(
         /** TIME_BUDGET만: 이번 계획에 쓸 수 있는 시간(분). */
         Integer minutes,
         /** TIME_BUDGET만: PLAN(계획 전체) / DAY(하루). */
-        String per
+        String per,
+        /** TIME_BUDGET만: 공부를 시작할 수 있는 시각(HH:mm). 모르면 null */
+        String from,
+        /** TIME_BUDGET만: 공부를 끝낼 시각(HH:mm, 자정은 24:00). "밤 12시까지"면 24:00. 모르면 null */
+        String until
 ) {
     public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
+                       Long courseId, Long executionItemId, String periodStart, String periodEnd, Integer minutes,
+                       String per) {
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, periodStart, periodEnd, minutes, per,
+                null, null);
+    }
+
+    public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
                        Long courseId, Long executionItemId, String periodStart, String periodEnd) {
-        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, periodStart, periodEnd, null, null);
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, periodStart, periodEnd, null, null,
+                null, null);
     }
 
     /** 날짜 없이 만드는 경로(기존 호출부·테스트). */
     public PlanBriefOp(String op, Integer id, String kind, String text, String speaker, String scope, Long topicId,
                        Long courseId, Long executionItemId) {
-        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, null, null, null, null);
+        this(op, id, kind, text, speaker, scope, topicId, courseId, executionItemId, null, null, null, null, null, null);
     }
 }

@@ -1,5 +1,6 @@
 package com.jungwoo.project.memo.plan;
 
+import com.jungwoo.project.memo.ai.brief.PlanBriefService;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.execution.ExecutionItemMapper;
@@ -64,6 +65,7 @@ public class PlanPlacementService {
     private final SchedulingSolverService solverService;
     private final ExecutionItemMapper executionItemMapper;
     private final ExecutionItemService executionItemService;
+    private final PlanStudyTimeResolver studyTimeResolver;
     private final Clock clock;
 
     @Value("${scheduling.availability.slot-granularity-minutes:15}")
@@ -115,6 +117,13 @@ public class PlanPlacementService {
         // 그 안에서 이미 한다 — 여기서 다시 조회하지 않는다.
         AvailabilityEstimateResult availability = availabilityEstimateService.estimate(
                 userId, windowStart, windowEnd, List.of(), List.of());
+        /*
+         * (2026-10-18) 상담에서 "밤 12시까지"·"20시부터"처럼 시간대를 말했으면 그 안에서만 시각을 정한다. 초안 예산도 같은 시간대
+         * 안의 남는 시간으로 잡았으니(PeriodPlanDraftGenerator.userTimeOf) 배치가 다른 시간에 흩어 놓으면 말과 어긋난다.
+         */
+        PlanBriefService.TimeBudget said = studyTimeResolver.resolve(userId, plan);
+        List<AvailabilityWindow> windows = said != null && said.hasWindow()
+                ? withinStudyTime(availability.windows(), said) : availability.windows();
 
         List<SchedulingTask> tasks = new ArrayList<>();
         for (ExecutionItem item : targets) {
@@ -131,7 +140,7 @@ public class PlanPlacementService {
             LocalDateTime deadline = item.getDeadlineAt();
             LocalDate fixedDay = item.getPlacementType() == PlacementType.DATE_ONLY ? item.getScheduledDate() : null;
             List<TimeSlotOption> candidates = buildCandidates(
-                    fixedDay == null ? availability.windows() : windowsOn(availability.windows(), fixedDay),
+                    fixedDay == null ? windows : windowsOn(windows, fixedDay),
                     duration, now, windowEnd, deadline);
             if (candidates.isEmpty()) {
                 String reason;
@@ -219,6 +228,20 @@ public class PlanPlacementService {
             }
         }
         return options;
+    }
+
+    /** 남는 시간을 날마다 사용자가 말한 시간대(from~until)로 자른다. */
+    static List<AvailabilityWindow> withinStudyTime(List<AvailabilityWindow> windows, PlanBriefService.TimeBudget said) {
+        List<AvailabilityWindow> out = new ArrayList<>();
+        for (AvailabilityWindow w : windows) {
+            LocalDate day = w.startAt().toLocalDate();
+            LocalDateTime from = said.windowStartOn(day).isAfter(w.startAt()) ? said.windowStartOn(day) : w.startAt();
+            LocalDateTime to = said.windowEndOn(day).isBefore(w.endAt()) ? said.windowEndOn(day) : w.endAt();
+            if (from.isBefore(to)) {
+                out.add(new AvailabilityWindow(from, to, w.source(), w.confidence(), w.reason()));
+            }
+        }
+        return out;
     }
 
     private LocalDateTime roundUpToGranularity(LocalDateTime time) {

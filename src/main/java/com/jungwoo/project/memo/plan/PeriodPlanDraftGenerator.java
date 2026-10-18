@@ -619,13 +619,22 @@ public class PeriodPlanDraftGenerator {
         PlanBriefService.TimeBudget saidTime = facts.brief() == null ? null
                 : PlanBriefService.timeBudgetOf(facts.brief().effectiveFor(spec.start(), spec.end(), flowRootForBudget)
                 .stream().map(PlanBriefService.Applicable::item).toList());
-        Integer userTimeLimit = saidTime == null ? null : Math.max(MIN_ITEM_MINUTES, saidTime.totalFor(days));
+        Integer userTimeLimit = userTimeOf(saidTime, availability.windows(), available, days);
         String timeNote = null;
-        if (userTimeLimit != null && userTimeLimit < target) {
-            timeNote = "사용자가 이번 계획에 쓸 수 있다고 말한 시간은 " + (saidTime.perDay() ? "하루 " + saidTime.minutes() + "분(기간 합 "
-                    + userTimeLimit + "분)" : userTimeLimit + "분") + "이다. 강도로 계산한 예산(" + target
-                    + "분)보다 이 값이 우선이다 — 항목의 예상 시간 합이 " + userTimeLimit + "분을 넘지 않게 한다.";
-            target = userTimeLimit;
+        if (userTimeLimit != null && userTimeLimit != target) {
+            /*
+             * (2026-10-18) 사용자가 말한 시간은 상한이자 목표다 — 강도 비율로 계산한 예산보다 크면 늘린다. "밤 12시까지 공부할게"라고
+             * 했는데 남는 시간의 65%만 채우면 19시쯤 끝나 버렸다. 남는 시간(시간대를 말했으면 그 안)보다 크게는 잡지 않는다.
+             */
+            String said = saidTime.minutes() == null ? saidTime.windowLabel() + " 사이의 남는 시간(" + userTimeLimit + "분)"
+                    : saidTime.perDay() ? "하루 " + saidTime.minutes() + "분(기간 합 " + saidTime.totalFor(days) + "분)"
+                    : saidTime.minutes() + "분";
+            timeNote = "사용자가 이번 계획에 쓸 수 있다고 말한 시간은 " + said
+                    + (saidTime.hasWindow() && saidTime.minutes() != null ? ", 시간대는 " + saidTime.windowLabel() : "")
+                    + "이다. 강도로 계산한 예산(" + target + "분) 대신 이 값을 쓴다 — 항목의 예상 시간 합을 " + userTimeLimit
+                    + "분에 맞춘다(넘지 않게, 크게 모자라지도 않게).";
+            target = Math.min(userTimeLimit, cap);
+            cappedByItemLimit = userTimeLimit > cap;
         }
 
         // 교재(사용자 정정 포함)와 계획 목적이 바뀌면 같은 자료라도 다시 고른다 — 이전 선택을 재사용하지 않는다.
@@ -1497,6 +1506,44 @@ public class PeriodPlanDraftGenerator {
             total += Math.max(0, window.durationMinutes());
         }
         return Math.toIntExact(total);
+    }
+
+    /**
+     * 사용자가 말한 시간으로 정한 학습 예산(분). 말하지 않았으면 null.
+     *
+     * <p>분을 말했으면 그 값, 시간대만 말했으면("밤 12시까지") 그 시간대 안의 남는 시간이다. 어느 쪽이든 실제로 남는 시간(시간대를
+     * 말했으면 그 안)보다 크게는 잡지 않는다 — 배치할 자리가 없는 분량은 계획이 아니다.
+     */
+    public static Integer userTimeOf(PlanBriefService.TimeBudget said, List<AvailabilityWindow> windows, int available, int days) {
+        if (said == null) {
+            return null;
+        }
+        int room = said.hasWindow() ? minutesWithin(windows, said) : available;
+        Integer total = said.totalFor(days);
+        int minutes = total == null ? room : Math.min(total, room);
+        return Math.max(MIN_ITEM_MINUTES, minutes);
+    }
+
+    /** 남는 시간 중 사용자가 말한 시간대(날마다 from~until) 안에 드는 분. */
+    static int minutesWithin(List<AvailabilityWindow> windows, PlanBriefService.TimeBudget said) {
+        long total = 0;
+        for (AvailabilityWindow w : windows) {
+            LocalDate day = w.startAt().toLocalDate();
+            LocalDateTime from = max(w.startAt(), said.windowStartOn(day));
+            LocalDateTime to = min(w.endAt(), said.windowEndOn(day));
+            if (from.isBefore(to)) {
+                total += java.time.Duration.between(from, to).toMinutes();
+            }
+        }
+        return Math.toIntExact(total);
+    }
+
+    private static LocalDateTime max(LocalDateTime a, LocalDateTime b) {
+        return a.isAfter(b) ? a : b;
+    }
+
+    private static LocalDateTime min(LocalDateTime a, LocalDateTime b) {
+        return a.isBefore(b) ? a : b;
     }
 
     public static final String CONFIDENCE_ALL_DEFAULT = "기본 시간대(하루 기본 창에서 확정 일정을 뺀 시간)를 사용한 추정";
