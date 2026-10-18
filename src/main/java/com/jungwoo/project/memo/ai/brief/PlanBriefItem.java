@@ -38,6 +38,9 @@ import java.util.List;
  * @param periodEnd           PERIOD 합의가 적용되는 실제 종료 날짜
  * @param saidOn              발언 날짜(사용자 시간대). "이번 주"의 해석 기준
  * @param flowProposalId      THIS_DRAFT 합의가 묶인 초안 흐름(처음 만든 초안 id). 아직 초안을 만들지 않았으면 null
+ * @param quote               (2026-10-18) 근거가 된 사용자 원문 구절. 서버가 그 사용자 메시지에 실제로 있는지 확인한 것만 남는다
+ * @param basisMessageId      quote가 들어 있는 사용자 메시지. 서버가 대화에서 직접 찾은 USER 메시지다(모델이 준 id가 아니다)
+ * @param basisSentence       quote가 든 문장 전체(서버가 원문에서 잘라 냄). 짧은 구절만으로는 "빼지 마"가 "빼"로 읽힐 수 있다
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record PlanBriefItem(
@@ -61,12 +64,24 @@ public record PlanBriefItem(
         LocalDate periodStart,
         LocalDate periodEnd,
         LocalDate saidOn,
-        Long flowProposalId
+        Long flowProposalId,
+        String quote,
+        Long basisMessageId,
+        String basisSentence
 ) {
     public static final String SPEAKER_USER = "USER";
     public static final String SPEAKER_ASSISTANT = "ASSISTANT";
     public static final String SCOPE_THIS_DRAFT = "THIS_DRAFT";
     public static final String SCOPE_PERIOD = "PERIOD";
+
+    /** 근거 필드가 생기기 전 모양(옛 저장본·호출부·테스트). 근거 없음으로 읽힌다. */
+    public PlanBriefItem(int id, String kind, String text, String speaker, boolean accepted, boolean rejected,
+                         boolean removed, String scope, Long sourceMessageId, Long acceptedByMessageId, Integer supersedes,
+                         Long topicId, Long courseId, Long executionItemId, int revision, List<String> history,
+                         LocalDateTime updatedAt, LocalDate periodStart, LocalDate periodEnd, LocalDate saidOn,
+                         Long flowProposalId) {
+        this(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId, acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, updatedAt, periodStart, periodEnd, saidOn, flowProposalId, null, null, null);
+    }
 
     /** 범위 정보 없이 만드는 경로(옛 호출부·테스트). 범위는 markProposal이 초안을 만들 때 묶는다. */
     public PlanBriefItem(int id, String kind, String text, String speaker, boolean accepted, boolean rejected,
@@ -77,14 +92,31 @@ public record PlanBriefItem(
                 topicId, courseId, executionItemId, revision, history, updatedAt, null, null, null, null);
     }
 
-    /** 사용자가 받아들였고 거절·삭제되지 않았는가(범위는 보지 않는다 — 범위는 {@link PlanBriefService.View#effectiveFor}). */
-    public boolean effective() {
-        return accepted && !rejected && !removed;
+    /**
+     * 사용자 발언에 근거가 확인됐는가. 승인과는 다르다 — AI가 사용자 말을 정리한 문장은 작성자가 AI여도 근거가 사용자 발언이다.
+     */
+    public boolean grounded() {
+        return basisMessageId != null;
     }
 
-    /** 아직 사용자가 답하지 않은 AI 제안인가. */
+    /**
+     * 유효한가: 사용자가 받아들였거나 사용자 발언에 근거가 확인됐고, 거절·삭제되지 않았다(범위는 보지 않는다 — 범위는
+     * {@link PlanBriefService.View#effectiveFor}). 근거만 있는 항목은 승인이 아니라 "사용자 요청을 정리한 것"으로 다룬다.
+     */
+    public boolean effective() {
+        return (accepted || grounded()) && !rejected && !removed;
+    }
+
+    /** 아직 사용자가 답하지 않은 AI 제안인가(사용자 발언 근거가 없는 것만). */
     public boolean pendingProposal() {
-        return SPEAKER_ASSISTANT.equals(speaker) && !accepted && !rejected && !removed;
+        return SPEAKER_ASSISTANT.equals(speaker) && !accepted && !grounded() && !rejected && !removed;
+    }
+
+    /** 사용자 발언 근거를 붙인다. 거절·삭제 상태는 그대로다 — 근거가 붙었다고 되살아나지 않는다. */
+    public PlanBriefItem withBasis(String newQuote, Long messageId, String sentence, LocalDateTime at) {
+        return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
+                acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart,
+                periodEnd, saidOn, flowProposalId, newQuote, messageId, sentence);
     }
 
     public boolean isPeriod() {
@@ -117,19 +149,19 @@ public record PlanBriefItem(
     public PlanBriefItem withAccepted(Long byMessageId, LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, true, false, removed, scope, sourceMessageId, byMessageId,
                 supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart, periodEnd, saidOn,
-                flowProposalId);
+                flowProposalId, quote, basisMessageId, basisSentence);
     }
 
     public PlanBriefItem withRejected(LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, false, true, removed, scope, sourceMessageId, acceptedByMessageId,
                 supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart, periodEnd, saidOn,
-                flowProposalId);
+                flowProposalId, quote, basisMessageId, basisSentence);
     }
 
     public PlanBriefItem withRemoved(LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, true, scope, sourceMessageId,
                 acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart,
-                periodEnd, saidOn, flowProposalId);
+                periodEnd, saidOn, flowProposalId, quote, basisMessageId, basisSentence);
     }
 
     /**
@@ -147,22 +179,31 @@ public record PlanBriefItem(
         }
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
                 acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history,
-                updatedAt != null ? updatedAt : at, nextStart, nextEnd, saidOn, nextFlow);
+                updatedAt != null ? updatedAt : at, nextStart, nextEnd, saidOn, nextFlow, quote, basisMessageId,
+                basisSentence);
     }
 
-    /** 사용자가 문장을 고쳤다. 최신 문장이 우선하고 이전 문장은 history에 남는다. 기간을 함께 말했으면 그 날짜로 바뀐다. */
-    public PlanBriefItem revised(String newText, String newScope, LocalDate newStart, LocalDate newEnd, Long byMessageId,
-                                 LocalDateTime at) {
+    /**
+     * 문장을 고쳤다. 최신 문장이 우선하고 이전 문장은 history에 남는다. 기간을 함께 말했으면 그 날짜로 바뀐다.
+     *
+     * <p>(2026-10-18) 근거·승인은 이 수정판으로 다시 정한다 — 이전 판의 근거를 승계하지 않는다. 사용자가 고쳐 말한 문장을 그대로
+     * 옮겼으면 사용자 수정판(승인), 사용자 발언 근거는 있지만 AI가 자기 말로 정리했으면 근거 있는 AI 정리(승인 아님), 근거가
+     * 확인되지 않으면 AI가 고친 후보다(사용자가 다시 답해야 유효).
+     *
+     * @param basis 이 수정의 근거로 확인된 사용자 발언. 없으면 null
+     */
+    public PlanBriefItem revised(String newText, String newScope, LocalDate newStart, LocalDate newEnd,
+                                 PlanBriefService.UserBasis basis, LocalDateTime at) {
         List<String> next = new java.util.ArrayList<>(history == null ? List.of() : history);
         next.add(text);
         String scopeNext = newScope != null ? newScope : scope;
         boolean datesGiven = newStart != null && newEnd != null;
-        return new PlanBriefItem(id, kind, newText, SPEAKER_USER, true, false, removed, scopeNext, sourceMessageId,
-                byMessageId, supersedes, topicId, courseId, executionItemId, revision + 1, next, at,
-                datesGiven ? newStart : periodStart, datesGiven ? newEnd : periodEnd, saidOn, flowProposalId);
-    }
-
-    public PlanBriefItem revised(String newText, String newScope, Long byMessageId, LocalDateTime at) {
-        return revised(newText, newScope, null, null, byMessageId, at);
+        boolean grounded = basis != null;
+        boolean byUser = grounded && PlanBriefService.verbatim(newText, basis.sentence());
+        return new PlanBriefItem(id, kind, newText, byUser ? SPEAKER_USER : SPEAKER_ASSISTANT, byUser, false, removed,
+                scopeNext, sourceMessageId, byUser ? basis.messageId() : null, supersedes, topicId, courseId,
+                executionItemId, revision + 1, next, at, datesGiven ? newStart : periodStart,
+                datesGiven ? newEnd : periodEnd, saidOn, flowProposalId,
+                grounded ? basis.quote() : null, grounded ? basis.messageId() : null, grounded ? basis.sentence() : null);
     }
 }

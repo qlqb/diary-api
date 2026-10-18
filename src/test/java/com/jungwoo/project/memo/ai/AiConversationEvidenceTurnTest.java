@@ -311,13 +311,15 @@ class AiConversationEvidenceTurnTest {
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("UPDATE", 4, null, "범위는 전부", null, "THIS_DRAFT", null, null,
                         null, null, null),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "SCOPE", "1~6주차만", "USER", "THIS_DRAFT", null, null,
-                        null, null, null),
+                        null, null, null, null, null, null, null, "좋아"),
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ACCEPT", 5, null, null, null, null, null, null, null, null, null));
 
         var kept = AiConversationService.restrictBriefOps(ops, java.util.Set.of(5), "좋아");
 
         assertThat(kept).extracting(com.jungwoo.project.memo.ai.brief.PlanBriefOp::op).containsExactly("ADD", "ACCEPT");
         assertThat(kept.get(0).speaker()).isEqualTo("ASSISTANT");
+        // 근거 구절도 뗀다 — 사용자 메시지의 아무 구절이나 붙여 "사용자 요청을 정리함"으로 유효해지지 못하게.
+        assertThat(kept.get(0).quote()).isNull();
         // 같은 응답에서 새로 추가한 항목(이 턴 전에 없던 번호)을 곧바로 수락하지 못한다.
         var sameTurnAccept = AiConversationService.restrictBriefOps(List.of(
                 new com.jungwoo.project.memo.ai.brief.PlanBriefOp("ADD", null, "GOAL", "전부 삭제", "ASSISTANT", "THIS_DRAFT", null,

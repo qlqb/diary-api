@@ -284,8 +284,9 @@ public class ConsultTurnService {
             if (item.removed() || item.rejected()) {
                 continue;
             }
-            boolean fromThisTurn = Objects.equals(item.sourceMessageId(), userMessageId)
-                    && PlanBriefItem.SPEAKER_USER.equals(item.speaker());
+            boolean fromThisTurn = (Objects.equals(item.sourceMessageId(), userMessageId)
+                    && PlanBriefItem.SPEAKER_USER.equals(item.speaker()))
+                    || Objects.equals(item.basisMessageId(), userMessageId); // AI가 이번 사용자 말을 정리한 항목
             boolean acceptedThisTurn = Objects.equals(item.acceptedByMessageId(), userMessageId);
             if (!fromThisTurn && !acceptedThisTurn) {
                 continue;

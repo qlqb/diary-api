@@ -197,13 +197,23 @@ public class PlanBriefService {
     @Transactional
     public View applyTurn(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
                           List<PlanBriefOp> ops, TurnPeriod turnPeriod) {
+        return applyTurn(userId, conversationId, userMessageId, assistantMessageId, ops, turnPeriod, List.of());
+    }
+
+    /**
+     * @param utterances 근거 확인에 쓰는 이 대화의 사용자 발언(서버가 직접 조회한 USER 메시지, 최신이 앞). 비어 있으면 어떤 항목도
+     *                   사용자 발언 근거를 얻지 못한다 — 모델이 speaker=USER라고 해도 후보다
+     */
+    @Transactional
+    public View applyTurn(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
+                          List<PlanBriefOp> ops, TurnPeriod turnPeriod, List<UserUtterance> utterances) {
         if (ops == null || ops.isEmpty() || conversationId == null) {
             return load(userId, conversationId);
         }
         for (int attempt = 0; attempt < 2; attempt++) {
             PlanBrief brief = mapper.findByConversationIdAndUserId(conversationId, userId);
             List<PlanBriefItem> items = brief == null ? new ArrayList<>() : new ArrayList<>(parse(brief.getItems()));
-            int applied = apply(items, ops, userMessageId, assistantMessageId, turnPeriod);
+            int applied = apply(items, ops, userMessageId, assistantMessageId, turnPeriod, utterances);
             if (applied == 0) {
                 return brief == null ? View.empty(conversationId) : toView(brief);
             }
@@ -284,6 +294,19 @@ public class PlanBriefService {
 
     int apply(List<PlanBriefItem> items, List<PlanBriefOp> ops, Long userMessageId, Long assistantMessageId,
               TurnPeriod turnPeriod) {
+        return apply(items, ops, userMessageId, assistantMessageId, turnPeriod, List.of());
+    }
+
+    /**
+     * (2026-10-18) 작성 주체(speaker)·근거(사용자 발언)·승인을 나눠 저장한다.
+     * <ul>
+     *   <li>speaker=USER이고 quote가 사용자 발언에서 확인되면 사용자 진술(유효).</li>
+     *   <li>speaker=ASSISTANT이고 quote가 확인되면 AI가 사용자 말을 정리한 항목 — 작성 주체는 AI, 근거는 그 발언, 사용자 요청이므로 유효.</li>
+     *   <li>quote가 없거나 확인되지 않으면 speaker 값과 무관하게 AI 제안(후보). speaker=USER만으로 승인하지 않는다.</li>
+     * </ul>
+     */
+    int apply(List<PlanBriefItem> items, List<PlanBriefOp> ops, Long userMessageId, Long assistantMessageId,
+              TurnPeriod turnPeriod, List<UserUtterance> utterances) {
         LocalDateTime now = LocalDateTime.now(clock);
         LocalDate today = today();
         int applied = 0;
@@ -298,24 +321,37 @@ public class PlanBriefService {
             }
             if ("ADD".equals(kind)) {
                 String text = withTimeBudget(clean(op.text()), op);
-                if (text == null || items.stream().filter(i -> !i.removed()).count() >= MAX_ITEMS) {
-                    continue;
-                }
-                boolean user = PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker());
-                String speaker = user ? PlanBriefItem.SPEAKER_USER : PlanBriefItem.SPEAKER_ASSISTANT;
-                // 같은 문장을 같은 발화자가 또 내면 중복이다.
-                boolean duplicate = items.stream().anyMatch(i -> !i.removed() && i.speaker().equals(speaker)
-                        && i.text().equals(text));
-                if (duplicate) {
+                if (text == null) {
                     continue;
                 }
                 String scope = scopeOf(op.scope());
+                UserBasis basis = admissibleBasis(op, scope, userMessageId, utterances);
+                // 사용자 말을 그대로 옮긴 문장만 사용자 작성이다. AI가 자기 말로 정리했으면 작성자는 AI, 근거는 그 발언(승인은 아니다).
+                boolean user = basis != null && PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker())
+                        && verbatim(text, basis.sentence());
+                String speaker = user ? PlanBriefItem.SPEAKER_USER : PlanBriefItem.SPEAKER_ASSISTANT;
                 LocalDate[] period = resolvePeriod(scope, op, turnPeriod, today);
+                // 같은 문장·같은 적용 범위(초안/기간·날짜·과목)면 같은 항목이다 — 새로 만들지 않고, 근거가 새로 확인됐으면 붙인다.
+                // 범위나 과목이 다르면 다른 요청이다. 거절된 항목은 근거가 붙어도 되살리지 않는다(사용자가 다시 말하면 새 문장으로 온다).
+                int same = sameItem(items, text, scope, period, op.courseId());
+                if (same >= 0) {
+                    PlanBriefItem existing = items.get(same);
+                    if (basis != null && !existing.grounded() && !existing.rejected()) {
+                        items.set(same, existing.withBasis(basis.quote(), basis.messageId(), basis.sentence(), now));
+                        applied++;
+                    }
+                    continue;
+                }
+                if (items.stream().filter(i -> !i.removed()).count() >= MAX_ITEMS) {
+                    continue; // 상한은 새 항목에만 — 기존 항목에 근거를 붙이는 것은 막지 않는다
+                }
                 int id = items.stream().mapToInt(PlanBriefItem::id).max().orElse(0) + 1;
                 items.add(new PlanBriefItem(id, kindOf(op.kind()), text, speaker, user, false, false,
-                        scope, user ? userMessageId : assistantMessageId, user ? userMessageId : null,
+                        scope, user ? basis.messageId() : assistantMessageId, user ? basis.messageId() : null,
                         null, op.topicId(), op.courseId(), op.executionItemId(), 1, List.of(), now,
-                        period[0], period[1], today, null));
+                        period[0], period[1], today, null,
+                        basis == null ? null : basis.quote(), basis == null ? null : basis.messageId(),
+                        basis == null ? null : basis.sentence()));
                 applied++;
                 continue;
             }
@@ -325,7 +361,7 @@ public class PlanBriefService {
             }
             PlanBriefItem current = items.get(index);
             PlanBriefItem next = switch (kind) {
-                case "ACCEPT" -> current.effective() ? null : current.withAccepted(userMessageId, now);
+                case "ACCEPT" -> current.accepted() || current.rejected() ? null : current.withAccepted(userMessageId, now);
                 case "REJECT" -> current.rejected() ? null : current.withRejected(now);
                 case "REMOVE" -> current.removed() ? null : current.withRemoved(now);
                 case "UPDATE" -> {
@@ -334,12 +370,18 @@ public class PlanBriefService {
                     LocalDate end = parseDate(op.periodEnd());
                     boolean datesGiven = start != null && end != null && !end.isBefore(start);
                     boolean sameText = text == null || text.equals(current.text());
-                    if (sameText && !datesGiven) {
-                        yield null;
+                    if (current.rejected()) {
+                        yield null; // 거절된 제안은 고쳐 쓰는 것으로 되살아나지 않는다
                     }
-                    yield current.revised(sameText ? current.text() : text,
-                            op.scope() == null ? null : scopeOf(op.scope()),
-                            datesGiven ? start : null, datesGiven ? end : null, userMessageId, now);
+                    String scopeNext = op.scope() == null ? current.scope() : scopeOf(op.scope());
+                    UserBasis basis = admissibleBasis(op, scopeNext, userMessageId, utterances);
+                    if (sameText && !datesGiven && scopeNext.equals(current.scope())) {
+                        // 내용은 그대로인데 사용자가 같은 말을 했다 — 근거만 붙인다(판·승인 상태는 그대로).
+                        yield basis != null && !current.grounded()
+                                ? current.withBasis(basis.quote(), basis.messageId(), basis.sentence(), now) : null;
+                    }
+                    yield current.revised(sameText ? current.text() : text, scopeNext,
+                            datesGiven ? start : null, datesGiven ? end : null, basis, now);
                 }
                 default -> null;
             };
@@ -384,6 +426,135 @@ public class PlanBriefService {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** 근거 확인에 쓰는 사용자 발언 하나. 서버가 대화에서 직접 조회한 USER 메시지만 담는다. */
+    public record UserUtterance(Long messageId, String text) {
+    }
+
+    /** 확인된 근거: 사용자 메시지, 모델이 낸 구절, 그 구절이 든 문장. */
+    public record UserBasis(Long messageId, String quote, String sentence) {
+    }
+
+    /** 근거로 인정하는 구절의 최소 글자 수(공백 제외). "네", "그래"처럼 어디에나 있는 말로 근거를 얻지 못하게 한다. */
+    static final int MIN_QUOTE_CHARS = 3;
+    static final int MAX_QUOTE_CHARS = 200;
+    /** 근거 문장 상한. 넘으면 자르지 않고 근거로 인정하지 않는다 — 잘린 문장에서는 뒤쪽의 부정·조건이 사라질 수 있다. */
+    static final int MAX_SENTENCE_CHARS = 600;
+
+    /**
+     * quote가 사용자 발언(최신부터)에 그대로 있는지 확인한다. 공백 차이만 무시한다 — 다른 말로 바꾼 구절은 근거가 아니다.
+     * 있으면 그 메시지와, 구절이 든 문장(줄·문장 경계로 자른 전체)을 돌려준다.
+     */
+    static UserBasis verifyQuote(String quote, List<UserUtterance> utterances) {
+        if (quote == null || utterances == null || utterances.isEmpty()) {
+            return null;
+        }
+        String q = quote.replaceAll("\\s+", " ").trim();
+        if (q.replace(" ", "").length() < MIN_QUOTE_CHARS || q.length() > MAX_QUOTE_CHARS) {
+            return null;
+        }
+        for (UserUtterance u : utterances) {
+            if (u == null || u.messageId() == null || u.text() == null) {
+                continue;
+            }
+            // 줄바꿈은 문장 경계로 남기고 그 밖의 공백만 접는다. 줄을 넘는 구절이면 줄바꿈까지 접어 한 번 더 찾는다.
+            String lined = u.text().replace("\r", "").replaceAll("[ \\t\\x0B\\f]+", " ");
+            int at = lined.indexOf(q);
+            if (at < 0) {
+                lined = lined.replace('\n', ' ').replaceAll(" +", " ");
+                at = lined.indexOf(q);
+            }
+            if (at < 0) {
+                continue;
+            }
+            String sentence = sentenceAround(lined, at, q.length());
+            return sentence == null ? null : new UserBasis(u.messageId(), q, sentence);
+        }
+        return null;
+    }
+
+    /**
+     * 근거로 인정할 사용자 발언(ADD·UPDATE 공통). quote가 사용자 발언에 그대로 있어야 하고, 지난 발언을 근거로 날짜 없는
+     * 기간 합의를 만들거나 고치지 않는다 — 지난 발언의 "이번 주"는 그때의 주다(사용자가 다시 말해야 한다).
+     *
+     * @param scope 결과 항목의 적용 범위(UPDATE에서 범위를 말하지 않았으면 기존 항목의 범위)
+     */
+    static UserBasis admissibleBasis(PlanBriefOp op, String scope, Long userMessageId, List<UserUtterance> utterances) {
+        UserBasis basis = verifyQuote(op.quote(), utterances);
+        if (basis != null && PlanBriefItem.SCOPE_PERIOD.equals(scope) && !datesGiven(op)
+                && !Objects.equals(basis.messageId(), userMessageId)) {
+            return null;
+        }
+        return basis;
+    }
+
+    /**
+     * 정리 문장이 근거 문장을 그대로 옮겼는가. 공백과 의미 없는 문장부호만 무시한다 — 범위·소수·부호·시각 기호(~ . - + / : %)는
+     * 남긴다("1~2시간"과 "12시간", "1.5"와 "15"는 다르다).
+     */
+    static boolean verbatim(String text, String sentence) {
+        if (text == null || sentence == null) {
+            return false;
+        }
+        String t = text.replaceAll(VERBATIM_IGNORED, "");
+        String s = sentence.replaceAll(VERBATIM_IGNORED, "");
+        if (t.isEmpty()) {
+            return false;
+        }
+        // 수의 안쪽에서 시작하거나 끝나는 일치는 같은 말이 아니다("15시간" 속의 "5시간", "1.5" 속의 "5", "열두" 속의 "두").
+        for (int at = s.indexOf(t); at >= 0; at = s.indexOf(t, at + 1)) {
+            boolean cutBefore = SaidTime.insideNumber(s, at);
+            int after = at + t.length();
+            boolean cutAfter = after < s.length() && Character.isDigit(t.charAt(t.length() - 1)) && isNumberChar(s.charAt(after));
+            if (!cutBefore && !cutAfter) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean isNumberChar(char c) {
+        return Character.isDigit(c) || c == '.' || c == '/' || c == '~' || c == '-';
+    }
+
+    private static final String VERBATIM_IGNORED = "[\\s,!?;'\"“”‘’()\\[\\]{}<>·…。、]+";
+
+    private static boolean datesGiven(PlanBriefOp op) {
+        LocalDate start = parseDate(op.periodStart());
+        LocalDate end = parseDate(op.periodEnd());
+        return start != null && end != null && !end.isBefore(start);
+    }
+
+    /** 구절이 든 문장. 문장 끝(. ! ? 。 줄바꿈)으로 자른다. 상한보다 길면 null(근거로 쓰지 않는다). */
+    static String sentenceAround(String text, int at, int length) {
+        String stops = ".!?。\n";
+        int start = at;
+        while (start > 0 && stops.indexOf(text.charAt(start - 1)) < 0) {
+            start--;
+        }
+        int end = at + length;
+        while (end < text.length() && stops.indexOf(text.charAt(end)) < 0) {
+            end++;
+        }
+        if (end < text.length() && text.charAt(end) != '\n') {
+            end++;
+        }
+        String sentence = text.substring(start, end).trim();
+        return sentence.length() <= MAX_SENTENCE_CHARS ? sentence : null;
+    }
+
+    /** 삭제되지 않은 항목 중 문장·적용 범위·과목이 같은 것. 없으면 -1. */
+    private static int sameItem(List<PlanBriefItem> items, String text, String scope, LocalDate[] period, Long courseId) {
+        for (int i = 0; i < items.size(); i++) {
+            PlanBriefItem it = items.get(i);
+            if (!it.removed() && it.text().equals(text) && it.scope().equals(scope)
+                    && Objects.equals(it.courseId(), courseId)
+                    && Objects.equals(it.periodStart(), period[0]) && Objects.equals(it.periodEnd(), period[1])) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static int indexOf(List<PlanBriefItem> items, Integer id) {
@@ -523,16 +694,26 @@ public class PlanBriefService {
     public static TimeBudget timeBudgetOf(List<PlanBriefItem> effective) {
         TimeBudget found = null;
         for (PlanBriefItem item : effective == null ? List.<PlanBriefItem>of() : effective) {
-            if (!"TIME_BUDGET".equals(item.kind()) || !PlanBriefItem.SPEAKER_USER.equals(item.speaker())) {
+            boolean userWords = PlanBriefItem.SPEAKER_USER.equals(item.speaker());
+            if (!"TIME_BUDGET".equals(item.kind()) || !(userWords || item.grounded())) {
                 continue; // AI가 제안만 한 시간은 사용자의 제약이 아니다.
             }
             java.util.regex.Matcher m = TIME_BUDGET_TAG.matcher(item.text());
             if (m.find()) {
-                found = new TimeBudget(m.group(1) == null ? null : Integer.parseInt(m.group(1)), "하루".equals(m.group(2)),
-                        m.group(3) == null ? null : java.time.LocalTime.parse(m.group(3)), m.group(4));
+                TimeBudget candidate = new TimeBudget(m.group(1) == null ? null : Integer.parseInt(m.group(1)),
+                        "하루".equals(m.group(2)), m.group(3) == null ? null : java.time.LocalTime.parse(m.group(3)), m.group(4));
+                // AI가 정리한 항목은 근거가 있어도 시간 값은 모델이 적은 것이다 — 원문 문장에서 같은 값이 읽힐 때만 쓴다.
+                if (userWords || timeValuesMatch(candidate, item.basisSentence())) {
+                    found = candidate;
+                }
             }
         }
         return found;
+    }
+
+    /** 정리된 시간 값(분·단위·시작·끝)이 사용자 원문 문장에서 그대로 읽히는가. 읽지 못하면 false — {@link SaidTime}. */
+    static boolean timeValuesMatch(TimeBudget budget, String sentence) {
+        return SaidTime.matches(budget, sentence);
     }
 
     // ===== 프롬프트 =====
@@ -604,7 +785,10 @@ public class PlanBriefService {
         if (PlanBriefItem.SPEAKER_USER.equals(item.speaker())) {
             return item.revision() > 1 ? "[사용자 · 수정판]" : "[사용자]";
         }
-        return item.accepted() ? "[AI 제안 · 사용자 수락]" : "[AI 제안 · 아직 답 없음]";
+        if (item.accepted()) {
+            return "[AI 제안 · 사용자 수락]";
+        }
+        return item.grounded() ? "[사용자 요청 · AI가 정리]" : "[AI 제안 · 아직 답 없음]";
     }
 
     /**
@@ -632,7 +816,12 @@ public class PlanBriefService {
 
     public static String agreedLine(PlanBriefItem item, String note) {
         StringBuilder sb = new StringBuilder(kindLabel(item.kind())).append(": ").append(item.text());
-        sb.append(PlanBriefItem.SPEAKER_USER.equals(item.speaker()) ? " (사용자가 말함" : " (AI 제안을 사용자가 수락함");
+        sb.append(PlanBriefItem.SPEAKER_USER.equals(item.speaker()) ? " (사용자가 말함"
+                : item.accepted() ? " (AI 제안을 사용자가 수락함" : " (사용자 요청을 AI가 정리함");
+        if (item.basisSentence() != null) {
+            // 정리 문장이 원문의 "…까지"·"…빼지 마" 같은 경계를 잃을 수 있다 — 원문을 함께 싣고 원문이 기준이라고 둔다.
+            sb.append(", 원문: \"").append(item.basisSentence()).append("\" — 정리와 다르면 원문이 기준");
+        }
         if (item.revision() > 1) {
             sb.append(", 최신 수정판");
         }

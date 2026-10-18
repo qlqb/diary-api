@@ -972,10 +972,15 @@ public class AiConversationService {
                 log.info("자료 원문을 실은 턴이라 사용자의 명시적 답이 아닌 {}를 적용하지 않음: id={}", kind, op.id());
                 continue;
             }
-            if ("ADD".equals(kind) && com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker())) {
+            /*
+             * 원문 속 지시가 사용자 진술을 흉내 내지 못하게 ADD는 후보로만 남긴다. 근거 구절(quote)도 뗀다 — 사용자 메시지의
+             * 아무 구절이나 붙여 "사용자 요청을 정리함"으로 유효해지는 길을 막는다. 시간대(from·until)는 그대로 둔다.
+             */
+            if ("ADD".equals(kind)) {
                 op = new com.jungwoo.project.memo.ai.brief.PlanBriefOp(op.op(), op.id(), op.kind(), op.text(),
                         com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_ASSISTANT, op.scope(), op.topicId(),
-                        op.courseId(), op.executionItemId(), op.periodStart(), op.periodEnd(), op.minutes(), op.per());
+                        op.courseId(), op.executionItemId(), op.periodStart(), op.periodEnd(), op.minutes(), op.per(),
+                        op.from(), op.until(), null);
             }
             out.add(op);
         }

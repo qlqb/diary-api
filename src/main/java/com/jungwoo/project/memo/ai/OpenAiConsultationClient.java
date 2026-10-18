@@ -299,7 +299,10 @@ public class OpenAiConsultationClient implements AiConsultationClient {
             23. 계획 합의(planBrief). 사용자 메시지 앞에 [계획 합의 현황]이 있으면 그것은 이 대화에서 계획에 대해
                 오간 결정의 서버 기록이다(#번호는 planBrief 항목 id). 너는 합의를 직접 쓰지 않는다 — 변경 제안만 낸다.
                 - 사용자가 계획에 대한 목표·우선순위·제외·시간 제약·범위를 말하면 planBrief에
-                  {"op":"ADD","kind":…,"text":"한 문장","speaker":"USER","scope":"THIS_DRAFT"|"PERIOD"}를 낸다.
+                  {"op":"ADD","kind":…,"text":"한 문장","speaker":…,"quote":"사용자 원문 구절","scope":"THIS_DRAFT"|"PERIOD"}를
+                  낸다. text가 사용자 말을 그대로 옮긴 것이면 speaker="USER", 네 말로 정리했으면 speaker="ASSISTANT"(근거는 quote가
+                  보여 준다). quote가 없거나 사용자 메시지에 그대로 없으면 서버는 사용자 요청으로 보지 않는다(후보가 된다). 한 메시지에
+                  과목별 범위·시험 방식이 여럿이면 과목마다 따로 ADD한다("…까지", "…주차", "…장까지", "빼고" 같은 경계를 text에 그대로).
                   "이번 계획만"이면 THIS_DRAFT, "이번 주만"·"시험 전까지"처럼 날짜 범위가 있으면 PERIOD에 periodStart/
                   periodEnd(실제 날짜)를 함께 적는다. 앞으로도 계속될 선호(예: "아침엔 공부 안 해")는 planBrief가 아니라
                   contextChanges 후보로 낸다. [계획 합의 현황]에 "기간 지남"으로 표시된 합의는 지금 조건이 아니다 — 새
@@ -307,7 +310,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 - 네가 계획 방향을 제안했으면(예: "자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기") 그 문장마다
                   speaker="ASSISTANT"로 ADD한다. 그것은 후보다 — 사용자가 "좋아", "그대로 해줘"라고 하면 그 항목들에
                   {"op":"ACCEPT","id":번호}를 낸다. 거절하면 REJECT, 사용자가 고쳐 말하면 {"op":"UPDATE","id":번호,
-                  "text":"고친 문장"}(speaker는 서버가 USER로 둔다), 철회하면 REMOVE.
+                  "text":"고친 문장","quote":"사용자가 고쳐 말한 구절"}(사용자 원문 구절이 확인돼야 사용자 수정판이 된다), 철회하면 REMOVE.
                 - 사용자가 막힌 점·어려움을 말하면 kind="DIFFICULTY"(speaker USER)로 남기고, 관련 학습 항목·실행 항목
                   번호를 알면 topicId·executionItemId에 적는다(모르면 null). 원인을 사용자가 확인해 말하면 kind="CAUSE".
                 - 같은 문장을 매 턴 다시 ADD하지 않는다. 이미 있는 항목은 번호로 다룬다. 한 턴에 최대 8개.
@@ -320,7 +323,7 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                 [다른 대화에서 확인된 것]에 있는 어려움·원인은 다시 묻지 않고 그 범위에서 활용한다.
             25. 기간 계획 OFFER 직전에는 합의를 정리해 말한다("정리하면: 자료구조 복구 우선, 영어 15분/일, 금요일 밤은
                 비움 — 이대로 만들까요?"). 그 정리 문장의 항목이 아직 planBrief에 없으면 ADD한다. 사용자가 이미 같은
-                뜻을 말했으면 speaker는 USER다.
+                뜻을 말했으면 quote에 그 사용자 원문 구절을 그대로 적는다(정리 문장이면 speaker는 ASSISTANT).
 
             26. 상담 대화(consult). 너는 사용자가 같은 상황을 다시 설명하지 않아도 되게 하려고 묻고, 기억하고, 그 답으로
                 계획 방향을 바꾼다. 설문을 돌리는 것이 아니다.
@@ -567,6 +570,8 @@ public class OpenAiConsultationClient implements AiConsultationClient {
                    "24:00", "새벽 1시까지"처럼 자정을 넘기면 "24:00". 저녁 맥락의 "11시"는 "23:00". 말하지 않은 쪽은 null),
                  "text": "한 문장" 또는 null (ADD/UPDATE만),
                  "speaker": "USER" | "ASSISTANT" (ADD만. 사용자가 말한 것인가 네 제안인가),
+                 "quote": "사용자 원문 구절" 또는 null (ADD/UPDATE. 사용자가 말한 것을 옮기거나 정리한 항목이면 그 근거가 된 사용자
+                   메시지의 구절을 한 글자도 바꾸지 말고 그대로 — 예 "빅데이터분석은 붓꽃타이타닉까지야". 네가 새로 제안한 것이면 null),
                  "scope": "THIS_DRAFT" | "PERIOD" (ADD/UPDATE. 모르면 THIS_DRAFT),
                  "periodStart": "YYYY-MM-DD" 또는 null, "periodEnd": "YYYY-MM-DD" 또는 null (scope가 PERIOD일 때 실제
                    날짜. "이번 주"는 [현재 시각]의 오늘이 속한 주(월~일)의 실제 날짜로 적는다 — 다음 상담의 주가 아니다),

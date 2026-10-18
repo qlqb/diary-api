@@ -342,7 +342,8 @@ public class AiTurnLifecycleService {
          */
         if (draftCommitOrNull != null && draftCommitOrNull.hasBriefOps()) {
             planBriefService.applyTurn(userId, conversationId, requestMessageId, assistantMessage.getMessageId(),
-                    draftCommitOrNull.briefOps(), draftCommitOrNull.briefPeriod());
+                    draftCommitOrNull.briefOps(), draftCommitOrNull.briefPeriod(),
+                    briefUtterances(conversationId, userId, requestMessageId));
         }
 
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
@@ -405,6 +406,27 @@ public class AiTurnLifecycleService {
         }
         aiMessageMapper.updateStatusIfCurrent(requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.FAILED);
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
+    }
+
+    /** 합의 근거 확인에 쓰는 최근 사용자 발언 수. 이번 요청과 그 앞 몇 턴("앞에서 말했듯이")까지 본다. */
+    static final int BRIEF_BASIS_RECENT_MESSAGES = 12;
+
+    /**
+     * 합의 항목의 근거를 확인할 사용자 발언(최신이 앞). 서버가 이 대화·이 사용자의 메시지를 직접 읽는다 — 모델이 낸 메시지 id나
+     * 본문은 믿지 않는다. 이번 요청 메시지는 아직 PROCESSING이어도 포함하고, 그보다 뒤의 메시지는 넣지 않는다.
+     */
+    private List<com.jungwoo.project.memo.ai.brief.PlanBriefService.UserUtterance> briefUtterances(Long conversationId, Long userId, Long requestMessageId) {
+        List<AiMessage> recent = aiMessageMapper.findRecentByConversationIdAndUserId(
+                conversationId, userId, BRIEF_BASIS_RECENT_MESSAGES * 2, null);
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefService.UserUtterance> out = new java.util.ArrayList<>();
+        for (int i = recent.size() - 1; i >= 0 && out.size() < BRIEF_BASIS_RECENT_MESSAGES; i--) {
+            AiMessage m = recent.get(i);
+            if (m.getRole() == MessageRole.USER && m.getMessageId() != null && requestMessageId != null
+                    && m.getMessageId() <= requestMessageId && m.getContent() != null) {
+                out.add(new com.jungwoo.project.memo.ai.brief.PlanBriefService.UserUtterance(m.getMessageId(), m.getContent()));
+            }
+        }
+        return out;
     }
 
     /**
