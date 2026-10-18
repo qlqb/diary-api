@@ -123,6 +123,8 @@ public class PlanSelectionFixture {
 
     /** 선택 호출의 답. 사용자 프롬프트를 받아 구조화 JSON을 돌려준다. null이면 빈 선택. */
     public Function<String, String> selectionAnswer = prompt -> emptySelection();
+    /** (2026-10-18) 요청 범위 추출 응답. {@link #enableScopes()}를 부르면 생성기가 범위 추출을 한다. */
+    public Function<String, String> scopeAnswer = prompt -> "{\"scopes\":[]}";
     public String planJson = planWithOneItem("s1");
     /** 계획 호출의 답을 프롬프트로 정하고 싶을 때. null이면 planJson. 호출마다 불린다(추가 읽기 2회차 포함). */
     public Function<String, String> planAnswer = null;
@@ -169,6 +171,9 @@ public class PlanSelectionFixture {
             String system = inv.getArgument(0);
             String user = inv.getArgument(1);
             calls.add(new String[]{system, user});
+            if (isScope(system)) {
+                return structured(scopeAnswer.apply(user));
+            }
             if (isSelection(system)) {
                 if (selectionError != null) {
                     return Flux.error(selectionError);
@@ -374,7 +379,21 @@ public class PlanSelectionFixture {
 
     /** 계획 호출 프롬프트 전부(추가 읽기 회차 포함). */
     public List<String[]> planCalls() {
-        return calls.stream().filter(c -> !isSelection(c[0])).toList();
+        return calls.stream().filter(c -> !isSelection(c[0]) && !isScope(c[0])).toList();
+    }
+
+    /** 생성기가 요청 범위 추출(SCOPE)을 하게 한다. */
+    public void enableScopes() {
+        ReflectionTestUtils.setField(generator, "scopeExtractor",
+                new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor(ai, usage, new PromptTokenEstimator(0.10)));
+    }
+
+    public List<String> scopePrompts() {
+        return calls.stream().filter(c -> isScope(c[0])).map(c -> c[1]).toList();
+    }
+
+    private static boolean isScope(String system) {
+        return com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.SYSTEM_PROMPT.equals(system);
     }
 
     public List<String> selectionPrompts() {
@@ -382,7 +401,7 @@ public class PlanSelectionFixture {
     }
 
     public List<String> planPrompts() {
-        return calls.stream().filter(c -> !isSelection(c[0])).map(c -> c[1]).toList();
+        return calls.stream().filter(c -> !isSelection(c[0]) && !isScope(c[0])).map(c -> c[1]).toList();
     }
 
     public String planPrompt() {

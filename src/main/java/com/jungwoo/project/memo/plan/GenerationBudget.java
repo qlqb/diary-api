@@ -24,7 +24,8 @@ import java.util.function.LongSupplier;
  */
 public final class GenerationBudget {
 
-    public enum Call { SELECTION, SELECTION_EXPAND, PLAN, PLAN_MORE_EVIDENCE, PLAN_RECOVERY }
+    /** SCOPE(요청 범위 추출)는 정상 호출 수에 넣지 않는다 — 기존 선택·계획 호출의 몫을 줄이지 않게. 토큰·시간은 함께 센다. */
+    public enum Call { SCOPE, SELECTION, SELECTION_EXPAND, PLAN, PLAN_MORE_EVIDENCE, PLAN_RECOVERY }
 
     /** 호출 하나의 계측. 원문은 남기지 않는다. */
     public record CallRecord(Call kind, int round, Integer inputTokens, Integer outputTokens, long latencyMs,
@@ -128,7 +129,7 @@ public final class GenerationBudget {
                        String note) {
         if (kind == Call.PLAN_RECOVERY) {
             recoveryCalls++;
-        } else {
+        } else if (kind != Call.SCOPE) {
             normalCalls++;
         }
         records.add(new CallRecord(kind, round, inputTokens, outputTokens, latencyMs, success, note));

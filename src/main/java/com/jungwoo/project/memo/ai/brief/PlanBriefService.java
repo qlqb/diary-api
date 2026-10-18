@@ -446,7 +446,7 @@ public class PlanBriefService {
      * quote가 사용자 발언(최신부터)에 그대로 있는지 확인한다. 공백 차이만 무시한다 — 다른 말로 바꾼 구절은 근거가 아니다.
      * 있으면 그 메시지와, 구절이 든 문장(줄·문장 경계로 자른 전체)을 돌려준다.
      */
-    static UserBasis verifyQuote(String quote, List<UserUtterance> utterances) {
+    public static UserBasis verifyQuote(String quote, List<UserUtterance> utterances) {
         if (quote == null || utterances == null || utterances.isEmpty()) {
             return null;
         }

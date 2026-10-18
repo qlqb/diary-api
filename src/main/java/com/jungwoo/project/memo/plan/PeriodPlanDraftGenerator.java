@@ -168,6 +168,10 @@ public class PeriodPlanDraftGenerator {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.photo.AiMessagePhotoMapper messagePhotoMapper;
 
+    /** (2026-10-18) 요청 범위 추출(SCOPE). 없으면(테스트 픽스처) 범위 없이 예전처럼 동작한다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.plan.scope.PlanScopeExtractor scopeExtractor;
+
     /** 초점 사진 구간의 원문 상한. 다른 구간(2,400자부터 줄인다)보다 넉넉히 — 사진 뒤쪽의 문제까지 싣는다. */
     static final int FOCUS_PHOTO_CAP = 6000;
 
@@ -219,8 +223,8 @@ public class PeriodPlanDraftGenerator {
     private int maxTotalInputTokens = 90000;
 
     /** 한 회차의 전체 경과 시간 상한(초). 넘으면 새 호출을 시작하지 않는다. */
-    @Value("${plan.draft.max-elapsed-seconds:170}")
-    private int maxElapsedSeconds = 170;
+    @Value("${plan.draft.max-elapsed-seconds:200}")
+    private int maxElapsedSeconds = 200;
 
     /** 선택적 호출(펼친 선택·추가 읽기 뒤 계획)을 새로 시작할 수 있는 마지막 시점(초). */
     @Value("${plan.draft.optional-call-deadline-seconds:75}")
@@ -495,12 +499,21 @@ public class PeriodPlanDraftGenerator {
                          List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
                          boolean selectionReused, Long briefId, Integer briefVersion,
                          /** 과목별 프로젝트 상태 지문(생성 때). 지금 지문과 다르면 초안이 오래된 것이다 */
-                         Map<Long, String> projectStates) {
+                         Map<Long, String> projectStates,
+                         /** (2026-10-18) 요청 범위와 부분별 판정. 범위를 다루지 않은 경로면 null */
+                         com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport) {
+
+        public Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
+                      List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
+                      boolean selectionReused, Long briefId, Integer briefVersion, Map<Long, String> projectStates) {
+            this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, projectStates,
+                    null);
+        }
 
         public Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
                       List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
                       boolean selectionReused, Long briefId, Integer briefVersion) {
-            this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, Map.of());
+            this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, Map.of(), null);
         }
     }
 
@@ -597,13 +610,28 @@ public class PeriodPlanDraftGenerator {
         // 목적이 정해져야 "기록 기준 첫 항목"을 출발점으로 표시할지 정한다(복습·시험은 진도·시험 범위가 근거다).
         boolean firstAnchor = facts.purpose().allowsFirstUnlearnedAnchor();
         List<PlanMaterialContextService.CourseCatalog> catalogs = new ArrayList<>();
+        List<Boolean> anchored = new ArrayList<>();
         for (Course course : courses) {
             com.jungwoo.project.memo.ai.state.ProjectStateService.State state = facts.projectStates().get(course.getCourseId());
             // 확인된 수업 진도가 있으면 그것이 출발점이다 — 기록 기준 "첫 미학습"(목차 트리면 Unit 1)을 붙이지 않는다.
             boolean anchor = firstAnchor && !hasConfirmedProgress(state);
-            catalogs.add(FocusPhotos.mark(withStateFocus(materialContextService.build(spec.userId(), course.getCourseId(),
-                    course.getTitle(), excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(),
-                    anchor), state), state, messagePhotoMapper, spec.userId()));
+            anchored.add(anchor);
+            catalogs.add(catalogOf(spec, course, state, excluded, requested, anchor));
+        }
+
+        // ===== 1-1. 요청 범위(SCOPE) — 자료 선택보다 먼저, 사용자 원문에서 =====
+        com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result scopeResult =
+                extractScopes(spec, facts, catalogs, budget, traceEntries, generationId);
+        List<com.jungwoo.project.memo.plan.scope.RequestScope> scopes = scopeResult.scopes();
+        for (int i = 0; i < courses.size(); i++) {
+            Course course = courses.get(i);
+            // 사용자가 이 과목의 범위를 말했으면 "첫 미학습"으로 범위를 대신하지 않는다(범위 안의 순서는 계획이 정한다).
+            // 근거를 확인한 범위만 기준을 바꾼다 — 확인 필요 후보가 출발점을 지우지 않는다.
+            if (anchored.get(i) && scopes.stream().anyMatch(s -> s.verified()
+                    && Objects.equals(s.courseId(), course.getCourseId()))) {
+                catalogs.set(i, catalogOf(spec, course, facts.projectStates().get(course.getCourseId()), excluded, requested,
+                        false));
+            }
         }
         if (!requested.unscoped().isEmpty()) {
             catalogs.add(materialContextService.buildUnscoped(spec.userId(), requested.unscoped(),
@@ -669,6 +697,10 @@ public class PeriodPlanDraftGenerator {
             String selectionInstruction = facts.purpose() == PlanPurpose.UNSPECIFIED ? spec.instruction()
                     : facts.purpose().promptRule() + (spec.instruction() == null || spec.instruction().isBlank() ? ""
                     : "\n" + spec.instruction());
+            String scopeBlock = scopeSelectionBlock(scopes, catalogs);
+            if (scopeBlock != null) {
+                selectionInstruction = (selectionInstruction == null ? "" : selectionInstruction + "\n\n") + scopeBlock;
+            }
             selection = materialSelector.select(new PlanMaterialSelector.Request(
                     spec.userId(), generationId, spec.start(), spec.end(), capturedAt.toLocalDate(), selectionInstruction,
                     catalogs, selectionContexts(facts, contexts), requested.materials(),
@@ -702,7 +734,7 @@ public class PeriodPlanDraftGenerator {
 
         PlanInputs inputs = new PlanInputs(catalogs, selection, retrieved, new java.util.LinkedHashSet<>(),
                 RETRIEVAL_CAPS[0], contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(),
-                timeNote);
+                timeNote, scopes);
         PlanPrompt prompt = fitPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
                 cappedByItemLimit, generationId, capturedAt, inputs);
         inputs = prompt.inputs();
@@ -742,7 +774,7 @@ public class PeriodPlanDraftGenerator {
                         + "개를 더 읽었다" + (blankToNull(ai.moreEvidence().reason()) == null ? ""
                         : " (이유: " + PlanCatalogText.cut(PlanCatalogText.flat(ai.moreEvidence().reason()), 200) + ")");
                 inputs = new PlanInputs(catalogs, selection, retrieved, new java.util.LinkedHashSet<>(), RETRIEVAL_CAPS[0],
-                        contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(note), timeNote);
+                        contexts, requested, facts, moreEvidenceLines, changesFromPrevious, List.of(note), timeNote, scopes);
                 prompt = fitPrompt(spec, courses, availability, days, available, target, confidence, maxItems,
                         cappedByItemLimit, generationId, capturedAt, inputs);
                 inputs = prompt.inputs();
@@ -809,6 +841,12 @@ public class PeriodPlanDraftGenerator {
                 Map.of("projects", objectMapper.convertValue(outcomes, List.class),
                         "apiCommit", traceService == null || traceService.commit() == null ? "" : traceService.commit()));
 
+        com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport = judgeScopes(scopeResult, catalogs, selection, inputs,
+                prompt, normalized, ai);
+        log.info("요청 범위 판정: workflowId={}, 상태={}, 범위={}개, 완료={}, 필수 미충족={}, 남은 부분={}, 확인 필요={}",
+                generationId, scopeReport.status(), scopeReport.scopes().size(), scopeReport.completion(),
+                scopeReport.requiredUnmet(), scopeReport.remaining(), scopeReport.needsConfirm());
+
         PlanRequestContext.EvidenceSnapshot snapshot = snapshot(fingerprint, capturedAt, selection, retrieved);
         return new Generated(spec, target, target, null, false,
                 blankToNull(ai.title()) != null ? ai.title() : defaultTitle(spec.start(), spec.end()),
@@ -817,7 +855,200 @@ public class PeriodPlanDraftGenerator {
                 finalStrategy, null, collector.build(), normalized.evidence(), summary,
                 new Extras(budgetSummary, snapshot, normalized.adjustments(), changesFromPrevious, reused,
                         facts.brief() == null ? null : facts.brief().briefId(),
-                        facts.brief() == null ? null : facts.brief().version(), stateFingerprints(facts)));
+                        facts.brief() == null ? null : facts.brief().version(), stateFingerprints(facts), scopeReport));
+    }
+
+    // ===== 요청 범위(2026-10-18) =====
+
+    private PlanMaterialContextService.CourseCatalog catalogOf(Spec spec, Course course,
+                                                               com.jungwoo.project.memo.ai.state.ProjectStateService.State state,
+                                                               Set<Long> excluded, PlanRequestedMaterialResolver.Resolution requested,
+                                                               boolean anchor) {
+        return FocusPhotos.mark(withStateFocus(materialContextService.build(spec.userId(), course.getCourseId(),
+                course.getTitle(), excluded, requested.materialIdsOfCourse(course.getCourseId()), requested.sectionIds(),
+                anchor), state), state, messagePhotoMapper, spec.userId());
+    }
+
+    private com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result extractScopes(
+            Spec spec, Facts facts, List<PlanMaterialContextService.CourseCatalog> catalogs, GenerationBudget budget,
+            List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry> traceEntries, String generationId) {
+        if (scopeExtractor == null) {
+            return new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result(
+                    com.jungwoo.project.memo.plan.scope.ScopeReport.SKIPPED, List.of(), null, null, null, "범위 추출기 없음");
+        }
+        Long flowRoot = spec.origin() == null ? null : spec.origin().flowRootProposalId();
+        List<String> agreed = facts.brief() == null ? List.of()
+                : PlanBriefService.agreedLines(facts.brief().effectiveFor(spec.start(), spec.end(), flowRoot));
+        long startedAt = System.currentTimeMillis();
+        var result = scopeExtractor.extract(new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Request(
+                spec.userId(), generationId, spec.instruction(), agreed, catalogs));
+        if (result.prompt() != null) {
+            budget.record(GenerationBudget.Call.SCOPE, 1, result.estimatedTokens(), null,
+                    System.currentTimeMillis() - startedAt,
+                    !com.jungwoo.project.memo.plan.scope.ScopeReport.FAILED.equals(result.status()), "입력 토큰은 추정값");
+            traceEntries.add(new com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry("SCOPE", modelName,
+                    result.estimatedTokens(), result.systemPrompt(), traceText(result.prompt(), catalogs), List.of(),
+                    List.of(), List.of(), materialIdsOf(catalogs), List.of()));
+        }
+        log.info("요청 범위 추출: workflowId={}, 상태={}, 범위={}개(확인됨 {}개), 부분={}개", generationId, result.status(),
+                result.scopes().size(), result.scopes().stream().filter(com.jungwoo.project.memo.plan.scope.RequestScope::verified).count(),
+                result.scopes().stream().mapToInt(s -> s.parts().size()).sum());
+        return result;
+    }
+
+    /** 자료 선택 입력의 범위 블록. 범위마다 부분을 빠짐없이 검토하게 한다(선택 결과는 서버가 부분별로 대조한다). */
+    static String scopeSelectionBlock(List<com.jungwoo.project.memo.plan.scope.RequestScope> scopes,
+                                      List<PlanMaterialContextService.CourseCatalog> catalogs) {
+        if (scopes == null || scopes.isEmpty()) {
+            return null;
+        }
+        Map<Long, String> names = materialNames(catalogs);
+        StringBuilder sb = new StringBuilder("[이번 요청의 범위 — 서버가 사용자 원문에서 확정. 부분마다 그 부분을 다루는 구간을 빠짐없이 "
+                + "검토한다. 자료가 있는 부분을 한 부분만 보고 끝내지 않는다. 앞부분까지 누적 범위면 앞부분 자료의 구간도 고른다]\n");
+        for (var s : scopes) {
+            sb.append("- ").append(s.scopeId()).append(!s.verified() ? " (원문 확인 필요 후보 — 필수로 다루지 않는다)"
+                            : s.required() ? " (꼭)" : " (가능하면)")
+                    .append(s.courseTitle() == null ? " 과목 미확정" : " " + s.courseTitle());
+            if (s.goal() != null) {
+                sb.append(" · 목표: ").append(s.goal());
+            }
+            if (s.boundary() != null) {
+                sb.append(" · 범위: ").append(s.boundary());
+            }
+            sb.append('\n');
+            for (var p : s.parts()) {
+                sb.append("  ").append(p.partId()).append(' ').append(p.label());
+                if (!p.materialIds().isEmpty()) {
+                    sb.append(" — 자료: ").append(String.join(", ",
+                            p.materialIds().stream().map(id -> names.getOrDefault(id, "자료 " + id)).toList()));
+                } else if (p.noMaterial()) {
+                    sb.append(" — 앱에 자료 없음");
+                }
+                sb.append('\n');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static Map<Long, String> materialNames(List<PlanMaterialContextService.CourseCatalog> catalogs) {
+        Map<Long, String> names = new LinkedHashMap<>();
+        for (var c : catalogs) {
+            for (var m : c.materials() == null ? List.<com.jungwoo.project.memo.material.domain.CourseMaterial>of() : c.materials()) {
+                if (m != null && m.getMaterialId() != null) {
+                    names.put(m.getMaterialId(), m.getOriginalFilename());
+                }
+            }
+        }
+        return names;
+    }
+
+    /**
+     * 계획 입력의 [요청 범위]. 부분마다 인용 번호를 단다 — 항목·미룬 범위가 그 번호를 refIds에 넣으면 서버가 부분별 반영을 판정한다.
+     */
+    static void appendScopes(StringBuilder sb, List<com.jungwoo.project.memo.plan.scope.RequestScope> scopes,
+                             List<PlanMaterialContextService.CourseCatalog> catalogs, ProvenanceCollector collector) {
+        if (scopes == null || scopes.isEmpty()) {
+            return;
+        }
+        Map<Long, String> names = materialNames(catalogs);
+        sb.append("[요청 범위] (서버가 사용자 원문에서 확정한 이번 요청의 범위. 이 부분을 다루는 항목은 그 부분 줄의 번호를 refIds에 함께 넣고, ")
+                .append("미루는 부분은 deferred의 refIds에 넣는다. \"원문 확인 필요\"는 사용자 요청이라고 단정하지 않는다)\n");
+        for (var s : scopes) {
+            sb.append("- ").append(s.scopeId()).append(!s.verified() ? " 원문 확인 필요 후보(필수 아님)"
+                            : s.required() ? " 꼭" : " 가능하면")
+                    .append(s.courseTitle() == null ? " · 과목 미확정" : " · " + s.courseTitle())
+                    .append(s.goal() == null ? "" : " · 목표: " + s.goal())
+                    .append(s.boundary() == null ? "" : " · 범위: " + s.boundary());
+            if (s.basisSentence() != null) {
+                sb.append(" · 원문: \"").append(s.basisSentence()).append('"');
+            }
+            sb.append('\n');
+            for (var p : s.parts()) {
+                String line = "  " + p.partId() + " " + p.label()
+                        + (!p.materialIds().isEmpty() ? " — 자료: " + String.join(", ",
+                        p.materialIds().stream().map(id -> names.getOrDefault(id, "자료 " + id)).toList())
+                        : p.noMaterial() ? " — 앱에 자료 없음" : "")
+                        + (p.userMaterial() ? " · 사용자가 가진 자료로 함" : "");
+                sb.append(collector.mark(ProvenanceSourceType.TURN_INPUT, null, null, null,
+                        ProvenanceRepresentation.SELECTED_FIELDS,
+                        ProvenanceCollector.value("scopeId", s.scopeId(), "scopePartId", p.partId(), "label", p.label(),
+                                "verified", s.verified(), "role", s.role()), line).text()).append('\n');
+            }
+        }
+        sb.append('\n');
+    }
+
+    /** ⑦ 최종 판정. 이번 회차에 보여 주고 실은 것과 최종 항목·미룬 범위의 인용 번호로만 판단한다. */
+    private com.jungwoo.project.memo.plan.scope.ScopeReport judgeScopes(
+            com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result scopeResult,
+            List<PlanMaterialContextService.CourseCatalog> catalogs, PlanMaterialSelector.Result selection,
+            PlanInputs inputs, PlanPrompt prompt, PlanResultNormalizer.Normalized normalized, PlanDraftAiResult ai) {
+        Map<Long, Long> sectionMaterial = new LinkedHashMap<>();
+        for (var c : catalogs) {
+            for (var line : c.sections()) {
+                if (line.section() != null && line.material() != null) {
+                    sectionMaterial.put(line.section().getSectionId(), line.material().getMaterialId());
+                }
+            }
+        }
+        Set<Long> shown = new java.util.HashSet<>();
+        for (PlanMaterialSelector.CallTrace t : selection.traces()) {
+            if (t.sectionIds() != null) {
+                shown.addAll(t.sectionIds());
+            }
+        }
+        Map<Long, Integer> fullChars = new LinkedHashMap<>();
+        for (PlanMaterialRetriever.Retrieved r : inputs.retrieved()) {
+            if (r.outcome().retrieved()) {
+                fullChars.put(r.target().sectionId(), r.fullChars());
+            }
+        }
+        Map<Long, String> selectedNotIn = new LinkedHashMap<>();
+        for (PlanMaterialRetriever.Retrieved r : inputs.retrieved()) {
+            Long id = r.target().sectionId();
+            if (!prompt.refBySection().containsKey(id)) {
+                selectedNotIn.put(id, !r.outcome().retrieved() ? "조회 실패(" + r.outcome().name() + ")"
+                        : inputs.budgetDropped().contains(id) ? "입력 한도" : "입력에 싣지 않음");
+            }
+        }
+        for (PlanMaterialSelector.SelectedSection s : selection.sections()) {
+            Long id = s.line().section().getSectionId();
+            if (!prompt.refBySection().containsKey(id)) {
+                selectedNotIn.putIfAbsent(id, "조회 대상에서 빠짐");
+            }
+        }
+        Map<Long, Boolean> deliveredFull = new LinkedHashMap<>();
+        Map<String, Long> refToSection = new LinkedHashMap<>();
+        for (Map.Entry<Long, String> e : prompt.refBySection().entrySet()) {
+            PlanMaterialRetriever.Rendered rendered = prompt.rendered().get(e.getKey());
+            Integer full = fullChars.get(e.getKey());
+            deliveredFull.put(e.getKey(), rendered != null && full != null && rendered.chars() >= full);
+            refToSection.put(e.getValue(), e.getKey());
+        }
+        Map<String, String> refToPart = new LinkedHashMap<>();
+        for (var source : prompt.collector().build().providedSources()) {
+            Object part = source.providedValue() == null ? null : source.providedValue().get("scopePartId");
+            if (part != null) {
+                refToPart.put(source.refId(), String.valueOf(part));
+            }
+        }
+        List<com.jungwoo.project.memo.plan.scope.ScopeVerdict.ItemRef> items = new ArrayList<>();
+        for (int i = 0; i < normalized.items().size(); i++) {
+            List<String> refs = i < normalized.evidence().size() && normalized.evidence().get(i).refIds() != null
+                    ? normalized.evidence().get(i).refIds() : List.of();
+            items.add(new com.jungwoo.project.memo.plan.scope.ScopeVerdict.ItemRef(normalized.items().get(i).courseId(), refs));
+        }
+        List<com.jungwoo.project.memo.plan.scope.ScopeVerdict.DeferredRef> deferred = new ArrayList<>();
+        if (ai.strategy() != null && ai.strategy().deferred() != null) {
+            for (PlanDraftAiResult.DeferredOut d : ai.strategy().deferred()) {
+                if (d != null) {
+                    deferred.add(new com.jungwoo.project.memo.plan.scope.ScopeVerdict.DeferredRef(d.reason(), d.refIds()));
+                }
+            }
+        }
+        return com.jungwoo.project.memo.plan.scope.ScopeVerdict.judge(scopeResult.status(), scopeResult.incomplete(),
+                scopeResult.scopes(), sectionMaterial, shown, selectedNotIn, deliveredFull, refToSection, refToPart, items,
+                deferred);
     }
 
     // ===== 사용자가 말한 시간 =====
@@ -1350,15 +1581,17 @@ public class PeriodPlanDraftGenerator {
                       List<UserContext> contexts, PlanRequestedMaterialResolver.Resolution requested, Facts facts,
                       int moreLines, List<String> changesFromPrevious, List<String> roundNotes,
                       /** 사용자가 말한 "쓸 수 있는 시간"으로 예산을 줄였을 때의 설명. 없으면 null. */
-                      String timeNote) {
+                      String timeNote,
+                      /** (2026-10-18) 서버가 확정한 요청 범위. 없으면 빈 목록 */
+                      List<com.jungwoo.project.memo.plan.scope.RequestScope> scopes) {
         PlanInputs withCap(int newCap) {
             return new PlanInputs(catalogs, selection, retrieved, budgetDropped, newCap, contexts, requested, facts,
-                    moreLines, changesFromPrevious, roundNotes, timeNote);
+                    moreLines, changesFromPrevious, roundNotes, timeNote, scopes);
         }
 
         PlanInputs withMoreLines(int lines) {
             return new PlanInputs(catalogs, selection, retrieved, budgetDropped, cap, contexts, requested, facts, lines,
-                    changesFromPrevious, roundNotes, timeNote);
+                    changesFromPrevious, roundNotes, timeNote, scopes);
         }
     }
 
@@ -1864,6 +2097,7 @@ public class PeriodPlanDraftGenerator {
                 .append("넘으면 안 되는 최대치다. 개수를 채우려 하지 말고, 각 작업에 실제로 필요한 ")
                 .append("길이를 먼저 정한 다음 필요한 만큼만 만들어라. 15~30분짜리 짧은 항목을 넣기 위해 ")
                 .append("다른 항목을 길게 부풀리지 마라 — 남는 예산은 그대로 남겨도 된다.\n\n");
+        appendScopes(sb, inputs.scopes(), inputs.catalogs(), collector);
         if (inputs.timeNote() != null) {
             sb.append("[사용자가 말한 시간]\n").append(inputs.timeNote()).append("\n\n");
         }

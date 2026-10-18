@@ -374,7 +374,7 @@ public class PlanDraftService {
                     origin == null ? null : origin.previousProposalId(),
                     generated.extras() == null ? null : generated.extras().evidence(),
                     origin == null ? null : origin.flowRootProposalId(), spec.purpose(),
-                    extras == null ? null : extras.projectStates()));
+                    extras == null ? null : extras.projectStates(), extras == null ? null : extras.scopeReport()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
             return null;

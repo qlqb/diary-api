@@ -52,8 +52,24 @@ public record PlanRequestContext(
         /** (2026-10-04) 화면에서 고른 계획 목적. 다시 만들 때 그대로 쓴다. */
         String purpose,
         /** (2026-10-05) 생성 때의 과목별 프로젝트 상태 지문. 지금과 다르면 초안이 오래된 것이다. 예전 초안은 null */
-        java.util.Map<Long, String> projectStates
+        java.util.Map<Long, String> projectStates,
+        /** (2026-10-18) 이번 생성의 요청 범위와 부분별 확보·반영 판정. 예전 초안은 null */
+        com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport
 ) {
+
+    /** 요청 범위가 생기기 전 모양. */
+    public PlanRequestContext(int version, String source, LocalDate startDate, LocalDate endDate, PlanIntensity intensity,
+                              String title, String instruction, List<Long> courseIds, List<Long> excludeTopicIds,
+                              List<Long> requestedMaterialIds, List<Long> requestedSectionIds,
+                              FamiliarityAnswer familiarityAnswer, List<Long> familiarityTopicIds, Long conversationId,
+                              String requestKey, Long briefId, Integer briefVersion, Long previousProposalId,
+                              EvidenceSnapshot evidence, Long flowRootProposalId, String purpose,
+                              java.util.Map<Long, String> projectStates) {
+        this(version, source, startDate, endDate, intensity, title, instruction, courseIds, excludeTopicIds,
+                requestedMaterialIds, requestedSectionIds, familiarityAnswer, familiarityTopicIds, conversationId,
+                requestKey, briefId, briefVersion, previousProposalId, evidence, flowRootProposalId, purpose, projectStates,
+                null);
+    }
 
     public PlanRequestContext(int version, String source, LocalDate startDate, LocalDate endDate, PlanIntensity intensity,
                               String title, String instruction, List<Long> courseIds, List<Long> excludeTopicIds,
