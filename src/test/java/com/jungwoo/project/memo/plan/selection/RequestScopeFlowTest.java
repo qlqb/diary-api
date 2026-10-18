@@ -53,6 +53,9 @@ class RequestScopeFlowTest {
         assertThat(report.parts().get(0).acquisition()).isIn("DELIVERED_UNIT", "EXCERPT_ONLY");
         assertThat(report.requiredUnmet()).isTrue();
         assertThat(report.completion()).isEqualTo("NOT_COMPLETE");
+        // 3단계: 완료 표시는 판정으로 — 남은 필수 범위를 맨 위 문장이 말한다. 계획 입력에는 범위 규칙이 실린다.
+        assertThat(report.notice()).contains("판다스 실습");
+        assertThat(f.planPrompts().get(0)).contains("첫 미학습\"은 범위 안의 순서 참고일 뿐").contains("지어내지 않고");
     }
 
     @Test

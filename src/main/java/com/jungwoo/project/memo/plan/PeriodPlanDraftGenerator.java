@@ -845,6 +845,7 @@ public class PeriodPlanDraftGenerator {
         List<com.jungwoo.project.memo.plan.domain.ProjectOutcome> outcomes = projectOutcomes(courses, catalogs,
                 selection, retrieved, prompt, ai, normalized.items());
         PlanStrategy finalStrategy = normalized.strategy().withProjects(outcomes);
+        // (요청 범위 판정은 아래에서 finalStrategy에 서버 이유를 덧붙일 수 있다)
         collector.calculation(ServerCalculation.ServerCalculationKind.PROJECT_OUTCOMES, false, List.of(),
                 ServerCalculation.InputLineage.COMPLETE,
                 "대상 프로젝트별 처리 결과와 실제 전달 집계. 입력 전문과 줄로 실린 id는 plan_generation_traces(generationId)에 있다",
@@ -853,6 +854,23 @@ public class PeriodPlanDraftGenerator {
 
         com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport = judgeScopes(scopeResult, catalogs, selection, inputs,
                 prompt, normalized, ai);
+        List<String> modelReasons = new ArrayList<>();
+        if (normalized.strategy().changes() != null) {
+            normalized.strategy().changes().forEach(c -> {
+                modelReasons.add(c.what());
+                modelReasons.add(c.why());
+            });
+        }
+        if (normalized.strategy().deferred() != null) {
+            normalized.strategy().deferred().forEach(d -> modelReasons.add(d.reason()));
+        }
+        var checked = com.jungwoo.project.memo.plan.scope.ScopeChecks.check(scopeReport,
+                normalized.items().stream().map(com.jungwoo.project.memo.ai.dto.ProposalItem::courseId).toList(), modelReasons);
+        scopeReport = checked.report();
+        if (checked.serverReason() != null) {
+            finalStrategy = finalStrategy.withChanges(appended(finalStrategy.changes(),
+                    new PlanStrategy.Change("필수 범위가 남은 채 '가능하면' 범위를 넣었다(서버 검증)", checked.serverReason())));
+        }
         log.info("요청 범위 판정: workflowId={}, 상태={}, 범위={}개, 완료={}, 필수 미충족={}, 남은 부분={}, 확인 필요={}",
                 generationId, scopeReport.status(), scopeReport.scopes().size(), scopeReport.completion(),
                 scopeReport.requiredUnmet(), scopeReport.remaining(), scopeReport.needsConfirm());
@@ -869,6 +887,12 @@ public class PeriodPlanDraftGenerator {
     }
 
     // ===== 요청 범위(2026-10-18) =====
+
+    private static <T> List<T> appended(List<T> list, T value) {
+        List<T> out = new ArrayList<>(list == null ? List.of() : list);
+        out.add(value);
+        return out;
+    }
 
     /**
      * 근거가 확인된 범위의 부분마다, 그 부분만의 자료(다른 부분과 함께 쓰지 않는 자료)에서 원문이 실린 첫 구간. 입력 예산을 줄일 때
@@ -990,7 +1014,13 @@ public class PeriodPlanDraftGenerator {
         }
         Map<Long, String> names = materialNames(catalogs);
         sb.append("[요청 범위] (서버가 사용자 원문에서 확정한 이번 요청의 범위. 이 부분을 다루는 항목은 그 부분 줄의 번호를 refIds에 함께 넣고, ")
-                .append("미루는 부분은 deferred의 refIds에 넣는다. \"원문 확인 필요\"는 사용자 요청이라고 단정하지 않는다)\n");
+                .append("미루는 부분은 deferred의 refIds에 넣는다. \"원문 확인 필요\"는 사용자 요청이라고 단정하지 않는다.\n")
+                .append(" 규칙: ① 범위가 시험 범위다 — 학습 기록의 \"첫 미학습\"은 범위 안의 순서 참고일 뿐 범위를 대신하지 않는다.")
+                .append(" ② 원문을 받지 못했거나 앱에 자료가 없는 부분도 목표를 낮추지 않는다: 사용자가 가진 자료(교재·배포 PDF 등)로 하는")
+                .append(" 연습 항목을 만들고 그 부분 줄 번호를 넣는다. 앱이 내용을 확인하지 못했으므로 실제 문항·쪽·코드를 지어내지 않고,")
+                .append(" 사용자가 말한 대로 가리킨다(예: \"교재에 표시한 시험 범위를 덮고 셀프 테스트\", \"배포 PDF만 보고 Navigation 코드 빈칸 채우기\").")
+                .append(" ③ \"꼭\" 범위를 다 담지 못하면 \"가능하면\" 범위를 넣기 전에 그 판단과 이유를 changes에 적는다.")
+                .append(" ④ \"…까지\"는 앞부분을 포함한 누적 범위다 — 앞부분을 줄이려면 확인된 근거(실행 기록·사용자 진술)를 changes에 적는다)\n");
         for (var s : scopes) {
             sb.append("- ").append(s.scopeId()).append(!s.verified() ? " 원문 확인 필요 후보(필수 아님)"
                             : s.required() ? " 꼭" : " 가능하면")

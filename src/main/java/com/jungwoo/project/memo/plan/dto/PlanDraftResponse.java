@@ -148,6 +148,12 @@ public class PlanDraftResponse {
     private RequestContextView requestContext;
 
     /**
+     * (2026-10-18) 이번 요청의 범위와 부분별 확보·반영 판정, 서버 검증 결과와 맨 위 안내 문장. 범위를 다루기 전 초안이면 null.
+     * 완료 표시는 모델의 목표 문장이 아니라 이 판정으로 정한다.
+     */
+    private com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport;
+
+    /**
      * 이번 생성의 호출·토큰·지연과 상한, 자료 선택 재사용 여부. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
      * 저장된 초안을 다시 읽을 때는 근거 스냅샷의 서버 계산(GENERATION_CALLS)에서 복원한다.
      */

@@ -17,7 +17,21 @@ import java.util.List;
 public record ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
                           List<String> remaining, List<String> needsConfirm, String completion,
                           /** 범위 추출에서 상한·잘못된 원소로 버린 것이 있다 — 그때는 전체·필수 완료를 말하지 않는다 */
-                          boolean incomplete) {
+                          boolean incomplete,
+                          /** (3단계) 서버 검증에서 걸린 것(예: 필수 범위가 남았는데 이유 없이 추가 과목을 넣음). 비어 있으면 통과 */
+                          List<String> issues,
+                          /** (3단계) 화면 맨 위에 보일 서버 문장. 완료 표시는 모델 문장이 아니라 이 판정으로 정한다 */
+                          String notice) {
+
+    public ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
+                       List<String> remaining, List<String> needsConfirm, String completion, boolean incomplete) {
+        this(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete, List.of(), null);
+    }
+
+    public ScopeReport withChecks(List<String> newIssues, String newNotice) {
+        return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
+                List.copyOf(newIssues), newNotice);
+    }
 
     public static final String EXTRACTED = "EXTRACTED";
     public static final String NONE = "NONE";

@@ -100,6 +100,12 @@ public record PlanStrategy(
                 unreadNotes, changes, existingDecisions, newProjects);
     }
 
+    public PlanStrategy withChanges(List<Change> newChanges) {
+        return new PlanStrategy(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds,
+                courses, topics, planningRules, reach, keptDecisions, deferred, assumptions, openQuestions,
+                unreadNotes, newChanges, existingDecisions, projects);
+    }
+
     public PlanStrategy withDeferred(List<Deferred> newDeferred) {
         return new PlanStrategy(goal, strategySummary, strategySource, reusedFromVersionId, referencedContextIds,
                 courses, topics, planningRules, reach, keptDecisions, newDeferred, assumptions, openQuestions,

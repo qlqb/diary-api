@@ -504,6 +504,7 @@ public class PlanDraftService {
                 .pendingMaterials(pendingMaterials(userId, spec))
                 .materialSelection(generated.materialSelection())
                 .requestContext(requestContextView(spec, generated.materialSelection(), conversationId, requestContext != null))
+                .scopeReport(extras == null ? null : extras.scopeReport())
                 .generation(extras == null ? null : generationView(extras.budget(), extras.selectionReused()))
                 .previousDraft(supersededProposalId == null ? null : PlanDraftResponse.PreviousDraftView.builder()
                         .proposalId(supersededProposalId)
@@ -834,6 +835,7 @@ public class PlanDraftService {
                 .pendingMaterials(pendingMaterials(userId, spec))
                 .materialSelection(selection)
                 .requestContext(requestContextView(spec, selection, proposal.getConversationId(), context != null))
+                .scopeReport(context == null ? null : context.scopeReport())
                 .generation(generation)
                 .previousDraft(context == null || context.previousProposalId() == null ? null
                         : PlanDraftResponse.PreviousDraftView.builder().proposalId(context.previousProposalId())
