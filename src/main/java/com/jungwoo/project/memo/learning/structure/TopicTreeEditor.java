@@ -1,0 +1,329 @@
+package com.jungwoo.project.memo.learning.structure;
+
+import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ConflictException;
+import com.jungwoo.project.memo.common.exception.ErrorCode;
+import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.domain.Course;
+import com.jungwoo.project.memo.learning.CourseTopicMapper;
+import com.jungwoo.project.memo.learning.TopicMaterialLinkMapper;
+import com.jungwoo.project.memo.learning.TopicProgressMapper;
+import com.jungwoo.project.memo.learning.domain.CourseTopic;
+import com.jungwoo.project.memo.learning.domain.TopicLinkOrigin;
+import com.jungwoo.project.memo.learning.domain.TopicMaterialLink;
+import com.jungwoo.project.memo.learning.domain.TopicProgress;
+import com.jungwoo.project.memo.learning.domain.TopicProgressStatus;
+import com.jungwoo.project.memo.learning.domain.TopicSourceType;
+import com.jungwoo.project.memo.learning.domain.TopicStatus;
+import com.jungwoo.project.memo.material.domain.MaterialSection;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * 검증된 변경안 작업을 트리에 적용한다. 한 트랜잭션, 전부 아니면 전무.
+ *
+ * <p>불변식:
+ * <ul>
+ *   <li>이동·이름 변경은 topicId를 유지한다 — progress·user_mark·실행 기록·근거가 그대로 따라온다.</li>
+ *   <li>병합은 살아남은 id를 남기고 흡수된 항목을 ARCHIVED + merged_into로 내린다. 흡수된 항목의 자료
+ *       연결은 살아남은 항목으로 옮긴다. 학습 기록은 복제하지 않는다 — 흡수된 항목에 기록이 있고 살아남은
+ *       항목에 없으면 review_note를 남겨 사람이 정한다.</li>
+ *   <li>분할은 원본을 부모로 남기고 자식을 새로 만든다. 원본의 완료 하나를 자식 전부의 완료로 복제하지
+ *       않는다. 원본에 기록이 있으면 review_note를 남긴다.</li>
+ *   <li>적용 직전에 courses.topic_tree_version을 기대값과 대조해 올린다. 다르면 아무것도 바꾸지 않는다.</li>
+ * </ul>
+ */
+@Slf4j
+@Service
+@RequiredArgsConstructor
+public class TopicTreeEditor {
+
+    private final CourseMapper courseMapper;
+    private final CourseTopicMapper topicMapper;
+    private final TopicMaterialLinkMapper linkMapper;
+    private final TopicProgressMapper progressMapper;
+
+    public record Applied(int linked, int added, int renamed, int moved, int merged, int split,
+                          List<Long> createdTopicIds, List<String> reviewNotes) {
+    }
+
+    /**
+     * @param expectedTreeVersion 변경안을 만들 때 본 버전. null이면 대조하지 않고 올리기만 한다(사용자 직접 편집).
+     * @param materialId          구간을 모르는 작업이 출처로 적을 자료. 자료 하나를 대상으로 하는 호출자가 준다.
+     *                            프로젝트 단위 정리처럼 근거 자료가 여럿이면 null이고, 그때 출처는
+     *                            <b>구간이 정한다</b>
+     * @param sectionsById        근거 구간들(위치 문자열과 소속 자료를 링크에 적기 위해). 자료가 여럿일 수 있다
+     */
+    @Transactional
+    public Applied apply(Long userId, Long courseId, Long materialId, List<TopicChangeOp> ops,
+                         Long expectedTreeVersion, Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin) {
+        return apply(userId, courseId, materialId, ops, expectedTreeVersion, sectionsById, origin, null);
+    }
+
+    /**
+     * 목차에서 온 항목의 출처. 웹 목차면 리비전, 업로드 목차면 null(자료 출처는 op.materialId가 정한다). bookKey는 그 목차가
+     * 어느 책의 것인지 — 교재가 바뀐 뒤 이전 교재 항목을 구분한다.
+     */
+    public record TocProvenance(Long webRevisionId, String bookKey, String keyKind, String keyHash,
+                                java.util.Map<Integer, Integer> ordinalByKey) {
+
+        public TocProvenance(Long webRevisionId, String bookKey) {
+            this(webRevisionId, bookKey, null, null, java.util.Map.of());
+        }
+
+        /** 이 목차에서 열쇠 → 표시 순번(1부터). 모르면 열쇠 그대로(업로드 목차는 열쇠가 곧 순번이다). */
+        Integer ordinalOf(Integer key) {
+            if (key == null) {
+                return null;
+            }
+            Integer ordinal = ordinalByKey == null ? null : ordinalByKey.get(key);
+            return ordinal != null ? ordinal : "MATERIAL".equals(keyKind) ? key : null;
+        }
+    }
+
+    @Transactional
+    public Applied apply(Long userId, Long courseId, Long materialId, List<TopicChangeOp> ops,
+                         Long expectedTreeVersion, Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin,
+                         TocProvenance toc) {
+        Course course = courseMapper.findByIdAndUserIdForUpdate(courseId, userId);
+        if (course == null) {
+            throw new BadRequestException(ErrorCode.COURSE_NOT_FOUND);
+        }
+        if (expectedTreeVersion != null) {
+            if (courseMapper.bumpTopicTreeVersion(courseId, userId, expectedTreeVersion) != 1) {
+                throw new ConflictException(ErrorCode.TOPIC_TREE_CONFLICT);
+            }
+        } else {
+            courseMapper.incrementTopicTreeVersion(courseId, userId);
+        }
+        List<CourseTopic> active = topicMapper.findActiveByCourseIdAndUserIdForUpdate(courseId, userId);
+        TopicChangeOpsValidator.Result checked = TopicChangeOpsValidator.validate(
+                ops, active, sectionsById.keySet(), true);
+        if (!checked.rejected().isEmpty()) {
+            throw new BadRequestException(ErrorCode.TOPIC_CHANGE_INVALID, String.join("; ", checked.rejected()));
+        }
+        Map<Long, CourseTopic> topics = new HashMap<>();
+        for (CourseTopic topic : active) {
+            topics.put(topic.getTopicId(), topic);
+        }
+        Map<String, Long> tempIds = new HashMap<>();
+        List<Long> created = new ArrayList<>();
+        List<String> notes = new ArrayList<>();
+        int linked = 0, added = 0, renamed = 0, moved = 0, merged = 0, split = 0;
+
+        for (TopicChangeOp op : checked.ops()) {
+            if (!op.isTreeOp()) {
+                continue; // 실제 수업·범위 정정은 트리를 바꾸지 않는다(StructureCorrectionApplier가 적는다).
+            }
+            switch (op.op()) {
+                case TopicChangeOp.LINK -> {
+                    Long target = op.topicId() != null ? op.topicId() : tempIds.get(op.tempId());
+                    linked += link(userId, courseId, materialId, target, op.sectionIds(), op.role(), sectionsById, origin);
+                }
+                case TopicChangeOp.ADD -> {
+                    Long parent = op.parentTopicId() != null ? op.parentTopicId()
+                            : op.parentTempId() != null ? tempIds.get(op.parentTempId()) : null;
+                    added += insertTree(userId, courseId, materialId, parent, op, tempIds, created, sectionsById, origin,
+                            toc, false);
+                }
+                case TopicChangeOp.RENAME -> {
+                    topicMapper.updateTitle(op.topicId(), userId, op.title());
+                    renamed++;
+                }
+                case TopicChangeOp.MOVE -> {
+                    topicMapper.updateParent(op.topicId(), userId, op.parentTopicId(),
+                            positionFor(userId, courseId, op));
+                    moved++;
+                }
+                case TopicChangeOp.MERGE -> {
+                    merged += merge(userId, op.survivingTopicId(), op.absorbedTopicIds(), notes);
+                }
+                case TopicChangeOp.SPLIT -> {
+                    split += splitTopic(userId, courseId, materialId, op, tempIds, created, sectionsById, origin, notes);
+                }
+                default -> throw new BadRequestException(ErrorCode.TOPIC_CHANGE_INVALID, op.op());
+            }
+        }
+        log.info("학습 구조 변경 적용: userId={}, courseId={}, materialId={}, link={}, add={}, rename={}, move={}, merge={}, split={}",
+                userId, courseId, materialId, linked, added, renamed, moved, merged, split);
+        return new Applied(linked, added, renamed, moved, merged, split, created, notes);
+    }
+
+    /**
+     * 옮길 자리. afterTopicId가 없으면 새 부모의 맨 뒤(예전 동작), 0이면 맨 앞, 있으면 그 형제 바로 뒤.
+     * 끼워 넣을 때는 뒤 형제들을 한 칸씩 민다 — 다른 항목의 id·기록은 그대로다.
+     */
+    private int positionFor(Long userId, Long courseId, TopicChangeOp op) {
+        Long parent = op.parentTopicId();
+        Long after = op.afterTopicId();
+        if (after == null) {
+            Integer max = parent == null ? topicMapper.findMaxRootOrderIndex(courseId, userId)
+                    : topicMapper.findMaxChildOrderIndex(courseId, userId, parent);
+            return max == null ? 0 : max + 1;
+        }
+        int target;
+        if (after == 0L) {
+            Integer min = topicMapper.findMinOrderIndex(courseId, userId, parent);
+            target = min == null ? 0 : min;
+        } else {
+            CourseTopic anchor = topicMapper.findByIdAndUserId(after, userId);
+            target = anchor == null || anchor.getOrderIndex() == null ? 0 : anchor.getOrderIndex() + 1;
+        }
+        topicMapper.shiftSiblings(courseId, userId, parent, target, op.topicId());
+        return target;
+    }
+
+    /**
+     * 구간을 항목에 잇는다. 자료는 <b>구간이 정한다</b> — 프로젝트 단위 정리에서는 한 항목에
+     * 서로 다른 자료의 구간이 붙을 수 있다(강의 슬라이드 + 교재 + 실습 안내). 구간을 찾지 못하면
+     * 호출자가 준 자료로 물러난다.
+     */
+    private int link(Long userId, Long courseId, Long materialId, Long topicId, List<Long> sectionIds, String role,
+                     Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin) {
+        int n = 0;
+        for (Long sectionId : sectionIds == null ? List.<Long>of() : sectionIds) {
+            MaterialSection section = sectionsById.get(sectionId);
+            Long owner = section != null && section.getMaterialId() != null ? section.getMaterialId() : materialId;
+            if (owner == null) {
+                continue;
+            }
+            linkMapper.upsert(TopicMaterialLink.builder()
+                    .userId(userId).courseId(courseId).topicId(topicId).materialId(owner)
+                    .sectionId(sectionId)
+                    .role(role != null ? role : firstRole(section))
+                    .locator(section == null ? null : section.locator())
+                    .origin(origin)
+                    .build());
+            n++;
+        }
+        return n;
+    }
+
+    /**
+     * @param toc           이번 적용의 목차 출처(없으면 null)
+     * @param parentFromToc 부모가 목차에서 왔다(골격의 자식은 표시가 없다 — 부모를 따른다)
+     */
+    private int insertTree(Long userId, Long courseId, Long materialId, Long parentId, TopicChangeOp op,
+                           Map<String, Long> tempIds, List<Long> created, Map<Long, MaterialSection> sectionsById,
+                           TopicLinkOrigin origin, TocProvenance toc, boolean parentFromToc) {
+        boolean fromToc = parentFromToc || op.isFromToc();
+        TocProvenance mine = fromToc ? toc : null;
+        Integer max = parentId == null
+                ? topicMapper.findMaxRootOrderIndex(courseId, userId)
+                : topicMapper.findMaxChildOrderIndex(courseId, userId, parentId);
+        MaterialSection first = op.sectionIds() == null || op.sectionIds().isEmpty() ? null
+                : sectionsById.get(op.sectionIds().get(0));
+        // 최초 출처는 이 항목의 첫 근거 구간이 속한 자료다. 구간이 없으면 작업이 밝힌 자료(목차 골격 등), 그다음 호출자가 준 자료.
+        Long sourceMaterialId = first != null && first.getMaterialId() != null ? first.getMaterialId()
+                : op.materialId() != null ? op.materialId() : materialId;
+        CourseTopic topic = CourseTopic.builder()
+                .userId(userId).courseId(courseId).parentTopicId(parentId)
+                .title(op.title()).orderIndex(max == null ? 0 : max + 1)
+                .sourceType("SOURCE".equals(op.sourceType()) ? TopicSourceType.SOURCE : TopicSourceType.AI_DERIVED)
+                .sourceMaterialId(sourceMaterialId)
+                .sourceLocator(op.locator() != null ? op.locator() : first == null ? null : first.locator())
+                .sourceWebRevisionId(mine == null ? null : mine.webRevisionId())
+                .sourceTextbookKey(mine == null ? null : mine.bookKey())
+                // 목차 항목이면 표시용 순번과 열쇠(골격·정리안 ADD 모두 tocLine = 목차 항목 열쇠로 넘긴다). 열쇠는 이후 바꾸지 않는다.
+                .sourceTocSeq(!fromToc ? null : mine == null || mine.keyHash() == null ? op.tocLine() : mine.ordinalOf(op.tocLine()))
+                .tocKeyKind(keyed(fromToc, mine, op) ? mine.keyKind() : null)
+                .tocKeyHash(keyed(fromToc, mine, op) ? mine.keyHash() : null)
+                .tocKeyLine(keyed(fromToc, mine, op) ? op.tocLine() : null)
+                .tocKeyState(keyed(fromToc, mine, op) ? "SET" : null)
+                .status(TopicStatus.ACTIVE)
+                .build();
+        topicMapper.insert(topic);
+        created.add(topic.getTopicId());
+        if (op.tempId() != null) {
+            tempIds.put(op.tempId(), topic.getTopicId());
+        }
+        int count = 1;
+        if (op.sectionIds() != null && !op.sectionIds().isEmpty()) {
+            link(userId, courseId, materialId, topic.getTopicId(), op.sectionIds(), op.role(), sectionsById, origin);
+        } else if (sourceMaterialId != null) {
+            // 구간을 모르는 새 항목도 자료 전체와는 잇는다 — 최초 출처를 남기는 것이 source_material_id와 같은 뜻이다.
+            // 근거 자료가 여럿인 정리에서 어느 자료에서 왔는지조차 모르는 항목은 연결하지 않는다.
+            linkMapper.upsert(TopicMaterialLink.builder()
+                    .userId(userId).courseId(courseId).topicId(topic.getTopicId()).materialId(sourceMaterialId)
+                    .sectionId(TopicMaterialLink.WHOLE_MATERIAL).role("SOURCE").locator(op.locator())
+                    .origin(origin).build());
+        }
+        for (TopicChangeOp child : op.children() == null ? List.<TopicChangeOp>of() : op.children()) {
+            count += insertTree(userId, courseId, materialId, topic.getTopicId(), child, tempIds, created,
+                    sectionsById, origin, toc, fromToc);
+        }
+        return count;
+    }
+
+    /** 목차 항목 열쇠를 남길 수 있는가: 목차에서 왔고, 이번 적용의 목차 원문을 알고, 항목 열쇠가 있다. */
+    private static boolean keyed(boolean fromToc, TocProvenance toc, TopicChangeOp op) {
+        return fromToc && toc != null && toc.keyHash() != null && toc.keyKind() != null && op.tocLine() != null;
+    }
+
+    private int merge(Long userId, Long survivingId, List<Long> absorbedIds, List<String> notes) {
+        TopicProgress survivingProgress = progressMapper.findByUserIdAndTopicId(userId, survivingId);
+        boolean survivingHasRecord = survivingProgress != null
+                && survivingProgress.getStatus() != TopicProgressStatus.NOT_STARTED;
+        int n = 0;
+        for (Long absorbedId : absorbedIds) {
+            for (TopicMaterialLink link : linkMapper.findActiveByTopicId(absorbedId, userId)) {
+                linkMapper.upsert(TopicMaterialLink.builder()
+                        .userId(userId).courseId(link.getCourseId()).topicId(survivingId)
+                        .materialId(link.getMaterialId()).sectionId(link.getSectionId())
+                        .role(link.getRole()).locator(link.getLocator()).origin(link.getOrigin()).build());
+            }
+            TopicProgress absorbedProgress = progressMapper.findByUserIdAndTopicId(userId, absorbedId);
+            boolean absorbedHasRecord = absorbedProgress != null
+                    && absorbedProgress.getStatus() != TopicProgressStatus.NOT_STARTED;
+            if (absorbedHasRecord && !survivingHasRecord) {
+                String note = "병합된 항목에 학습 기록이 있어요. 이 항목의 상태를 확인해 주세요";
+                topicMapper.updateReviewNote(survivingId, userId, note);
+                notes.add(note);
+            }
+            topicMapper.archiveMerged(absorbedId, userId, survivingId);
+            n++;
+        }
+        return n;
+    }
+
+    private int splitTopic(Long userId, Long courseId, Long materialId, TopicChangeOp op, Map<String, Long> tempIds,
+                           List<Long> created, Map<Long, MaterialSection> sectionsById, TopicLinkOrigin origin,
+                           List<String> notes) {
+        int n = 0;
+        for (TopicChangeOp child : op.children()) {
+            n += insertTree(userId, courseId, materialId, op.topicId(), child, tempIds, created, sectionsById, origin, null, false);
+        }
+        TopicProgress progress = progressMapper.findByUserIdAndTopicId(userId, op.topicId());
+        if (progress != null && progress.getStatus() != TopicProgressStatus.NOT_STARTED) {
+            String note = "나눈 뒤에도 기존 학습 기록은 이 항목에 남아 있어요. 하위 항목은 새로 시작이에요";
+            topicMapper.updateReviewNote(op.topicId(), userId, note);
+            notes.add(note);
+        }
+        return n;
+    }
+
+    private static String firstRole(MaterialSection section) {
+        if (section == null || section.getRolesJson() == null) {
+            return "SOURCE";
+        }
+        String json = section.getRolesJson().replace("[", "").replace("]", "").replace("\"", "");
+        String first = json.split(",")[0].trim();
+        return first.isEmpty() ? "SOURCE" : first;
+    }
+
+    /** 활성 항목 id 집합(검증용 편의). */
+    public Set<Long> activeIds(Long userId, Long courseId) {
+        return topicMapper.findActiveByCourseIdAndUserId(courseId, userId).stream()
+                .map(CourseTopic::getTopicId).collect(Collectors.toCollection(HashSet::new));
+    }
+}

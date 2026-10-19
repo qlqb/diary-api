@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialAnalysisControlMapper">
+
+    <resultMap id="controlResultMap" type="com.jungwoo.project.memo.material.domain.MaterialAnalysisControl">
+        <id     property="userId"    column="user_id"/>
+        <result property="paused"    column="paused"/>
+        <result property="pausedAt"  column="paused_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <select id="findByUserId" resultMap="controlResultMap">
+        SELECT * FROM material_analysis_controls WHERE user_id = #{userId}
+    </select>
+
+    <insert id="upsert">
+        INSERT INTO material_analysis_controls (user_id, paused, paused_at)
+        VALUES (#{userId}, #{paused}, CASE WHEN #{paused} THEN NOW() ELSE NULL END)
+        ON DUPLICATE KEY UPDATE paused = VALUES(paused), paused_at = VALUES(paused_at)
+    </insert>
+
+</mapper>
