@@ -46,12 +46,17 @@ public class PlanStudyTimeResolver {
             log.warn("배치: 계획 요청 맥락을 읽지 못했다: {}", e.getClass().getSimpleName());
             return null;
         }
+        // 범위 추출이 원문에서 확인한 시간 조건(생성 때 예산에 쓴 것)이 있으면 그것을 배치에도 쓴다.
+        if (context.scopeReport() != null && context.scopeReport().studyTime() != null) {
+            return context.scopeReport().studyTime().toBudget();
+        }
         if (context.briefId() == null) {
             return null;
         }
         PlanBriefService.View brief = planBriefService.loadById(userId, context.briefId());
         Long flowRoot = Objects.requireNonNullElse(context.flowRootProposalId(), proposal.getProposalId());
-        return PlanBriefService.timeBudgetOf(brief.effectiveFor(plan.getStartDate(), plan.getEndDate(), flowRoot)
-                .stream().map(PlanBriefService.Applicable::item).toList());
+        // 생성 때 범위 추출의 시간을 쓰지 않았으면 같은 규칙으로 합의에서 고른다(사용자가 확인한 합의 → 근거만 붙은 AI 정리).
+        return PlanBriefService.chooseTimeBudget(brief.effectiveFor(plan.getStartDate(), plan.getEndDate(), flowRoot)
+                .stream().map(PlanBriefService.Applicable::item).toList(), null);
     }
 }

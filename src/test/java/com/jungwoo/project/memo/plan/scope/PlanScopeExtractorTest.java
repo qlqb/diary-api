@@ -111,4 +111,129 @@ class PlanScopeExtractorTest {
         PlanScopeExtractor.Registry registry = PlanScopeExtractor.registry(catalogs);
         assertThat(extractor.parse("범위를 뽑았어요.\n{\"scopes\":[]}", registry, SAID)).isNotNull();
     }
+
+    private static final String TIME_SAID = "아래는 이 계획을 요청하기까지 사용자가 대화에서 말한 것이다(오래된 것부터).\n"
+            + "- 오늘 자료구조 스택 괄호검사 과제 끝내고 빅데이터분석 좀 공부하고 싶은데 공부 계획 짜줘\n"
+            + "- 오늘 오후4시까지 가능해\n- (기간 계획 초안 생성 요청)\n";
+
+    @Test
+    void 말한_시간은_원문_구절과_값이_맞을_때만_확인된_시간이_된다() {
+        // 대화 2164 재현: "4시까지"가 자료를 읽은 상담 턴에서 AI 후보로 떨어져 예산에 안 들어갔다.
+        PlanScopeExtractor.Registry registry = PlanScopeExtractor.registry(catalogs);
+        ScopeReport.StudyTime ok = extractor.parse("""
+                {"scopes":[],"studyTime":{"minutes":null,"per":"DAY","from":null,"until":"16:00","quote":"오늘 오후4시까지 가능해"}}
+                """, registry, TIME_SAID).studyTime();
+        assertThat(ok).isNotNull();
+        assertThat(ok.until()).isEqualTo("16:00");
+        assertThat(ok.from()).isNull();
+        assertThat(ok.perDay()).isTrue();
+        assertThat(ok.sentence()).isEqualTo("오늘 오후4시까지 가능해"); // 지시문의 발언 한 줄
+        assertThat(ok.toBudget().until()).isEqualTo("16:00");
+
+        // 값이 원문과 다르다(오후 4시를 04:00로) — 모델이 정한 값은 믿지 않는다
+        assertThat(extractor.parse("""
+                {"scopes":[],"studyTime":{"until":"04:00","quote":"오늘 오후4시까지 가능해"}}
+                """, registry, TIME_SAID).studyTime()).isNull();
+        // 원문에 없는 구절
+        assertThat(extractor.parse("""
+                {"scopes":[],"studyTime":{"until":"16:00","quote":"4시까지 공부한다"}}
+                """, registry, TIME_SAID).studyTime()).isNull();
+        // 원문에 없는 분량을 덧붙였다
+        assertThat(extractor.parse("""
+                {"scopes":[],"studyTime":{"minutes":120,"per":"DAY","until":"16:00","quote":"오늘 오후4시까지 가능해"}}
+                """, registry, TIME_SAID).studyTime()).isNull();
+        // 말하지 않았다
+        assertThat(extractor.parse("{\"scopes\":[],\"studyTime\":null}", registry, TIME_SAID).studyTime()).isNull();
+    }
+
+    private ScopeReport.StudyTime time(String said, String studyTime, java.time.LocalTime reference) {
+        return extractor.parse("{\"scopes\":[],\"studyTime\":" + studyTime + "}", PlanScopeExtractor.registry(catalogs),
+                said, reference).studyTime();
+    }
+
+    @Test
+    void 소수점_뒤_조각을_인용해도_발언_줄_전체와_대조해_통과하지_못한다() {
+        assertThat(time("- 1.5시간만 오늘 공부할 수 있어\n",
+                "{\"minutes\":300,\"per\":\"DAY\",\"quote\":\"5시간만 오늘 공부할 수 있어\"}", null)).isNull();
+        assertThat(time("- 1.5시간만 오늘 공부할 수 있어\n",
+                "{\"minutes\":90,\"per\":\"DAY\",\"quote\":\"1.5시간만 오늘 공부할 수 있어\"}", null).minutes()).isEqualTo(90);
+    }
+
+    @Test
+    void 나중에_시간을_바꿔_말했으면_예전_구절은_확인되지_않는다() {
+        String said = PlanScopeExtractor.CONVERSATION_HEADER
+                + "\n- 오후4시까지 가능해\n- 아 오후6시까지 가능해\n- (기간 계획 초안 생성 요청)\n";
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"오후4시까지 가능해\"}", null)).isNull();
+        assertThat(time(said, "{\"until\":\"18:00\",\"quote\":\"오후6시까지 가능해\"}", null).until()).isEqualTo("18:00");
+    }
+
+    @Test
+    void 발언의_분량이나_시간대를_빠뜨리면_확인되지_않는다() {
+        String said = "- 오늘 오후4시까지 한 시간만 공부할 수 있어\n";
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"오후4시까지 한 시간만\"}", null)).isNull();
+        assertThat(time(said, "{\"minutes\":60,\"per\":\"DAY\",\"quote\":\"오후4시까지 한 시간만\"}", null)).isNull();
+        ScopeReport.StudyTime both = time(said,
+                "{\"minutes\":60,\"per\":\"DAY\",\"until\":\"16:00\",\"quote\":\"오후4시까지 한 시간만\"}", null);
+        assertThat(both.minutes()).isEqualTo(60);
+        assertThat(both.until()).isEqualTo("16:00");
+    }
+
+    @Test
+    void 오전_오후를_말하지_않은_시각은_기준_시각_뒤의_가장_이른_시각만_인정한다() {
+        String said = "- 4시까지 공부가능해 집중적으로 공부하고 싶어\n";
+        java.time.LocalTime noon = java.time.LocalTime.of(12, 53);
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"4시까지 공부가능해\"}", noon).until()).isEqualTo("16:00");
+        assertThat(time(said, "{\"until\":\"04:00\",\"quote\":\"4시까지 공부가능해\"}", noon)).isNull();
+        // 기준 시각이 없으면 어느 쪽인지 정할 수 없다
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"4시까지 공부가능해\"}", null)).isNull();
+        // 시작이 애매하면 기준 뒤의 가장 이른 시작, 끝은 그 뒤의 가장 이른 끝
+        String evening = "- 8시부터 11시까지 할게\n";
+        assertThat(time(evening, "{\"from\":\"20:00\",\"until\":\"23:00\",\"quote\":\"8시부터 11시까지\"}", noon))
+                .isNotNull();
+        assertThat(time(evening, "{\"from\":\"08:00\",\"until\":\"11:00\",\"quote\":\"8시부터 11시까지\"}", noon))
+                .isNull();
+        // 계획 첫날 아침부터 남는 시간이면 오전이다
+        assertThat(time(evening, "{\"from\":\"08:00\",\"until\":\"11:00\",\"quote\":\"8시부터 11시까지\"}",
+                java.time.LocalTime.of(7, 0))).isNotNull();
+    }
+
+    @Test
+    void 여러_줄인_한_발언은_통째로_대조하고_구간이_되지_못한_시각이_있으면_확인되지_않는다() {
+        String said = PlanScopeExtractor.CONVERSATION_HEADER
+                + "따른다.\n- 오늘 한 시간만 공부할 수 있어\n오늘 오후4시까지 가능해\n- (기간 계획 초안 생성 요청)\n";
+        assertThat(PlanScopeExtractor.utteranceLines(said))
+                .containsExactly("오늘 한 시간만 공부할 수 있어\n오늘 오후4시까지 가능해", "(기간 계획 초안 생성 요청)");
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"오늘 오후4시까지 가능해\"}", null)).isNull();
+        assertThat(time(said, "{\"minutes\":60,\"per\":\"DAY\",\"until\":\"16:00\",\"quote\":\"오늘 오후4시까지 가능해\"}",
+                null)).isNotNull();
+        // 화면에서 바로 쓴 지시문은 불릿이 있어도 전체가 한 발언(첫 줄을 머리말로 버리지 않는다)
+        assertThat(PlanScopeExtractor.utteranceLines("오늘 한 시간만 공부할 수 있어\n- 오늘 오후4시까지 가능해"))
+                .containsExactly("오늘 한 시간만 공부할 수 있어\n- 오늘 오후4시까지 가능해");
+        assertThat(time("오늘 한 시간만 공부할 수 있어\n- 오늘 오후4시까지 가능해",
+                "{\"until\":\"16:00\",\"quote\":\"오늘 오후4시까지 가능해\"}", null)).isNull();
+
+        assertThat(time("- 오늘 한 시간만 공부하고 오후4시 전에 끝내야 해\n",
+                "{\"minutes\":60,\"per\":\"DAY\",\"quote\":\"오늘 한 시간만 공부하고\"}", null)).isNull();
+    }
+
+    @Test
+    void 대화_메시지_안의_불릿은_발언_경계가_아니다() {
+        StringBuilder sb = new StringBuilder(PlanScopeExtractor.CONVERSATION_HEADER).append("따른다.\n");
+        PlanScopeExtractor.appendUtterance(sb, "오늘 한 시간만 공부할 수 있어\n- 오늘 오후4시까지 가능해");
+        PlanScopeExtractor.appendUtterance(sb, "(기간 계획 초안 생성 요청)");
+        String said = sb.toString();
+
+        assertThat(PlanScopeExtractor.utteranceLines(said))
+                .containsExactly("오늘 한 시간만 공부할 수 있어\n- 오늘 오후4시까지 가능해", "(기간 계획 초안 생성 요청)");
+        assertThat(time(said, "{\"until\":\"16:00\",\"quote\":\"오늘 오후4시까지 가능해\"}", null)).isNull();
+        assertThat(time(said, "{\"minutes\":60,\"per\":\"DAY\",\"until\":\"16:00\",\"quote\":\"오늘 오후4시까지 가능해\"}",
+                null)).isNotNull();
+    }
+
+    @Test
+    void 시각_기준이_있으면_입력에_싣는다() {
+        PlanScopeExtractor.Registry registry = PlanScopeExtractor.registry(catalogs);
+        assertThat(PlanScopeExtractor.prompt(new PlanScopeExtractor.Request(1L, "g", SAID, List.of(), catalogs,
+                java.time.LocalTime.of(12, 53)), registry)).contains("[시각 기준] 12:53");
+    }
 }

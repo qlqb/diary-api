@@ -1203,10 +1203,10 @@ public class AiConversationService {
         if (lines.isEmpty()) {
             return null;
         }
-        StringBuilder sb = new StringBuilder("아래는 이 계획을 요청하기까지 사용자가 대화에서 말한 것이다(오래된 것부터). ")
+        StringBuilder sb = new StringBuilder(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER)
                 .append("여기서 정한 우선순위·제외 조건·집중할 과목을 따른다.\n");
         for (String line : lines) {
-            sb.append("- ").append(line.strip()).append('\n');
+            com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.appendUtterance(sb, line);
         }
         return sb.toString();
     }

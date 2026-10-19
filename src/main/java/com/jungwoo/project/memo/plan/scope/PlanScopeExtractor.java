@@ -86,37 +86,75 @@ public class PlanScopeExtractor {
               · 목록에 그 부분의 자료가 없으면 materials는 []이고 noMaterial=true.
               · 사용자가 따로 가진 자료로 한다고 말했으면(예 "책에 표시해 놨어", "시험 때 주는 PDF") userMaterial=true.
             - 과목을 알 수 없는 범위는 course를 null로 둔다.
+            - studyTime: 사용자가 이번 요청에서 쓸 수 있는 시간·시간대를 말했으면 적는다(예 "4시까지 공부가능해" → until "16:00",
+              "오늘 한 시간만" → minutes 60·per "DAY"). 여러 번 말했으면 가장 최근 발언 하나만. 그 발언의 분량과 시간대를 모두 적는다.
+              오전·오후를 말하지 않은 시각은 [시각 기준] 이후의 가장 이른 시각으로 본다. 밤 12시·자정은 "24:00". quote에는 그 시간을
+              말한 사용자 원문 구절을 그대로. 말하지 않았으면 null.
 
             응답 형식(반드시 지킨다):
             1) 뽑은 범위를 한 문장으로.
             2) 다음 줄에 정확히: %s
             3) 그 아래 JSON 객체 하나:
             {"scopes":[{"course":"c1"|null,"role":"REQUIRED"|"OPTIONAL","goal":"…","boundary":"…","quote":"사용자 원문 구절",
-              "parts":[{"label":"…","materials":["d3"],"noMaterial":false,"userMaterial":false}]}]}
-            사용자가 범위를 하나도 말하지 않았으면 {"scopes":[]}.
+              "parts":[{"label":"…","materials":["d3"],"noMaterial":false,"userMaterial":false}]}],
+             "studyTime":{"minutes":정수|null,"per":"DAY"|"PLAN","from":"HH:mm"|null,"until":"HH:mm"|null,"quote":"사용자 원문 구절"}|null}
+            사용자가 범위를 하나도 말하지 않았으면 "scopes":[].
             """.formatted(AiStreamParser.DELIMITER);
 
     /**
      * @param instruction  이번 요청의 사용자 원문(서버가 사용자 메시지로 만든 지시문). 근거 구절은 여기서만 확인한다
      * @param agreedLines  유효한 상담 합의(참고용). 근거로 쓰지 않는다
+     * @param timeReference 오전·오후를 말하지 않은 시각을 정하는 기준(계획 첫날의 남는 시간이 시작하는 시각). 없으면 null —
+     *                      그때 애매한 시각은 확인된 시간이 되지 못한다
      */
+    /** 대화에서 계획을 요청할 때 서버가 만드는 지시문의 머리말. 이 뒤로 발언마다 "- "로 시작한다. */
+    public static final String CONVERSATION_HEADER = "아래는 이 계획을 요청하기까지 사용자가 대화에서 말한 것이다(오래된 것부터). ";
+
+    /**
+     * 대화 지시문에 사용자 메시지 하나를 붙인다. 첫 줄은 "- ", 이어지는 줄은 두 칸 들여 쓴다 — 메시지 안의 "- " 줄이 발언 경계로
+     * 읽히지 않게. {@link #utteranceLines}가 같은 규칙으로 되읽는다.
+     */
+    public static void appendUtterance(StringBuilder sb, String message) {
+        String[] lines = message.strip().split("\\R");
+        sb.append("- ").append(lines[0].strip()).append('\n');
+        for (int i = 1; i < lines.length; i++) {
+            if (!lines[i].isBlank()) {
+                sb.append("  ").append(lines[i].strip()).append('\n');
+            }
+        }
+    }
+
     public record Request(Long userId, String workflowId, String instruction, List<String> agreedLines,
-                          List<CourseCatalog> catalogs) {
+                          List<CourseCatalog> catalogs, java.time.LocalTime timeReference) {
+        public Request(Long userId, String workflowId, String instruction, List<String> agreedLines,
+                       List<CourseCatalog> catalogs) {
+            this(userId, workflowId, instruction, agreedLines, catalogs, null);
+        }
     }
 
     /** @param prompt 사용자 프롬프트(생성 기록용). 호출하지 않았으면 null */
     public record Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt,
                          Integer estimatedTokens, String note,
                          /** 상한을 넘거나 읽을 수 없는 원소가 있어 버린 범위·부분이 있다 */
-                         boolean incomplete) {
+                         boolean incomplete,
+                         /** 원문과 대조해 확인한 쓸 수 있는 시간. 말하지 않았거나 확인하지 못했으면 null */
+                         ScopeReport.StudyTime studyTime) {
         public Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt, Integer estimatedTokens,
                       String note) {
-            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, false);
+            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, false, null);
+        }
+
+        public Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt, Integer estimatedTokens,
+                      String note, boolean incomplete) {
+            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, incomplete, null);
         }
     }
 
-    /** 검증 결과와 버린 것이 있었는지. */
-    record Parsed(List<RequestScope> scopes, boolean dropped) {
+    /** 검증 결과, 버린 것이 있었는지, 확인된 시간 조건. */
+    record Parsed(List<RequestScope> scopes, boolean dropped, ScopeReport.StudyTime studyTime) {
+        Parsed(List<RequestScope> scopes, boolean dropped) {
+            this(scopes, dropped, null);
+        }
     }
 
     /** 핸들 → 서버 값. 이번 호출에서 보여 준 것만 들어 있다. */
@@ -140,16 +178,17 @@ public class PlanScopeExtractor {
             log.warn("범위 추출 실패 — 범위 없이 계속한다: userId={}, {}", request.userId(), e.getClass().getSimpleName());
             return new Result(ScopeReport.FAILED, List.of(), SYSTEM_PROMPT, prompt, estimated, "범위 추출 호출 실패");
         }
-        Parsed parsed = parse(json, registry, request.instruction());
+        Parsed parsed = parse(json, registry, request.instruction(), request.timeReference());
         if (parsed == null) {
             return new Result(ScopeReport.FAILED, List.of(), SYSTEM_PROMPT, prompt, estimated, "범위 추출 응답을 읽지 못했다");
         }
         if (parsed.dropped()) {
             log.warn("범위 추출: 상한을 넘거나 읽을 수 없는 범위·부분을 버렸다. userId={}", request.userId());
         }
-        return new Result(parsed.scopes().isEmpty() && !parsed.dropped() ? ScopeReport.NONE : ScopeReport.EXTRACTED,
+        boolean nothing = parsed.scopes().isEmpty() && !parsed.dropped() && parsed.studyTime() == null;
+        return new Result(nothing ? ScopeReport.NONE : ScopeReport.EXTRACTED,
                 parsed.scopes(), SYSTEM_PROMPT, prompt, estimated,
-                parsed.dropped() ? "상한·형식 때문에 일부 범위를 버렸다" : null, parsed.dropped());
+                parsed.dropped() ? "상한·형식 때문에 일부 범위를 버렸다" : null, parsed.dropped(), parsed.studyTime());
     }
 
     // ===== 입력 =====
@@ -195,6 +234,9 @@ public class PlanScopeExtractor {
 
     static String prompt(Request request, Registry registry) {
         StringBuilder sb = new StringBuilder("[사용자 요청 원문]\n").append(request.instruction().strip()).append("\n\n");
+        if (request.timeReference() != null) {
+            sb.append("[시각 기준] ").append(request.timeReference()).append("\n\n");
+        }
         if (request.agreedLines() != null && !request.agreedLines().isEmpty()) {
             sb.append("[상담 합의 — 참고만, 근거 구절은 위 원문에서]\n");
             request.agreedLines().forEach(l -> sb.append("- ").append(l).append('\n'));
@@ -274,6 +316,10 @@ public class PlanScopeExtractor {
 
     /** 모델 응답을 서버가 확정한 범위로 바꾼다. 읽을 수 없으면 null. */
     Parsed parse(String raw, Registry registry, String instruction) {
+        return parse(raw, registry, instruction, null);
+    }
+
+    Parsed parse(String raw, Registry registry, String instruction, java.time.LocalTime timeReference) {
         String json = ModelJson.unwrapObject(raw);
         if (json == null) {
             return null;
@@ -351,7 +397,93 @@ public class PlanScopeExtractor {
                     course == null ? null : course.courseTitle(), role, cut(text(s, "goal"), MAX_GOAL_CHARS), boundary,
                     cut(quote, 600), basis == null ? null : basis.sentence(), basis != null, List.copyOf(parts)));
         }
-        return new Parsed(out, dropped);
+        return new Parsed(out, dropped, studyTime(root.get("studyTime"), instruction, timeReference));
+    }
+
+    /**
+     * 쓸 수 있는 시간. 다음을 모두 만족할 때만 확인된 값이다 — 하나라도 어긋나면 null(모델이 정한 시간 값을 믿지 않는다).
+     * <ul>
+     *   <li>근거 구절이 사용자 발언 한 줄에 그대로 있다(같은 구절이 여러 줄에 있으면 가장 나중 줄).</li>
+     *   <li>그 뒤의 발언에 시간 표현이 없다 — 나중에 바꿔 말한 시간을 두고 예전 구절을 고르지 못하게.</li>
+     *   <li>분·단위·시작·끝이 그 발언 줄 전체에서 그대로 읽히고, 그 줄의 분량·시간대를 빠뜨리지 않았으며, 오전·오후를 말하지 않은
+     *       시각은 기준 시각 규칙과 같다({@link PlanBriefService#timeValuesMatchFully}). 줄 전체로 대조해 "1.5시간"의 "5시간"
+     *       같은 조각 인용이 통과하지 못한다.</li>
+     * </ul>
+     */
+    static ScopeReport.StudyTime studyTime(JsonNode node, String instruction, java.time.LocalTime timeReference) {
+        if (node == null || !node.isObject() || instruction == null) {
+            return null;
+        }
+        List<String> lines = utteranceLines(instruction);
+        String quoteText = text(node, "quote");
+        int at = -1;
+        PlanBriefService.UserBasis basis = null;
+        for (int i = lines.size() - 1; i >= 0 && at < 0; i--) {
+            PlanBriefService.UserBasis b = PlanBriefService.verifyQuote(quoteText,
+                    List.of(new PlanBriefService.UserUtterance(0L, lines.get(i))));
+            if (b != null) {
+                at = i;
+                basis = b;
+            }
+        }
+        if (basis == null) {
+            return null;
+        }
+        for (int i = at + 1; i < lines.size(); i++) {
+            if (PlanBriefService.mentionsTime(lines.get(i))) {
+                return null; // 나중 발언에 시간 표현이 있다 — 어느 것이 지금 조건인지 서버가 정할 수 없다
+            }
+        }
+        String line = lines.get(at);
+        Integer minutes = node.hasNonNull("minutes") && node.get("minutes").canConvertToInt() ? node.get("minutes").asInt() : null;
+        if (minutes != null && (minutes < 5 || minutes > 9999)) {
+            minutes = null;
+        }
+        String from = PlanBriefService.clockTime(text(node, "from"), false);
+        String until = PlanBriefService.clockTime(text(node, "until"), true);
+        if (from != null && until != null && !"24:00".equals(until) && from.compareTo(until) >= 0) {
+            return null; // 앞뒤가 뒤집힌 시간대
+        }
+        if (minutes == null && from == null && until == null) {
+            return null;
+        }
+        boolean perDay = minutes == null || !"PLAN".equalsIgnoreCase(text(node, "per"));
+        PlanBriefService.TimeBudget budget = new PlanBriefService.TimeBudget(minutes, perDay,
+                from == null ? null : java.time.LocalTime.parse(from), until);
+        if (!PlanBriefService.timeValuesMatchFully(budget, line, timeReference)) {
+            return null;
+        }
+        return new ScopeReport.StudyTime(minutes, perDay, from, until, basis.quote(), line);
+    }
+
+    /**
+     * 지시문의 사용자 발언. 대화 지시문은 발언마다 "- "로 시작하고 발언 안의 줄바꿈은 다음 "- "까지 이어진다 — 한 발언의 여러 줄을
+     * 따로 대조하면 그 발언의 분량·시간대 일부가 빠진 채 통과한다. "- " 줄이 없으면(화면에서 바로 쓴 지시문) 전체가 한 발언이다.
+     * 첫 "- " 앞의 줄은 서버 머리말이다.
+     */
+    static List<String> utteranceLines(String instruction) {
+        String[] raw = instruction.split("\\R");
+        // 대화 지시문인지는 서버가 붙인 머리말로만 판단한다 — 화면에서 쓴 글의 불릿("- ")을 발언 경계로 보지 않는다.
+        if (!instruction.strip().startsWith(CONVERSATION_HEADER.strip())) {
+            return instruction.isBlank() ? List.of() : List.of(instruction.strip());
+        }
+        List<String> out = new ArrayList<>();
+        StringBuilder current = null;
+        for (String r : raw) {
+            String line = r.strip();
+            if (r.startsWith("- ")) { // 경계는 줄 맨 앞의 "- "뿐 — 들여 쓴 줄은 같은 메시지의 이어지는 줄이다
+                if (current != null) {
+                    out.add(current.toString().strip());
+                }
+                current = new StringBuilder(line.substring(2).strip());
+            } else if (current != null && !line.isEmpty()) {
+                current.append('\n').append(line);
+            }
+        }
+        if (current != null && !current.toString().isBlank()) {
+            out.add(current.toString().strip());
+        }
+        return out;
     }
 
     private static String text(JsonNode node, String field) {

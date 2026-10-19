@@ -210,6 +210,77 @@ final class SaidTime {
         return true;
     }
 
+    /** {@link #spans}가 구간으로 묶은 시각의 수. 같은 규칙으로 센다. */
+    private static int spannedClocks(String sentence) {
+        List<Clock> clocks = clocks(sentence);
+        int used = 0;
+        for (int i = 0; i < clocks.size(); i++) {
+            Clock c = clocks.get(i);
+            if (c.opensRange()) {
+                Clock next = i + 1 < clocks.size() ? clocks.get(i + 1) : null;
+                boolean adjacent = next != null && sentence.substring(c.end(), next.start()).isBlank()
+                        && (next.tail() == null || "까지".equals(next.tail()));
+                used += adjacent ? 2 : 1;
+                if (adjacent) {
+                    i++;
+                }
+            } else if ("까지".equals(c.tail())) {
+                used++;
+            }
+        }
+        return used;
+    }
+
+    /** 이 글에 시간 표현(지속 시간·시각)이 하나라도 있는가. */
+    static boolean mentionsTime(String sentence) {
+        return sentence != null && (!durations(sentence).isEmpty() || !clocks(sentence).isEmpty());
+    }
+
+    /**
+     * {@link #matches}에 더해, 원문에서 읽히는 시간 조건을 빠뜨리지 않았고(지속 시간을 말했으면 분이, 시간대를 말했으면 시작·끝이
+     * 있다), 오전·오후를 말하지 않아 후보가 둘인 시각은 서버 규칙으로 정한 하나와 같다.
+     *
+     * <p>서버 규칙: 시작은 기준 시각 이후의 가장 이른 후보, 끝은 (시작이 있으면 시작, 없으면 기준 시각) 뒤의 가장 이른 후보.
+     * 기준 시각이 없으면 애매한 시각은 일치가 아니다.
+     */
+    static boolean matchesFully(PlanBriefService.TimeBudget budget, String sentence, LocalTime reference) {
+        if (!matches(budget, sentence)) {
+            return false;
+        }
+        if (!durations(sentence).isEmpty() && budget.minutes() == null) {
+            return false; // "4시까지 한 시간만"에서 한 시간을 뺐다
+        }
+        List<Span> spans = spans(sentence);
+        if (spans == null || (!spans.isEmpty() && !budget.hasWindow())) {
+            return false; // 시간대를 말했는데 빠졌거나 읽지 못했다
+        }
+        if (spannedClocks(sentence) < clocks(sentence).size()) {
+            return false; // "오후4시 전에 끝내야 해"처럼 읽은 시각을 시간대로 만들지 못했다 — 빠졌는지 서버가 알 수 없다
+        }
+        if (!budget.hasWindow()) {
+            return true;
+        }
+        Span span = spans.get(0); // matches가 구간이 정확히 하나임을 확인했다
+        LocalTime from = budget.from();
+        if (span.from() != null && span.from().size() > 1) {
+            LocalTime pick = reference == null ? null
+                    : span.from().stream().filter(t -> !t.isBefore(reference)).min(LocalTime::compareTo).orElse(null);
+            if (pick == null || !pick.equals(from)) {
+                return false;
+            }
+        }
+        if (span.until() != null && span.until().size() > 1) {
+            LocalTime base = from != null ? from : reference;
+            LocalTime until = "24:00".equals(budget.until()) ? LocalTime.MAX : LocalTime.parse(budget.until());
+            LocalTime pick = base == null ? null
+                    : span.until().stream().filter(t -> t.isAfter(base)).min(LocalTime::compareTo).orElse(null);
+            if (pick == null || !pick.equals(until)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean sameEnd(Set<LocalTime> said, LocalTime value) {
         return said == null ? value == null : value != null && said.contains(value);
     }

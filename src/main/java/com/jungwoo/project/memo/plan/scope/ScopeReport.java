@@ -21,16 +21,45 @@ public record ScopeReport(String status, List<RequestScope> scopes, List<PartSta
                           /** (3단계) 서버 검증에서 걸린 것(예: 필수 범위가 남았는데 이유 없이 추가 과목을 넣음). 비어 있으면 통과 */
                           List<String> issues,
                           /** (3단계) 화면 맨 위에 보일 서버 문장. 완료 표시는 모델 문장이 아니라 이 판정으로 정한다 */
-                          String notice) {
+                          String notice,
+                          /**
+                           * (2026-10-19) 사용자가 이번 요청에서 말한 쓸 수 있는 시간 — 자료를 보지 않는 범위 추출이 원문에서 뽑고 서버가
+                           * 원문 문장과 값을 대조해 확인한 것만. 예산 계산과 배치가 이것을 쓴다. 없으면 null
+                           */
+                          StudyTime studyTime) {
 
     public ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
                        List<String> remaining, List<String> needsConfirm, String completion, boolean incomplete) {
-        this(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete, List.of(), null);
+        this(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete, List.of(), null, null);
+    }
+
+    public ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
+                       List<String> remaining, List<String> needsConfirm, String completion, boolean incomplete,
+                       List<String> issues, String notice) {
+        this(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete, issues, notice, null);
     }
 
     public ScopeReport withChecks(List<String> newIssues, String newNotice) {
         return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
-                List.copyOf(newIssues), newNotice);
+                List.copyOf(newIssues), newNotice, studyTime);
+    }
+
+    public ScopeReport withStudyTime(StudyTime newStudyTime) {
+        return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
+                issues, notice, newStudyTime);
+    }
+
+    /**
+     * 확인된 쓸 수 있는 시간. 값(분·단위·시작·끝)은 서버가 원문 문장에서 그대로 읽힌다고 대조한 것이다.
+     *
+     * @param until "HH:mm" 또는 "24:00"(자정)
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record StudyTime(Integer minutes, boolean perDay, String from, String until, String quote, String sentence) {
+        public com.jungwoo.project.memo.ai.brief.PlanBriefService.TimeBudget toBudget() {
+            return new com.jungwoo.project.memo.ai.brief.PlanBriefService.TimeBudget(minutes, perDay,
+                    from == null ? null : java.time.LocalTime.parse(from), until);
+        }
     }
 
     public static final String EXTRACTED = "EXTRACTED";

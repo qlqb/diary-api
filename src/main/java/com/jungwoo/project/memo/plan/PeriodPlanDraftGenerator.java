@@ -75,6 +75,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -624,7 +625,8 @@ public class PeriodPlanDraftGenerator {
 
         // ===== 1-1. 요청 범위(SCOPE) — 자료 선택보다 먼저, 사용자 원문에서 =====
         com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result scopeResult =
-                extractScopes(spec, facts, catalogs, budget, traceEntries, generationId);
+                extractScopes(spec, facts, catalogs, budget, traceEntries, generationId,
+                        firstWindowStart(availability.windows(), spec.start()));
         List<com.jungwoo.project.memo.plan.scope.RequestScope> scopes = scopeResult.scopes();
         for (int i = 0; i < courses.size(); i++) {
             Course course = courses.get(i);
@@ -647,9 +649,24 @@ public class PeriodPlanDraftGenerator {
          * 이 값은 모델에게도 알리고, 결과가 넘치면 서버가 뒤에서부터 덜어 낸다(초안과 배치까지 유지된다).
          */
         Long flowRootForBudget = spec.origin() == null ? null : spec.origin().flowRootProposalId();
-        PlanBriefService.TimeBudget saidTime = facts.brief() == null ? null
-                : PlanBriefService.timeBudgetOf(facts.brief().effectiveFor(spec.start(), spec.end(), flowRootForBudget)
-                .stream().map(PlanBriefService.Applicable::item).toList());
+        /*
+         * (2026-10-19) 상담 합의에 쓸 수 있는 시간이 없으면, 자료를 보지 않는 범위 추출이 사용자 원문에서 확인한 시간을 쓴다. 합의의
+         * 시간 항목은 자료를 읽은 턴에서 AI 후보로 떨어지면 쓰이지 못했다(대화 2164: "4시까지"가 예산에 안 들어감). 사용자가 확인한
+         * 합의가 있으면 합의가 먼저다 — 원문에 시간이 있다는 것만으로 나중에 확정한 합의를 덮지 않는다.
+         */
+        List<com.jungwoo.project.memo.ai.brief.PlanBriefItem> briefItems = facts.brief() == null ? List.of()
+                : facts.brief().effectiveFor(spec.start(), spec.end(), flowRootForBudget)
+                .stream().map(PlanBriefService.Applicable::item).toList();
+        // 범위 추출보다 앞서는 것은 사용자가 말했거나 승인한 합의뿐이다. 근거만 붙은 AI 정리(미승인)는 값 누락을 엄격히 보지 않았다.
+        // 배치(PlanStudyTimeResolver)도 같은 선택(chooseTimeBudget)을 쓴다.
+        boolean confirmed = PlanBriefService.confirmedTimeBudgetOf(briefItems) != null;
+        com.jungwoo.project.memo.plan.scope.ScopeReport.StudyTime scopeTime = confirmed ? null : scopeResult.studyTime();
+        if (confirmed && scopeResult.studyTime() != null) {
+            log.info("말한 시간: 사용자가 확인한 상담 합의를 쓴다(범위 추출의 시간은 쓰지 않음). workflowId={}, 추출={}", generationId,
+                    scopeResult.studyTime().quote());
+        }
+        PlanBriefService.TimeBudget saidTime = PlanBriefService.chooseTimeBudget(briefItems,
+                scopeTime == null ? null : scopeTime.toBudget());
         Integer userTimeLimit = userTimeOf(saidTime, availability.windows(), available, days);
         String timeNote = null;
         if (userTimeLimit != null && userTimeLimit != target) {
@@ -870,6 +887,7 @@ public class PeriodPlanDraftGenerator {
         if (normalized.strategy().deferred() != null) {
             normalized.strategy().deferred().forEach(d -> modelReasons.add(d.reason()));
         }
+        scopeReport = scopeReport.withStudyTime(scopeTime); // 예산에 쓴 경우만 — 배치가 같은 값을 다시 쓴다
         var checked = com.jungwoo.project.memo.plan.scope.ScopeChecks.check(scopeReport,
                 normalized.items().stream().map(com.jungwoo.project.memo.ai.dto.ProposalItem::courseId).toList(), modelReasons);
         scopeReport = checked.report();
@@ -939,7 +957,8 @@ public class PeriodPlanDraftGenerator {
 
     private com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result extractScopes(
             Spec spec, Facts facts, List<PlanMaterialContextService.CourseCatalog> catalogs, GenerationBudget budget,
-            List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry> traceEntries, String generationId) {
+            List<com.jungwoo.project.memo.plan.trace.PlanGenerationTraceService.Entry> traceEntries, String generationId,
+            java.time.LocalTime timeReference) {
         if (scopeExtractor == null) {
             return new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Result(
                     com.jungwoo.project.memo.plan.scope.ScopeReport.SKIPPED, List.of(), null, null, null, "범위 추출기 없음");
@@ -949,7 +968,7 @@ public class PeriodPlanDraftGenerator {
                 : PlanBriefService.agreedLines(facts.brief().effectiveFor(spec.start(), spec.end(), flowRoot));
         long startedAt = System.currentTimeMillis();
         var result = scopeExtractor.extract(new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Request(
-                spec.userId(), generationId, spec.instruction(), agreed, catalogs));
+                spec.userId(), generationId, spec.instruction(), agreed, catalogs, timeReference));
         if (result.prompt() != null) {
             budget.record(GenerationBudget.Call.SCOPE, 1, result.estimatedTokens(), null,
                     System.currentTimeMillis() - startedAt,
@@ -1825,6 +1844,12 @@ public class PeriodPlanDraftGenerator {
      * <p>분을 말했으면 그 값, 시간대만 말했으면("밤 12시까지") 그 시간대 안의 남는 시간이다. 어느 쪽이든 실제로 남는 시간(시간대를
      * 말했으면 그 안)보다 크게는 잡지 않는다 — 배치할 자리가 없는 분량은 계획이 아니다.
      */
+    /** 계획 첫날의 남는 시간이 시작하는 시각(오늘이면 지금 이후). 없으면 null. 오전·오후를 말하지 않은 시각의 기준이다. */
+    static LocalTime firstWindowStart(List<AvailabilityWindow> windows, LocalDate day) {
+        return windows.stream().map(AvailabilityWindow::startAt).filter(t -> t.toLocalDate().equals(day))
+                .min(LocalDateTime::compareTo).map(LocalDateTime::toLocalTime).orElse(null);
+    }
+
     public static Integer userTimeOf(PlanBriefService.TimeBudget said, List<AvailabilityWindow> windows, int available, int days) {
         if (said == null) {
             return null;

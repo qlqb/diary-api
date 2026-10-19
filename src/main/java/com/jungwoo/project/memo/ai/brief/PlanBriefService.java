@@ -646,7 +646,7 @@ public class PlanBriefService {
     }
 
     /** "HH:mm" 시각. until이면 24:00(자정)도 받는다. 형식이 틀리면 null. */
-    static String clockTime(String value, boolean until) {
+    public static String clockTime(String value, boolean until) {
         if (value == null || value.isBlank()) {
             return null;
         }
@@ -691,12 +691,34 @@ public class PlanBriefService {
         return tagged.length() > MAX_TEXT_CHARS ? text : tagged;
     }
 
+    /**
+     * 생성 예산과 배치가 같이 쓰는 "쓸 수 있는 시간" 선택. 사용자가 말했거나 승인한 합의 → 범위 추출이 원문에서 확인한 시간
+     * (scopeTime, 없으면 null) → 근거만 붙은 AI 정리 순.
+     */
+    public static TimeBudget chooseTimeBudget(List<PlanBriefItem> effective, TimeBudget scopeTime) {
+        TimeBudget confirmed = confirmedTimeBudgetOf(effective);
+        if (confirmed != null) {
+            return confirmed;
+        }
+        return scopeTime != null ? scopeTime : timeBudgetOf(effective);
+    }
+
+    /** 사용자가 말했거나(작성자 USER) 승인한(accepted) "쓸 수 있는 시간"만. 여러 개면 가장 최근 것. 없으면 null. */
+    public static TimeBudget confirmedTimeBudgetOf(List<PlanBriefItem> effective) {
+        return timeBudgetOf(effective, true);
+    }
+
     /** 유효한 합의 중 사용자가 말한 "쓸 수 있는 시간". 여러 개면 가장 최근 것. 없으면 null. */
     public static TimeBudget timeBudgetOf(List<PlanBriefItem> effective) {
+        return timeBudgetOf(effective, false);
+    }
+
+    private static TimeBudget timeBudgetOf(List<PlanBriefItem> effective, boolean confirmedOnly) {
         TimeBudget found = null;
         for (PlanBriefItem item : effective == null ? List.<PlanBriefItem>of() : effective) {
-            boolean userWords = PlanBriefItem.SPEAKER_USER.equals(item.speaker());
-            if (!"TIME_BUDGET".equals(item.kind()) || !(userWords || item.grounded())) {
+            // 사용자가 말했거나 AI 제안을 승인했으면 사용자의 제약이다. 근거만 붙은 AI 정리는 값을 원문과 대조한 뒤에만.
+            boolean userWords = PlanBriefItem.SPEAKER_USER.equals(item.speaker()) || item.accepted();
+            if (!"TIME_BUDGET".equals(item.kind()) || !(userWords || (!confirmedOnly && item.grounded()))) {
                 continue; // AI가 제안만 한 시간은 사용자의 제약이 아니다.
             }
             java.util.regex.Matcher m = TIME_BUDGET_TAG.matcher(item.text());
@@ -713,8 +735,21 @@ public class PlanBriefService {
     }
 
     /** 정리된 시간 값(분·단위·시작·끝)이 사용자 원문 문장에서 그대로 읽히는가. 읽지 못하면 false — {@link SaidTime}. */
-    static boolean timeValuesMatch(TimeBudget budget, String sentence) {
+    public static boolean timeValuesMatch(TimeBudget budget, String sentence) {
         return SaidTime.matches(budget, sentence);
+    }
+
+    /**
+     * {@link #timeValuesMatch}보다 엄격하다: 원문에서 읽히는 분량·시간대를 빠뜨리지 않았고, 오전·오후를 말하지 않은 시각은
+     * 기준 시각 뒤의 가장 이른 시각이어야 한다(기준 시각이 없으면 애매한 시각은 일치가 아니다). {@link SaidTime#matchesFully}.
+     */
+    public static boolean timeValuesMatchFully(TimeBudget budget, String sentence, java.time.LocalTime reference) {
+        return SaidTime.matchesFully(budget, sentence, reference);
+    }
+
+    /** 글에 시간 표현(지속 시간·시각)이 있는가. */
+    public static boolean mentionsTime(String sentence) {
+        return SaidTime.mentionsTime(sentence);
     }
 
     // ===== 프롬프트 =====
