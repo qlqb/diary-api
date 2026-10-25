@@ -125,7 +125,7 @@ public class ChangeBundleService {
                 mapper.updateSelection(item.getItemId(), bundleId, next);
             }
         }
-        bump(userId, bundle, null);
+        bump(userId, bundle, null, new LocalDate[]{null, null});
         return view(userId, bundleId);
     }
 
@@ -149,7 +149,7 @@ public class ChangeBundleService {
             ops.add(check.op());
         }
         LocalDate[] range = range(ops);
-        bump(userId, bundle, range[0] == null ? null : basis.fingerprint(userId, range[0], range[1]));
+        bump(userId, bundle, range[0] == null ? null : basis.fingerprint(userId, range[0], range[1]), range);
         return view(userId, bundleId);
     }
 
@@ -183,26 +183,27 @@ public class ChangeBundleService {
         String requestHash = hash(bundleId + "|" + command.expectedRevision() + "|"
                 + (command.selectedItemIds() == null ? "" : command.selectedItemIds().stream().sorted()
                 .map(String::valueOf).collect(Collectors.joining(","))));
-        if (command.idempotencyKey() != null) {
-            ChangeBundleRows.Bundle byKey = mapper.findByApplyKey(userId, command.idempotencyKey());
-            if (byKey != null) {
-                if (Objects.equals(byKey.getBundleId(), bundleId) && Objects.equals(byKey.getApplyRequestHash(), requestHash)) {
-                    return view(userId, bundleId); // 응답 유실 뒤 재시도·중복 클릭 — 이미 적용한 결과
-                }
-                throw new ConflictException(ErrorCode.CHANGE_BUNDLE_IDEMPOTENCY_REUSED);
-            }
-        }
+        // 묶음 행을 먼저 잠근다. 같은 키의 동시 요청은 여기서 줄 서고, 앞선 요청이 끝난 뒤 최신 커밋(잠금 조회)을 본다.
         ChangeBundleRows.Bundle bundle = mapper.findBundleForUpdate(bundleId, userId);
         if (bundle == null) {
             throw new NotFoundException(ErrorCode.CHANGE_BUNDLE_NOT_FOUND);
         }
         if (!ChangeBundleRows.PROPOSED.equals(bundle.getStatus())) {
-            // 잠금을 기다리는 사이 같은 키의 첫 요청이 적용을 끝냈으면 그 결과다
             if (Objects.equals(bundle.getApplyIdempotencyKey(), command.idempotencyKey())
                     && Objects.equals(bundle.getApplyRequestHash(), requestHash)) {
-                return view(userId, bundleId);
+                // 응답 유실 뒤 재시도·중복 클릭 — 이미 적용한 결과를 잠근 최신 행으로 돌려준다
+                return toView(bundle, mapper.findItemsForUpdate(bundleId, userId));
+            }
+            if (Objects.equals(bundle.getApplyIdempotencyKey(), command.idempotencyKey())) {
+                throw new ConflictException(ErrorCode.CHANGE_BUNDLE_IDEMPOTENCY_REUSED);
             }
             throw new ConflictException(ErrorCode.CHANGE_BUNDLE_ALREADY_RESOLVED);
+        }
+        if (command.idempotencyKey() != null) {
+            ChangeBundleRows.Bundle byKey = mapper.findByApplyKey(userId, command.idempotencyKey());
+            if (byKey != null && !Objects.equals(byKey.getBundleId(), bundleId)) {
+                throw new ConflictException(ErrorCode.CHANGE_BUNDLE_IDEMPOTENCY_REUSED); // 다른 묶음 적용에 쓴 키
+            }
         }
         if (bundle.getRevision() != command.expectedRevision()) {
             throw new ConflictException(ErrorCode.CHANGE_BUNDLE_REVISION_CHANGED,
@@ -237,11 +238,14 @@ public class ChangeBundleService {
             throw new ConflictException(ErrorCode.CHANGE_BUNDLE_ITEM_NOT_APPLICABLE, problems);
         }
 
-        // 잠금 → 범위 지문 → 항목 재확인 → 적용. 원본이 바뀌는 곳은 여기뿐이다.
+        // 잠금 순서: 범위(약속 → 시각 고정 실행 → 반복) → 모듈 대상(약속 → 실행 → 반복 → 과제). 계획 확정과 같은 도메인 순서다.
+        // 대상의 날짜는 범위 안이라(affectedDates) 범위 잠금이 대상 행을 먼저 잡는다 — 묶음끼리 순서가 뒤집히지 않는다.
         List<ChangeOp> ops = toApply.stream().map(i -> registry.read(i.getOpType(), i.getOpJson())).toList();
+        String lockedNow = bundle.getRangeStart() == null ? null
+                : basis.lockedFingerprint(userId, bundle.getRangeStart(), bundle.getRangeEnd());
         lockAll(userId, ops);
         if (bundle.getRangeStart() != null) {
-            String now = basis.lockedFingerprint(userId, bundle.getRangeStart(), bundle.getRangeEnd());
+            String now = lockedNow;
             if (!Objects.equals(now, bundle.getBasisFingerprint())) {
                 log.info("변경 묶음 적용 거절: 범위 일정이 검토 뒤 바뀜. bundleId={}", bundleId);
                 throw new ConflictException(ErrorCode.CHANGE_BUNDLE_STALE,
@@ -356,8 +360,10 @@ public class ChangeBundleService {
         return bundle;
     }
 
-    private void bump(Long userId, ChangeBundleRows.Bundle bundle, String newFingerprint) {
-        int updated = mapper.bumpRevision(bundle.getBundleId(), userId, bundle.getRevision(), newFingerprint, null, null);
+    /** 리비전을 올린다. 지문을 새로 잡으면 그 범위도 같은 갱신에서 함께 저장한다(범위와 지문이 어긋나지 않게). */
+    private void bump(Long userId, ChangeBundleRows.Bundle bundle, String newFingerprint, LocalDate[] range) {
+        int updated = mapper.bumpRevision(bundle.getBundleId(), userId, bundle.getRevision(), newFingerprint,
+                newFingerprint == null ? null : range[0], newFingerprint == null ? null : range[1]);
         if (updated != 1) {
             throw new ConflictException(ErrorCode.CHANGE_BUNDLE_REVISION_CHANGED);
         }

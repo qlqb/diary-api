@@ -105,10 +105,16 @@ public record StudyTimeCondition(String status, List<Range> windows, List<Range>
         return parts.isEmpty() ? null : String.join(" · ", parts);
     }
 
-    /** 이 조건의 하루 공부 총량(분). 말하지 않았으면 null. */
+    /** 분량의 단위(하루·전체)가 확인됐는가. 여러 날 계획에서 단위를 모르면 분량을 예산에 쓰지 않는다(물어야 한다). */
+    @JsonIgnore
+    public boolean amountConfirmed() {
+        return minutes != null && issues.stream().noneMatch(i -> "AMBIGUOUS_UNIT".equals(i.code()));
+    }
+
+    /** 이 조건의 공부 총량(분). 말하지 않았거나 단위를 확인하지 못했으면 null. */
     @JsonIgnore
     public Integer totalFor(int days) {
-        if (minutes == null) {
+        if (!amountConfirmed()) {
             return null;
         }
         return "PLAN".equals(per) ? minutes : minutes * Math.max(1, days);

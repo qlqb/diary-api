@@ -75,6 +75,10 @@
         SELECT * FROM ai_change_bundle_items WHERE bundle_id = #{bundleId} AND user_id = #{userId} ORDER BY seq
     </select>
 
+    <select id="findItemsForUpdate" resultMap="itemMap">
+        SELECT * FROM ai_change_bundle_items WHERE bundle_id = #{bundleId} AND user_id = #{userId} ORDER BY seq FOR UPDATE
+    </select>
+
     <select id="findByConversation" resultMap="bundleMap">
         SELECT * FROM ai_change_bundles WHERE conversation_id = #{conversationId} AND user_id = #{userId}
         ORDER BY bundle_id

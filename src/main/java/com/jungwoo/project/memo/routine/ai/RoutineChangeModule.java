@@ -105,8 +105,8 @@ public class RoutineChangeModule implements ChangeModule {
     }
 
     /** 그날 빼거나 옮긴 것을 되돌린다(원래 회차가 돌아온다). */
-    public record RestoreOccurrence(Long routineId, LocalDate date, Long routineExceptionId, String title,
-                                    String stateHash) implements ChangeOp, ScenarioProjection {
+    public record RestoreOccurrence(Long routineId, LocalDate date, Long routineExceptionId, LocalDate movedDate,
+                                    String title, String stateHash) implements ChangeOp, ScenarioProjection {
         public String type() {
             return "ROUTINE_RESTORE";
         }
@@ -119,8 +119,9 @@ public class RoutineChangeModule implements ChangeModule {
             return date.getMonthValue() + "/" + date.getDayOfMonth() + " " + title + " 원래대로 되돌리기";
         }
 
+        /** 옮긴 것을 되돌리면 목적지 날짜의 일정도 바뀐다. */
         public List<LocalDate> affectedDates() {
-            return List.of(date);
+            return movedDate == null ? List.of(date) : List.of(date, movedDate);
         }
 
         public void project(Scenario.Builder s) {
@@ -149,7 +150,7 @@ public class RoutineChangeModule implements ChangeModule {
         }
 
         public void project(Scenario.Builder s) {
-            s.routines().putRoutine(Routine.builder().routineId(-(long) Math.abs(targetKey().hashCode()) - 1).title(title)
+            s.routines().putRoutine(Routine.builder().routineId(s.nextTempId()).title(title)
                     .courseId(courseId).location(location).startTime(startTime).endTime(endTime)
                     .effectiveFrom(effectiveFrom).effectiveUntil(effectiveUntil)
                     .daysOfWeek(new LinkedHashSet<>(daysOfWeek)).build());
@@ -192,6 +193,33 @@ public class RoutineChangeModule implements ChangeModule {
     }
 
     @Override
+    public Map<String, String> toolArgs() {
+        return Map.of(
+                "ROUTINE_SKIP", "{routineId, date} - 그 반복 일정의 그날 회차만 뺀다(이후 반복은 유지). date는 회차의 원래 날짜",
+                "ROUTINE_MOVE", "{routineId, date, movedDate, movedStart?, movedEnd?} - 그날 회차를 다른 날/시각으로 옮긴다",
+                "ROUTINE_RESTORE", "{routineId, date} - 그날 빼거나 옮긴 것을 원래대로 되돌린다",
+                "ROUTINE_CREATE", "{title, daysOfWeek[], startTime, endTime, effectiveFrom, effectiveUntil?, location?, courseId?} - 반복이 말로 명백할 때만",
+                "ROUTINE_UPDATE", "{routineId, title, daysOfWeek[], startTime, endTime, effectiveFrom, effectiveUntil?, location?, courseId?} - 규칙 전체 교체(종료일 설정 포함)");
+    }
+
+    @Override
+    public ChangeOp fromToolArgs(String type, com.fasterxml.jackson.databind.JsonNode a) {
+        return switch (type) {
+            case "ROUTINE_SKIP" -> new SkipOccurrence(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "routineId"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "date"), null, null, null, null);
+            case "ROUTINE_MOVE" -> new MoveOccurrence(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "routineId"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "date"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "movedDate"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "movedStart"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "movedEnd"), null, null);
+            case "ROUTINE_RESTORE" -> new RestoreOccurrence(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "routineId"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "date"), null, null, null, null);
+            case "ROUTINE_CREATE" -> new CreateRoutine(com.jungwoo.project.memo.ai.change.ToolArgs.optionalId(a, "courseId"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "location"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.days(a, "daysOfWeek"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "startTime"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "endTime"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "effectiveFrom"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalDate(a, "effectiveUntil"));
+            case "ROUTINE_UPDATE" -> new UpdateRoutine(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "routineId"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalId(a, "courseId"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "location"), com.jungwoo.project.memo.ai.change.ToolArgs.days(a, "daysOfWeek"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "startTime"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "endTime"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "effectiveFrom"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalDate(a, "effectiveUntil"), null);
+            default -> throw new IllegalArgumentException("모르는 변경: " + type);
+        };
+    }
+
+    @Override
     public int lockOrder() {
         return 30;
     }
@@ -216,7 +244,7 @@ public class RoutineChangeModule implements ChangeModule {
                             : ChangeCheck.fail(ChangeCheck.CONFLICT, "그날은 이미 다른 날로 옮겨져 있어요", op);
                 }
                 yield ChangeCheck.ok(new SkipOccurrence(r.getRoutineId(), skip.date(), r.getTitle(), r.getStartTime(),
-                        r.getEndTime(), stateHash(r)));
+                        r.getEndTime(), stateHash(r, exceptionMapper.findByRoutineId(r.getRoutineId()))));
             }
             case MoveOccurrence move -> {
                 Routine r = owned(userId, move.routineId());
@@ -231,7 +259,7 @@ public class RoutineChangeModule implements ChangeModule {
                     yield ChangeCheck.fail(ChangeCheck.CONFLICT, "그날은 이미 빠지거나 옮겨져 있어요", op);
                 }
                 yield ChangeCheck.ok(new MoveOccurrence(r.getRoutineId(), move.date(), move.movedDate(), move.movedStart(),
-                        move.movedEnd(), r.getTitle(), stateHash(r)));
+                        move.movedEnd(), r.getTitle(), stateHash(r, exceptionMapper.findByRoutineId(r.getRoutineId()))));
             }
             case RestoreOccurrence restore -> {
                 Routine r = owned(userId, restore.routineId());
@@ -243,21 +271,24 @@ public class RoutineChangeModule implements ChangeModule {
                     yield ChangeCheck.fail(ChangeCheck.ALREADY_DONE, "그날은 원래대로예요", op);
                 }
                 yield ChangeCheck.ok(new RestoreOccurrence(r.getRoutineId(), restore.date(),
-                        existing.getRoutineExceptionId(), r.getTitle(), stateHash(r)));
+                        existing.getRoutineExceptionId(), existing.getMovedDate(), r.getTitle(),
+                        stateHash(r, exceptionMapper.findByRoutineId(r.getRoutineId()))));
             }
-            case CreateRoutine create -> create.title() == null || create.title().isBlank() || create.daysOfWeek() == null
-                    || create.daysOfWeek().isEmpty() || create.startTime() == null || create.endTime() == null
-                    || create.startTime().equals(create.endTime()) || create.effectiveFrom() == null
-                    ? ChangeCheck.fail(ChangeCheck.INVALID, "제목·요일·시각·시작일이 필요해요", op)
-                    : ChangeCheck.ok(op);
+            case CreateRoutine create -> serviceCheck(userId, null, new RoutineSaveRequest(create.courseId(), create.title(),
+                    create.location(), create.daysOfWeek(), create.startTime(), create.endTime(), create.effectiveFrom(),
+                    create.effectiveUntil()), op);
             case UpdateRoutine update -> {
                 Routine r = owned(userId, update.routineId());
                 if (r == null) {
                     yield ChangeCheck.fail(ChangeCheck.NOT_FOUND, "그 반복 일정을 찾지 못했어요", op);
                 }
-                yield ChangeCheck.ok(new UpdateRoutine(r.getRoutineId(), update.courseId(), update.title(), update.location(),
-                        update.daysOfWeek(), update.startTime(), update.endTime(), update.effectiveFrom(),
-                        update.effectiveUntil(), stateHash(r)));
+                UpdateRoutine normalized = new UpdateRoutine(r.getRoutineId(), update.courseId(), update.title(),
+                        update.location(), update.daysOfWeek(), update.startTime(), update.endTime(), update.effectiveFrom(),
+                        update.effectiveUntil(), stateHash(r, exceptionMapper.findByRoutineId(r.getRoutineId())));
+                // 실제 고치기와 같은 검증(요일·기간·과목·기존 예외와의 충돌)을 쓰기 없이 지난다 — 확인은 통과했는데 적용에서 거절되지 않게.
+                yield serviceCheck(userId, r.getRoutineId(), new RoutineSaveRequest(update.courseId(), update.title(),
+                        update.location(), update.daysOfWeek(), update.startTime(), update.endTime(), update.effectiveFrom(),
+                        update.effectiveUntil()), normalized);
             }
             default -> throw new IllegalArgumentException(op.type());
         };
@@ -288,11 +319,13 @@ public class RoutineChangeModule implements ChangeModule {
             case UpdateRoutine u -> u.routineId();
             default -> null;
         };
-        Routine current = owned(userId, routineId);
+        // 적용 트랜잭션 안이다. 일반 조회는 트랜잭션이 처음 읽은 시점의 스냅샷이라 그사이 커밋된 변경을 놓친다 — 잠금 조회로 읽는다.
+        Routine current = routineReader.findAllWithWeekdaysForUpdate(userId).stream()
+                .filter(r -> r.getRoutineId().equals(routineId) && !r.isDeleted()).findFirst().orElse(null);
         if (current == null) {
             return ChangeCheck.fail(ChangeCheck.STALE, "그 반복 일정이 지워졌어요", op);
         }
-        return hash.equals(stateHash(current)) ? ChangeCheck.ok(op)
+        return hash.equals(stateHash(current, exceptionMapper.findByRoutineIdForUpdate(routineId))) ? ChangeCheck.ok(op)
                 : ChangeCheck.fail(ChangeCheck.STALE, current.getTitle() + "이 검토한 뒤 바뀌었어요", op);
     }
 
@@ -376,8 +409,22 @@ public class RoutineChangeModule implements ChangeModule {
                 && r.getDaysOfWeek() != null && r.getDaysOfWeek().contains(date.getDayOfWeek());
     }
 
+    /** 실제 저장과 같은 검증을 쓰기 없이. 예외를 결과 코드로 바꾼다. */
+    private ChangeCheck serviceCheck(Long userId, Long routineId, RoutineSaveRequest request, ChangeOp op) {
+        try {
+            routineService.checkSave(userId, routineId, request);
+            return ChangeCheck.ok(op);
+        } catch (com.jungwoo.project.memo.common.exception.NotFoundException e) {
+            return ChangeCheck.fail(ChangeCheck.NOT_FOUND, e.getErrorCode().getMessage(), op);
+        } catch (com.jungwoo.project.memo.common.exception.ConflictException e) {
+            return ChangeCheck.fail(ChangeCheck.CONFLICT, e.getErrorCode().getMessage(), op);
+        } catch (com.jungwoo.project.memo.common.exception.BusinessException e) {
+            return ChangeCheck.fail(ChangeCheck.INVALID, e.getErrorCode().getMessage(), op);
+        }
+    }
+
     /** 규칙 전체(본체·요일·예외)의 해시. 제목만 바뀌어도 달라진다. */
-    String stateHash(Routine r) {
+    String stateHash(Routine r, List<RoutineException> exceptionsOfRoutine) {
         StringBuilder sb = new StringBuilder();
         sb.append(r.getRoutineId()).append('|').append(r.getTitle()).append('|').append(r.getLocation()).append('|')
                 .append(r.getCourseId()).append('|').append(r.getStartTime()).append('|').append(r.getEndTime()).append('|')
@@ -385,7 +432,7 @@ public class RoutineChangeModule implements ChangeModule {
         List<DayOfWeek> days = new ArrayList<>(r.getDaysOfWeek() == null ? Set.of() : r.getDaysOfWeek());
         days.sort(Comparator.naturalOrder());
         sb.append(days).append('|');
-        List<RoutineException> exceptions = new ArrayList<>(exceptionMapper.findByRoutineId(r.getRoutineId()));
+        List<RoutineException> exceptions = new ArrayList<>(exceptionsOfRoutine);
         exceptions.sort(Comparator.comparing(RoutineException::getExceptionDate));
         for (RoutineException e : exceptions) {
             sb.append(e.getExceptionDate()).append(e.getType()).append(e.getMovedDate()).append(e.getMovedStartTime())

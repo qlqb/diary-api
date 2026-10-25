@@ -179,6 +179,12 @@ public final class StudyTimeInterpreter {
         LocalTime start = chosen[0];
         LocalTime end = chosen[1];
         boolean endsNextDay = endsNextDay(start, end, date, said);
+        if (start == null && end != null && !end.equals(LocalTime.MAX) && !endsNextDay && end.isBefore(DEFAULT_START)) {
+            // 새벽에 말한 "1시까지"는 그날 01:00까지다. 기본 시작(09:00)을 쓰면 구간이 거꾸로 돼 사라진다 — 지금부터로 본다.
+            start = date != null && date.equals(said.saidAt().toLocalDate())
+                    ? said.saidAt().toLocalTime().withSecond(0).withNano(0) : LocalTime.MIDNIGHT;
+            notes.add("끝만 말한 새벽 시간이라 " + start + "부터로 봤어요");
+        }
         LocalTime storedEnd = end;
         if (end != null && end.equals(LocalTime.MAX)) {
             storedEnd = LocalTime.MIDNIGHT;

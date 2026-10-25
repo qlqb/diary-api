@@ -125,9 +125,12 @@ public class AvailabilityEstimateService {
             }
         }
 
+        // 말한 범위가 자정을 넘으면 그 끝 날짜까지의 실제 일정도 읽는다(다음 날 00:30 약속을 놓치지 않게).
+        LocalDate busyEnd = upperBound.isAfter(horizonEnd.plusDays(1).atStartOfDay())
+                ? upperBound.toLocalDate() : horizonEnd;
         List<ExecutionItem> existingFixed = sc.execution().apply(
-                executionItemMapper.findTimeFixedByUserIdAndDateRange(userId, horizonStart, horizonEnd),
-                item -> isTimeFixedIn(item, horizonStart, horizonEnd));
+                executionItemMapper.findTimeFixedByUserIdAndDateRange(userId, horizonStart, busyEnd),
+                item -> isTimeFixedIn(item, horizonStart, busyEnd));
         List<Interval> hardBusy = new ArrayList<>();
         List<BusyWindow> busyWindows = new ArrayList<>();
         for (ExecutionItem item : existingFixed) {
@@ -145,7 +148,7 @@ public class AvailabilityEstimateService {
          * 보이는데 배치는 그 시간에 학습을 넣는" 상태가 구조적으로 불가능하다.
          */
         for (RoutineOccurrence occurrence :
-                routineOccurrenceService.expand(userId, horizonStart, horizonEnd, sc.routines())) {
+                routineOccurrenceService.expand(userId, horizonStart, busyEnd, sc.routines())) {
             hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
             busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(),
                     occurrence.title(), BusySource.ROUTINE_OCCURRENCE, occurrence.routineId()));
@@ -158,7 +161,7 @@ public class AvailabilityEstimateService {
          * 구간 단위로 깎으므로 겹친 부분은 한 번만 사라진다.
          */
         for (Commitment commitment : sc.commitments().apply(
-                commitmentService.findOverlapping(userId, horizonStart, horizonEnd), horizonStart, horizonEnd)) {
+                commitmentService.findOverlapping(userId, horizonStart, busyEnd), horizonStart, busyEnd)) {
             hardBusy.add(new Interval(commitment.getStartAt(), commitment.getEndAt()));
             busyWindows.add(new BusyWindow(
                     commitment.getStartAt(), commitment.getEndAt(), commitment.getTitle(),

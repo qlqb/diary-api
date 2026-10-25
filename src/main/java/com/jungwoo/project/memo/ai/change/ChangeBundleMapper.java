@@ -21,6 +21,9 @@ public interface ChangeBundleMapper {
 
     List<ChangeBundleRows.Item> findItems(@Param("bundleId") Long bundleId, @Param("userId") Long userId);
 
+    /** 묶음을 잠근 뒤 최신 항목(트랜잭션 스냅샷이 아니라 최신 커밋)을 읽는다 — 같은 키 재응답이 옛 상태를 보이지 않게. */
+    List<ChangeBundleRows.Item> findItemsForUpdate(@Param("bundleId") Long bundleId, @Param("userId") Long userId);
+
     List<ChangeBundleRows.Bundle> findByConversation(@Param("conversationId") Long conversationId,
                                                      @Param("userId") Long userId);
 

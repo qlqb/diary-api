@@ -241,6 +241,32 @@ class ChangeBundleApplyDbTest {
         assertThat(exceptionsOn(shift)).isEqualTo(1);
     }
 
+    @Test
+    void 같은_키로_동시에_두_번_와도_둘_다_적용된_결과를_받고_예외는_하나다() throws Exception {
+        Long shift = routine(USER, "근무", LocalTime.of(17, 0), LocalTime.of(22, 0));
+        ChangeBundleView view = bundle(item(checked(new RoutineChangeModule.SkipOccurrence(shift, DAY, null, null, null, null))));
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        List<Callable<ChangeBundleView>> tasks = List.of(() -> apply(view, view.selectedIds(), "k-same-c"),
+                () -> apply(view, view.selectedIds(), "k-same-c"));
+        List<ChangeBundleView> results = new ArrayList<>();
+        for (Future<ChangeBundleView> f : pool.invokeAll(tasks)) {
+            results.add(f.get());
+        }
+        pool.shutdown();
+        assertThat(results).allMatch(r -> "APPLIED".equals(r.status()) && r.applyResult() != null);
+        assertThat(exceptionsOn(shift)).isEqualTo(1);
+    }
+
+    @Test
+    void 기존_예외와_맞지_않는_반복_일정_고치기는_확인에서_거절한다() {
+        Long shift = routine(USER, "근무", LocalTime.of(17, 0), LocalTime.of(22, 0));
+        ChangeBundleView skipBundle = bundle(item(checked(new RoutineChangeModule.SkipOccurrence(shift, DAY, null, null, null, null))));
+        apply(skipBundle, skipBundle.selectedIds(), "k-pre");
+        ChangeCheck check = bundles.safeCheck(USER, new RoutineChangeModule.UpdateRoutine(shift, null, "근무", null,
+                EnumSet.of(DayOfWeek.MONDAY), LocalTime.of(17, 0), LocalTime.of(22, 0), DAY.minusDays(7), null, null));
+        assertThat(check.code()).isEqualTo(ChangeCheck.CONFLICT);
+    }
+
     private String outcome(ChangeBundleView view, String key) {
         try {
             return apply(view, view.selectedIds(), key).status();

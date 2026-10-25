@@ -15,22 +15,14 @@ public class ChangeRegistry {
 
     private final List<ChangeModule> modules;
     private final Map<String, ChangeModule> byType = new HashMap<>();
-    /**
-     * op 필드는 엄격하게 읽는다(모르는 필드 거절). 다만 op 안에 담은 검토 당시 엔티티 스냅샷(실행 항목·과제)은 파생 getter(예: 과제의
-     * isCompleted)가 직렬화돼 되읽을 수 없으므로, 그 엔티티에만 모르는 필드를 무시하는 믹스인을 붙인다 — 도메인 클래스는 건드리지 않는다.
-     */
-    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
-    private abstract static class LenientSnapshot {
-    }
-
+    /** op 필드는 엄격하게 읽는다(모르는 필드 거절). 스냅샷 엔티티의 조정은 각 모듈이 낸다(customizeJson). */
     private final ObjectMapper json = new ObjectMapper().findAndRegisterModules()
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true)
-            .addMixIn(com.jungwoo.project.memo.execution.domain.ExecutionItem.class, LenientSnapshot.class)
-            .addMixIn(com.jungwoo.project.memo.assignment.domain.CourseAssignment.class, LenientSnapshot.class);
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true);
     private final ObjectMapper writer = new ObjectMapper().findAndRegisterModules();
 
     public ChangeRegistry(List<ChangeModule> modules) {
         this.modules = modules.stream().sorted(Comparator.comparingInt(ChangeModule::lockOrder)).toList();
+        this.modules.forEach(m -> m.customizeJson(json));
         for (ChangeModule module : this.modules) {
             module.opTypes().keySet().forEach(type -> {
                 if (byType.put(type, module) != null) {

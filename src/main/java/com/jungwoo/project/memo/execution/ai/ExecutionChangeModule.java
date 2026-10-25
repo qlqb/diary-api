@@ -205,6 +205,10 @@ public class ExecutionChangeModule implements ChangeModule {
                         i.setScheduledStartAt(toDate.atTime(startTime));
                         i.setScheduledEndAt(endTime.equals(LocalTime.MIDNIGHT) ? toDate.plusDays(1).atStartOfDay()
                                 : toDate.atTime(endTime));
+                        // 서비스와 같은 규칙: 시각이 정해진 항목의 분량은 그 시각 길이다
+                        i.setExpectedMinutes(com.jungwoo.project.memo.execution.domain.PlacementDuration.resolve(
+                                PlacementType.TIME_FIXED, i.getScheduledStartAt(), i.getScheduledEndAt(),
+                                before.getExpectedMinutes()));
                     } else {
                         long days = java.time.temporal.ChronoUnit.DAYS.between(before.getScheduledDate(), toDate);
                         i.setScheduledStartAt(before.getScheduledStartAt().plusDays(days));
@@ -260,12 +264,15 @@ public class ExecutionChangeModule implements ChangeModule {
         }
 
         public void project(Scenario.Builder s) {
-            s.execution().put(ExecutionItem.builder().executionItemId(-(long) Math.abs(targetKey().hashCode()) - 1)
+            PlacementType placement = scheduledStartAt == null ? PlacementType.DATE_ONLY : PlacementType.TIME_FIXED;
+            // ExecutionItemService.create와 같은 규칙: 시각이 있으면 분량은 시각 길이, 우선순위 기본은 SHOULD
+            s.execution().put(ExecutionItem.builder().executionItemId(s.nextTempId())
                     .title(title).courseId(courseId).scheduledDate(scheduledDate).scheduledStartAt(scheduledStartAt)
-                    .scheduledEndAt(scheduledEndAt)
-                    .placementType(scheduledStartAt == null ? PlacementType.DATE_ONLY : PlacementType.TIME_FIXED)
-                    .expectedMinutes(expectedMinutes).priority(priority).status(ExecutionStatus.PLANNED).version(0L)
-                    .isDeleted(false).build());
+                    .scheduledEndAt(scheduledEndAt).placementType(placement)
+                    .expectedMinutes(com.jungwoo.project.memo.execution.domain.PlacementDuration.resolve(placement,
+                            scheduledStartAt, scheduledEndAt, expectedMinutes))
+                    .priority(priority != null ? priority : ExecutionPriority.SHOULD).status(ExecutionStatus.PLANNED)
+                    .version(0L).isDeleted(false).build());
         }
     }
 
@@ -275,6 +282,51 @@ public class ExecutionChangeModule implements ChangeModule {
                 "EXECUTION_REOPEN", ReopenItem.class, "EXECUTION_RESUME", ResumeItem.class, "EXECUTION_HOLD", HoldItem.class,
                 "EXECUTION_UNSCHEDULE", UnscheduleItem.class, "EXECUTION_MOVE", MoveItem.class,
                 "EXECUTION_REDUCE", ReduceItem.class, "EXECUTION_CREATE", CreateItem.class);
+    }
+
+    @Override
+    public Map<String, String> toolArgs() {
+        return Map.of(
+                "EXECUTION_COMPLETE", "{executionItemId, actualMinutes?, note?} - 다 했다(실제 걸린 분). 이해했다는 뜻은 아니다",
+                "EXECUTION_PARTIAL", "{executionItemId, completionPercent?(1-99), actualMinutes?, note?} - 일부만 했다. 남은 분량은 새 할 일",
+                "EXECUTION_REOPEN", "{executionItemId} - 완료를 취소하고 다시 할 일로",
+                "EXECUTION_RESUME", "{executionItemId} - 보류를 풀기",
+                "EXECUTION_HOLD", "{executionItemId} - 보류(삭제 아님)",
+                "EXECUTION_UNSCHEDULE", "{executionItemId, planningStartDate?, planningEndDate?} - 할 일로는 두고 날짜/시각만 떼기",
+                "EXECUTION_MOVE", "{executionItemId, toDate, startTime?, endTime?} - 다른 날/시각으로 옮기기",
+                "EXECUTION_REDUCE", "{executionItemId, expectedMinutes?, reducedTitle?} - 분량 줄이기",
+                "EXECUTION_CREATE", "{title, scheduledDate, scheduledStartAt?, scheduledEndAt?, expectedMinutes?, courseId?} - 할 일 하나 만들기");
+    }
+
+    @Override
+    public ChangeOp fromToolArgs(String type, com.fasterxml.jackson.databind.JsonNode a) {
+        if ("EXECUTION_CREATE".equals(type)) {
+            return new CreateItem(com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalId(a, "courseId"), com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "scheduledDate"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalDateTime(a, "scheduledStartAt"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalDateTime(a, "scheduledEndAt"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalInt(a, "expectedMinutes"), null);
+        }
+        // 대상 항목은 id만 담는다 - check가 지금 행으로 채운다.
+        ExecutionItem target = ExecutionItem.builder().executionItemId(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "executionItemId")).build();
+        return switch (type) {
+            case "EXECUTION_COMPLETE" -> new CompleteItem(target, com.jungwoo.project.memo.ai.change.ToolArgs.optionalInt(a, "actualMinutes"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "note"));
+            case "EXECUTION_PARTIAL" -> new PartialItem(target, com.jungwoo.project.memo.ai.change.ToolArgs.optionalInt(a, "completionPercent"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalInt(a, "actualMinutes"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "note"));
+            case "EXECUTION_REOPEN" -> new ReopenItem(target);
+            case "EXECUTION_RESUME" -> new ResumeItem(target);
+            case "EXECUTION_HOLD" -> new HoldItem(target);
+            case "EXECUTION_UNSCHEDULE" -> new UnscheduleItem(target, com.jungwoo.project.memo.ai.change.ToolArgs.optionalDate(a, "planningStartDate"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalDate(a, "planningEndDate"));
+            case "EXECUTION_MOVE" -> new MoveItem(target, com.jungwoo.project.memo.ai.change.ToolArgs.date(a, "toDate"), com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "startTime"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.optionalTime(a, "endTime"));
+            case "EXECUTION_REDUCE" -> new ReduceItem(target, com.jungwoo.project.memo.ai.change.ToolArgs.optionalInt(a, "expectedMinutes"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "reducedTitle"));
+            default -> throw new IllegalArgumentException("모르는 변경: " + type);
+        };
+    }
+
+    /** op 안의 검토 당시 엔티티 스냅샷은 파생 getter가 직렬화돼 되읽을 수 없다 — 그 필드는 읽을 때 무시한다. */
+    @Override
+    public void customizeJson(com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        mapper.addMixIn(com.jungwoo.project.memo.execution.domain.ExecutionItem.class, LenientSnapshot.class);
     }
 
     @Override

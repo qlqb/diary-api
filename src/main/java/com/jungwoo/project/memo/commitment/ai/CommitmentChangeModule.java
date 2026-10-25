@@ -49,17 +49,18 @@ public class CommitmentChangeModule implements ChangeModule {
         }
 
         public List<LocalDate> affectedDates() {
-            return List.of(startAt.toLocalDate());
+            return List.of(startAt.toLocalDate(), endAt.toLocalDate());
         }
 
         public void project(Scenario.Builder s) {
-            s.commitments().put(Commitment.builder().commitmentId(-(long) Math.abs(targetKey().hashCode()) - 1).title(title)
+            s.commitments().put(Commitment.builder().commitmentId(s.nextTempId()).title(title)
                     .startAt(startAt).endAt(endAt).locationText(locationText).isDeleted(false).build());
         }
     }
 
     public record UpdateCommitment(Long commitmentId, Long version, String title, LocalDateTime startAt, LocalDateTime endAt,
-                                   String locationText, LocalDateTime beforeStartAt) implements ChangeOp, ScenarioProjection {
+                                   String locationText, LocalDateTime beforeStartAt, LocalDateTime beforeEndAt)
+            implements ChangeOp, ScenarioProjection {
         public String type() {
             return "COMMITMENT_UPDATE";
         }
@@ -73,8 +74,14 @@ public class CommitmentChangeModule implements ChangeModule {
         }
 
         public List<LocalDate> affectedDates() {
-            return beforeStartAt == null ? List.of(startAt.toLocalDate())
-                    : List.of(beforeStartAt.toLocalDate(), startAt.toLocalDate());
+            List<LocalDate> out = new ArrayList<>(List.of(startAt.toLocalDate(), endAt.toLocalDate()));
+            if (beforeStartAt != null) {
+                out.add(beforeStartAt.toLocalDate());
+            }
+            if (beforeEndAt != null) {
+                out.add(beforeEndAt.toLocalDate());
+            }
+            return out;
         }
 
         public void project(Scenario.Builder s) {
@@ -98,7 +105,7 @@ public class CommitmentChangeModule implements ChangeModule {
         }
 
         public List<LocalDate> affectedDates() {
-            return List.of(startAt.toLocalDate());
+            return List.of(startAt.toLocalDate(), endAt.toLocalDate());
         }
 
         public void project(Scenario.Builder s) {
@@ -111,6 +118,26 @@ public class CommitmentChangeModule implements ChangeModule {
     public Map<String, Class<? extends ChangeOp>> opTypes() {
         return Map.of("COMMITMENT_CREATE", CreateCommitment.class, "COMMITMENT_UPDATE", UpdateCommitment.class,
                 "COMMITMENT_CANCEL", CancelCommitment.class);
+    }
+
+    @Override
+    public Map<String, String> toolArgs() {
+        return Map.of(
+                "COMMITMENT_CREATE", "{title, startAt, endAt, locationText?} - 한 번만 있는 약속(YYYY-MM-DDTHH:mm)",
+                "COMMITMENT_UPDATE", "{commitmentId, startAt, endAt, title?, locationText?} - 약속 시각/제목 고치기",
+                "COMMITMENT_CANCEL", "{commitmentId} - 약속 취소");
+    }
+
+    @Override
+    public ChangeOp fromToolArgs(String type, com.fasterxml.jackson.databind.JsonNode a) {
+        return switch (type) {
+            case "COMMITMENT_CREATE" -> new CreateCommitment(com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"), com.jungwoo.project.memo.ai.change.ToolArgs.dateTime(a, "startAt"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.dateTime(a, "endAt"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "locationText"));
+            case "COMMITMENT_UPDATE" -> new UpdateCommitment(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "commitmentId"), null, com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"),
+                    com.jungwoo.project.memo.ai.change.ToolArgs.dateTime(a, "startAt"), com.jungwoo.project.memo.ai.change.ToolArgs.dateTime(a, "endAt"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "locationText"), null, null);
+            case "COMMITMENT_CANCEL" -> new CancelCommitment(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "commitmentId"), null, null, null, null);
+            default -> throw new IllegalArgumentException("모르는 변경: " + type);
+        };
     }
 
     @Override
@@ -134,7 +161,8 @@ public class CommitmentChangeModule implements ChangeModule {
                 }
                 yield ChangeCheck.ok(new UpdateCommitment(current.getCommitmentId(), current.getVersion(),
                         u.title() == null ? current.getTitle() : u.title(), u.startAt(), u.endAt(),
-                        u.locationText() == null ? current.getLocationText() : u.locationText(), current.getStartAt()));
+                        u.locationText() == null ? current.getLocationText() : u.locationText(), current.getStartAt(),
+                        current.getEndAt()));
             }
             case CancelCommitment c -> {
                 Commitment current = commitmentMapper.findByIdAndUserId(c.commitmentId(), userId);
@@ -160,7 +188,8 @@ public class CommitmentChangeModule implements ChangeModule {
         if (id == null) {
             return ChangeCheck.ok(op);
         }
-        Commitment current = commitmentMapper.findByIdAndUserId(id, userId);
+        // 적용 트랜잭션 안 — 잠금 조회로 최신 커밋을 읽는다(일반 조회는 트랜잭션 스냅샷이다).
+        Commitment current = commitmentMapper.findByIdAndUserIdForUpdate(id, userId);
         Long expected = op instanceof UpdateCommitment u ? u.version() : ((CancelCommitment) op).version();
         if (current == null) {
             return ChangeCheck.fail(ChangeCheck.STALE, "그 약속이 지워졌어요", op);

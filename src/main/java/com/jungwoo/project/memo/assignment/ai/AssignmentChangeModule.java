@@ -81,7 +81,17 @@ public class AssignmentChangeModule implements ChangeModule {
     }
 
     public record CreateAssignment(Long courseId, String title, DueKind dueKind, LocalDate dueDate, LocalDateTime dueAt)
-            implements ChangeOp {
+            implements ChangeOp, ScenarioProjection {
+        /** CourseAssignmentService.create와 같은 규칙: 사용자가 만든 과제는 확정(CONFIRMED), 마감 출처는 USER(모르면 없음). */
+        public void project(Scenario.Builder s) {
+            s.assignments().put(CourseAssignment.builder().assignmentId(s.nextTempId()).courseId(courseId).title(title)
+                    .confirmStatus(com.jungwoo.project.memo.assignment.domain.AssignmentConfirmStatus.CONFIRMED)
+                    .dueKind(dueKind == null ? DueKind.UNKNOWN : dueKind).dueDate(dueDate).dueAt(dueAt)
+                    .dueSource(dueKind == null || dueKind == DueKind.UNKNOWN ? null
+                            : com.jungwoo.project.memo.assignment.domain.DueSource.USER)
+                    .version(0L).build());
+        }
+
         public String type() {
             return "ASSIGNMENT_CREATE";
         }
@@ -99,6 +109,36 @@ public class AssignmentChangeModule implements ChangeModule {
     public Map<String, Class<? extends ChangeOp>> opTypes() {
         return Map.of("ASSIGNMENT_DUE", SetDue.class, "ASSIGNMENT_COMPLETED", SetCompleted.class,
                 "ASSIGNMENT_CREATE", CreateAssignment.class);
+    }
+
+    @Override
+    public Map<String, String> toolArgs() {
+        return Map.of(
+                "ASSIGNMENT_DUE", "{assignmentId, dueDate?(YYYY-MM-DD) | dueAt?(YYYY-MM-DDTHH:mm)} - 마감 바로잡기(사용자 확정으로 남는다)",
+                "ASSIGNMENT_COMPLETED", "{assignmentId, completed:true|false} - 제출(완료) 표시",
+                "ASSIGNMENT_CREATE", "{title, courseId?, dueDate?, dueAt?} - 과제 하나 추가");
+    }
+
+    @Override
+    public ChangeOp fromToolArgs(String type, com.fasterxml.jackson.databind.JsonNode a) {
+        LocalDate dueDate = com.jungwoo.project.memo.ai.change.ToolArgs.optionalDate(a, "dueDate");
+        LocalDateTime dueAt = com.jungwoo.project.memo.ai.change.ToolArgs.optionalDateTime(a, "dueAt");
+        DueKind kind = dueAt != null ? DueKind.DATETIME : dueDate != null ? DueKind.DATE : null;
+        return switch (type) {
+            case "ASSIGNMENT_DUE" -> new SetDue(CourseAssignment.builder().assignmentId(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "assignmentId")).build(),
+                    kind, dueDate, dueAt);
+            case "ASSIGNMENT_COMPLETED" -> new SetCompleted(CourseAssignment.builder().assignmentId(com.jungwoo.project.memo.ai.change.ToolArgs.id(a, "assignmentId")).build(),
+                    !a.has("completed") || a.path("completed").asBoolean(true));
+            case "ASSIGNMENT_CREATE" -> new CreateAssignment(com.jungwoo.project.memo.ai.change.ToolArgs.optionalId(a, "courseId"), com.jungwoo.project.memo.ai.change.ToolArgs.text(a, "title"),
+                    kind == null ? DueKind.UNKNOWN : kind, dueDate, dueAt);
+            default -> throw new IllegalArgumentException("모르는 변경: " + type);
+        };
+    }
+
+    /** op 안의 검토 당시 엔티티 스냅샷은 파생 getter가 직렬화돼 되읽을 수 없다 — 그 필드는 읽을 때 무시한다. */
+    @Override
+    public void customizeJson(com.fasterxml.jackson.databind.ObjectMapper mapper) {
+        mapper.addMixIn(com.jungwoo.project.memo.assignment.domain.CourseAssignment.class, LenientSnapshot.class);
     }
 
     @Override

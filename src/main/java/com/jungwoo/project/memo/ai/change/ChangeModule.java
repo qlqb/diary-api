@@ -29,6 +29,31 @@ public interface ChangeModule {
     /** 기존 서비스로 적용한다. 만든 것의 id 등 결과를 돌려준다(묶음에 남는다). 같은 트랜잭션이다. */
     Map<String, Object> apply(Long userId, ChangeOp op);
 
+    /**
+     * 상담 도구(propose_change)에 보일 op별 인자 설명. 공통 도구 설명은 이것을 모아 만든다 — 공통부가 도메인을 몰라도 된다.
+     */
+    Map<String, String> toolArgs();
+
+    /**
+     * 모델이 낸 인자로 op를 만든다. 사용자 id는 인자에 없다(서버 실행 문맥). 대상 상태(version·해시·스냅샷)는 여기서 채우지 않는다 —
+     * {@link #check}가 지금 행으로 채운다.
+     *
+     * @throws IllegalArgumentException 인자 모양이 틀림(모델 입력 오류 — 도구 결과로 돌려준다)
+     */
+    ChangeOp fromToolArgs(String type, com.fasterxml.jackson.databind.JsonNode args);
+
+    /**
+     * op에 담은 스냅샷 타입의 저장 형식 조정(예: 파생 getter가 있는 엔티티는 모르는 필드를 무시). 공통 Registry가 도메인 타입을 알지
+     * 않게 모듈이 낸다. 기본은 없다.
+     */
+    default void customizeJson(com.fasterxml.jackson.databind.ObjectMapper mapper) {
+    }
+
+    /** 스냅샷 엔티티에 붙여 파생 getter가 만든 필드를 읽을 때 무시하게 하는 믹스인. */
+    @com.fasterxml.jackson.annotation.JsonIgnoreProperties(ignoreUnknown = true)
+    abstract class LenientSnapshot {
+    }
+
     /** 이 op와 함께 고를 만한 관련 변경(근무를 빼면 그 근무의 이동시간 등). 기본은 없다. */
     default List<LinkedChange> linked(Long userId, ChangeOp op) {
         return List.of();

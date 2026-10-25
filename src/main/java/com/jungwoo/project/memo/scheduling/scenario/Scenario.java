@@ -96,6 +96,13 @@ public record Scenario(RoutineOverlay routines, CommitmentOverlay commitments, E
             return assignments;
         }
 
+        private long nextTemp = -1_000_000_000L;
+
+        /** 새로 만드는 것의 임시 id. 묶음 안에서 겹치지 않는다(실제 id와도 겹치지 않는 음수). */
+        public long nextTempId() {
+            return nextTemp--;
+        }
+
         Scenario build(ScenarioRef ref) {
             return new Scenario(routines.build(), commitments.build(), execution.build(), assignments.build(), ref);
         }

@@ -237,6 +237,52 @@ public class PlanBriefService {
         return load(userId, conversationId);
     }
 
+    /**
+     * 상담 도구 단계에서 확인한 시간 조건을 합의로 남긴다(턴 완료 트랜잭션 안). 문장은 사용자가 한 말 그대로, 해석은 구조로 따로 둔다.
+     * 근거가 사용자 발언에서 확인돼 채택된 조건만 사용자 작성(승인)이다 — 그 밖의 상태(모호·확인 못 함)는 AI 정리로 남아 시간 제약으로
+     * 쓰이지 않지만 화면에는 보인다. 같은 흐름의 이전 시간 합의는 지운다(새 조건이 그것을 대신한다).
+     */
+    public View recordTimeCondition(Long userId, Long conversationId, Long userMessageId, Long assistantMessageId,
+                                    StudyTimeCondition condition, String sentence) {
+        if (condition == null || conversationId == null) {
+            return load(userId, conversationId);
+        }
+        LocalDateTime now = LocalDateTime.now(clock);
+        // 채택된 조건의 근거는 소유가 확인된 사용자 발언에서만 찾았다(해석기가 그 발언 목록만 대조한다) — 그래서 채택이면 사용자의 말이다.
+        boolean user = condition.adopted() && !condition.basis().isEmpty();
+        String quote = condition.basis().isEmpty() ? null : condition.basis().get(0).quote();
+        Long basisMessage = condition.basis().isEmpty() ? null : condition.basis().get(0).messageId();
+        for (int attempt = 0; attempt < 2; attempt++) {
+            PlanBrief brief = mapper.findByConversationIdAndUserId(conversationId, userId);
+            List<PlanBriefItem> items = brief == null ? new ArrayList<>() : new ArrayList<>(parse(brief.getItems()));
+            for (int i = 0; i < items.size(); i++) {
+                PlanBriefItem it = items.get(i);
+                if ("TIME_BUDGET".equals(it.kind()) && !it.removed() && PlanBriefItem.SCOPE_THIS_DRAFT.equals(it.scope())) {
+                    items.set(i, it.withRemoved(now));
+                }
+            }
+            int id = items.stream().mapToInt(PlanBriefItem::id).max().orElse(0) + 1;
+            String text = clean(sentence == null ? condition.label() : sentence);
+            items.add(new PlanBriefItem(id, "TIME_BUDGET", text == null ? "말한 공부 시간" : text,
+                    user ? PlanBriefItem.SPEAKER_USER : PlanBriefItem.SPEAKER_ASSISTANT, user, false, false,
+                    PlanBriefItem.SCOPE_THIS_DRAFT, user ? basisMessage : assistantMessageId, user ? userMessageId : null,
+                    null, null, null, null, 1, List.of(), now, null, null, today(), null, quote,
+                    user ? basisMessage : null, user ? sentence : null, condition));
+            String serialized = serialize(items);
+            if (brief == null) {
+                PlanBrief created = PlanBrief.builder().userId(userId).conversationId(conversationId).version(1)
+                        .status("OPEN").items(serialized).build();
+                mapper.insert(created);
+                return new View(created.getBriefId(), conversationId, 1, List.copyOf(items), null);
+            }
+            if (mapper.updateItems(brief.getBriefId(), userId, brief.getVersion(), serialized, "OPEN") == 1) {
+                return new View(brief.getBriefId(), conversationId, brief.getVersion() + 1, List.copyOf(items),
+                        brief.getLastProposalId());
+            }
+        }
+        return load(userId, conversationId);
+    }
+
     /** 이 합의로 초안을 만들었다(흐름·기간을 모르는 옛 호출부). 새 초안 자체를 흐름의 시작으로 본다. */
     @Transactional
     public void markProposal(Long userId, Long briefId, Long proposalId) {

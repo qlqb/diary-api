@@ -142,8 +142,10 @@ public class PlanConfirmScheduleGuard {
         java.util.Set<LocalDate> covered = new java.util.HashSet<>();
         study.windows().forEach(w -> covered.add(w.start().toLocalDate()));
         for (var edit : timed) {
-            boolean dayCovered = covered.contains(edit.getScheduledStartAt().toLocalDate())
-                    || covered.contains(edit.getScheduledStartAt().toLocalDate().minusDays(1));
+            LocalDate day = edit.getScheduledStartAt().toLocalDate();
+            // 말한 범위가 그날 시작했거나, 전날 시작한 범위가 자정을 넘어 이 항목 시작 전까지 이어질 때만 그 범위로 검사한다.
+            boolean dayCovered = covered.contains(day) || study.windows().stream()
+                    .anyMatch(w -> w.start().toLocalDate().isBefore(day) && w.end().isAfter(edit.getScheduledStartAt()));
             boolean inside = study.windows().stream().anyMatch(w -> !edit.getScheduledStartAt().isBefore(w.start())
                     && !edit.getScheduledEndAt().isAfter(w.end()));
             if (dayCovered && !study.windows().isEmpty() && !inside) {

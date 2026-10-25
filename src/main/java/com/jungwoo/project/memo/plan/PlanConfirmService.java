@@ -92,8 +92,14 @@ public class PlanConfirmService {
         //    확정 사이에 근무가 생겼으면 여기서 전체를 거절한다 — 겹친 항목만 빼고 확정하면
         //    사용자가 승인한 계획과 저장된 계획이 조용히 달라진다.
         //    초안에 고정한 말한 시간 조건(범위·제외 구간)도 함께 본다 — 편집으로 범위 밖·식사 시간에 옮긴 항목을 그대로 확정하지 않는다.
+        //    검사 대상은 실제로 확정될 항목이다 — 제외한 항목의 편집값은 보지 않는다. 계획 초안 항목은 원래 날짜만 있고(시각 없음) 시각은
+        //    미리보기 편집으로만 붙으므로, 편집 중 제외되지 않은 시각 고정 항목이 확정될 시각 전부다.
+        java.util.Set<Long> excluded = request.getExcludedItemIds() == null ? java.util.Set.of()
+                : new java.util.HashSet<>(request.getExcludedItemIds());
         scheduleGuard.ensureNoConflicts(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(),
-                request.getEditedItems(), PlanStudyTimeResolver.conditionOf(proposal.getPlanRequestJson()));
+                request.getEditedItems() == null ? null : request.getEditedItems().stream()
+                        .filter(e -> e != null && !excluded.contains(e.getProposalItemId())).toList(),
+                PlanStudyTimeResolver.conditionOf(proposal.getPlanRequestJson()));
 
         // 1. 제안 적용 → 새 항목은 execution_items 생성, 조정 항목은 기존 항목의 도메인 액션(줄임·이동·보류).
         //    승인 전 미반영 원칙은 여기서 이미 보장되고, base_version이 낡았으면 409로 전체가 되돌아간다.
