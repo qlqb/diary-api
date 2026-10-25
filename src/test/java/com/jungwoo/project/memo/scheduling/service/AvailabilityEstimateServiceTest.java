@@ -389,6 +389,27 @@ class AvailabilityEstimateServiceTest {
     }
 
     @Test
+    void 밤_11시부터_새벽_1시까지_계획의_자정_뒤_날은_넘어간_범위만_쓴다() {
+        // S6 실모델(2026-10-26): 기간이 10/26~10/27로 잡히자 10/27의 기본 창 09:00에 항목이 놓였다.
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        LocalDate day = HORIZON_START;
+        com.jungwoo.project.memo.scheduling.scenario.Scenario scenario = com.jungwoo.project.memo.scheduling.scenario.Scenario.ORIGINAL
+                .withStudy(new com.jungwoo.project.memo.scheduling.scenario.Scenario.StudyWindows(List.of(
+                        new com.jungwoo.project.memo.scheduling.scenario.Scenario.TimeRange(day.atTime(23, 0),
+                                day.plusDays(1).atTime(1, 0))), List.of()));
+
+        AvailabilityEstimateResult twoDays = service.estimate(USER_ID, day, day.plusDays(1), List.of(), List.of(), scenario);
+        assertThat(twoDays.windows()).allSatisfy(w -> {
+            assertThat(w.startAt()).isAfterOrEqualTo(day.atTime(23, 0));
+            assertThat(w.endAt()).isBeforeOrEqualTo(day.plusDays(1).atTime(1, 0));
+        });
+
+        // 기간이 더 이어지면 그 다음 날들은 말하지 않은 날이다 — 사흘째는 기본 창 그대로
+        AvailabilityEstimateResult threeDays = service.estimate(USER_ID, day, day.plusDays(2), List.of(), List.of(), scenario);
+        assertThat(threeDays.windows()).anySatisfy(w -> assertThat(w.startAt()).isEqualTo(day.plusDays(2).atTime(9, 0)));
+    }
+
+    @Test
     void 기본_창은_자정까지이고_자정을_넘기지_않는다() {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
 

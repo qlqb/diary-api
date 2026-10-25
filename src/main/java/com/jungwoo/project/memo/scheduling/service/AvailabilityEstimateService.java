@@ -291,6 +291,12 @@ public class AvailabilityEstimateService {
         java.util.Set<LocalDate> covered = new java.util.HashSet<>();
         for (Scenario.TimeRange w : study.windows()) {
             covered.add(w.start().toLocalDate());
+            // "오늘 밤 11시부터 새벽 1시까지": 계획 기간이 자정 뒤 날짜에서 끝나면 그날은 넘어간 범위를 담으려고 붙은 날이다 — 그날의 기본
+            // 창(09:00~)을 더하지 않는다. 기간이 더 이어지면 그 날은 말하지 않은 날이라 기본 창 그대로다.
+            LocalDate spill = w.end().toLocalDate();
+            if (spill.isAfter(w.start().toLocalDate()) && w.end().isAfter(spill.atStartOfDay()) && spill.equals(horizonEnd)) {
+                covered.add(spill);
+            }
             windows.add(new AvailabilityWindow(w.start(), w.end(), AvailabilitySource.CURRENT_CONVERSATION,
                     AvailabilityConfidence.HIGH, "사용자가 말한 공부 시간"));
         }
