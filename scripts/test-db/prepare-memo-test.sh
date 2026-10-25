@@ -65,6 +65,7 @@ PENDING_MIGRATIONS=(
     "docs/sql/2026-09-22-material-week-assignments.sql"
     "docs/sql/2026-09-29-learning-flow.sql"
     "docs/sql/2026-10-04-textbook-web-toc.sql"
+    "docs/sql/2026-10-26-change-bundles.sql"
 )
 for migration in "${PENDING_MIGRATIONS[@]}"; do
     "$MYSQL_BIN/mysql" -u "$USER_NAME" "$TARGET_DB" < "$migration"

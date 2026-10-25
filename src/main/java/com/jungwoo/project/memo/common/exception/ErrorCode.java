@@ -109,6 +109,7 @@ public enum ErrorCode {
     ROUTINE_EXCEPTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_020", "반복 일정의 예외를 찾을 수 없습니다"),
     COMMITMENT_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_021", "약속을 찾을 수 없습니다"),
     SCHEDULE_SUGGESTION_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_022", "일정 후보를 찾을 수 없습니다"),
+    CHANGE_BUNDLE_NOT_FOUND(HttpStatus.NOT_FOUND, "E404_034", "변경 묶음을 찾을 수 없습니다"),
     /*
      * 메타데이터는 ACTIVE인데 디스크에 원본이 없는 상태. 업로드/삭제 규칙상 정상적으로는
      * 생기지 않지만(고아 파일은 반대 방향으로만 남는다), 파일을 직접 열어 주는 경로가
@@ -213,6 +214,12 @@ public enum ErrorCode {
     PHOTO_UPLOAD_IN_PROGRESS(HttpStatus.CONFLICT, "E409_044", "이 사진을 아직 읽고 있어요. 잠시 뒤 결과를 다시 확인해 주세요"),
     PHOTO_CONVERSATION_CHANGED(HttpStatus.CONFLICT, "E409_045", "대화나 과목이 바뀌어 사진을 저장하지 않았어요"),
     PHOTO_NOT_REEXTRACTABLE(HttpStatus.CONFLICT, "E409_046", "상담 사진은 다시 읽을 수 없어요. 사진을 새로 올려 주세요"),
+    CHANGE_BUNDLE_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_047", "이미 적용했거나 닫은 변경 묶음입니다"),
+    CHANGE_BUNDLE_REVISION_CHANGED(HttpStatus.CONFLICT, "E409_048", "변경 묶음이 그사이 바뀌었어요. 최신 내용을 다시 확인해 주세요"),
+    CHANGE_BUNDLE_STALE(HttpStatus.CONFLICT, "E409_049", "검토한 뒤 일정이나 항목이 바뀌었어요. 다시 검토해 주세요"),
+    CHANGE_BUNDLE_IDEMPOTENCY_REUSED(HttpStatus.CONFLICT, "E409_050", "같은 요청 키로 다른 적용 내용이 왔습니다"),
+    CHANGE_BUNDLE_DEPENDENCY(HttpStatus.CONFLICT, "E409_051", "기대는 항목을 함께 고르지 않았어요"),
+    CHANGE_BUNDLE_ITEM_NOT_APPLICABLE(HttpStatus.CONFLICT, "E409_052", "적용할 수 없는 항목이 선택되어 있어요"),
 
     // ===== 410 Gone =====
     MATERIAL_ORIGINAL_REMOVED(HttpStatus.GONE, "E410_001", "원본 사진은 지워졌어요(읽은 글은 남아 있어요)"),
