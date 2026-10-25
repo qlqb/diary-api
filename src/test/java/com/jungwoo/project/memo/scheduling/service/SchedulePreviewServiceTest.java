@@ -184,6 +184,35 @@ class SchedulePreviewServiceTest {
     }
 
     @Test
+    void 말한_시간_범위가_차면_계획_기간_밖_다음_날에_놓지_않고_못_넣은_항목으로_남긴다() throws Exception {
+        // S6 실모델(2026-10-26): 14~20시가 이미 찬 날 계획에서 남은 항목이 다음 날 09:00(기본 시간대)에 놓였다.
+        com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition = new com.jungwoo.project.memo.ai.brief.StudyTimeCondition(
+                com.jungwoo.project.memo.ai.brief.StudyTimeCondition.ADOPTED,
+                List.of(new com.jungwoo.project.memo.ai.brief.StudyTimeCondition.Range(TODAY, java.time.LocalTime.of(14, 0),
+                        java.time.LocalTime.of(15, 0), false, null)),
+                List.of(), null, null, "FILL", List.of(), List.of(), List.of());
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules()
+                .writeValueAsString(java.util.Map.of("scopeReport", java.util.Map.of("timeCondition", condition)));
+        AiProposal plan = proposal();
+        plan.setPlanStartDate(TODAY);
+        plan.setPlanEndDate(TODAY);
+        plan.setPlanRequestJson(json);
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(plan);
+        when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID)).thenReturn(List.of(
+                proposalItem(1L, "A", 60, "MUST", null), proposalItem(2L, "B", 60, "SHOULD", null)));
+        when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+
+        SchedulePreviewResponse response = service.computePreview(USER_ID, PROPOSAL_ID, SchedulePreviewRequest.builder().build());
+
+        assertThat(response.getHorizonEnd()).isEqualTo(TODAY);
+        assertThat(response.getPlacedItems()).allSatisfy(p -> {
+            assertThat(p.getScheduledStartAt()).isAfterOrEqualTo(TODAY.atTime(14, 0));
+            assertThat(p.getScheduledEndAt()).isBeforeOrEqualTo(TODAY.atTime(15, 0));
+        });
+        assertThat(response.getUnplacedItems()).isNotEmpty();
+    }
+
+    @Test
     void doesNotPlaceEitherItem_whenDeadlineIsInThePast() {
         when(aiProposalMapper.findByIdAndUserIdForUpdate(PROPOSAL_ID, USER_ID)).thenReturn(proposal());
         when(aiProposalItemMapper.findByProposalIdAndUserId(PROPOSAL_ID, USER_ID))

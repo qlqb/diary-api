@@ -129,6 +129,12 @@ public class SchedulePreviewService {
          */
         com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition =
                 com.jungwoo.project.memo.plan.PlanStudyTimeResolver.conditionOf(proposal.getPlanRequestJson());
+        // 말한 시간 범위가 있는 계획은 계획 기간 밖으로 넘겨 놓지 않는다 — 범위가 차면 기본 시간대의 다음 날에 조용히 놓는 대신
+        // "못 넣은 항목"으로 남겨 사용자가 고르게 한다.
+        if (condition != null && !condition.windows().isEmpty() && proposal.getPlanEndDate() != null
+                && horizonEnd.isAfter(proposal.getPlanEndDate())) {
+            horizonEnd = proposal.getPlanEndDate().isBefore(horizonStart) ? horizonStart : proposal.getPlanEndDate();
+        }
         com.jungwoo.project.memo.scheduling.scenario.Scenario scenario = previewScenario(userId, proposal)
                 .withStudy(com.jungwoo.project.memo.plan.StudyTimeBudget.windowsFor(condition, horizonStart, horizonEnd));
         AvailabilityEstimateResult raw = com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService.estimateFor(availabilityEstimateService, userId, horizonStart, horizonEnd, aiUnavailable, overrides, scenario);
