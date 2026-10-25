@@ -8,7 +8,7 @@
   B. 그 대화에서 공부 시간: "그럼 오늘 2시부터 8시까지 공부 잡아줘" → 초안이 묶음에 기대고(근무 빠진 가정) 14~20시 안, 쉬는 시간 따로
   C. 확정 → 묶음과 계획이 함께 적용, 회차 예외 1건. 같은 묶음 재적용(새 키) 거절, 예외 1건 그대로
   D. 근무 유지 + 시간 요청: 근무가 있는 내일 "내일 2시부터 8시까지 공부" → 근무와 겹친다고 알리거나 묻는다(조용히 바꾸지 않음)
-  E. 말한 시간 + 식사: "오늘 2시부터 8시까지 공부할 건데 6시부터 7시는 저녁 먹어" → 18~19시 비움
+  E. 말한 시간 + 식사: "오늘 저녁 8시부터 11시까지 공부할 건데 9시부터 9시 반은 저녁 먹어" → 21:00~21:30 비움
   F. 이미 지난 시작: 지금보다 이른 시각부터 → 지난 부분을 알리거나 지금부터
   G. 자정 넘김: "오늘 밤 11시부터 새벽 1시까지 공부" → 23~01시, 날짜 넘김
   H. 부분 거절·검토 뒤 변경·중복 적용: 근무 옮기기 묶음 → 원본을 손으로 바꾼 뒤 적용 거절 / 같은 키 두 번 → 같은 결과
@@ -221,12 +221,14 @@ def make_plan(token, cid, last, today):
 
 def within(items, day, start, end, holes=()):
     """모든 항목이 day의 start~end(끝이 다음 날이면 넘김) 안이고 holes와 겹치지 않는가."""
+    # 문자열이 아니라 시각으로 비교한다("…T21:00:00" > "…T21:00"이 참이라 경계에서 끝나는 항목을 겹침으로 잘못 본다).
+    t = datetime.datetime.fromisoformat
     bad = []
     for title, s, e, *_ in items:
-        if s < start or e > end:
+        if t(s) < t(start) or t(e) > t(end):
             bad.append("%s %s~%s 범위 밖" % (title, s[5:16], e[5:16]))
         for hs, he in holes:
-            if s < he and e > hs:
+            if t(s) < t(he) and t(e) > t(hs):
                 bad.append("%s %s~%s 제외 구간과 겹침" % (title, s[5:16], e[5:16]))
     return bad
 
@@ -336,16 +338,16 @@ def main():
 
     # ---------- E ----------
     if run("E"):
-        # 오늘 근무는 A·C에서 빠졌다(적용됨). 빠지지 않았으면 이 시나리오는 D와 같아진다.
+        # B가 확정한 14~20시 계획과 겹치지 않게 저녁 범위로 본다(같은 계정이라 낮 범위는 이미 차 있다).
         cid = conversation(token)
-        e = turn(token, cid, "오늘 2시부터 8시까지 자료구조 공부할 건데 6시부터 7시는 저녁 먹어")
+        e = turn(token, cid, "오늘 저녁 8시부터 11시까지 자료구조 공부할 건데 9시부터 9시 반은 저녁 먹어")
         made = make_plan(token, cid, e, today)
         its, unplaced, perr = preview(token, made.get("draft"))
-        bad = within(its, today, "%sT14:00" % today, "%sT20:00" % today,
-                     [("%sT18:00" % today, "%sT19:00" % today)])
+        bad = within(its, today, "%sT20:00" % today, "%sT23:00" % today,
+                     [("%sT21:00" % today, "%sT21:30" % today)])
         tc = ((made.get("draft") or {}).get("scopeReport") or {}).get("timeCondition") or {}
-        scenario("E 말한 시간 + 저녁 제외", "오늘 2시부터 8시까지 공부할 건데 6시부터 7시는 저녁 먹어",
-                 "항목 14~20시 안, 18~19시 비움, 시간 조건 ADOPTED",
+        scenario("E 말한 시간 + 저녁 제외", "오늘 저녁 8시부터 11시까지 자료구조 공부할 건데 9시부터 9시 반은 저녁 먹어",
+                 "항목 20~23시 안, 21:00~21:30 비움, 시간 조건 ADOPTED",
                  "배치 %s, 못 넣음 %s, 조건 %s, 문제 %s, 오류 %s" % ([(t, hm(s), hm(e2)) for t, s, e2, *_ in its], unplaced,
                                                          tc.get("status"), bad, made.get("error") or perr),
                  bool(its) and not bad and tc.get("status") == "ADOPTED")
