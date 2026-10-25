@@ -101,7 +101,7 @@ class AvailabilityEstimateServiceTest {
     @Test
     void excludesRoutineOccurrences_fromAvailabilityWindows() {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
-        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END, com.jungwoo.project.memo.routine.RoutineOverlay.NONE))
                 .thenReturn(List.of(occurrence(LocalTime.of(20, 0), LocalTime.of(21, 0))));
 
         AvailabilityEstimateResult result = service.estimate(
@@ -120,7 +120,7 @@ class AvailabilityEstimateServiceTest {
     @Test
     void userOverrideCannotReopenRoutineOccurrence() {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
-        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END, com.jungwoo.project.memo.routine.RoutineOverlay.NONE))
                 .thenReturn(List.of(occurrence(LocalTime.of(20, 0), LocalTime.of(21, 0))));
 
         AvailabilityOverrideRequest reopen = new AvailabilityOverrideRequest();
@@ -273,7 +273,7 @@ class AvailabilityEstimateServiceTest {
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
         LocalDateTime start = LocalDateTime.of(HORIZON_START, LocalTime.of(19, 0));
         LocalDateTime end = LocalDateTime.of(HORIZON_START, LocalTime.of(20, 0));
-        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END, com.jungwoo.project.memo.routine.RoutineOverlay.NONE))
                 .thenReturn(List.of(new RoutineOccurrence(
                         9L, null, "수업", null, start, end, HORIZON_START, false)));
         when(commitmentService.findOverlapping(USER_ID, HORIZON_START, HORIZON_END))
@@ -370,7 +370,7 @@ class AvailabilityEstimateServiceTest {
     void classAndCommitment_stillCarveTheDayIntoExactPieces() {
         LocalDate tuesday = LocalDate.of(2026, 8, 11);
         when(executionItemMapper.findTimeFixedByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
-        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END))
+        when(routineOccurrenceService.expand(USER_ID, HORIZON_START, HORIZON_END, com.jungwoo.project.memo.routine.RoutineOverlay.NONE))
                 .thenReturn(List.of(new RoutineOccurrence(2L, null, "자료구조", "3-315",
                         LocalDateTime.of(tuesday, LocalTime.of(14, 0)),
                         LocalDateTime.of(tuesday, LocalTime.of(16, 50)), tuesday, false)));

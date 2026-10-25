@@ -13,6 +13,7 @@ import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
 import com.jungwoo.project.memo.scheduling.domain.BusySource;
 import com.jungwoo.project.memo.scheduling.domain.BusyWindow;
 import com.jungwoo.project.memo.scheduling.dto.AvailabilityOverrideRequest;
+import com.jungwoo.project.memo.scheduling.scenario.Scenario;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -84,13 +85,27 @@ public class AvailabilityEstimateService {
             Long userId, LocalDate horizonStart, LocalDate horizonEnd,
             List<UnavailableWindowSpec> aiUnavailable, List<AvailabilityOverrideRequest> userOverrides
     ) {
+        return estimate(userId, horizonStart, horizonEnd, aiUnavailable, userOverrides, Scenario.ORIGINAL);
+    }
+
+    /**
+     * 가정 상태(아직 적용하지 않은 변경을 겹친 상태)로 계산한다. 원본은 바뀌지 않는다. 사실을 읽는 곳은 이 메서드 하나라서
+     * 원본 계산과 가정 상태 계산이 같은 차감 규칙을 쓴다.
+     */
+    public AvailabilityEstimateResult estimate(
+            Long userId, LocalDate horizonStart, LocalDate horizonEnd,
+            List<UnavailableWindowSpec> aiUnavailable, List<AvailabilityOverrideRequest> userOverrides,
+            Scenario scenario
+    ) {
+        Scenario sc = scenario == null ? Scenario.ORIGINAL : scenario;
         ZoneId zone = ZoneId.of(defaultTimeZoneId);
         LocalDateTime now = ZonedDateTime.now(clock).withZoneSameInstant(zone).toLocalDateTime();
         LocalDateTime lowerBound = now.isAfter(horizonStart.atStartOfDay()) ? now : horizonStart.atStartOfDay();
         LocalDateTime upperBound = horizonEnd.plusDays(1).atStartOfDay();
 
-        List<ExecutionItem> existingFixed =
-                executionItemMapper.findTimeFixedByUserIdAndDateRange(userId, horizonStart, horizonEnd);
+        List<ExecutionItem> existingFixed = sc.execution().apply(
+                executionItemMapper.findTimeFixedByUserIdAndDateRange(userId, horizonStart, horizonEnd),
+                item -> isTimeFixedIn(item, horizonStart, horizonEnd));
         List<Interval> hardBusy = new ArrayList<>();
         List<BusyWindow> busyWindows = new ArrayList<>();
         for (ExecutionItem item : existingFixed) {
@@ -108,7 +123,7 @@ public class AvailabilityEstimateService {
          * 보이는데 배치는 그 시간에 학습을 넣는" 상태가 구조적으로 불가능하다.
          */
         for (RoutineOccurrence occurrence :
-                routineOccurrenceService.expand(userId, horizonStart, horizonEnd)) {
+                routineOccurrenceService.expand(userId, horizonStart, horizonEnd, sc.routines())) {
             hardBusy.add(new Interval(occurrence.startAt(), occurrence.endAt()));
             busyWindows.add(new BusyWindow(occurrence.startAt(), occurrence.endAt(),
                     occurrence.title(), BusySource.ROUTINE_OCCURRENCE, occurrence.routineId()));
@@ -120,7 +135,8 @@ public class AvailabilityEstimateService {
          * 것뿐이다. 루틴과 약속이 겹쳐도 시간을 두 번 빼지 않는다 — 아래 subtract가
          * 구간 단위로 깎으므로 겹친 부분은 한 번만 사라진다.
          */
-        for (Commitment commitment : commitmentService.findOverlapping(userId, horizonStart, horizonEnd)) {
+        for (Commitment commitment : sc.commitments().apply(
+                commitmentService.findOverlapping(userId, horizonStart, horizonEnd), horizonStart, horizonEnd)) {
             hardBusy.add(new Interval(commitment.getStartAt(), commitment.getEndAt()));
             busyWindows.add(new BusyWindow(
                     commitment.getStartAt(), commitment.getEndAt(), commitment.getTitle(),
@@ -183,6 +199,15 @@ public class AvailabilityEstimateService {
 
         resultWindows.sort((a, b) -> a.startAt().compareTo(b.startAt()));
         return new AvailabilityEstimateResult(resultWindows, busyWindows);
+    }
+
+    /** {@code findTimeFixedByUserIdAndDateRange}와 같은 조건. 가정 상태로 바뀐 항목이 그 조회에 들어오는지 같은 기준으로 본다. */
+    static boolean isTimeFixedIn(ExecutionItem item, LocalDate from, LocalDate to) {
+        return item.getPlacementType() == com.jungwoo.project.memo.execution.domain.PlacementType.TIME_FIXED
+                && item.getStatus() != com.jungwoo.project.memo.execution.domain.ExecutionStatus.CANCELLED
+                && item.getScheduledDate() != null
+                && !item.getScheduledDate().isBefore(from) && !item.getScheduledDate().isAfter(to)
+                && item.getScheduledStartAt() != null && item.getScheduledEndAt() != null;
     }
 
     private List<LocalDate> expandDates(UnavailableWindowSpec spec, LocalDate horizonStart, LocalDate horizonEnd) {
