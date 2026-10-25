@@ -2454,7 +2454,9 @@ public class PeriodPlanDraftGenerator {
         sb.append("이 시간은 새로 만들 대상이 아니다. 계획은 이 시간을 피해 잡힌다.\n\n");
 
         sb.append("[남는 시간(추정)]\n");
-        List<AvailabilityWindow> windows = availability.windows();
+        // 배치(미리보기·확정)와 같은 칸으로 보여 준다 — 자정을 넘는 범위는 날짜에서 나뉜 두 칸이다. 하나로 보여 주면 모델이 두 칸보다 긴
+        // 항목을 만들어 배치되지 않는다.
+        List<AvailabilityWindow> windows = PlanPlacementService.splitAtMidnight(availability.windows());
         if (windows.isEmpty()) {
             sb.append("(없음)\n");
         }
@@ -2468,7 +2470,12 @@ public class PeriodPlanDraftGenerator {
                     .append(" (").append(window.durationMinutes()).append("분)\n");
         }
         sb.append("합계 약 ").append(available).append("분 · ").append(confidence)
-                .append(". 사용자가 확정한 값이 아니라 추정이므로 확정된 것처럼 말하지 않는다.\n\n");
+                .append(". 사용자가 확정한 값이 아니라 추정이므로 확정된 것처럼 말하지 않는다.\n");
+        if (windows.size() > availability.windows().size()) {
+            long longest = windows.stream().mapToLong(AvailabilityWindow::durationMinutes).max().orElse(0);
+            sb.append("칸이 자정에서 나뉜다 — 항목 하나는 가장 긴 칸(").append(longest).append("분)을 넘지 않게 나눈다.\n");
+        }
+        sb.append("\n");
 
         recordAvailabilityCalculations(availability, available, confidence, intensity, target,
                 busyTruncated, collector);
