@@ -255,10 +255,15 @@ public class PlanBriefService {
         for (int attempt = 0; attempt < 2; attempt++) {
             PlanBrief brief = mapper.findByConversationIdAndUserId(conversationId, userId);
             List<PlanBriefItem> items = brief == null ? new ArrayList<>() : new ArrayList<>(parse(brief.getItems()));
-            for (int i = 0; i < items.size(); i++) {
-                PlanBriefItem it = items.get(i);
-                if ("TIME_BUDGET".equals(it.kind()) && !it.removed() && PlanBriefItem.SCOPE_THIS_DRAFT.equals(it.scope())) {
-                    items.set(i, it.withRemoved(now));
+            // 확인된 조건만 이전 조건을 대신한다. 모호·확인 실패는 기존 합의를 지우지 않고 따로 남는다(표시만 된다).
+            // 이미 다른 초안 흐름에 묶인 항목(flowProposalId)은 그 흐름의 것이라 건드리지 않는다.
+            if (user) {
+                for (int i = 0; i < items.size(); i++) {
+                    PlanBriefItem it = items.get(i);
+                    if ("TIME_BUDGET".equals(it.kind()) && !it.removed() && PlanBriefItem.SCOPE_THIS_DRAFT.equals(it.scope())
+                            && it.flowProposalId() == null) {
+                        items.set(i, it.withRemoved(now));
+                    }
                 }
             }
             int id = items.stream().mapToInt(PlanBriefItem::id).max().orElse(0) + 1;
@@ -815,7 +820,7 @@ public class PlanBriefService {
         LocalDate start = turnPeriod != null && turnPeriod.known() ? turnPeriod.offerStart() : today();
         LocalDate end = turnPeriod != null && turnPeriod.known() ? turnPeriod.offerEnd() : start;
         int days = (int) java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
-        return StudyTimeInterpreter.interpret(parts, null, said, start, days);
+        return StudyTimeInterpreter.interpret(parts, null, said, start, days, turnPeriod != null && turnPeriod.known());
     }
 
     /**

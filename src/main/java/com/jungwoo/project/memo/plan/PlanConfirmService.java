@@ -71,6 +71,9 @@ public class PlanConfirmService {
     private final CourseMapper courseMapper;
     private final PlanConfirmScheduleGuard scheduleGuard;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.change.PlanScenarioService planScenarioService;
+
     @Transactional
     public PlanVersion confirm(Long userId, Long proposalId, PlanConfirmRequest request) {
         AiProposal proposal = aiProposalMapper.findByIdAndUserId(proposalId, userId);
@@ -86,6 +89,12 @@ public class PlanConfirmService {
         int days = (int) ChronoUnit.DAYS.between(proposal.getPlanStartDate(), proposal.getPlanEndDate()) + 1;
         if (days < 1 || days > MAX_PLAN_DAYS) {
             throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+
+        // -1. 이 초안이 기대는 변경(예: 오늘 근무 회차 빼기)을 같은 트랜잭션에서 먼저 적용한다. 묶음이 초안 뒤에 바뀌었으면 막는다.
+        //     아래 겹침 검사는 그 변경이 적용된 상태를 본다 — 계획은 그 상태로 만들어졌다.
+        if (planScenarioService != null) {
+            planScenarioService.applyForConfirm(userId, proposal.getPlanRequestJson(), proposalId);
         }
 
         // 0. 미리보기가 정한 시각이 지금의 일정과 겹치는지 최신 커밋 기준으로 본다. 미리보기와

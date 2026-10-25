@@ -540,7 +540,7 @@ public class PlanScopeExtractor {
             said.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance((long) i + 1, lines.get(i), at));
         }
         return com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.interpret(parts, text(node, "intent"), said,
-                planStart == null ? at.toLocalDate() : planStart, Math.max(1, days));
+                planStart == null ? at.toLocalDate() : planStart, Math.max(1, days), planStart != null);
     }
 
     private static final com.fasterxml.jackson.databind.ObjectMapper STUDY_TIME_JSON =

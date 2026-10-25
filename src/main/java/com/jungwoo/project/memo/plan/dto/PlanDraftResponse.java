@@ -154,6 +154,13 @@ public class PlanDraftResponse {
     private com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport;
 
     /**
+     * (2026-10-26) 이 초안이 기대는 변경(적용 전 변경 묶음의 항목). 확정하면 이 변경이 계획과 함께 적용된다. 비어 있으면 원본 그대로 만든
+     * 초안이다.
+     */
+    @lombok.Builder.Default
+    private List<String> scenarioChanges = List.of();
+
+    /**
      * 이번 생성의 호출·토큰·지연과 상한, 자료 선택 재사용 여부. 모델이 완료를 선언하는 값이 아니라 서버가 센 값이다.
      * 저장된 초안을 다시 읽을 때는 근거 스냅샷의 서버 계산(GENERATION_CALLS)에서 복원한다.
      */

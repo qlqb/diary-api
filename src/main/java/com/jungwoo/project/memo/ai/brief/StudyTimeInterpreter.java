@@ -52,6 +52,15 @@ public final class StudyTimeInterpreter {
      */
     public static StudyTimeCondition interpret(List<Part> parts, String intent, List<Utterance> utterances,
                                                LocalDate planStart, int days) {
+        return interpret(parts, intent, utterances, planStart, days, false);
+    }
+
+    /**
+     * @param periodKnown planStart·days가 실제 계획 기간인가(초안 생성 경로). 그러면 말한 날짜가 기간 밖일 때 조용히 버리지 않고 알린다.
+     *                    상담 도구 단계처럼 기간을 아직 모르면 false — 오늘을 기준으로만 쓴다.
+     */
+    public static StudyTimeCondition interpret(List<Part> parts, String intent, List<Utterance> utterances,
+                                               LocalDate planStart, int days, boolean periodKnown) {
         if (parts == null || parts.isEmpty()) {
             return null;
         }
@@ -78,9 +87,25 @@ public final class StudyTimeInterpreter {
                 continue;
             }
             String quote = part.quote().strip();
+            LocalDate said0 = said.saidAt().toLocalDate();
+            LocalDate wordDate = dateFromWords(quote, said.text(), said0);
             LocalDate date = parseDate(part.date());
+            if (date != null && !dateConsistent(date, quote, said.text(), said0, planStart, days)) {
+                issues.add(new StudyTimeCondition.Issue("VALUE_MISMATCH",
+                        "정리한 날짜(" + date + ")가 말한 문장에서 읽히지 않아요", quote));
+                continue;
+            }
+            if (date == null && wordDate != null) {
+                date = wordDate; // "내일 2시부터 8시까지" — 날짜는 말한 낱말에서 정한다
+            }
             if (date == null && days == 1) {
                 date = planStart;
+            }
+            if (periodKnown && date != null && planStart != null
+                    && (date.isBefore(planStart) || !date.isBefore(planStart.plusDays(Math.max(1, days))))) {
+                issues.add(new StudyTimeCondition.Issue("OUT_OF_PERIOD", "말한 날짜(" + date + ")가 이번 계획 기간(" + planStart
+                        + (days > 1 ? "~" + planStart.plusDays(days - 1) : "") + ") 밖이라 이 계획에 쓰지 않았어요", quote));
+                continue;
             }
             switch (role) {
                 case "WINDOW" -> {
@@ -303,6 +328,88 @@ public final class StudyTimeInterpreter {
     private static String text(LocalTime[] pair) {
         return (pair[0] == null ? "" : pair[0].toString()) + "~" + (pair[1] == null ? ""
                 : pair[1].equals(LocalTime.MAX) ? "24:00" : pair[1].toString());
+    }
+
+    private static final java.util.regex.Pattern MONTH_DAY = java.util.regex.Pattern.compile(
+            "(\\d{1,2})\\s*(?:월|/)\\s*(\\d{1,2})\\s*일?");
+
+    private static final String[] WEEKDAYS = {"월요일", "화요일", "수요일", "목요일", "금요일", "토요일", "일요일"};
+
+    /** 글에 나온 오늘·내일·모레(말한 날 기준). */
+    static java.util.Set<LocalDate> wordDates(String text, LocalDate saidOn) {
+        java.util.Set<LocalDate> out = new java.util.LinkedHashSet<>();
+        if (text == null) {
+            return out;
+        }
+        if (text.contains("오늘")) {
+            out.add(saidOn);
+        }
+        if (text.contains("내일")) {
+            out.add(saidOn.plusDays(1));
+        }
+        if (text.contains("모레")) {
+            out.add(saidOn.plusDays(2));
+        }
+        return out;
+    }
+
+    /** 날짜를 비운 구절의 날짜: 구절에 날짜 낱말이 하나면 그것, 없으면 문장에 하나뿐일 때 그것. */
+    static LocalDate dateFromWords(String quote, String text, LocalDate saidOn) {
+        java.util.Set<LocalDate> q = wordDates(quote, saidOn);
+        if (q.size() == 1) {
+            return q.iterator().next();
+        }
+        if (!q.isEmpty()) {
+            return null;
+        }
+        java.util.Set<LocalDate> t = wordDates(text, saidOn);
+        return t.size() == 1 ? t.iterator().next() : null;
+    }
+
+    private static boolean mentionsDay(String text, LocalDate date) {
+        if (text == null) {
+            return false;
+        }
+        java.util.regex.Matcher m = MONTH_DAY.matcher(text);
+        while (m.find()) {
+            if (Integer.parseInt(m.group(1)) == date.getMonthValue() && Integer.parseInt(m.group(2)) == date.getDayOfMonth()) {
+                return true;
+            }
+        }
+        String wd = WEEKDAYS[date.getDayOfWeek().getValue() - 1];
+        return text.contains(wd) || text.contains(wd.substring(0, 1) + "욜");
+    }
+
+    private static boolean namesAnyDay(String text) {
+        if (text == null) {
+            return false;
+        }
+        if (MONTH_DAY.matcher(text).find()) {
+            return true;
+        }
+        for (String w : WEEKDAYS) {
+            if (text.contains(w)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 모델이 정리한 날짜가 말에서 읽히는가. 구절에 날짜 낱말(오늘·내일·모레·요일·"10월 26일")이 있으면 그 중 하나와 맞아야 하고,
+     * 구절에 없으면 문장에서 같은 규칙을 본다. 문장에도 날짜 말이 없으면 이번 계획 기간 안의 날짜만 받는다.
+     */
+    static boolean dateConsistent(LocalDate date, String quote, String text, LocalDate saidOn, LocalDate planStart, int days) {
+        for (String scope : new String[]{quote, text}) {
+            java.util.Set<LocalDate> words = wordDates(scope, saidOn);
+            if (!words.isEmpty() || namesAnyDay(scope)) {
+                return words.contains(date) || mentionsDay(scope, date);
+            }
+        }
+        if (planStart == null) {
+            return date.equals(saidOn);
+        }
+        return !date.isBefore(planStart) && date.isBefore(planStart.plusDays(Math.max(1, days)));
     }
 
     /** 구절을 가장 나중 발언에서 찾는다(공백 무시). */

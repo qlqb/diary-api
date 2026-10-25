@@ -30,6 +30,12 @@ public final class TurnWorkspace {
     private final List<String> checked = new ArrayList<>();
     private int modelCalls;
     private int toolCalls;
+    /** 제안 번호. 철회해도 다시 쓰지 않는다(번호가 겹치면 철회가 다른 제안까지 지운다). */
+    private int nextNo = 1;
+    /** 도구 결과 원문(잘라서). 답변 단계가 제목·시각·원인을 그대로 근거로 쓴다. */
+    private final List<String> details = new ArrayList<>();
+    private int detailChars;
+    static final int MAX_DETAIL_CHARS = 6000;
 
     /**
      * @param no       모델과 화면이 쓰는 번호(1부터)
@@ -82,7 +88,7 @@ public final class TurnWorkspace {
     }
 
     public Staged stage(ChangeOp op, boolean selected, String origin, Integer linkedTo, String reason) {
-        Staged s = new Staged(staged.size() + 1, op, "OK", null, selected, origin, linkedTo, reason);
+        Staged s = new Staged(nextNo++, op, "OK", null, selected, origin, linkedTo, reason);
         staged.add(s);
         return s;
     }
@@ -115,6 +121,26 @@ public final class TurnWorkspace {
 
     public List<String> checkedFacts() {
         return List.copyOf(checked);
+    }
+
+    /** 도구 결과를 답변 단계에 넘길 만큼(턴 전체 상한 안에서) 남긴다. 넘치면 잘렸다고 표시한다. */
+    public void detail(String toolName, String result) {
+        if (result == null) {
+            return;
+        }
+        String line = toolName + " → " + (result.length() > 1500 ? result.substring(0, 1500) + "…(잘림)" : result);
+        if (detailChars + line.length() > MAX_DETAIL_CHARS) {
+            if (details.isEmpty() || !details.get(details.size() - 1).startsWith("(이후 도구 결과")) {
+                details.add("(이후 도구 결과는 길이 상한으로 싣지 못했다)");
+            }
+            return;
+        }
+        details.add(line);
+        detailChars += line.length();
+    }
+
+    public List<String> details() {
+        return List.copyOf(details);
     }
 
     public int modelCalls() {

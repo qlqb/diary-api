@@ -127,7 +127,7 @@ class RequestScopeFlowTest {
 
     @Test
     void 범위_추출이_원문에서_확인한_시간은_AI_후보로_떨어진_합의_대신_예산을_정한다() {
-        // 대화 2164 재현: "4시까지"는 상담 합의에서 근거 없는 AI 후보였다 — 예산은 하루 기본 창 그대로였다.
+        // 대화 2164 재현(날짜 낱말은 계획 첫날 월요일로 바꿈 — 픽스처의 지금은 9/13, 계획은 9/14부터): "4시까지"는 상담 합의에서 근거 없는 AI 후보였다 — 예산은 하루 기본 창 그대로였다.
         PlanSelectionFixture f = new PlanSelectionFixture();
         f.enableScopes();
         brief(f, timeItem("오늘 4시까지 공부한다. (쓸 수 있는 시간 하루 · ~16:00)",
@@ -136,7 +136,7 @@ class RequestScopeFlowTest {
         f.material(10, "a.pdf", 1L);
         f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
         f.scopeAnswer = prompt -> """
-                {"scopes":[],"studyTime":{"minutes":null,"per":"DAY","from":null,"until":"16:00","quote":"오늘 오후4시까지 가능해"}}
+                {"scopes":[],"studyTime":{"minutes":null,"per":"DAY","from":null,"until":"16:00","quote":"월요일 오후4시까지 가능해"}}
                 """;
         f.selectionAnswer = prompt -> selection(java.util.List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")),
                 java.util.List.of(), java.util.List.of());
@@ -146,7 +146,7 @@ class RequestScopeFlowTest {
                     + item("스택 응용", ref, 200, "SHOULD") + "]}";
         };
 
-        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 스택 과제 끝내고 싶어\n- 오늘 오후4시까지 가능해\n", origin()),
+        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 스택 과제 끝내고 싶어\n- 월요일 오후4시까지 가능해\n", origin()),
                 com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
         // 픽스처 가용 창은 첫날 09:00부터 하나 — 09:00~16:00(420분)이 범위다(강도 비율 600분이 아니다). (2026-10-25) 범위를 채우되
@@ -172,7 +172,7 @@ class RequestScopeFlowTest {
         f.material(10, "a.pdf", 1L);
         f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
         f.scopeAnswer = prompt -> """
-                {"scopes":[],"studyTime":{"until":"12:00","quote":"오늘 오후4시까지 가능해"}}
+                {"scopes":[],"studyTime":{"until":"12:00","quote":"월요일 오후4시까지 가능해"}}
                 """;
         f.selectionAnswer = prompt -> selection(java.util.List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")),
                 java.util.List.of(), java.util.List.of());
@@ -180,7 +180,7 @@ class RequestScopeFlowTest {
                 + "\"expectedMinutes\":30,\"priority\":\"MUST\",\"courseId\":1,\"reason\":\"r\",\"refIds\":[\""
                 + refOf(prompt, "스택 개념") + "\"]}]}";
 
-        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 오늘 오후4시까지 가능해\n", null),
+        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 월요일 오후4시까지 가능해\n", null),
                 com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
         assertThat(f.planPrompt()).doesNotContain("[사용자가 말한 시간]");
@@ -198,20 +198,20 @@ class RequestScopeFlowTest {
                 "TIME_BUDGET", "오후 4시까지 (쓸 수 있는 시간 하루 · ~16:00)",
                 com.jungwoo.project.memo.ai.brief.PlanBriefItem.SPEAKER_ASSISTANT, false, false, false,
                 com.jungwoo.project.memo.ai.brief.PlanBriefItem.SCOPE_THIS_DRAFT, 10L, null, null, null, null, null, 1, java.util.List.of(),
-                java.time.LocalDateTime.of(2026, 9, 13, 9, 0), null, null, null, null, "오늘 오후4시까지 30분만", 10L,
-                "오늘 오후4시까지 30분만 공부할 수 있어");
+                java.time.LocalDateTime.of(2026, 9, 13, 9, 0), null, null, null, null, "매일 오후4시까지 30분만", 10L,
+                "매일 오후4시까지 30분만 공부할 수 있어");
         brief(f, grounded);
         f.course(1, "자료구조");
         f.material(10, "a.pdf", 1L);
         f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
         f.scopeAnswer = prompt -> """
-                {"scopes":[],"studyTime":{"minutes":30,"per":"DAY","until":"16:00","quote":"오늘 오후4시까지 30분만 공부할 수 있어"}}
+                {"scopes":[],"studyTime":{"minutes":30,"per":"DAY","until":"16:00","quote":"매일 오후4시까지 30분만 공부할 수 있어"}}
                 """;
         f.selectionAnswer = prompt -> selection(java.util.List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")),
                 java.util.List.of(), java.util.List.of());
         f.planAnswer = prompt -> "{\"title\":\"t\",\"items\":[" + item("스택", refOf(prompt, "스택 개념"), 30, "MUST") + "]}";
 
-        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 오늘 오후4시까지 30분만 공부할 수 있어\n", origin()),
+        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 매일 오후4시까지 30분만 공부할 수 있어\n", origin()),
                 com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
         // 7일 계획 · 하루 30분 = 210분. AI 정리(~16:00만)를 썼다면 420분이었다.
@@ -229,13 +229,13 @@ class RequestScopeFlowTest {
         f.material(10, "a.pdf", 1L);
         f.section(101, 10, "스택 개념", roles("CONCEPT"), 1, "원문-스택");
         f.scopeAnswer = prompt -> """
-                {"scopes":[],"studyTime":{"until":"16:00","quote":"오늘 오후4시까지 가능해"}}
+                {"scopes":[],"studyTime":{"until":"16:00","quote":"월요일 오후4시까지 가능해"}}
                 """;
         f.selectionAnswer = prompt -> selection(java.util.List.of(PlanSelectionFixture.handleOf(prompt, "스택 개념")),
                 java.util.List.of(), java.util.List.of());
         f.planAnswer = prompt -> "{\"title\":\"t\",\"items\":[" + item("스택", refOf(prompt, "스택 개념"), 30, "MUST") + "]}";
 
-        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 오늘 오후4시까지 가능해\n", origin()),
+        Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 월요일 오후4시까지 가능해\n", origin()),
                 com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
         assertThat(generated.targetMinutes()).isEqualTo(60);

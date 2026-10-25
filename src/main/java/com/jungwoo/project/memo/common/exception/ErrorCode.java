@@ -220,6 +220,7 @@ public enum ErrorCode {
     CHANGE_BUNDLE_IDEMPOTENCY_REUSED(HttpStatus.CONFLICT, "E409_050", "같은 요청 키로 다른 적용 내용이 왔습니다"),
     CHANGE_BUNDLE_DEPENDENCY(HttpStatus.CONFLICT, "E409_051", "기대는 항목을 함께 고르지 않았어요"),
     CHANGE_BUNDLE_ITEM_NOT_APPLICABLE(HttpStatus.CONFLICT, "E409_052", "적용할 수 없는 항목이 선택되어 있어요"),
+    PLAN_SCENARIO_CHANGED(HttpStatus.CONFLICT, "E409_053", "이 계획이 기대는 변경이 바뀌었어요. 계획을 다시 만들어 주세요"),
 
     // ===== 410 Gone =====
     MATERIAL_ORIGINAL_REMOVED(HttpStatus.GONE, "E410_001", "원본 사진은 지워졌어요(읽은 글은 남아 있어요)"),

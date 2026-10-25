@@ -243,6 +243,12 @@ public class ChangeBundleService {
         List<ChangeOp> ops = toApply.stream().map(i -> registry.read(i.getOpType(), i.getOpJson())).toList();
         String lockedNow = bundle.getRangeStart() == null ? null
                 : basis.lockedFingerprint(userId, bundle.getRangeStart(), bundle.getRangeEnd());
+        // 범위가 검토 뒤 바뀌었으면 대상 잠금을 더 잡기 전에 거절한다 — 대상이 범위 밖으로 옮겨진 경우 잠금 순서가 뒤집히지 않게.
+        if (bundle.getRangeStart() != null && !Objects.equals(lockedNow, bundle.getBasisFingerprint())) {
+            log.info("변경 묶음 적용 거절: 범위 일정이 검토 뒤 바뀜. bundleId={}", bundleId);
+            throw new ConflictException(ErrorCode.CHANGE_BUNDLE_STALE, Map.of("reason", "SCHEDULE_CHANGED",
+                    "rangeStart", bundle.getRangeStart(), "rangeEnd", bundle.getRangeEnd()));
+        }
         lockAll(userId, ops);
         if (bundle.getRangeStart() != null) {
             String now = lockedNow;

@@ -347,9 +347,16 @@ public class PeriodPlanDraftGenerator {
                           /** 아직 적용하지 않은 변경을 겹친 계산용 상태. 원본이면 null */
                           com.jungwoo.project.memo.scheduling.scenario.Scenario scenario,
                           /** 상담에서 이미 확인한 시간 조건(턴 작업 공간에서 저장된 것). 있으면 합의·범위 추출보다 먼저다 */
-                          com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition) {
+                          com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition,
+                          /** scenario를 만든 변경 묶음의 불변 스냅샷. 초안 요청 맥락에 그대로 남는다 */
+                          com.jungwoo.project.memo.plan.selection.PlanScenarioSnapshot snapshot) {
         public Options(PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> progress) {
-            this(previous, progress, null, null);
+            this(previous, progress, null, null, null);
+        }
+
+        public Options withScenario(com.jungwoo.project.memo.scheduling.scenario.Scenario newScenario,
+                                    com.jungwoo.project.memo.plan.selection.PlanScenarioSnapshot newSnapshot) {
+            return new Options(previous, progress, newScenario, condition, newSnapshot);
         }
 
         public static Options none() {
@@ -358,7 +365,7 @@ public class PeriodPlanDraftGenerator {
 
         public Options with(com.jungwoo.project.memo.scheduling.scenario.Scenario newScenario,
                             com.jungwoo.project.memo.ai.brief.StudyTimeCondition newCondition) {
-            return new Options(previous, progress, newScenario, newCondition);
+            return new Options(previous, progress, newScenario, newCondition, snapshot);
         }
 
         com.jungwoo.project.memo.scheduling.scenario.Scenario scenarioOrOriginal() {
@@ -519,7 +526,17 @@ public class PeriodPlanDraftGenerator {
                          /** 과목별 프로젝트 상태 지문(생성 때). 지금 지문과 다르면 초안이 오래된 것이다 */
                          Map<Long, String> projectStates,
                          /** (2026-10-18) 요청 범위와 부분별 판정. 범위를 다루지 않은 경로면 null */
-                         com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport) {
+                         com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport,
+                         /** (2026-10-26) 이 초안이 기대는 변경의 스냅샷. 원본으로 만들었으면 null */
+                         com.jungwoo.project.memo.plan.selection.PlanScenarioSnapshot scenario) {
+
+        public Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
+                      List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
+                      boolean selectionReused, Long briefId, Integer briefVersion, Map<Long, String> projectStates,
+                      com.jungwoo.project.memo.plan.scope.ScopeReport scopeReport) {
+            this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, projectStates,
+                    scopeReport, null);
+        }
 
         public Extras(GenerationBudget.Summary budget, PlanRequestContext.EvidenceSnapshot evidence,
                       List<ProposalAdjustment> adjustments, List<String> changesFromPrevious,
@@ -984,7 +1001,8 @@ public class PeriodPlanDraftGenerator {
                 finalStrategy, null, collector.build(), normalized.evidence(), summary,
                 new Extras(budgetSummary, snapshot, normalized.adjustments(), changesFromPrevious, reused,
                         facts.brief() == null ? null : facts.brief().briefId(),
-                        facts.brief() == null ? null : facts.brief().version(), stateFingerprints(facts), scopeReport));
+                        facts.brief() == null ? null : facts.brief().version(), stateFingerprints(facts), scopeReport,
+                        opts.snapshot()));
     }
 
     // ===== 요청 범위(2026-10-18) =====
@@ -1544,8 +1562,13 @@ public class PeriodPlanDraftGenerator {
         }
         Map<Long, RoutineOccurrence> nextClasses = new HashMap<>();
         try {
-            for (RoutineOccurrence occurrence : routineOccurrenceService.expand(spec.userId(), now.toLocalDate(),
-                    spec.end().plusDays(14))) {
+            // 다음 수업(마감 근거)도 가정 상태로 본다 — 수업을 옮기는 변경에 기댄 초안이 옛 수업 시각을 마감으로 쓰지 않게.
+            com.jungwoo.project.memo.scheduling.scenario.Scenario scenario = opts.scenarioOrOriginal();
+            List<RoutineOccurrence> upcoming = scenario.isOriginal()
+                    ? routineOccurrenceService.expand(spec.userId(), now.toLocalDate(), spec.end().plusDays(14))
+                    : routineOccurrenceService.expand(spec.userId(), now.toLocalDate(), spec.end().plusDays(14),
+                    scenario.routines());
+            for (RoutineOccurrence occurrence : upcoming) {
                 if (occurrence.courseId() == null || !occurrence.startAt().isAfter(now)) {
                     continue;
                 }
@@ -1562,7 +1585,14 @@ public class PeriodPlanDraftGenerator {
             transcript = aiMessageMapper.findByConversationIdAndUserId(conversationId, spec.userId());
             brief = planBriefService.load(spec.userId(), conversationId);
         }
-        List<ExecutionItem> existing = executionItemMapper.findByUserIdAndPlanningRange(spec.userId(), spec.start(), spec.end());
+        // 기존 실행 목록도 가정 상태로(완료·보류·옮기기 변경을 반영). 바뀐 항목이 이 기간에 걸치는지 같은 기준으로 다시 거른다.
+        List<ExecutionItem> stored = executionItemMapper.findByUserIdAndPlanningRange(spec.userId(), spec.start(), spec.end());
+        List<ExecutionItem> existing = opts.scenarioOrOriginal().isOriginal() ? stored : opts.scenarioOrOriginal().execution().apply(
+                stored == null ? List.of() : stored,
+                i -> i.getScheduledDate() == null
+                        ? i.getPlanningStartDate() != null && !i.getPlanningStartDate().isAfter(spec.end())
+                        && !i.getPlanningEndDate().isBefore(spec.start())
+                        : !i.getScheduledDate().isBefore(spec.start()) && !i.getScheduledDate().isAfter(spec.end()));
         return new Facts(history, nextClasses, transcript == null ? List.of() : transcript, brief,
                 existing == null ? List.of() : existing, purposeOf(spec, brief), loadProjectStates(spec.userId(), courses));
     }

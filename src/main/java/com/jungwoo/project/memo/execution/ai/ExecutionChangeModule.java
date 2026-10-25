@@ -340,6 +340,16 @@ public class ExecutionChangeModule implements ChangeModule {
             if (c.title() == null || c.title().isBlank() || c.scheduledDate() == null) {
                 return ChangeCheck.fail(ChangeCheck.INVALID, "제목과 날짜가 필요해요", op);
             }
+            // 서비스와 같은 규칙: 시각은 시작·끝을 함께, 끝이 뒤, 시작은 그 날짜(끝은 다음 날 00:00까지 허용)
+            if ((c.scheduledStartAt() == null) != (c.scheduledEndAt() == null)) {
+                return ChangeCheck.fail(ChangeCheck.INVALID, "시작과 끝 시각을 함께 정해야 해요", op);
+            }
+            if (c.scheduledStartAt() != null && (!c.scheduledEndAt().isAfter(c.scheduledStartAt())
+                    || !c.scheduledStartAt().toLocalDate().equals(c.scheduledDate())
+                    || (!c.scheduledEndAt().toLocalDate().equals(c.scheduledDate())
+                    && !c.scheduledEndAt().equals(c.scheduledDate().plusDays(1).atStartOfDay())))) {
+                return ChangeCheck.fail(ChangeCheck.INVALID, "시각이 맞지 않아요(그날 안, 끝이 뒤)", op);
+            }
             if (c.courseId() != null) {
                 Course course = courseMapper.findByIdAndUserId(c.courseId(), userId);
                 if (course == null) {
@@ -375,7 +385,10 @@ public class ExecutionChangeModule implements ChangeModule {
                     ? "INVALID:날짜가 있는 할 일만 옮길 수 있어요"
                     : m.toDate() == null ? "INVALID:옮길 날짜가 필요해요"
                     : (m.startTime() != null && current.getPlacementType() != PlacementType.TIME_FIXED)
-                    ? "INVALID:시각이 없는 할 일에는 시각을 붙여 옮길 수 없어요" : null;
+                    ? "INVALID:시각이 없는 할 일에는 시각을 붙여 옮길 수 없어요"
+                    : (m.startTime() == null) != (m.endTime() == null) ? "INVALID:시작과 끝 시각을 함께 정해야 해요"
+                    : m.startTime() != null && !m.endTime().isAfter(m.startTime()) && !m.endTime().equals(LocalTime.MIDNIGHT)
+                    ? "INVALID:끝 시각이 시작보다 뒤여야 해요" : null;
             case ReduceItem r -> st != ExecutionStatus.PLANNED ? "INVALID:할 일 상태에서만 줄일 수 있어요"
                     : r.expectedMinutes() != null && current.getExpectedMinutes() != null
                     && r.expectedMinutes() >= current.getExpectedMinutes() ? "INVALID:줄이는 분량은 지금보다 작아야 해요" : null;

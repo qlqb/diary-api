@@ -72,6 +72,10 @@ public class ConsultToolLoop {
         this.usage = usage;
     }
 
+    public int maxSeconds() {
+        return maxSeconds;
+    }
+
     public boolean available() {
         return enabled && chatModel.getIfAvailable() != null;
     }
@@ -146,6 +150,12 @@ public class ConsultToolLoop {
             usage.record(ws.userId(), ws.conversationId(), ws.requestMessageId(), this.model, in, null, out,
                     UsageResultStatus.SUCCESS, null, USAGE_FEATURE, null, null, null);
             AssistantMessage reply = response.getResult().getOutput();
+            if (reply.hasToolCalls() && System.nanoTime() > deadline) {
+                // 모델 호출이 길어져 시간 상한을 넘겼다 — 이 응답의 도구는 실행하지 않는다.
+                ws.note("도구 단계 시간 상한(" + maxSeconds + "초)에 닿아 마지막 확인을 하지 못했다");
+                recorder.record(ws, ++seq, "LIMIT", "time", null, "LIMIT", null, latency, in, out);
+                break;
+            }
             recorder.record(ws, ++seq, "MODEL", "tool_round", null, reply.hasToolCalls() ? "TOOL_CALLS" : "DONE",
                     reply.hasToolCalls() ? null : reply.getText(), latency, in, out);
             if (!reply.hasToolCalls()) {
@@ -188,6 +198,10 @@ public class ConsultToolLoop {
                 }
                 recorder.record(ws, ++seq, "TOOL", call.name(), call.arguments(), code, result,
                         System.currentTimeMillis() - toolStarted, null, null);
+                ws.detail(call.name(), result);
+                if ("READ_FAILED".equals(code)) {
+                    ws.note(call.name() + " 조회가 서버에서 실패해 그 부분은 확인하지 못했다");
+                }
                 results.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
             }
             messages.add(ToolResponseMessage.builder().responses(results).build());
@@ -227,6 +241,10 @@ public class ConsultToolLoop {
                         .map(StudyTimeIssueText::of).toList()));
             }
             sb.append('\n');
+        }
+        if (!ws.details().isEmpty()) {
+            sb.append("도구 결과(원문 그대로, 근거로 쓴다):\n");
+            ws.details().forEach(d -> sb.append("  ").append(d).append('\n'));
         }
         if (!ws.limitNotes().isEmpty()) {
             sb.append("미완료: ").append(String.join(" / ", ws.limitNotes()))

@@ -168,6 +168,16 @@ public class PlanDraftService {
      */
     public Generated generate(Long userId, PlanDraftRequest request, PeriodPlanDraftGenerator.Origin origin,
                               PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> stage) {
+        return generate(userId, request, origin, previous, stage, null);
+    }
+
+    /**
+     * @param scenario 아직 적용하지 않은 변경 묶음의 가정 상태(예: 오늘 근무 회차 빼기). 원본으로 만들면 null.
+     *                 다시 만들기(redraft)는 대체하는 초안이 기댄 묶음의 지금 선택으로 다시 만든다
+     */
+    public Generated generate(Long userId, PlanDraftRequest request, PeriodPlanDraftGenerator.Origin origin,
+                              PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> stage,
+                              com.jungwoo.project.memo.ai.change.PlanScenarioService.Resolved scenario) {
         PeriodPlanDraftGenerator.validatePeriod(request.getStartDate(), request.getEndDate());
         PlanIntensity intensity = planVersionService.resolveIntensity(userId, request.getIntensity());
         Spec spec = new Spec(userId, request.getStartDate(), request.getEndDate(), intensity,
@@ -187,8 +197,19 @@ public class PlanDraftService {
         if (!aiConsultationClient.isConfigured()) {
             throw new ServiceUnavailableException(ErrorCode.AI_NOT_CONFIGURED);
         }
-        return generator.generate(spec, new PeriodPlanDraftGenerator.Options(previous, stage));
+        com.jungwoo.project.memo.ai.change.PlanScenarioService.Resolved resolved = scenario;
+        if (resolved == null && previous != null && previous.scenario() != null && planScenarioService != null) {
+            resolved = planScenarioService.forBundle(userId, previous.scenario().bundleId());
+        }
+        PeriodPlanDraftGenerator.Options options = new PeriodPlanDraftGenerator.Options(previous, stage);
+        if (resolved != null) {
+            options = options.withScenario(resolved.scenario(), resolved.snapshot());
+        }
+        return generator.generate(spec, options);
     }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.change.PlanScenarioService planScenarioService;
 
     /** 판단 → 조각(측정용 경로). 서버 코드가 순서를 부른다. */
     private Generated generateWithJudgment(Spec spec, PlanDraftRequest request, boolean generateItems) {
@@ -374,7 +395,8 @@ public class PlanDraftService {
                     origin == null ? null : origin.previousProposalId(),
                     generated.extras() == null ? null : generated.extras().evidence(),
                     origin == null ? null : origin.flowRootProposalId(), spec.purpose(),
-                    extras == null ? null : extras.projectStates(), extras == null ? null : extras.scopeReport()));
+                    extras == null ? null : extras.projectStates(), extras == null ? null : extras.scopeReport(),
+                    extras == null ? null : extras.scenario()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
             return null;
@@ -505,6 +527,7 @@ public class PlanDraftService {
                 .materialSelection(generated.materialSelection())
                 .requestContext(requestContextView(spec, generated.materialSelection(), conversationId, requestContext != null))
                 .scopeReport(extras == null ? null : extras.scopeReport())
+                .scenarioChanges(extras == null || extras.scenario() == null ? List.of() : extras.scenario().summaries())
                 .generation(extras == null ? null : generationView(extras.budget(), extras.selectionReused()))
                 .previousDraft(supersededProposalId == null ? null : PlanDraftResponse.PreviousDraftView.builder()
                         .proposalId(supersededProposalId)
@@ -836,6 +859,7 @@ public class PlanDraftService {
                 .materialSelection(selection)
                 .requestContext(requestContextView(spec, selection, proposal.getConversationId(), context != null))
                 .scopeReport(context == null ? null : context.scopeReport())
+                .scenarioChanges(context == null || context.scenario() == null ? List.of() : context.scenario().summaries())
                 .generation(generation)
                 .previousDraft(context == null || context.previousProposalId() == null ? null
                         : PlanDraftResponse.PreviousDraftView.builder().proposalId(context.previousProposalId())

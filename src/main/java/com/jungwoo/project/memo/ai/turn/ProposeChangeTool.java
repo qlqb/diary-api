@@ -79,6 +79,16 @@ public class ProposeChangeTool implements ConsultTool {
             out.put("message", check.message());
             return write(out);
         }
+        String summary;
+        try {
+            summary = check.op().summary();
+            check.op().targetKey();
+        } catch (RuntimeException e) {
+            // 확인은 통과했지만 값이 모자라 문장을 만들 수 없다 — 작업 공간에 올리지 않는다
+            out.put("result", "INVALID_ARGS");
+            out.put("message", "변경에 필요한 값이 모자란다(시작·끝 등)");
+            return write(out);
+        }
         if (ws.hasTarget(check.op().targetKey())) {
             out.put("result", ChangeCheck.CONFLICT);
             out.put("message", "같은 대상의 변경이 이미 제안 목록에 있다 — 바꾸려면 withdraw_change 후 다시 제안한다");
@@ -86,7 +96,7 @@ public class ProposeChangeTool implements ConsultTool {
         }
         TurnWorkspace.Staged staged = ws.stage(check.op(), true, "PROPOSED", null, null);
         out.put("itemNo", staged.no());
-        out.put("summary", check.op().summary());
+        out.put("summary", summary);
         out.put("state", "제안됨(적용 전)");
         List<Map<String, Object>> linked = new ArrayList<>();
         try {
