@@ -16,10 +16,38 @@ import java.util.List;
  * @param ref 이 상태를 만든 변경 묶음(검토 리비전·선택 항목). 원본이면 null
  */
 public record Scenario(RoutineOverlay routines, CommitmentOverlay commitments, ExecutionOverlay execution,
-                       AssignmentOverlay assignments, ScenarioRef ref) {
+                       AssignmentOverlay assignments, ScenarioRef ref, StudyWindows study) {
 
     public static final Scenario ORIGINAL = new Scenario(RoutineOverlay.NONE, CommitmentOverlay.NONE,
-            ExecutionOverlay.NONE, AssignmentOverlay.NONE, null);
+            ExecutionOverlay.NONE, AssignmentOverlay.NONE, null, null);
+
+    public Scenario(RoutineOverlay routines, CommitmentOverlay commitments, ExecutionOverlay execution,
+                    AssignmentOverlay assignments, ScenarioRef ref) {
+        this(routines, commitments, execution, assignments, ref, null);
+    }
+
+    /**
+     * 사용자가 말한 공부 범위(그날 기본 창을 대신한다)와 그 안에서 뺄 구간(식사 등). 날짜가 붙은 실제 시각이라 자정을 넘을 수 있다.
+     * 범위가 있는 날만 기본 창을 대신하고, 없는 날은 기본 창 그대로다. 실제 일정(hard busy)은 언제나 뺀다.
+     */
+    public record StudyWindows(List<TimeRange> windows, List<TimeRange> exclusions) {
+        public StudyWindows {
+            windows = windows == null ? List.of() : List.copyOf(windows);
+            exclusions = exclusions == null ? List.of() : List.copyOf(exclusions);
+        }
+
+        public boolean isEmpty() {
+            return windows.isEmpty() && exclusions.isEmpty();
+        }
+    }
+
+    public record TimeRange(java.time.LocalDateTime start, java.time.LocalDateTime end) {
+    }
+
+    /** 같은 겹침에 공부 범위만 바꾼다. */
+    public Scenario withStudy(StudyWindows study) {
+        return new Scenario(routines, commitments, execution, assignments, ref, study);
+    }
 
     /**
      * @param bundleId    변경 묶음

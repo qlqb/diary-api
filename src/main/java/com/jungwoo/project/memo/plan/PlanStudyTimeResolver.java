@@ -31,6 +31,50 @@ public class PlanStudyTimeResolver {
     private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
             .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
 
+    /**
+     * (2026-10-25) 초안에 고정한 시간 조건(범위·제외·분량). 생성 때 정한 값을 그대로 쓰고 합의를 다시 골라 읽지 않는다 — 검토한 초안과
+     * 배치가 다른 조건을 보지 않게. 그 값이 없는 옛 초안은 예전 경로(범위 추출의 시간 → 합의)로 읽는다.
+     */
+    public com.jungwoo.project.memo.ai.brief.StudyTimeCondition resolveCondition(Long userId, PlanVersion plan) {
+        PlanRequestContext context = context(userId, plan);
+        if (context != null && context.scopeReport() != null && context.scopeReport().timeCondition() != null) {
+            return context.scopeReport().timeCondition();
+        }
+        PlanBriefService.TimeBudget legacy = resolve(userId, plan);
+        return legacy == null ? null : PlanBriefService.fromLegacyCondition(legacy);
+    }
+
+    /** 저장된 요청 맥락에서 초안에 고정한 시간 조건만 읽는다. 없거나 읽지 못하면 null. */
+    public static com.jungwoo.project.memo.ai.brief.StudyTimeCondition conditionOf(String planRequestJson) {
+        if (planRequestJson == null || planRequestJson.isBlank()) {
+            return null;
+        }
+        try {
+            PlanRequestContext context = STATIC_JSON.readValue(planRequestJson, PlanRequestContext.class);
+            return context.scopeReport() == null ? null : context.scopeReport().timeCondition();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final ObjectMapper STATIC_JSON = new ObjectMapper().findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    private PlanRequestContext context(Long userId, PlanVersion plan) {
+        if (plan.getSourceProposalId() == null) {
+            return null;
+        }
+        AiProposal proposal = proposalMapper.findByIdAndUserId(plan.getSourceProposalId(), userId);
+        if (proposal == null || proposal.getPlanRequestJson() == null || proposal.getPlanRequestJson().isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(proposal.getPlanRequestJson(), PlanRequestContext.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public PlanBriefService.TimeBudget resolve(Long userId, PlanVersion plan) {
         if (plan.getSourceProposalId() == null) {
             return null;

@@ -149,16 +149,19 @@ class RequestScopeFlowTest {
         Generated generated = f.generate(f.spec(com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.CONVERSATION_HEADER + "\n- 스택 과제 끝내고 싶어\n- 오늘 오후4시까지 가능해\n", origin()),
                 com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
-        // 픽스처 가용 창은 첫날 09:00부터 하나 — 09:00~16:00의 남는 시간(420분)이 예산이다(강도 비율 600분이 아니다).
+        // 픽스처 가용 창은 첫날 09:00부터 하나 — 09:00~16:00(420분)이 범위다(강도 비율 600분이 아니다). (2026-10-25) 범위를 채우되
+        // 연속 60분마다 10분 휴식 여유를 남긴다: 공부 360분 + 휴식 여유 60분.
         assertThat(f.scopePrompts().get(0)).contains("[시각 기준] 09:00");
-        assertThat(generated.targetMinutes()).isEqualTo(420);
+        assertThat(generated.targetMinutes()).isEqualTo(360);
         // 생성 뒤에도 그 시간을 넘는 항목은 미룬다
         assertThat(generated.items()).extracting(i -> i.title()).containsExactly("스택 과제");
         assertThat(generated.strategy().deferred()).extracting(d -> d.title()).contains("스택 응용");
         assertThat(f.planPrompt()).contains("[사용자가 말한 시간]").contains("~16:00");
         ScopeReport report = generated.extras().scopeReport();
         assertThat(report.status()).isEqualTo("EXTRACTED");
-        assertThat(report.studyTime().until()).isEqualTo("16:00");
+        assertThat(report.timeCondition().windows().get(0).end()).isEqualTo(java.time.LocalTime.of(16, 0));
+        assertThat(report.timeBudget().capacityMinutes()).isEqualTo(420);
+        assertThat(report.timeBudget().breakReserveMinutes()).isEqualTo(60);
     }
 
     @Test
@@ -182,6 +185,8 @@ class RequestScopeFlowTest {
 
         assertThat(f.planPrompt()).doesNotContain("[사용자가 말한 시간]");
         assertThat(generated.extras().scopeReport().studyTime()).isNull();
+        // 버리지 않고 왜 쓰지 않았는지 남긴다 — 화면이 "말한 시간을 확인하지 못했어요"를 보인다.
+        assertThat(generated.extras().scopeReport().timeCondition().status()).isEqualTo("VERIFY_FAILED");
     }
 
     @Test
@@ -211,7 +216,7 @@ class RequestScopeFlowTest {
 
         // 7일 계획 · 하루 30분 = 210분. AI 정리(~16:00만)를 썼다면 420분이었다.
         assertThat(generated.targetMinutes()).isEqualTo(210);
-        assertThat(generated.extras().scopeReport().studyTime().minutes()).isEqualTo(30);
+        assertThat(generated.extras().scopeReport().timeCondition().minutes()).isEqualTo(30);
     }
 
     @Test

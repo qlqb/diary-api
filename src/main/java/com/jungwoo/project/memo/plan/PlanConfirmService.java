@@ -91,8 +91,9 @@ public class PlanConfirmService {
         // 0. 미리보기가 정한 시각이 지금의 일정과 겹치는지 최신 커밋 기준으로 본다. 미리보기와
         //    확정 사이에 근무가 생겼으면 여기서 전체를 거절한다 — 겹친 항목만 빼고 확정하면
         //    사용자가 승인한 계획과 저장된 계획이 조용히 달라진다.
+        //    초안에 고정한 말한 시간 조건(범위·제외 구간)도 함께 본다 — 편집으로 범위 밖·식사 시간에 옮긴 항목을 그대로 확정하지 않는다.
         scheduleGuard.ensureNoConflicts(userId, proposal.getPlanStartDate(), proposal.getPlanEndDate(),
-                request.getEditedItems());
+                request.getEditedItems(), PlanStudyTimeResolver.conditionOf(proposal.getPlanRequestJson()));
 
         // 1. 제안 적용 → 새 항목은 execution_items 생성, 조정 항목은 기존 항목의 도메인 액션(줄임·이동·보류).
         //    승인 전 미반영 원칙은 여기서 이미 보장되고, base_version이 낡았으면 409로 전체가 되돌아간다.

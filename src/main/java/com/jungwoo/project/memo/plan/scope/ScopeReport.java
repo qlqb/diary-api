@@ -26,7 +26,34 @@ public record ScopeReport(String status, List<RequestScope> scopes, List<PartSta
                            * (2026-10-19) 사용자가 이번 요청에서 말한 쓸 수 있는 시간 — 자료를 보지 않는 범위 추출이 원문에서 뽑고 서버가
                            * 원문 문장과 값을 대조해 확인한 것만. 예산 계산과 배치가 이것을 쓴다. 없으면 null
                            */
-                          StudyTime studyTime) {
+                          StudyTime studyTime,
+                          /**
+                           * (2026-10-25) 이번 초안이 쓴 시간 조건(해석값·근거·메모·확인 못 한 부분). 생성·미리보기·배치·확정이 이 값을 그대로
+                           * 다시 쓴다 — 저장된 합의를 다시 읽어 고르지 않는다(검토한 초안과 확정이 다른 조건을 보는 일을 막는다). 없으면 null
+                           */
+                          com.jungwoo.project.memo.ai.brief.StudyTimeCondition timeCondition,
+                          /** 시간 조건으로 정한 분량: 요청량·수용량·목표·휴식 여유·부족분·겹친 일정. 조건이 없으면 null */
+                          TimeBudget timeBudget) {
+
+    /**
+     * @param placedMinutes 배치가 실제로 넣은 분(배치 전이면 null)
+     */
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record TimeBudget(Integer requestedMinutes, int capacityMinutes, int targetMinutes, int breakReserveMinutes,
+                             int shortfallMinutes, List<String> conflicts, Integer placedMinutes) {
+    }
+
+    public ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
+                       List<String> remaining, List<String> needsConfirm, String completion, boolean incomplete,
+                       List<String> issues, String notice, StudyTime studyTime) {
+        this(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete, issues, notice, studyTime,
+                null, null);
+    }
+
+    public ScopeReport withTime(com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition, TimeBudget budget) {
+        return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
+                issues, notice, studyTime, condition, budget);
+    }
 
     public ScopeReport(String status, List<RequestScope> scopes, List<PartState> parts, boolean requiredUnmet,
                        List<String> remaining, List<String> needsConfirm, String completion, boolean incomplete) {
@@ -41,12 +68,12 @@ public record ScopeReport(String status, List<RequestScope> scopes, List<PartSta
 
     public ScopeReport withChecks(List<String> newIssues, String newNotice) {
         return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
-                List.copyOf(newIssues), newNotice, studyTime);
+                List.copyOf(newIssues), newNotice, studyTime, timeCondition, timeBudget);
     }
 
     public ScopeReport withStudyTime(StudyTime newStudyTime) {
         return new ScopeReport(status, scopes, parts, requiredUnmet, remaining, needsConfirm, completion, incomplete,
-                issues, notice, newStudyTime);
+                issues, notice, newStudyTime, timeCondition, timeBudget);
     }
 
     /**

@@ -89,6 +89,19 @@ public class AvailabilityEstimateService {
     }
 
     /**
+     * 가정 상태가 원본이면 원본 계산을, 아니면 가정 상태 계산을 부른다. 부르는 쪽이 둘을 직접 고르지 않게 한다.
+     */
+    public static AvailabilityEstimateResult estimateFor(AvailabilityEstimateService service, Long userId,
+                                                         LocalDate horizonStart, LocalDate horizonEnd,
+                                                         List<UnavailableWindowSpec> aiUnavailable,
+                                                         List<AvailabilityOverrideRequest> userOverrides, Scenario scenario) {
+        boolean original = scenario == null || (scenario.isOriginal()
+                && (scenario.study() == null || scenario.study().isEmpty()));
+        return original ? service.estimate(userId, horizonStart, horizonEnd, aiUnavailable, userOverrides)
+                : service.estimate(userId, horizonStart, horizonEnd, aiUnavailable, userOverrides, scenario);
+    }
+
+    /**
      * 가정 상태(아직 적용하지 않은 변경을 겹친 상태)로 계산한다. 원본은 바뀌지 않는다. 사실을 읽는 곳은 이 메서드 하나라서
      * 원본 계산과 가정 상태 계산이 같은 차감 규칙을 쓴다.
      */
@@ -102,6 +115,15 @@ public class AvailabilityEstimateService {
         LocalDateTime now = ZonedDateTime.now(clock).withZoneSameInstant(zone).toLocalDateTime();
         LocalDateTime lowerBound = now.isAfter(horizonStart.atStartOfDay()) ? now : horizonStart.atStartOfDay();
         LocalDateTime upperBound = horizonEnd.plusDays(1).atStartOfDay();
+        Scenario.StudyWindows study = sc.study() == null || sc.study().isEmpty() ? null : sc.study();
+        if (study != null) {
+            // 말한 범위가 자정을 넘으면("새벽 1시까지") 그 끝까지 본다. 계획 날짜 범위는 그대로다.
+            for (Scenario.TimeRange w : study.windows()) {
+                if (w.end().isAfter(upperBound)) {
+                    upperBound = w.end();
+                }
+            }
+        }
 
         List<ExecutionItem> existingFixed = sc.execution().apply(
                 executionItemMapper.findTimeFixedByUserIdAndDateRange(userId, horizonStart, horizonEnd),
@@ -171,10 +193,15 @@ public class AvailabilityEstimateService {
         // 사용자가 "이 시간은 돼요"라고 말해도 다시 열리지 않는다.
         List<Interval> softBlockedAfterReopen = subtractAll(softBlocked, reopenIntervals);
 
-        List<AvailabilityWindow> rawWindows = baseCandidateWindows(horizonStart, horizonEnd);
+        List<AvailabilityWindow> rawWindows = study == null ? baseCandidateWindows(horizonStart, horizonEnd)
+                : studyCandidateWindows(horizonStart, horizonEnd, study);
 
         List<Interval> allExclusions = new ArrayList<>(hardBusy);
         allExclusions.addAll(softBlockedAfterReopen);
+        if (study != null) {
+            // 식사처럼 사용자가 뺀 구간은 이번 계획에서 배치하지 않는다(일정으로 저장된 것은 아니라 busy 목록에는 넣지 않는다).
+            study.exclusions().forEach(x -> allExclusions.add(new Interval(x.start(), x.end())));
+        }
 
         List<AvailabilityWindow> resultWindows = new ArrayList<>();
         for (AvailabilityWindow raw : rawWindows) {
@@ -247,6 +274,27 @@ public class AvailabilityEstimateService {
                     untilMidnight ? d.plusDays(1).atStartOfDay() : LocalDateTime.of(d, end),
                     AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW,
                     "구체적인 근거가 없어 하루 기본 시간대에서 확정 일정을 뺀 시간이에요"));
+        }
+        return windows;
+    }
+
+    /**
+     * 말한 공부 범위로 후보 창을 만든다. 범위가 있는 날은 기본 창을 쓰지 않는다(기본 창 밖의 명시 요청을 조용히 자르지 않는다).
+     * 범위가 없는 날은 기본 창 그대로다.
+     */
+    private List<AvailabilityWindow> studyCandidateWindows(LocalDate horizonStart, LocalDate horizonEnd,
+                                                           Scenario.StudyWindows study) {
+        List<AvailabilityWindow> windows = new ArrayList<>();
+        java.util.Set<LocalDate> covered = new java.util.HashSet<>();
+        for (Scenario.TimeRange w : study.windows()) {
+            covered.add(w.start().toLocalDate());
+            windows.add(new AvailabilityWindow(w.start(), w.end(), AvailabilitySource.CURRENT_CONVERSATION,
+                    AvailabilityConfidence.HIGH, "사용자가 말한 공부 시간"));
+        }
+        for (AvailabilityWindow base : baseCandidateWindows(horizonStart, horizonEnd)) {
+            if (!covered.contains(base.startAt().toLocalDate())) {
+                windows.add(base);
+            }
         }
         return windows;
     }

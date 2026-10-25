@@ -320,15 +320,21 @@ public class PlanBriefService {
                 continue;
             }
             if ("ADD".equals(kind)) {
-                String text = withTimeBudget(clean(op.text()), op);
+                // (2026-10-25) 문장에 시간 꼬리표를 붙이지 않는다. 꼬리표가 붙은 문장은 사용자 원문과 같을 수 없어, 사용자가 그대로
+                // 말한 시간 합의도 AI 작성으로 떨어졌다. 해석한 시간은 timeCondition에 따로 둔다.
+                String text = clean(op.text());
                 if (text == null) {
                     continue;
                 }
                 String scope = scopeOf(op.scope());
                 UserBasis basis = admissibleBasis(op, scope, userMessageId, utterances);
+                StudyTimeCondition timeCondition = "TIME_BUDGET".equals(kindOf(op.kind()))
+                        ? timeConditionOf(op, basis, utterances, turnPeriod) : null;
                 // 사용자 말을 그대로 옮긴 문장만 사용자 작성이다. AI가 자기 말로 정리했으면 작성자는 AI, 근거는 그 발언(승인은 아니다).
+                // 시간 합의는 값까지 원문에서 확인돼야 사용자 작성이다 — 문장이 같아도 모델이 적은 시각이 다르면 사용자의 말이 아니다.
                 boolean user = basis != null && PlanBriefItem.SPEAKER_USER.equalsIgnoreCase(op.speaker())
-                        && verbatim(text, basis.sentence());
+                        && verbatim(text, basis.sentence())
+                        && (timeCondition == null || timeCondition.adopted());
                 String speaker = user ? PlanBriefItem.SPEAKER_USER : PlanBriefItem.SPEAKER_ASSISTANT;
                 LocalDate[] period = resolvePeriod(scope, op, turnPeriod, today);
                 // 같은 문장·같은 적용 범위(초안/기간·날짜·과목)면 같은 항목이다 — 새로 만들지 않고, 근거가 새로 확인됐으면 붙인다.
@@ -351,7 +357,7 @@ public class PlanBriefService {
                         null, op.topicId(), op.courseId(), op.executionItemId(), 1, List.of(), now,
                         period[0], period[1], today, null,
                         basis == null ? null : basis.quote(), basis == null ? null : basis.messageId(),
-                        basis == null ? null : basis.sentence()));
+                        basis == null ? null : basis.sentence(), timeCondition));
                 applied++;
                 continue;
             }
@@ -365,7 +371,7 @@ public class PlanBriefService {
                 case "REJECT" -> current.rejected() ? null : current.withRejected(now);
                 case "REMOVE" -> current.removed() ? null : current.withRemoved(now);
                 case "UPDATE" -> {
-                    String text = withTimeBudget(clean(op.text()), op);
+                    String text = clean(op.text());
                     LocalDate start = parseDate(op.periodStart());
                     LocalDate end = parseDate(op.periodEnd());
                     boolean datesGiven = start != null && end != null && !end.isBefore(start);
@@ -380,8 +386,10 @@ public class PlanBriefService {
                         yield basis != null && !current.grounded()
                                 ? current.withBasis(basis.quote(), basis.messageId(), basis.sentence(), now) : null;
                     }
-                    yield current.revised(sameText ? current.text() : text, scopeNext,
+                    PlanBriefItem revised = current.revised(sameText ? current.text() : text, scopeNext,
                             datesGiven ? start : null, datesGiven ? end : null, basis, now);
+                    yield "TIME_BUDGET".equals(current.kind())
+                            ? revised.withTimeCondition(timeConditionOf(op, basis, utterances, turnPeriod)) : revised;
                 }
                 default -> null;
             };
@@ -732,6 +740,89 @@ public class PlanBriefService {
             }
         }
         return found;
+    }
+
+    /**
+     * 시간 합의 op의 값(분·시작·끝)을 사용자 원문으로 확인해 구조화한다. 근거 발언이 없으면 확인할 원문이 없으므로 VERIFY_FAILED로 남는다
+     * (값은 보이지만 시간 제약으로 쓰이지 않는다). 발언 시각은 지금으로 본다 — 합의는 그 말을 한 턴이 끝날 때 저장된다.
+     */
+    StudyTimeCondition timeConditionOf(PlanBriefOp op, UserBasis basis, List<UserUtterance> utterances,
+                                       TurnPeriod turnPeriod) {
+        // 확인된 인용에 시간 표현이 있으면 그 인용으로, 없으면 그 인용이 든 문장으로 값을 대조한다.
+        String quote = basis == null ? op.quote()
+                : SaidTime.mentionsTime(basis.quote()) ? basis.quote() : basis.sentence();
+        List<StudyTimeInterpreter.Part> parts = new ArrayList<>();
+        if (op.from() != null || op.until() != null) {
+            parts.add(new StudyTimeInterpreter.Part("WINDOW", quote, op.from(), op.until(), null, null, null, null));
+        }
+        if (op.minutes() != null) {
+            parts.add(new StudyTimeInterpreter.Part("AMOUNT", quote, null, null, null, op.minutes(), op.per(), null));
+        }
+        if (parts.isEmpty()) {
+            return null;
+        }
+        LocalDateTime now = LocalDateTime.now(clock.withZone(ZoneId.of(defaultTimeZoneId)));
+        List<StudyTimeInterpreter.Utterance> said = new ArrayList<>();
+        for (UserUtterance u : utterances == null ? List.<UserUtterance>of() : utterances) {
+            said.add(new StudyTimeInterpreter.Utterance(u.messageId(), u.text(), now));
+        }
+        LocalDate start = turnPeriod != null && turnPeriod.known() ? turnPeriod.offerStart() : today();
+        LocalDate end = turnPeriod != null && turnPeriod.known() ? turnPeriod.offerEnd() : start;
+        int days = (int) java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
+        return StudyTimeInterpreter.interpret(parts, null, said, start, days);
+    }
+
+    /**
+     * 생성 예산과 배치가 같이 쓰는 시간 조건 선택: 사용자가 말했거나 승인한 합의 → 범위 추출이 확인한 조건 → 근거가 붙은 AI 정리 순.
+     * 옛 저장본(꼬리표만 있는 항목)은 꼬리표 값을 조건으로 읽는다.
+     */
+    public static StudyTimeCondition chooseCondition(List<PlanBriefItem> effective, StudyTimeCondition scopeCondition) {
+        StudyTimeCondition confirmed = conditionOf(effective, true);
+        if (confirmed != null) {
+            return confirmed;
+        }
+        if (scopeCondition != null) {
+            return scopeCondition;
+        }
+        return conditionOf(effective, false);
+    }
+
+    private static StudyTimeCondition conditionOf(List<PlanBriefItem> effective, boolean confirmedOnly) {
+        StudyTimeCondition found = null;
+        for (PlanBriefItem item : effective == null ? List.<PlanBriefItem>of() : effective) {
+            boolean userWords = PlanBriefItem.SPEAKER_USER.equals(item.speaker()) || item.accepted();
+            if (!"TIME_BUDGET".equals(item.kind()) || !(userWords || (!confirmedOnly && item.grounded()))) {
+                continue;
+            }
+            if (item.timeCondition() != null) {
+                if (item.timeCondition().adopted() || (userWords && item.accepted())) {
+                    found = item.timeCondition();
+                }
+                continue;
+            }
+            TimeBudget legacy = timeBudgetOf(List.of(item));
+            if (legacy != null) {
+                found = fromLegacy(legacy);
+            }
+        }
+        return found;
+    }
+
+    public static StudyTimeCondition fromLegacyCondition(TimeBudget legacy) {
+        return fromLegacy(legacy);
+    }
+
+    /** 옛 꼬리표 값을 조건으로. 끝이 시작보다 이르거나 같으면 다음 날이다. */
+    static StudyTimeCondition fromLegacy(TimeBudget legacy) {
+        List<StudyTimeCondition.Range> windows = new ArrayList<>();
+        if (legacy.hasWindow()) {
+            boolean midnight = legacy.until() == null || "24:00".equals(legacy.until());
+            java.time.LocalTime end = midnight ? java.time.LocalTime.MIDNIGHT : java.time.LocalTime.parse(legacy.until());
+            boolean next = midnight || (legacy.from() != null && !end.isAfter(legacy.from()));
+            windows.add(new StudyTimeCondition.Range(null, legacy.from(), end, next, null));
+        }
+        return new StudyTimeCondition(StudyTimeCondition.ADOPTED, windows, List.of(), legacy.minutes(),
+                legacy.minutes() == null ? null : (legacy.perDay() ? "DAY" : "PLAN"), null, List.of(), List.of(), List.of());
     }
 
     /** 정리된 시간 값(분·단위·시작·끝)이 사용자 원문 문장에서 그대로 읽히는가. 읽지 못하면 false — {@link SaidTime}. */

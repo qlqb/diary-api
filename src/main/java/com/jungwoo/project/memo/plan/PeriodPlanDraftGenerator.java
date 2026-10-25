@@ -343,9 +343,26 @@ public class PeriodPlanDraftGenerator {
      * @param previous 대체하는 초안의 요청 맥락(근거 스냅샷 포함). 없으면 null
      * @param progress 단계가 바뀔 때 부른다. 없으면 무시
      */
-    public record Options(PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> progress) {
+    public record Options(PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> progress,
+                          /** 아직 적용하지 않은 변경을 겹친 계산용 상태. 원본이면 null */
+                          com.jungwoo.project.memo.scheduling.scenario.Scenario scenario,
+                          /** 상담에서 이미 확인한 시간 조건(턴 작업 공간에서 저장된 것). 있으면 합의·범위 추출보다 먼저다 */
+                          com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition) {
+        public Options(PlanRequestContext previous, Consumer<PlanGenerationProgress.Stage> progress) {
+            this(previous, progress, null, null);
+        }
+
         public static Options none() {
             return new Options(null, null);
+        }
+
+        public Options with(com.jungwoo.project.memo.scheduling.scenario.Scenario newScenario,
+                            com.jungwoo.project.memo.ai.brief.StudyTimeCondition newCondition) {
+            return new Options(previous, progress, newScenario, newCondition);
+        }
+
+        com.jungwoo.project.memo.scheduling.scenario.Scenario scenarioOrOriginal() {
+            return scenario == null ? com.jungwoo.project.memo.scheduling.scenario.Scenario.ORIGINAL : scenario;
         }
 
         void stage(PlanGenerationProgress.Stage stage) {
@@ -516,6 +533,37 @@ public class PeriodPlanDraftGenerator {
                       boolean selectionReused, Long briefId, Integer briefVersion) {
             this(budget, evidence, adjustments, changesFromPrevious, selectionReused, briefId, briefVersion, Map.of(), null);
         }
+
+        /** 모델을 부르지 않고 멈출 때(남는 시간 0) 말한 시간 조건과 분량만 싣는다 — 화면이 왜 비었는지 말할 수 있게. */
+        static Extras timeOnly(com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition,
+                               com.jungwoo.project.memo.plan.scope.ScopeReport.TimeBudget timeBudget) {
+            com.jungwoo.project.memo.plan.scope.ScopeReport report = condition == null ? null
+                    : com.jungwoo.project.memo.plan.scope.ScopeReport.empty(com.jungwoo.project.memo.plan.scope.ScopeReport.NONE)
+                    .withTime(condition, timeBudget);
+            return new Extras(null, null, List.of(), List.of(), false, null, null, Map.of(), report);
+        }
+    }
+
+    /** 계획 모델에게 주는 말한 시간 안내. 범위·제외·요청량·남는 시간·목표를 따로 적는다(요청량을 줄여 적지 않는다). */
+    static String timeNote(com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition, StudyTimeBudget budget, int days) {
+        StringBuilder sb = new StringBuilder("사용자가 말한 공부 시간: ").append(condition.label()).append(". ");
+        if (budget.requestedMinutes() != null) {
+            sb.append("요청량 ").append(budget.requestedMinutes()).append("분");
+            if (budget.breakReserveMinutes() > 0) {
+                sb.append("(범위를 채우되 휴식 여유 ").append(budget.breakReserveMinutes()).append("분을 남긴 값)");
+            }
+            sb.append(", ");
+        }
+        sb.append("말한 범위의 남는 시간 ").append(budget.capacityMinutes()).append("분, 이번 목표 ").append(budget.targetMinutes())
+                .append("분.");
+        if (!budget.conflicts().isEmpty()) {
+            sb.append(" 범위 안의 등록 일정(그 시간은 비워 둔다): ").append(String.join(", ", budget.conflicts())).append('.');
+        }
+        if (budget.shortfallMinutes() > 0) {
+            sb.append(" 요청량 중 ").append(budget.shortfallMinutes()).append("분은 들어갈 자리가 없다 — 줄인 이유를 전략에 적는다.");
+        }
+        sb.append(" 항목의 예상 시간 합을 목표에 맞춘다(넘지 않게, 크게 모자라지도 않게). 공부 항목은 말한 범위 안에서만 한다.");
+        return sb.toString();
     }
 
     public boolean isConfigured() {
@@ -570,13 +618,18 @@ public class PeriodPlanDraftGenerator {
         /*
          * 학습 예산은 서버가 정한다 — 추정 남는 시간 × 강도 비율. 가용시간은 기존 AvailabilityEstimateService 그대로다.
          */
-        AvailabilityEstimateResult availability = availabilityEstimateService.estimate(
-                spec.userId(), spec.start(), spec.end(), List.of(), List.of());
+        com.jungwoo.project.memo.scheduling.scenario.Scenario scenario = opts.scenarioOrOriginal();
+        AvailabilityEstimateResult availability = com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService.estimateFor(availabilityEstimateService, spec.userId(), spec.start(), spec.end(), List.of(), List.of(), scenario);
         int available = availableMinutes(availability.windows());
         int target = spec.intensity().targetMinutesFor(available);
         String confidence = confidenceSummary(availability.windows());
 
-        if (target <= 0) {
+        /*
+         * (2026-10-25) 말한 시간이 있을 수 있으면 기본 창이 0분이라고 여기서 멈추지 않는다 — 조건을 읽기 전에 멈추면 기본 창 밖의 명시
+         * 요청("새벽 1시까지", "7시부터")이 해석되기도 전에 사라진다. 조건을 읽은 뒤에도 0분이면 그 이유를 붙여 멈춘다.
+         */
+        boolean timeMaySpeak = opts.condition() != null || PlanBriefService.mentionsTime(spec.instruction());
+        if (target <= 0 && !timeMaySpeak) {
             log.info("기간 계획 초안: 추정 가용시간 0 — 모델을 부르지 않는다. userId={}, {}~{}",
                     spec.userId(), spec.start(), spec.end());
             return new Generated(spec, target, target, null, false, defaultTitle(spec.start(), spec.end()),
@@ -657,32 +710,55 @@ public class PeriodPlanDraftGenerator {
         List<com.jungwoo.project.memo.ai.brief.PlanBriefItem> briefItems = facts.brief() == null ? List.of()
                 : facts.brief().effectiveFor(spec.start(), spec.end(), flowRootForBudget)
                 .stream().map(PlanBriefService.Applicable::item).toList();
-        // 범위 추출보다 앞서는 것은 사용자가 말했거나 승인한 합의뿐이다. 근거만 붙은 AI 정리(미승인)는 값 누락을 엄격히 보지 않았다.
-        // 배치(PlanStudyTimeResolver)도 같은 선택(chooseTimeBudget)을 쓴다.
-        boolean confirmed = PlanBriefService.confirmedTimeBudgetOf(briefItems) != null;
-        com.jungwoo.project.memo.plan.scope.ScopeReport.StudyTime scopeTime = confirmed ? null : scopeResult.studyTime();
-        if (confirmed && scopeResult.studyTime() != null) {
-            log.info("말한 시간: 사용자가 확인한 상담 합의를 쓴다(범위 추출의 시간은 쓰지 않음). workflowId={}, 추출={}", generationId,
-                    scopeResult.studyTime().quote());
+        /*
+         * (2026-10-25) 시간 조건 선택: 상담에서 확인한 조건 → 사용자가 말했거나 승인한 합의 → 범위 추출이 원문에서 확인한 조건 → 근거가
+         * 붙은 AI 정리. 배치·확정은 이 선택을 다시 하지 않고 초안에 고정한 값을 쓴다.
+         */
+        com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition = opts.condition() != null ? opts.condition()
+                : PlanBriefService.chooseCondition(briefItems, scopeResult.timeCondition());
+        if (condition != null && opts.condition() == null && scopeResult.timeCondition() != null
+                && condition != scopeResult.timeCondition()) {
+            log.info("말한 시간: 사용자가 확인한 상담 합의를 쓴다(범위 추출의 조건은 쓰지 않음). workflowId={}, 추출={}", generationId,
+                    scopeResult.timeCondition().label());
         }
-        PlanBriefService.TimeBudget saidTime = PlanBriefService.chooseTimeBudget(briefItems,
-                scopeTime == null ? null : scopeTime.toBudget());
-        Integer userTimeLimit = userTimeOf(saidTime, availability.windows(), available, days);
+        com.jungwoo.project.memo.scheduling.scenario.Scenario.StudyWindows study =
+                StudyTimeBudget.windowsFor(condition, spec.start(), spec.end());
+        if (study != null) {
+            // 말한 범위는 그날 기본 창을 대신한다(기본 창 밖의 명시 요청을 자르지 않는다). 실제 일정은 그대로 뺀다.
+            scenario = scenario.withStudy(study);
+            availability = com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService.estimateFor(availabilityEstimateService, spec.userId(), spec.start(), spec.end(), List.of(),
+                    List.of(), scenario);
+            available = availableMinutes(availability.windows());
+            confidence = confidenceSummary(availability.windows());
+            target = spec.intensity().targetMinutesFor(available);
+        }
+        StudyTimeBudget studyBudget = condition == null ? null : StudyTimeBudget.compute(condition, study,
+                availability.windows(), availability.busyWindows(), days, spec.intensity());
+        Integer userTimeLimit = null;
         String timeNote = null;
-        if (userTimeLimit != null && userTimeLimit != target) {
-            /*
-             * (2026-10-18) 사용자가 말한 시간은 상한이자 목표다 — 강도 비율로 계산한 예산보다 크면 늘린다. "밤 12시까지 공부할게"라고
-             * 했는데 남는 시간의 65%만 채우면 19시쯤 끝나 버렸다. 남는 시간(시간대를 말했으면 그 안)보다 크게는 잡지 않는다.
-             */
-            String said = saidTime.minutes() == null ? saidTime.windowLabel() + " 사이의 남는 시간(" + userTimeLimit + "분)"
-                    : saidTime.perDay() ? "하루 " + saidTime.minutes() + "분(기간 합 " + saidTime.totalFor(days) + "분)"
-                    : saidTime.minutes() + "분";
-            timeNote = "사용자가 이번 계획에 쓸 수 있다고 말한 시간은 " + said
-                    + (saidTime.hasWindow() && saidTime.minutes() != null ? ", 시간대는 " + saidTime.windowLabel() : "")
-                    + "이다. 강도로 계산한 예산(" + target + "분) 대신 이 값을 쓴다 — 항목의 예상 시간 합을 " + userTimeLimit
-                    + "분에 맞춘다(넘지 않게, 크게 모자라지도 않게).";
-            target = Math.min(userTimeLimit, cap);
-            cappedByItemLimit = userTimeLimit > cap;
+        com.jungwoo.project.memo.plan.scope.ScopeReport.TimeBudget timeBudgetView = null;
+        if (studyBudget != null) {
+            timeBudgetView = new com.jungwoo.project.memo.plan.scope.ScopeReport.TimeBudget(studyBudget.requestedMinutes(),
+                    studyBudget.capacityMinutes(), studyBudget.targetMinutes(), studyBudget.breakReserveMinutes(),
+                    studyBudget.shortfallMinutes(), studyBudget.conflicts(), null);
+            if (studyBudget.requestedMinutes() != null || study != null) {
+                /*
+                 * 사용자가 말한 양(또는 말한 범위를 채운 양)이 목표다 — 강도 비율보다 우선한다. 남는 시간보다 크게 잡지 않지만 요청량은 줄여
+                 * 적지 않는다(부족분은 초안 화면이 보인다). 항목 상한보다 크면 상한까지만 만들고 그 사실을 표시한다.
+                 */
+                userTimeLimit = studyBudget.targetMinutes();
+                cappedByItemLimit = userTimeLimit > cap;
+                target = Math.min(userTimeLimit, cap);
+                timeNote = timeNote(condition, studyBudget, days);
+            }
+        }
+        if (target <= 0) {
+            log.info("기간 계획 초안: 말한 시간 조건을 반영해도 남는 시간이 0 — 모델을 부르지 않는다. userId={}, 조건={}, 겹침={}",
+                    spec.userId(), condition == null ? null : condition.label(),
+                    studyBudget == null ? List.of() : studyBudget.conflicts());
+            return new Generated(spec, 0, 0, null, false, defaultTitle(spec.start(), spec.end()),
+                    null, List.of(), available, confidence, 0, true, false, null, null, null, List.of(), null,
+                    Extras.timeOnly(condition, timeBudgetView));
         }
 
         // 교재(사용자 정정 포함)와 계획 목적이 바뀌면 같은 자료라도 다시 고른다 — 이전 선택을 재사용하지 않는다.
@@ -887,7 +963,8 @@ public class PeriodPlanDraftGenerator {
         if (normalized.strategy().deferred() != null) {
             normalized.strategy().deferred().forEach(d -> modelReasons.add(d.reason()));
         }
-        scopeReport = scopeReport.withStudyTime(scopeTime); // 예산에 쓴 경우만 — 배치가 같은 값을 다시 쓴다
+        // 예산에 쓴 조건과 분량을 초안에 고정한다 — 미리보기·배치·확정이 같은 값을 다시 쓴다(합의를 다시 골라 읽지 않는다).
+        scopeReport = scopeReport.withStudyTime(null).withTime(condition, timeBudgetView);
         var checked = com.jungwoo.project.memo.plan.scope.ScopeChecks.check(scopeReport,
                 normalized.items().stream().map(com.jungwoo.project.memo.ai.dto.ProposalItem::courseId).toList(), modelReasons);
         scopeReport = checked.report();
@@ -968,7 +1045,8 @@ public class PeriodPlanDraftGenerator {
                 : PlanBriefService.agreedLines(facts.brief().effectiveFor(spec.start(), spec.end(), flowRoot));
         long startedAt = System.currentTimeMillis();
         var result = scopeExtractor.extract(new com.jungwoo.project.memo.plan.scope.PlanScopeExtractor.Request(
-                spec.userId(), generationId, spec.instruction(), agreed, catalogs, timeReference));
+                spec.userId(), generationId, spec.instruction(), agreed, catalogs, timeReference,
+                LocalDateTime.now(clock.withZone(ZoneId.of(defaultTimeZoneId))), spec.start(), spec.days()));
         if (result.prompt() != null) {
             budget.record(GenerationBudget.Call.SCOPE, 1, result.estimatedTokens(), null,
                     System.currentTimeMillis() - startedAt,

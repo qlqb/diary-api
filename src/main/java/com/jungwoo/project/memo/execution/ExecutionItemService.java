@@ -434,7 +434,9 @@ public class ExecutionItemService {
             if (request.getStartTime() == null || request.getEndTime() == null) {
                 throw new BadRequestException(ErrorCode.PARTIAL_TIME_RANGE);
             }
-            if (!request.getEndTime().isAfter(request.getStartTime())) {
+            // 끝 00:00은 자정(다음 날 0시)에 끝나는 것이다 — 같은 규칙을 배치·확정과 함께 쓴다.
+            if (!request.getEndTime().isAfter(request.getStartTime())
+                    && !request.getEndTime().equals(java.time.LocalTime.MIDNIGHT)) {
                 throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
             }
             // 시각 없는 항목에 시각을 붙이는 것은 이동이 아니라 배치 형식 변경이다 — 여기서 하지 않는다.
@@ -448,7 +450,8 @@ public class ExecutionItemService {
         if (PlacementType.TIME_FIXED.equals(item.getPlacementType())) {
             if (timeGiven) {
                 newStart = LocalDateTime.of(toDate, request.getStartTime());
-                newEnd = LocalDateTime.of(toDate, request.getEndTime());
+                newEnd = request.getEndTime().equals(java.time.LocalTime.MIDNIGHT)
+                        ? toDate.plusDays(1).atStartOfDay() : LocalDateTime.of(toDate, request.getEndTime());
             } else {
                 long dayDiff = java.time.temporal.ChronoUnit.DAYS.between(fromDate, toDate);
                 newStart = item.getScheduledStartAt().plusDays(dayDiff);
@@ -972,7 +975,10 @@ public class ExecutionItemService {
                 throw new BadRequestException(ErrorCode.INVALID_TIME_RANGE);
             }
             requireMinutePrecision(start, end);
-            if (!scheduledDate.equals(start.toLocalDate()) || !scheduledDate.equals(end.toLocalDate())) {
+            // 하루 안의 시각이다. 끝만은 다음 날 00:00 정각(자정에 끝남)을 허용한다 — 23:00~24:00 공부가 그날의 마지막 칸이다.
+            // 자정을 넘는 부분은 다음 날짜 항목으로 나눈다(배치가 나눈다).
+            boolean endsAtMidnight = end.equals(scheduledDate.plusDays(1).atStartOfDay());
+            if (!scheduledDate.equals(start.toLocalDate()) || (!scheduledDate.equals(end.toLocalDate()) && !endsAtMidnight)) {
                 throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
             }
         } else if (PlacementType.DATE_ONLY.equals(placementType)) {
