@@ -103,6 +103,21 @@ public class ChangeBundleService {
                 .map(b -> toView(b, mapper.findItems(b.getBundleId(), userId))).toList();
     }
 
+    /** 그 대화의 적용 전(PROPOSED) 묶음 항목. 다음 턴이 같은 변경을 또 제안하지 않고, 그 변경이 사실처럼 기억되지 않게 쓴다. */
+    @Transactional(readOnly = true)
+    public List<ChangeBundleRows.Item> pendingItems(Long userId, Long conversationId) {
+        if (conversationId == null) {
+            return List.of();
+        }
+        List<ChangeBundleRows.Item> out = new java.util.ArrayList<>();
+        for (ChangeBundleRows.Bundle b : mapper.findByConversation(conversationId, userId)) {
+            if (ChangeBundleRows.PROPOSED.equals(b.getStatus())) {
+                out.addAll(mapper.findItems(b.getBundleId(), userId));
+            }
+        }
+        return out;
+    }
+
     @Transactional(readOnly = true)
     public List<ChangeBundleView> findBySourceMessage(Long userId, Long sourceMessageId) {
         return mapper.findBySourceMessage(sourceMessageId, userId).stream()

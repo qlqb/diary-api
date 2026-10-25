@@ -92,7 +92,7 @@ class PlanScenarioDbTest {
     @Test
     void 확정은_초안이_기댄_변경을_같은_트랜잭션에서_적용한다() throws Exception {
         Setup s = setup();
-        planScenarios.applyForConfirm(USER, s.draftJson(), 501L);
+        planScenarios.applyForConfirm(USER, s.draftJson(), 501L, DAY, DAY);
         assertThat(bundles.view(USER, s.bundle().bundleId()).status()).isEqualTo("APPLIED");
         assertThat(occurrenceService.expand(USER, DAY, DAY)).noneMatch(o -> o.routineId().equals(s.shift())
                 && o.sourceDate().equals(DAY));
@@ -102,7 +102,7 @@ class PlanScenarioDbTest {
     void 초안_뒤에_근무_빼기를_해제하면_확정을_막는다() throws Exception {
         Setup s = setup();
         bundles.select(USER, s.bundle().bundleId(), s.bundle().revision(), List.of()); // 사용자가 근무 제외를 거절
-        assertThatThrownBy(() -> planScenarios.applyForConfirm(USER, s.draftJson(), 502L))
+        assertThatThrownBy(() -> planScenarios.applyForConfirm(USER, s.draftJson(), 502L, DAY, DAY))
                 .isInstanceOf(ConflictException.class)
                 .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PLAN_SCENARIO_CHANGED);
         assertThat(occurrenceService.expand(USER, DAY, DAY)).anyMatch(o -> o.routineId().equals(s.shift()));
@@ -113,8 +113,26 @@ class PlanScenarioDbTest {
         Setup s = setup();
         bundles.apply(USER, s.bundle().bundleId(), new ChangeBundleService.ApplyCommand(s.bundle().revision(),
                 s.bundle().selectedIds(), "first"));
-        planScenarios.applyForConfirm(USER, s.draftJson(), 503L); // 예외 없음
+        planScenarios.applyForConfirm(USER, s.draftJson(), 503L, DAY, DAY); // 예외 없음
         // 적용된 뒤 미리보기는 원본(이미 그 상태)을 본다 — 두 번 겹치지 않는다
         assertThat(planScenarios.scenarioFor(USER, s.draftJson()).isOriginal()).isTrue();
+    }
+
+    @Test
+    void 초안_뒤에_선택을_바꾸면_미리보기도_옛_가정으로_계산하지_않는다() throws Exception {
+        Setup s = setup();
+        bundles.select(USER, s.bundle().bundleId(), s.bundle().revision(), List.of());
+        assertThatThrownBy(() -> planScenarios.scenarioFor(USER, s.draftJson()))
+                .isInstanceOf(ConflictException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PLAN_SCENARIO_CHANGED);
+    }
+
+    @Test
+    void 깨진_의존_스냅샷은_원본으로_넘어가지_않고_막는다() {
+        String broken = "{\"version\":1,\"scenario\":{\"bundleId\":\"x\"}}";
+        assertThatThrownBy(() -> planScenarios.applyForConfirm(USER, broken, 504L, DAY, DAY))
+                .isInstanceOf(ConflictException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ErrorCode.PLAN_SCENARIO_CHANGED);
+        assertThat(planScenarios.snapshotOf("{\"version\":1}")).isNull(); // 이 기능 전 초안: 의존 없음
     }
 }

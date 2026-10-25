@@ -89,6 +89,11 @@ public class ProposeChangeTool implements ConsultTool {
             out.put("message", "변경에 필요한 값이 모자란다(시작·끝 등)");
             return write(out);
         }
+        if (ws.isPending(check.op().targetKey())) {
+            out.put("result", ChangeCheck.CONFLICT);
+            out.put("message", "이전 턴에서 이미 제안돼 적용 전인 변경이 같은 대상에 있다 — 다시 제안하지 않는다. 계획은 그 변경을 가정해 만들 수 있다");
+            return write(out);
+        }
         if (ws.hasTarget(check.op().targetKey())) {
             out.put("result", ChangeCheck.CONFLICT);
             out.put("message", "같은 대상의 변경이 이미 제안 목록에 있다 — 바꾸려면 withdraw_change 후 다시 제안한다");

@@ -29,6 +29,11 @@ public final class ExecutionOverlay {
         return changes.isEmpty();
     }
 
+    /** 이 가정 상태가 그 할 일을 바꾸거나 새로 만들었는가. */
+    public boolean touches(Long executionItemId) {
+        return changes.containsKey(executionItemId);
+    }
+
     /**
      * @param fromDb    원래 조회 결과
      * @param condition 원래 조회의 조건(바뀐 항목이 여전히 이 조회에 들어오는가)

@@ -28,7 +28,10 @@ public final class TurnWorkspace {
     private StudyTimeCondition condition;
     private final List<String> limitNotes = new ArrayList<>();
     private final List<String> checked = new ArrayList<>();
-    private int modelCalls;
+    /** 시도한 모델 호출 수. 도구 단계가 시간 초과로 끊겨도 답변 단계가 이 값으로 남은 호출을 센다(다른 스레드가 읽는다). */
+    private volatile int modelCalls;
+    /** 이전 턴에서 제안돼 아직 적용 전인 변경(대상 키 → 요약). 같은 변경을 다시 제안하지 않는다. */
+    private final java.util.Map<String, String> pending = new java.util.LinkedHashMap<>();
     private int toolCalls;
     /** 제안 번호. 철회해도 다시 쓰지 않는다(번호가 겹치면 철회가 다른 제안까지 지운다). */
     private int nextNo = 1;
@@ -85,6 +88,18 @@ public final class TurnWorkspace {
 
     public boolean hasTarget(String targetKey) {
         return staged.stream().anyMatch(s -> s.op().targetKey().equals(targetKey));
+    }
+
+    public void pending(String targetKey, String summary) {
+        pending.put(targetKey, summary);
+    }
+
+    public boolean isPending(String targetKey) {
+        return pending.containsKey(targetKey);
+    }
+
+    public java.util.Collection<String> pendingSummaries() {
+        return List.copyOf(pending.values());
     }
 
     public Staged stage(ChangeOp op, boolean selected, String origin, Integer linkedTo, String reason) {

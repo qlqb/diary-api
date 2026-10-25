@@ -177,27 +177,27 @@ def conversation(token):
     return conv["conversationId"]
 
 
-def draft_items(draft):
-    """초안 항목의 (제목, 시작, 끝). 응답 모양을 가정하지 않고 시작·끝 시각이 있는 dict를 찾는다."""
-    found = []
+def preview(token, draft):
+    """초안 항목은 날짜만 있고 시각은 미리보기 배치가 붙인다 — 화면과 같은 미리보기 API로 시각을 읽는다."""
+    pid = (draft or {}).get("proposalId")
+    if not pid:
+        return [], [], None
+    st, res = call("POST", "/ai/proposals/%s/schedule-preview" % pid, token, {})
+    if st != 200:
+        return [], [], "preview %s %s" % (st, (res or {}).get("code"))
+    placed = [(p.get("title"), p.get("scheduledStartAt"), p.get("scheduledEndAt"), p.get("proposalItemId"), p.get("placementType"),
+               p.get("scheduledDate")) for p in (res.get("placedItems") or []) if p.get("scheduledStartAt")]
+    unplaced = [(u.get("title"), u.get("reason")) for u in (res.get("unplacedItems") or [])]
+    return placed, unplaced, None
 
-    def walk(o):
-        if isinstance(o, dict):
-            s, e = o.get("scheduledStartAt"), o.get("scheduledEndAt")
-            if s and e:
-                found.append((o.get("title") or o.get("itemTitle"), s, e, o.get("expectedMinutes")))
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
-    walk(draft)
-    seen, out = set(), []
-    for f in found:
-        if f[:3] not in seen:
-            seen.add(f[:3])
-            out.append(f)
-    return out
+
+def minutes_of(items):
+    total = 0
+    for _, s_, e_, *rest in items:
+        a = datetime.datetime.fromisoformat(s_)
+        b = datetime.datetime.fromisoformat(e_)
+        total += int((b - a).total_seconds() // 60)
+    return total
 
 
 def hm(ts):
@@ -222,7 +222,7 @@ def make_plan(token, cid, last, today):
 def within(items, day, start, end, holes=()):
     """모든 항목이 day의 start~end(끝이 다음 날이면 넘김) 안이고 holes와 겹치지 않는가."""
     bad = []
-    for title, s, e, _ in items:
+    for title, s, e, *_ in items:
         if s < start or e > end:
             bad.append("%s %s~%s 범위 밖" % (title, s[5:16], e[5:16]))
         for hs, he in holes:
@@ -286,45 +286,51 @@ def main():
         b = turn(token, cid, "그럼 오늘 2시부터 8시까지 자료구조 공부 잡아줘")
         made = make_plan(token, cid, b, today)
         draft = made.get("draft") or {}
-        its = draft_items(draft)
-        holes = []
-        bad = within(its, today, "%sT14:00" % today, "%sT20:00" % today, holes)
-        minutes = sum(int(m or 0) for *_, m in its)
+        its, unplaced, perr = preview(token, draft)
+        bad = within(its, today, "%sT14:00" % today, "%sT20:00" % today)
+        minutes = minutes_of(its)
         scen = draft.get("scenarioChanges") or []
         scenario("B 근무 뺀 가정에서 2~8시 공부", "그럼 오늘 2시부터 8시까지 자료구조 공부 잡아줘",
                  "초안이 근무 제외 변경에 기대고(scenarioChanges), 항목이 14~20시 안, 공부량 < 360분(쉬는 시간 따로), 원본 예외 0건",
-                 "항목 %s, 기대는 변경 %s, 합계 %d분, 원본 예외 %d건, 오류 %s, 범위 밖 %s" % (
-                     [(t, hm(s), hm(e)) for t, s, e, _ in its], scen, minutes, exceptions(today), made.get("error"), bad),
+                 "배치 %s, 못 넣음 %s, 기대는 변경 %s, 합계 %d분, 원본 예외 %d건, 오류 %s, 범위 밖 %s" % (
+                     [(t, hm(s), hm(e)) for t, s, e, *_ in its], unplaced, scen, minutes, exceptions(today),
+                     made.get("error") or perr, bad),
                  bool(its) and not bad and bool(scen) and 0 < minutes < 360 and exceptions(today) == 0)
         REPORT["draftB"] = draft.get("scopeReport")
 
         pid = draft.get("proposalId")
         if pid:
-            st, plan = call("POST", "/plans/proposals/%s/confirm" % pid, token, {})
+            edited = [{"proposalItemId": pi, "placementType": pt or "TIME_FIXED", "scheduledStartAt": s_, "scheduledEndAt": e_,
+                       "scheduledDate": sd or s_[:10]} for _, s_, e_, pi, pt, sd in its]
+            st, plan = call("POST", "/plans/proposals/%s/confirm" % pid, token, {"editedItems": edited})
+            convo_bundles = call("GET", "/ai/conversations/%s/change-bundles" % cid, token)[1] or []
+            skips = [(b.get("bundleId"), b.get("status")) for b in convo_bundles
+                     for i in b.get("items", []) if i.get("opType") == "ROUTINE_SKIP"]
             bst = call("GET", "/ai/change-bundles/%s" % bundle_id, token)[1] if bundle_id else {}
             ex1 = exceptions(today)
             st2, again = call("POST", "/ai/change-bundles/%s/apply" % bundle_id, token,
                               {"expectedRevision": (bst or {}).get("revision", 1), "selectedItemIds": [],
                                "idempotencyKey": str(uuid.uuid4())}) if bundle_id else (None, None)
             ex2 = exceptions(today)
-            scenario("C 확정 시 묶음 함께 적용, 재적용 거절", "(계획 확정 → 같은 묶음 새 키로 적용)",
-                     "확정 200, 묶음 APPLIED, 예외 1건, 재적용 409, 예외 1건 그대로",
-                     "확정 %s, 묶음 %s, 예외 %d건, 재적용 %s %s, 예외 %d건" % (
-                         st, (bst or {}).get("status"), ex1, st2, (again or {}).get("code"), ex2),
-                     st == 200 and (bst or {}).get("status") == "APPLIED" and ex1 == 1 and st2 == 409 and ex2 == 1)
+            scenario("C 확정 시 묶음 함께 적용, 재적용 거절", "(미리보기 시각으로 계획 확정 → 같은 묶음 새 키로 적용)",
+                     "확정 200, 대화의 근무 빼기 제안은 하나뿐이고 APPLIED, 예외 1건, 재적용 409, 예외 1건 그대로",
+                     "확정 %s %s, 대화의 근무 빼기 제안 %s, 예외 %d건, 재적용 %s %s, 예외 %d건" % (
+                         st, (plan or {}).get("code", ""), skips, ex1, st2, (again or {}).get("code"), ex2),
+                     st == 200 and (bst or {}).get("status") == "APPLIED" and len(skips) == 1 and ex1 == 1
+                     and st2 == 409 and ex2 == 1)
 
     # ---------- D ----------
     if run("D"):
         cid = conversation(token)
         d = turn(token, cid, "내일 2시부터 8시까지 자료구조 공부 잡아줘")
         made = make_plan(token, cid, d, tomorrow) if (d.get("offer") or not d.get("question")) else {}
-        its = draft_items((made or {}).get("draft") or {})
+        its, _, _ = preview(token, (made or {}).get("draft"))
         overlap = [x for x in its if x[1] < "%sT20:00" % tomorrow and x[2] > "%sT14:00" % tomorrow]
         text = d["reply"] + " " + ((made or {}).get("draft") or {}).get("scopeReport", {}).__str__()
         mentions = "알바" in text or "근무" in text or "겹" in text
         scenario("D 근무 유지 + 같은 시간 공부 요청", "내일 2시부터 8시까지 자료구조 공부 잡아줘",
                  "근무(14~20시)와 겹친다고 알리거나 묻는다. 근무 시간에 공부 항목을 몰래 넣지 않는다",
-                 "답: %s / 근무 시간과 겹친 항목 %s, 근무 언급 %s" % (d["reply"][:200], [(t, hm(s), hm(e)) for t, s, e, _ in overlap],
+                 "답: %s / 근무 시간과 겹친 항목 %s, 근무 언급 %s" % (d["reply"][:200], [(t, hm(s), hm(e)) for t, s, e, *_ in overlap],
                                                        mentions),
                  mentions and not overlap)
 
@@ -334,14 +340,14 @@ def main():
         cid = conversation(token)
         e = turn(token, cid, "오늘 2시부터 8시까지 자료구조 공부할 건데 6시부터 7시는 저녁 먹어")
         made = make_plan(token, cid, e, today)
-        its = draft_items(made.get("draft") or {})
+        its, unplaced, perr = preview(token, made.get("draft"))
         bad = within(its, today, "%sT14:00" % today, "%sT20:00" % today,
                      [("%sT18:00" % today, "%sT19:00" % today)])
         tc = ((made.get("draft") or {}).get("scopeReport") or {}).get("timeCondition") or {}
         scenario("E 말한 시간 + 저녁 제외", "오늘 2시부터 8시까지 공부할 건데 6시부터 7시는 저녁 먹어",
                  "항목 14~20시 안, 18~19시 비움, 시간 조건 ADOPTED",
-                 "항목 %s, 조건 %s, 문제 %s, 오류 %s" % ([(t, hm(s), hm(e2)) for t, s, e2, _ in its], tc.get("status"), bad,
-                                                made.get("error")),
+                 "배치 %s, 못 넣음 %s, 조건 %s, 문제 %s, 오류 %s" % ([(t, hm(s), hm(e2)) for t, s, e2, *_ in its], unplaced,
+                                                         tc.get("status"), bad, made.get("error") or perr),
                  bool(its) and not bad and tc.get("status") == "ADOPTED")
 
     # ---------- F ----------
@@ -353,11 +359,11 @@ def main():
         cid = conversation(token)
         f = turn(token, cid, said)
         made = make_plan(token, cid, f, today)
-        its = draft_items(made.get("draft") or {})
+        its, _, _ = preview(token, made.get("draft"))
         early = [x for x in its if x[1] < now.strftime("%Y-%m-%dT%H:%M")]
         tc = ((made.get("draft") or {}).get("scopeReport") or {}).get("timeCondition") or {}
         scenario("F 이미 지난 시작", said, "지난 시각에 항목을 넣지 않는다. 지금부터로 줄었다고 알린다",
-                 "항목 %s, 지난 시각 항목 %s, 조건 메모 %s" % ([(t, hm(s), hm(e)) for t, s, e, _ in its], early,
+                 "배치 %s, 지난 시각 항목 %s, 조건 메모 %s" % ([(t, hm(s), hm(e)) for t, s, e, *_ in its], early,
                                                   (tc.get("notes") or [])[:3]),
                  not early)
 
@@ -366,13 +372,13 @@ def main():
         cid = conversation(token)
         g = turn(token, cid, "오늘 밤 11시부터 새벽 1시까지 자료구조 공부 잡아줘")
         made = make_plan(token, cid, g, today)
-        its = draft_items(made.get("draft") or {})
+        its, unplaced, perr = preview(token, made.get("draft"))
         bad = within(its, today, "%sT23:00" % today, "%sT01:00" % tomorrow)
         tc = ((made.get("draft") or {}).get("scopeReport") or {}).get("timeCondition") or {}
         scenario("G 자정 넘김", "오늘 밤 11시부터 새벽 1시까지 자료구조 공부 잡아줘",
                  "항목이 23:00~다음 날 01:00 안, 시간 조건 ADOPTED",
-                 "항목 %s, 조건 %s, 문제 %s, 오류 %s" % ([(t, s[5:16], e[5:16]) for t, s, e, _ in its], tc.get("status"), bad,
-                                                made.get("error")),
+                 "배치 %s, 못 넣음 %s, 조건 %s, 문제 %s, 오류 %s" % ([(t, s[5:16], e[5:16]) for t, s, e, *_ in its], unplaced,
+                                                         tc.get("status"), bad, made.get("error") or perr),
                  bool(its) and not bad and tc.get("status") == "ADOPTED")
 
     # ---------- H ----------

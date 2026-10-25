@@ -399,6 +399,10 @@ public class PlanDraftService {
                     extras == null ? null : extras.scenario()));
         } catch (Exception e) {
             log.warn("계획 요청 맥락을 저장하지 못했다: {}", e.getClass().getSimpleName());
+            if (extras != null && extras.scenario() != null) {
+                // 변경 묶음에 기댄 초안은 그 의존을 남기지 못하면 확정 때 원본으로 계산된다 — 초안 저장을 되돌린다
+                throw new IllegalStateException("변경 의존을 저장하지 못했다", e);
+            }
             return null;
         }
     }

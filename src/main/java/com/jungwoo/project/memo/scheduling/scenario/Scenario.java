@@ -65,6 +65,11 @@ public record Scenario(RoutineOverlay routines, CommitmentOverlay commitments, E
         return routines.isEmpty() && commitments.isEmpty() && execution.isEmpty() && assignments.isEmpty();
     }
 
+    /** 일정 시간(루틴·약속·할 일)에 효과가 있는가. 과제 마감만 바꾸는 변경은 아니다. */
+    public boolean affectsSchedule() {
+        return !(routines.isEmpty() && commitments.isEmpty() && execution.isEmpty());
+    }
+
     public static Scenario of(List<? extends ScenarioProjection> changes, ScenarioRef ref) {
         Builder builder = new Builder();
         for (ScenarioProjection change : changes) {

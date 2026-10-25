@@ -1410,7 +1410,15 @@ public class PeriodPlanDraftGenerator {
     record Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
                  PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose,
                  /** 과목별 확인된 상태(학습 기억·교재·실제 수업 정정). 읽지 못한 과목은 없다 */
-                 Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> projectStates) {
+                 Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> projectStates,
+                 /** 적용 전 변경 묶음이 바꾼(또는 새로 만든) 할 일 id. 이 초안은 그 항목을 조정하지 않는다 */
+                 Set<Long> pendingTouched) {
+
+        Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
+              PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose,
+              Map<Long, com.jungwoo.project.memo.ai.state.ProjectStateService.State> projectStates) {
+            this(history, nextClasses, transcript, brief, existing, purpose, projectStates, Set.of());
+        }
 
         Facts(ExecutionEvidence history, Map<Long, RoutineOccurrence> nextClasses, List<AiMessage> transcript,
               PlanBriefService.View brief, List<ExecutionItem> existing, PlanPurpose purpose) {
@@ -1593,8 +1601,17 @@ public class PeriodPlanDraftGenerator {
                         ? i.getPlanningStartDate() != null && !i.getPlanningStartDate().isAfter(spec.end())
                         && !i.getPlanningEndDate().isBefore(spec.start())
                         : !i.getScheduledDate().isBefore(spec.start()) && !i.getScheduledDate().isAfter(spec.end()));
+        Set<Long> pendingTouched = new HashSet<>();
+        if (existing != null && !opts.scenarioOrOriginal().isOriginal()) {
+            for (ExecutionItem item : existing) {
+                if (opts.scenarioOrOriginal().execution().touches(item.getExecutionItemId())) {
+                    pendingTouched.add(item.getExecutionItemId());
+                }
+            }
+        }
         return new Facts(history, nextClasses, transcript == null ? List.of() : transcript, brief,
-                existing == null ? List.of() : existing, purposeOf(spec, brief), loadProjectStates(spec.userId(), courses));
+                existing == null ? List.of() : existing, purposeOf(spec, brief), loadProjectStates(spec.userId(), courses),
+                pendingTouched);
     }
 
     // ===== 선택 재사용·추가 읽기 =====
@@ -2377,7 +2394,7 @@ public class PeriodPlanDraftGenerator {
                     deadlineFacts, 0);
         }
 
-        appendExistingItems(sb, facts.existing(), collector, existingByRef);
+        appendExistingItems(sb, facts.existing(), collector, existingByRef, facts.pendingTouched());
         appendUnscopedHistory(sb, facts.history(), collector);
 
         String previous = planReviewService.summarizeLatestForPrompt(userId);
@@ -2766,7 +2783,7 @@ public class PeriodPlanDraftGenerator {
 
     /** [이 기간에 이미 있는 일정] — 계획 항목은 #id와 상태를 붙여 existingItems로 결정하게 한다. */
     private void appendExistingItems(StringBuilder sb, List<ExecutionItem> existing, ProvenanceCollector collector,
-                                     Map<String, ExecutionItem> existingByRef) {
+                                     Map<String, ExecutionItem> existingByRef, Set<Long> pendingTouched) {
         sb.append("[이 기간에 이미 있는 일정] (#표시 항목은 계획 항목이다 — existingItems로 유지·줄임·이동·제외를 정한다. ")
                 .append("유지한 항목과 같은 내용을 새로 만들지 않는다)\n");
         if (existing.isEmpty()) {
@@ -2774,7 +2791,10 @@ public class PeriodPlanDraftGenerator {
         }
         for (ExecutionItem item : existing) {
             StringBuilder line = new StringBuilder();
-            if (item.getPlanVersionId() != null) {
+            // 적용 전 변경이 바꾼 항목은 그 변경 뒤 상태로 보여 주되 조정 대상(#)에서 뺀다 — 확정 때 변경이 먼저 적용돼 버전이 바뀌므로
+            // 이 초안의 조정은 낡은 버전을 가리키게 된다.
+            boolean pendingChange = pendingTouched.contains(item.getExecutionItemId());
+            if (item.getPlanVersionId() != null && !pendingChange) {
                 line.append("#").append(item.getExecutionItemId()).append(' ');
             }
             line.append(item.getTitle());
@@ -2791,6 +2811,9 @@ public class PeriodPlanDraftGenerator {
             if (item.getStatus() != null) {
                 line.append(" · 상태 ").append(item.getStatus().name());
             }
+            if (pendingChange) {
+                line.append(" · 적용 전 변경이 반영된 상태(이 초안에서 조정하지 않는다)");
+            }
             ProvenanceCollector.Marked marked = collector.mark(
                     ProvenanceSourceType.EXECUTION_ITEM_PLANNED, item.getExecutionItemId(),
                     item.getVersion(), item.getUpdatedAt(), ProvenanceRepresentation.SELECTED_FIELDS,
@@ -2803,7 +2826,9 @@ public class PeriodPlanDraftGenerator {
                             "status", item.getStatus() == null ? null : item.getStatus().name(),
                             "planVersionId", item.getPlanVersionId()),
                     line.toString());
-            existingByRef.put(marked.refId(), item);
+            if (!pendingChange) {
+                existingByRef.put(marked.refId(), item);
+            }
             sb.append("- ").append(marked.text()).append("\n");
         }
         sb.append("\n");

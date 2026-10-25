@@ -366,9 +366,18 @@ public final class StudyTimeInterpreter {
         return t.size() == 1 ? t.iterator().next() : null;
     }
 
+    private static final java.util.regex.Pattern ISO_DATE = java.util.regex.Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})");
+
     private static boolean mentionsDay(String text, LocalDate date) {
         if (text == null) {
             return false;
+        }
+        java.util.regex.Matcher iso = ISO_DATE.matcher(text);
+        while (iso.find()) {
+            if (Integer.parseInt(iso.group(1)) == date.getYear() && Integer.parseInt(iso.group(2)) == date.getMonthValue()
+                    && Integer.parseInt(iso.group(3)) == date.getDayOfMonth()) {
+                return true;
+            }
         }
         java.util.regex.Matcher m = MONTH_DAY.matcher(text);
         while (m.find()) {
@@ -384,11 +393,11 @@ public final class StudyTimeInterpreter {
         if (text == null) {
             return false;
         }
-        if (MONTH_DAY.matcher(text).find()) {
+        if (MONTH_DAY.matcher(text).find() || ISO_DATE.matcher(text).find()) {
             return true;
         }
         for (String w : WEEKDAYS) {
-            if (text.contains(w)) {
+            if (text.contains(w) || text.contains(w.substring(0, 1) + "욜")) {
                 return true;
             }
         }

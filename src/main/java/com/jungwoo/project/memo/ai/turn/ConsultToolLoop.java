@@ -91,6 +91,8 @@ public class ConsultToolLoop {
             - 사용자가 공부 시간·시간대·분량을 말했으면 set_study_time으로 정리한다(부분마다 원문 구절 그대로).
             - 공부 계획이 걸린 요청이면 preview_availability로 원본과(변경을 제안했다면) 가정 상태를 계산해 실제로 몇 분이 들어가는지 확인한다.
             - 같은 도구를 같은 인자로 반복하지 않는다. 결과 코드가 NOT_FOUND·READ_FAILED·INVALID면 그 사실을 그대로 두고 지어내지 않는다.
+            - [적용 전 변경]에 있는 변경은 이미 제안돼 있다 — 다시 제안하지 않는다. 계획 시간을 계산할 때는 그 변경이 적용된 것으로 가정해도 된다
+              (계획 초안은 그 변경을 가정해 만들어지고, 계획을 확정하면 함께 적용된다).
             """;
 
     /**
@@ -217,6 +219,11 @@ public class ConsultToolLoop {
         StringBuilder sb = new StringBuilder("[도구 단계 결과 — 서버가 확인한 사실. 이것을 근거로 답한다]\n");
         if (!ws.checkedFacts().isEmpty()) {
             sb.append("확인한 것: ").append(String.join(" / ", ws.checkedFacts())).append('\n');
+        }
+        if (!ws.pendingSummaries().isEmpty()) {
+            sb.append("적용 전 변경(이전 턴에 제안, 아직 원본은 그대로): ").append(String.join(" / ", ws.pendingSummaries()))
+                    .append("\n  → 계획을 만들면 이 변경을 가정해 만들고, 계획을 확정할 때 함께 적용된다. 먼저 적용하라고 요구하지 않는다. "
+                            + "이 변경이 이미 이뤄진 것처럼(예: \"근무가 빠졌다\") 말하지 않는다.\n");
         }
         if (ws.staged().isEmpty()) {
             sb.append("제안한 변경: 없음\n");
