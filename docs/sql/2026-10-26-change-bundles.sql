@@ -90,3 +90,7 @@ CREATE TABLE IF NOT EXISTS consult_turn_steps (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 되돌리기(필요할 때만): DROP TABLE consult_turn_steps; DROP TABLE ai_change_bundle_items; DROP TABLE ai_change_bundles;
+
+-- 적용 기록: 2026-10-26 15:48 사용자 DB(memo, MariaDB 10.4.32)에 적용. 직전 전체 백업
+--   <저장소 부모>/db-backup/memo-before-change-bundles-20261026-154851.sql (테이블 73개, 적용 뒤 76개).
+--   새 테이블 세 개의 컬럼·인덱스가 memo_test와 같음을 확인했다.
