@@ -2,45 +2,61 @@
 
 ## 1. 문서 범위
 
-이 문서는 목표 실행 모델과 레거시 전환 기준을 정의한다. 현재 코드에 존재하는 `todos`, `schedule_blocks`, `daily_plans`, `plan_item_events`를 그대로 최종 구조로 간주하지 않는다.
+> 현재 기준: 2026-10-25(§1~§3 개정). 이 문서는 두 층이다. §4~§15는 2026-08 "목표 모델"과 레거시 전환 기록이고(일부는 만들지 않았거나 지웠다 —
+> 각 절 머리 표시), §17~§27은 날짜별로 덧붙인 스키마 변경 기록이다. 절 번호는 덧붙인 순서라 10.8 → 10.6, §16(보안)이 맨 끝에 있다.
 
-## 2. 목표 테이블
+스키마 변경은 `docs/sql/`의 날짜별 SQL로만 한다(Flyway 없음, 수동 적용). 저장소에는 전체 기본 스키마 DDL이 없다 — `users`, `diaries`,
+`ai_proposals`, `execution_items` 같은 초기 표는 CREATE 문이 `docs/sql/`에 없다.
 
-```text
-users
-daily_states
-plan_items
-context_items
-plan_item_context_links
-execution_items
-execution_item_context_links
-execution_records
-execution_item_events
-ai_proposals
-ai_proposal_items
-```
-
-마이그레이션 중에는 다음 보조 테이블을 사용할 수 있다.
+## 2. 지금 쓰는 테이블 (매퍼 기준, 2026-10-25)
 
 ```text
-legacy_execution_item_map
-migration_data_adjustments
+사용자·일기     users, diaries, diary_revisions
+실행            execution_items, execution_records, execution_item_events
+기간 계획       plan_versions, plan_item_details, plan_item_start_helps, plan_generation_traces
+AI 상담·제안    ai_conversations, ai_messages, ai_message_photos, consult_photo_uploads, ai_conversation_drafts,
+                ai_plan_briefs, ai_proposals, ai_proposal_items, ai_proposal_schedule_previews,
+                ai_schedule_suggestions, ai_context_change_suggestions, ai_usage_logs
+기억            user_contexts
+프로젝트·학습   courses, course_topics, course_notes, course_assignments, course_scope_exclusions,
+                topic_progress, topic_learning_events, topic_class_progress, topic_material_links, topic_change_proposals,
+                study_recommendations
+자료            course_materials, material_links, material_text_units, material_sections, material_textbook_extracts,
+                course_material_analyses, material_analysis_jobs, material_analysis_controls, material_analysis_timings,
+                material_analysis_batches, material_analysis_batch_items, material_zip_imports, material_zip_import_entries,
+                material_week_assignments
+프로젝트 정리   project_tidy_jobs, project_tidy_proposals, project_tidy_proposal_materials, project_tidy_edits
+교재            textbook_lookups, textbook_lookup_usage, textbook_web_pages, textbook_web_revisions, textbook_refs, textbook_ref_aliases
+학습 이벤트     learning_events, learning_event_origins, learning_event_meta, learning_resolution_links, learning_event_backfill, class_sessions
+일정            routines, routine_weekdays, routine_exceptions, one_off_commitments
 ```
+
+DB에 남아 있지만 코드가 쓰지 않는 표: `daily_states`, `context_items`(매퍼 참조 0건, `2026-08-25-dev-data-reset.sql` 주석), `legacy_execution_item_map`
+(2026-08-03 이관 출처 보존). 지운 표: `todos`, `schedule_blocks`, `plan_items`, `plan_item_events`, `plan_item_context_links`, `daily_plans`
+(`2026-08-23-remove-legacy-tables.sql`).
+
+아래 표들은 아직 이 문서에 정의 절이 없다 — 매퍼 XML과 해당 마이그레이션이 기준이다:
+`diaries`, `diary_revisions`, `ai_context_change_suggestions`, `course_material_analyses`, `course_notes`, `routines`·`routine_weekdays`·`routine_exceptions`
+(`2026-08-31-routines.sql`), `one_off_commitments`(`2026-09-01-one-off-commitments.sql`), `ai_schedule_suggestions`, `plan_versions`(11번 §2,
+`2026-08-24-plan-versions.sql`), `study_recommendations`, `topic_learning_events`, `topic_progress`.
 
 ## 3. 핵심 관계
 
 ```text
-PlanItem 1 ── N ExecutionItem
+Project(courses) 1 ── N course_topics / course_materials / user_contexts / plan_versions
+PlanVersion 1 ── N ExecutionItem            (항목 정의는 plan_versions.items_snapshot)
+ExecutionItem 1 ── 0..N ExecutionItem       (source_execution_item_id — 부분 수행으로 남은 조각)
 ExecutionItem 1 ── 0..N ExecutionRecord
 ExecutionItem 1 ── N ExecutionItemEvent
-PlanItem N ── M ContextItem
-ExecutionItem N ── M ContextItem
 AIProposal 1 ── N AIProposalItem
+LearningEvent N ── 1 learning_event_origins (원천 — 20번)
 ```
 
-DailyState는 ExecutionItem의 부모가 아니다. 두 모델은 날짜로 조회해 화면에서 합성한다.
+계획 항목의 근거는 연결 표가 아니라 provenance_json·plan_generation_traces(§10.7, §18)로 추적한다.
 
 ## 4. daily_states
+
+> **만들지 않았다**(2026-10-25 표시). 아래는 2026-08 목표 설계다. 하루 설정이 필요해지면 `day_settings`로 새로 만든다.
 
 하루의 컨디션과 운영 설정을 저장한다.
 
@@ -65,6 +81,8 @@ updated_at
 
 ## 5. plan_items
 
+> **2026-08-23에 지웠다.** 기간 계획은 `plan_versions`(11번)가 맡는다. 아래는 당시 목표 설계다.
+
 상위 계획과 계획 항목을 별도 계층으로 과도하게 쪼개기 전에, 앞으로 하려는 의도·범위·기간을 한 단위로 저장한다.
 
 ```text
@@ -87,6 +105,8 @@ updated_at
 기간은 시작일과 종료일이 모두 있을 때 `start_date <= end_date`를 만족해야 한다.
 
 ## 6. context_items
+
+> **쓰지 않는다.** 장기 기억은 `user_contexts`(§18, §24, 13번 §12.1)다. 아래는 당시 목표 설계다.
 
 ```text
 context_item_id
@@ -462,6 +482,8 @@ WHERE execution_item_id = ?
 각 묶음은 하나의 트랜잭션으로 처리한다.
 
 ## 13. 레거시 변환 규칙
+
+> §13~§15는 **끝난 작업**이다(2026-08-03 이관, 2026-08-23 원본 삭제). 기록으로 둔다.
 
 | 기존 | 신규 |
 | --- | --- |

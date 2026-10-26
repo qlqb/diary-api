@@ -1,6 +1,6 @@
 # Diary API Specification
 
-Base URL: `http://localhost:8080`
+Base URL: `http://localhost:8081` (`server.port=${SERVER_PORT:8081}`)
 
 Content-Type: `application/json`
 
@@ -12,8 +12,14 @@ Authorization: Bearer {token}
 
 인증 없이 호출 가능한 API는 `/api/auth/signup`, `/api/auth/login`입니다.
 
-이 문서는 Auth / Users / Diaries만 다룹니다. 실행 조각(`/api/execution-items`), 프로젝트,
-자료, AI 상담 엔드포인트는 `docs/openapi.yaml`을 기준으로 합니다.
+이 문서는 손으로 쓰는 명세입니다. 앞부분은 Auth / Users / Diaries 전체를, 뒷부분은 기능별(자료·정리·계획·교재·학습 이벤트 등)로
+날짜마다 추가·변경된 엔드포인트와 필드의 **의미**(오류 코드, 버전 충돌, 필드 뜻)를 적습니다. 모든 엔드포인트를 빠짐없이 싣지는 않습니다.
+전체 엔드포인트 목록은 서버를 띄운 뒤 springdoc이 만드는 `/v3/api-docs.yaml`(또는 `/swagger-ui.html`)이 기준입니다.
+`docs/openapi.yaml`은 그 출력을 저장한 스냅샷입니다(마지막 갱신 2026-10-25, 경로 163개). 엔드포인트를 바꾸면 서버를 띄우고 다시 받아 덮어씁니다:
+
+```bash
+curl -s http://localhost:8081/v3/api-docs.yaml -o docs/openapi.yaml
+```
 
 2026-08-23에 `/api/todos`와 `/api/schedule-blocks` 절을 삭제했습니다. 해당 기능은
 `execution_items`로 이관 완료 후 제거되었습니다 —
@@ -813,7 +819,7 @@ briefId, briefVersion            // 그때 읽은 상담 합의
 - `GET /api/materials/analysis/overview`: `limit{contentUsed, contentLimit, linkUsed, linkLimit, reached, resumesAt}`, 자료마다 `waitingReason`·`linkState`.
 - 업로드·ZIP 허용 확장자에 `sh`(text/plain으로 저장, 실행하지 않음). 파일 응답에 `X-Content-Type-Options: nosniff`.
 - `POST /api/execution-items/{id}/complete|partial`: 선택 필드 `blockerKind`(`TIME|CONCEPT|ENERGY|OTHER`, 모르는 값은 버린다).
-  `GET /api/execution-records`의 각 행에 `blockerKind`.
+  `GET /api/execution-items/records`의 각 행에 `blockerKind`.
 
 ## Textbook Web Lookup — 교재 목차 자동 검색 (2026-10-04)
 
@@ -997,3 +1003,46 @@ NONE(화면이 단원을 묻는다). `topics`는 바꾸기 선택지.
 
 `{"enabled": false}` — 그 과목은 수업 후·주간 확인을 묻지 않는다. 204.
 
+## Plan Intent Preservation — 합의 근거·요청 범위·말한 시간 (2026-10-18~19)
+
+설계 21번. 모든 추가 필드는 예전 저장본·응답에서 null이다.
+
+### 상담 합의 항목 (`planBrief.items[]`)
+
+| 필드 | 뜻 |
+|---|---|
+| `quote` | 근거가 된 사용자 원문 구절. 서버가 그 사용자 메시지에 실제로 있는지 확인한 것만 남는다 |
+| `basisMessageId` | `quote`가 든 USER 메시지 id. 서버가 대화에서 직접 찾은 것이다(모델이 준 id가 아니다) |
+| `basisSentence` | `quote`가 든 문장 전체 |
+
+`basisMessageId`가 있으면 근거 있음(유효, 승인과는 별개), `speaker=ASSISTANT`이고 근거·승인이 없으면 아직 답하지 않은 AI 제안이다.
+`kind`에 `DEPTH`·`TIME_BUDGET`·`PURPOSE`가 추가됐다.
+
+### 계획 초안 `PlanDraftResponse.scopeReport`
+
+초안 요청 맥락(`plan_request_json.scopeReport`)과 같은 값이다. 범위를 뽑지 않았으면 `status`만 의미가 있다.
+
+```json
+{
+  "status": "EXTRACTED | NONE | FAILED | SKIPPED",
+  "scopes": [{ "scopeId": "S1", "courseId": 12, "courseTitle": "...", "role": "REQUIRED | OPTIONAL", "goal": "...", "boundary": "...",
+              "parts": [{ "partId": "S1.P1", "label": "2주차", "materialIds": [31], "noMaterial": false, "userMaterial": false }],
+              "quote": "사용자 원문 구절", "basisSentence": "...", "verified": true }],
+  "parts": [{ "partId": "S1.P1", "scopeId": "S1",
+              "acquisition": "DELIVERED_UNIT | EXCERPT_ONLY | SHOWN_NOT_SELECTED | AVAILABLE_NOT_ACQUIRED | NO_MATERIAL_IN_APP",
+              "reflection": "ITEM | PRACTICE_WITH_USER_MATERIAL | DEFERRED | ALREADY_PREPARED | UNHANDLED",
+              "items": [0, 3], "note": "미룬 이유 등", "acquisitionNote": "미확보 사유" }],
+  "requiredUnmet": false,
+  "remaining": ["S2.P1"],
+  "needsConfirm": ["S3"],
+  "completion": "ALL | REQUIRED_ONLY | NOT_COMPLETE | UNKNOWN",
+  "incomplete": false,
+  "issues": ["OPTIONAL_OVER_REQUIRED_WITHOUT_REASON"],
+  "notice": "화면 맨 위에 보일 서버 문장",
+  "studyTime": { "minutes": 180, "perDay": true, "from": "13:00", "until": "16:00", "quote": "...", "sentence": "..." }
+}
+```
+
+- `items`는 이 부분에 연결된 초안 항목의 순번(0부터)이다.
+- `completion`·`notice`가 완료 표시를 정한다. 모델의 목표 문장은 "목표"로만 보인다.
+- `studyTime`은 범위 추출에서 확인된 시간을 예산·배치에 썼을 때만 있다. `until`은 `HH:mm` 또는 `24:00`이다.

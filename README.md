@@ -1,36 +1,42 @@
 # diary-api
 
-`diary-api`는 GPT와 나눈 고민·목표·제약을 편집 가능한 계획으로 바꾸고, 사용자가 승인한 내용만 실제 실행과 기록에 연결하는 개인 운영 웹 애플리케이션의 백엔드입니다.
+`diary-api`는 자료·상담·실행 기록으로 사용자의 현실(시간·진도·막힘)을 모으고, 그 위에서 AI가 기간 학습 계획 초안을 만들며, 사용자가 확인한 것만 실제 실행과 기록에 연결하는 개인 운영 웹 애플리케이션의 백엔드입니다. 제품 가설은 [12-product-thesis.md](docs/product/12-product-thesis.md)를 봅니다.
 
 이 저장소에는 현재 동작하는 일기·실행 조각·프로젝트·자료·AI 상담 API와 제품 문서가 함께 있습니다.
 
 ## 제품의 핵심 흐름
 
 ```text
-자연어 상담
-→ 목표·결정·제약·계획 후보 추출
-→ 화면에 편집 가능한 초안 표시
-→ 사용자가 직접 수정하고 선택 적용
-→ 오늘 실행 조각과 시간표에 반영
-→ 실제 수행 결과와 조정 사건 기록
+자료 업로드·자동 분석 + 상담(사진 포함) + 학습 기억·학습 이벤트
+→ 요청 범위·말한 시간을 원문과 대조해 확정
+→ 기간 계획 초안(PlanVersion) 미리보기 — 말한 범위가 어떻게 담겼는지 서버 판정으로 표시
+→ 사용자가 확정
+→ 실행 조각(ExecutionItem)으로 오늘·일정에 배치
+→ 수행 기록·조정 사건 기록
 → 다음 상담과 계획에 재사용
 ```
 
-최상위 사용자 화면은 `오늘 · 계획 · 실행 · 기록` 네 영역으로 구성합니다. AI 상담 패널은 모든 영역에서 현재 선택 항목과 관련 컨텍스트를 받아 제안을 만들지만, 공식 데이터는 사용자가 `적용`하기 전까지 바뀌지 않습니다.
+최상위 사용자 화면은 `오늘 · 자료 · 프로젝트 · 계획 · 일정 · 기록` 여섯 탭입니다(diary-ui `src/shell/MainShell.jsx`). AI 상담 패널은 모든 탭에서 열리지만, 계획·일정 같은 공식 데이터는 사용자가 확정·적용하기 전까지 바뀌지 않습니다.
 
-대학생의 과목·학기·방학 계획은 첫 번째 주요 사용 사례이며, 제품 전체를 학습 플래너로 제한하지 않습니다.
+관리 단위는 프로젝트입니다. 대학생의 과목·학기 계획이 첫 번째 사용 사례이고, 개인 개발·자격 준비도 같은 흐름을 씁니다.
 
 ## 현재 구조
 
 ```text
-execution_items            실제로 배치·조정하는 실행 조각. 실행의 유일한 원본
-execution_records          실제 수행 결과
-execution_item_events      이동·축소·보류·분할 같은 조정 사건
-courses / course_topics    프로젝트와 학습 목차
-materials / material_links 자료 원본과 프로젝트 연결
-context_items              다음 상담에 재사용할 장기 컨텍스트
-ai_proposals/items         적용 전 AI 초안과 사용자 반응
+courses / course_topics          프로젝트와 학습 목차(교재 목차·하위항목 포함)
+materials / material_links       자료 원본과 프로젝트 연결, 자동 분석·자료 구간
+plan_versions                    기간 계획(초안·확정·회고). 항목은 스냅샷으로 보관
+execution_items                  실제로 배치·조정하는 실행 조각. 실행의 유일한 원본
+execution_records                실제 수행 결과
+execution_item_events            이동·축소·보류·분할 같은 조정 사건
+user_contexts                    상담에서 기억한 사실(진도·시험 범위·막힘·해결 등)
+ai_plan_briefs                   상담 합의(작성 주체·근거·승인)
+learning_events / class_sessions 원천을 가리키는 학습 이벤트와 수업 회차
+routines / one_off_commitments   시간표와 일회성 약속
+ai_proposals/items               적용 전 AI 제안과 사용자 반응
 ```
+
+테이블 상세는 [05-database.md](docs/product/05-database.md), 기간 계획의 네 층은 [11-period-plan.md](docs/product/11-period-plan.md)를 봅니다.
 
 `Todo`와 `ScheduleBlock`의 `execution_items` 통합은 완료되었습니다. 2026-08-03에 데이터를 이관하고(출처는 `legacy_execution_item_map`에 보존), 2026-08-23에 `todos` / `schedule_blocks` / `plan_items` 계열 / `daily_plans` 테이블과 코드를 제거했습니다. `docs/sql/2026-08-23-remove-legacy-tables.sql`과 백업 `docs/sql/backup/2026-08-23-legacy-tables.sql`을 참고하세요.
 
@@ -48,16 +54,17 @@ ai_proposals/items         적용 전 AI 초안과 사용자 반응
 
 프런트엔드는 [diary-ui](https://github.com/qlqb/diary-ui)의 React + Vite + Tailwind CSS 구성을 사용합니다. JPA를 전제로 설계하지 않습니다.
 
-## 지금 구현된 것 (2026-08-04)
+## 구현 범위
 
-위 목표 구조 중 아래는 이미 코드로 구현되어 있습니다. 나머지(ContextItem, 외부 대화 가져오기, ghost/diff, 캘린더 등)는 여전히 목표 설계입니다.
+기능별 현재 상태는 설계 문서와 [99-changelog.md](docs/product/99-changelog.md)가 기준입니다. 큰 덩어리만 적으면 다음과 같습니다.
 
-- 회원가입/로그인: `/api/auth/signup`, `/api/auth/login`
-- 현재 사용자 조회: `/api/users/me`, `/api/users/me/detail`
-- 일기 CRUD, 검색, 즐겨찾기, 수정 이력, 통계
-- ExecutionItem(실행 조각): Today/Execution 화면의 공식 실행 원본. 조회/생성/완료/재열기/이동/축소/보류/삭제
-- AI 오늘 제안: Spring AI(OpenAI) 기반 자연어 상담 → 오늘 실행 후보 생성 → 편집 → 묶음 전체 적용 (`ai_proposals`/`ai_proposal_items`)
-- 정적 테스트 페이지: `/login.html`, `/signup.html`, `/diary.html`
+- 인증·사용자·일기(수정 이력·통계)
+- 실행 조각(완료·부분 수행·재열기·이동·미배정·축소·보류·재개·삭제·복원)과 수행 기록
+- 프로젝트·자료(업로드·ZIP 가져오기·자동 분석·자료 구간·토픽 연결 변경안·프로젝트 정리·자료 주차)
+- 교재 목차 웹 검색, 학습 지도, 학습 기억, 학습 이벤트·수업 확인
+- AI 상담(자료 근거 조회·사진 첨부·일정 이미지 가져오기·합의 정리)
+- 기간 계획 생성(요청 범위 추출·자료 선택·판정·배치)과 확정·회고, 근거 추적
+- 시간표(루틴)·일회성 약속·과제
 
 ## 실행 전 준비
 
@@ -69,7 +76,7 @@ jwt.expiration=${JWT_EXPIRATION:3600000}
 spring.datasource.url=${DB_URL}
 spring.datasource.username=${DB_USERNAME}
 spring.datasource.password=${DB_PASSWORD}
-server.port=8080
+server.port=${SERVER_PORT:8081}
 ```
 
 Windows PowerShell 예시:
@@ -111,21 +118,9 @@ Authorization: Bearer {token}
 
 ## 문서 지도
 
-| 문서 | 책임 |
-| --- | --- |
-| [01-product-plan.md](docs/product/01-product-plan.md) | 제품 문제, 핵심 경험, 성공 기준 |
-| [02-feature-structure.md](docs/product/02-feature-structure.md) | 네 탭과 AI 패널의 책임, 화면 데이터 관계 |
-| [03-planning-system.md](docs/product/03-planning-system.md) | 계획·실행·기록·이벤트·컨텍스트의 흐름 |
-| [04-requirements.md](docs/product/04-requirements.md) | 최신 구현 요구사항과 상태 불변조건 |
-| [05-database.md](docs/product/05-database.md) | 목표 테이블, 관계, 마이그레이션 기준 |
-| [06-mvp-roadmap.md](docs/product/06-mvp-roadmap.md) | 현재 코드에서 목표 구조로 가는 구현 순서 |
-| [07-ideas.md](docs/product/07-ideas.md) | 아직 확정되지 않은 아이디어 주차장 |
-| [08-today-execution-loop.md](docs/product/08-today-execution-loop.md) | 오늘과 실행 화면의 경계 및 당일 조정 흐름 |
-| [16-learning-flow.md](docs/product/16-learning-flow.md) | 계획 이해·학습 실행 작업 공간·수행 기록 반영·교재·실제 수업 정정 |
-| [17-textbook-web-toc.md](docs/product/17-textbook-web-toc.md) | 교재 목차 자동 검색(웹)·지금 교재 정정·목차 근거의 변경안·계획 목적 |
-| [99-changelog.md](docs/product/99-changelog.md) | 확정 변경 이력과 현재 기준 |
+설계 문서 목록과 읽는 순서는 [docs/product/README.md](docs/product/README.md)가 기준입니다. API는 [docs/api-spec.md](docs/api-spec.md)(계약의 의미와 날짜별 추가 필드)와, 서버를 띄운 뒤 `/v3/api-docs.yaml`(springdoc 자동 생성, 전체 엔드포인트)을 봅니다.
 
-`docs/product` Markdown이 제품 설계의 진실의 원천입니다. `자기관리앱_기획서_v2.1.docx`는 2026-07-05 시점의 과거 스냅샷이며, 충돌 시 2026-08-03 Markdown 기준을 따릅니다.
+`docs/product` Markdown이 제품 설계의 진실의 원천입니다. 완료된 작업 기록은 `docs/handoff/`에 있습니다.
 
 ## 문서 수정 규칙
 
@@ -134,37 +129,3 @@ Authorization: Bearer {token}
 - 화면 이름, 데이터 이름, 상태값을 문서마다 다르게 정의하지 않습니다.
 - 현재 구현과 목표 구조를 섞어 이미 구현된 것처럼 쓰지 않습니다.
 - 실제 사용자 데이터가 포함된 SQL 덤프는 저장소에 커밋하지 않습니다.
-
-## 지금 구현된 API
-
-| 구분 | 메서드/경로 | 설명 |
-| --- | --- | --- |
-| Auth | `POST /api/auth/signup` | 회원가입 및 JWT 발급 |
-| Auth | `POST /api/auth/login` | 로그인 및 JWT 발급 |
-| Users | `GET /api/users/me` | 현재 사용자 기본 정보 |
-| Users | `GET /api/users/me/detail` | 현재 사용자 상세 정보 |
-| Diaries | `GET /api/diaries` | 일기 목록, 필터, 페이지 조회 |
-| Diaries | `GET /api/diaries/search` | 일기 검색 |
-| Diaries | `POST /api/diaries` | 일기 작성 |
-| Diaries | `GET /api/diaries/{diaryId}` | 일기 상세 조회 |
-| Diaries | `PUT /api/diaries/{diaryId}` | 일기 수정 |
-| Diaries | `DELETE /api/diaries/{diaryId}` | 일기 삭제 |
-| Diaries | `PATCH /api/diaries/{diaryId}/favorite` | 즐겨찾기 토글 |
-| Diaries | `GET /api/diaries/{diaryId}/revisions` | 수정 이력 조회 |
-| Diaries | `POST /api/diaries/{diaryId}/revisions/{revisionId}/restore` | 수정 이력 복원 |
-| Diaries | `GET /api/diaries/statistics/summary` | 일기 요약 통계 |
-| Diaries | `GET /api/diaries/statistics/mood` | 기분별 통계 |
-| Diaries | `GET /api/diaries/statistics/monthly` | 월별 통계 |
-| Diaries | `GET /api/diaries/statistics/streak` | 연속 작성 통계 |
-| ExecutionItems | `GET /api/execution-items?date=YYYY-MM-DD` | 날짜별 실행 조각 조회 |
-| ExecutionItems | `GET /api/execution-items/pending?beforeDate=YYYY-MM-DD` | pending 조회 |
-| ExecutionItems | `POST /api/execution-items` | 실행 조각 생성 |
-| ExecutionItems | `POST /api/execution-items/{id}/complete` | 완료 (execution_record 동시 생성) |
-| ExecutionItems | `POST /api/execution-items/{id}/reopen` | 재열기 |
-| ExecutionItems | `POST /api/execution-items/{id}/move` | 이동 |
-| ExecutionItems | `POST /api/execution-items/{id}/reduce` | 축소 |
-| ExecutionItems | `POST /api/execution-items/{id}/hold` | 보류 |
-| ExecutionItems | `DELETE /api/execution-items/{id}?version=` | 삭제 (soft delete) |
-| AI Proposals | `POST /api/ai/proposals` | 오늘 실행 제안 생성 |
-| AI Proposals | `GET /api/ai/proposals/{id}` | 제안 조회 |
-| AI Proposals | `POST /api/ai/proposals/{id}/apply` | 제안 묶음 전체 적용 |

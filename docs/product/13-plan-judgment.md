@@ -1,7 +1,8 @@
 # 13. 기간 학습 계획 판단층
 
-> 상태: 커밋 4 완료 (2026-09-07). §8.2 지표 게이트와 커밋 4 왕복 게이트 모두 통과.
-> 기본값은 여전히 AI, V1은 측정용
+> 상태: 구현됨 (2026-10-25 정리). §0~§8은 2026-09-06~07 판단층 v0·커밋 1~4의 구현·게이트 기록이고(기본값은 여전히 AI, V1은 측정용),
+> 지금 기준이 되는 계약은 §10 출처 추적, §11 상담 합의, §12 사용자 이해·전달 기록이다. 상담 합의의 근거·승인 규칙과 요청 범위 판정은 21번.
+> 학습 기억의 확장(fact_kind 등)은 18번, 상담 사진은 19번, 학습 이벤트는 20번.
 > 선행: 11-period-plan.md (기간형 계획), 03-planning-system.md
 > 이 문서가 판단층의 기준이다. 대화로 오간 인수인계는 이 문서로 대체한다.
 
@@ -601,11 +602,14 @@ eval 전에 `user_contexts`에 직접 넣고 끝나면 지운다.
 "자료구조 복구 우선, 영어는 하루 15분, 금요일 밤은 비우기"를 AI가 제안하고 사용자가 "좋아, 그대로"라고 했을 때, 생성기가 받는
 것이 최근 사용자 발언 8개뿐이면 그 결정은 어디에도 없다. `ai_plan_briefs`(대화당 1행, 05번 §10.8)가 합의 항목을 든다.
 
-- **항목**: kind(GOAL·PRIORITY·EXCLUDE·TIME_CONSTRAINT·SCOPE·DIFFICULTY·CAUSE·OTHER) · text · speaker(USER|ASSISTANT) · accepted ·
-  rejected · scope(THIS_DRAFT|PERIOD) · sourceMessageId · acceptedByMessageId · topicId/courseId/executionItemId · revision · history.
-- **규칙**: 사용자가 말한 것은 즉시 유효(accepted). AI가 제안한 것은 후보이고 사용자가 "좋아/그대로"라고 하면 그 번호에 ACCEPT가
-  붙는다 — 무엇을 받아들였는지가 번호로 남는다. 발화자를 모르는 ADD는 AI 제안(후보)으로 낮춰 적는다. 고쳐 말하면 UPDATE(최신
-  수정판이 우선, 이전 문장은 history). 같은 문장을 매 턴 다시 ADD하지 않는다.
+- **항목**: kind(GOAL·PRIORITY·EXCLUDE·TIME_CONSTRAINT·FREQUENCY·SCOPE·DEPTH·TIME_BUDGET·PURPOSE·DIFFICULTY·CAUSE·OTHER, `PlanBriefService.KINDS`) ·
+  text · speaker(USER|ASSISTANT) · accepted · rejected · scope(THIS_DRAFT|PERIOD) · sourceMessageId · acceptedByMessageId ·
+  topicId/courseId/executionItemId · revision · history · (2026-10-18) quote · basisMessageId · basisSentence.
+- **규칙(2026-10-18 개정 — 21번 §3)**: 작성 주체·근거·승인을 나눈다. speaker=USER만으로 승인하지 않는다.
+  사용자 말을 그대로 옮긴 문장은 사용자 작성(승인), AI가 정리했지만 `quote`가 서버가 찾은 사용자 메시지에 그대로 있으면 근거 있음
+  (`grounded()` — 유효하지만 승인 아님, 계획 입력에 원문 문장을 함께 싣는다), 근거가 없으면 후보(`pendingProposal()`). 유효 = 승인 또는 근거 있음,
+  거절·삭제 아님(`effective()`). AI 후보에 사용자가 "좋아/그대로"라고 하면 그 번호에 ACCEPT가 붙는다 — 무엇을 받아들였는지가 번호로 남는다.
+  고쳐 말하면 UPDATE(최신 수정판이 우선, 근거·승인은 수정판 기준으로 다시 정하고 이전 문장은 history). 같은 문장이 다시 오면 근거만 붙인다.
 - **수명**: THIS_DRAFT는 이번 초안, PERIOD는 이번 기간. 다음 기간에도 유효한 선호는 여기가 아니라 `user_contexts`(사용자 확인 흐름)다.
   다른 대화에서는 확인된 어려움(DIFFICULTY·CAUSE)과 PERIOD 합의만 [다른 대화에서 확인된 것]으로 이어 온다.
 - **쓰는 곳**: 상담 프롬프트 [계획 합의 현황](번호와 상태 — 모델이 ACCEPT/UPDATE에서 그 번호를 쓴다) · 계획 호출 [상담에서 합의한
@@ -636,6 +640,13 @@ eval 전에 `user_contexts`에 직접 넣고 끝나면 지운다.
 - 사용자가 고쳐 말하면(UPDATE, 날짜 포함) 최신 조건과 수락 출처가 남고 이전 문장은 history에 남는다. 확정·만료돼도 원본 상담과
   합의 이력은 지우지 않는다.
 - 종류에 **FREQUENCY**(반복 빈도, "매일 15분")를 더했다. 상한("하루 15분까지")은 TIME_CONSTRAINT다.
+- (2026-10-18) **DEPTH**(깊이)·**TIME_BUDGET**(쓸 수 있는 시간, `from`·`until` 포함)·**PURPOSE**(목적)를 더했다. 시간 예산의 쓰임은 11번 §5-1-5 4),
+  어느 시간을 쓰는지의 선택 순서(합의 → 범위 추출의 확인된 시간 → 근거만 붙은 AI 정리)는 21번 §7.
+
+### 11.2 요청 범위 목록과 서버 판정 (2026-10-18)
+
+합의는 상담 모델의 ADD 누락에 약하므로, 계획 생성마다 사용자 원문에서 요청 범위를 다시 뽑고(SCOPE) 최종 초안과 부분별로 대조해
+완료 표시를 서버가 정한다(`ScopeReport`·`ScopeChecks`). 이것도 판단층의 검증이지만 규칙이 길어 21번에 둔다.
 
 ## 9. 완료 기준
 

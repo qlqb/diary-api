@@ -1,6 +1,6 @@
 # 20. 이벤트 기반 학습 진도 (설계, 2026-10-06)
 
-상태: **설계안 v2.1** — 구현 전. 사용자와 대화로 합의한 내용(2026-10-06)에 Codex 설계 리뷰(1회차 REVISE 14건, 재리뷰 APPROVED + P2 4건 — 모두 반영, §17)를
+상태: **1단계(1·1b) 구현, 2단계 이후 미착수** (2026-10-07 dev-playground 합침, §14). 설계안 v2.1은 사용자와 대화로 합의한 내용(2026-10-06)에 Codex 설계 리뷰(1회차 REVISE 14건, 재리뷰 APPROVED + P2 4건 — 모두 반영, §17)를
 더했다. 결정 사항은 §16.
 
 목표 흐름:
@@ -358,6 +358,26 @@ run, 시간표·교재 판), 계산 규칙 판, 계산 기준 시각을 같이 �
 | 6 | 정리 중지 → `topic_id` 의존 제거 → 트리 제거 | 의존 0, 백업·되돌리기 경로 |
 
 DB 통합 테스트는 `memo_test`에서 돌리고 `build.gradle`의 CI 제외 목록에 올린다(지금 관례). 로컬 전체 테스트는 DB 포함으로 돌린다.
+
+### 14.1 1단계 구현 상태 (2026-10-07)
+
+| 묶음 | 내용 | 커밋 |
+|---|---|---|
+| A | `learning_events`·`learning_event_origins`, `LearningEventWriter`·`LearningEventValidator`, 조회 API, `textbook_refs`·별칭 | api `5c41950` |
+| B | 기존 쓰기 경로(실행 완료·일부·회고, 토픽 진도, 기억, 해결, 자기 점검, 범위 제외, 사진 턴, 자료 연결)에서 이벤트를 같이 쓴다 | api `1104261` |
+| C·E | `class_sessions`·수업 확인 API, 일정 예외 → 휴강·이동, 백필(`LearningEventBackfill`) | api `bc460f5`, 후속 `bcf98ab` |
+| D | 오늘 수업 확인 카드, 프로젝트 "이번 주 수업 확인" | ui `c88b9cc` |
+
+설계와 다르게 정한 것(작업 기록 `docs/handoff/learning-events-stage1-2026-10-06.md` §2):
+
+- 수업 확인 끄기는 `PATCH /api/courses/{id}` 대신 `PATCH /api/courses/{id}/class-prompt`.
+- STALE 기억은 살아 있는 것으로 본다(18번과 같게).
+- 목차 항목 검증은 "그 과목 목차 토픽이 그 열쇠를 갖고, 토픽의 교재 키가 그 ref의 별칭"으로 본다(구조화 항목 직접 검증은 3단계).
+- 일정 예외 삭제도 루틴을 잠근다.
+- §9 몰아 올림은 줄였다: 이벤트에 batchId를 넣지 않았고 "어디까지 들었나" 화면은 만들지 않았다.
+
+운영 반영 전 할 일: 마이그레이션 세 개를 순서대로(learning-events → class-sessions → learning-event-backfill) 적용하고,
+새 서버 기동 뒤 옛 서버가 모두 내려간 것을 확인하고 10분 뒤 `learning.events.backfill.enabled=true`로 한 번 띄워 백필한다.
 
 **4단계 개념 그래프(요약):** 좌표가 없거나 자료 단위가 너무 큰 과목부터. 구간 임베딩 → 코사인 임계값 응집 군집 → 모델 대표 이름. 정정은 원천 쌍의
 must-link / cannot-link. 개념 ID 승계는 원천 집합 Jaccard(갈라지면 겹침 큰 쪽, 합쳐지면 오래된 ID). 빌드마다 모델·프롬프트 판·임베딩 모델 기록.

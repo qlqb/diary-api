@@ -1,6 +1,10 @@
 # 04. Requirements
 
-이 문서는 2026-08-03 이후 구현 기준이 되는 요구사항을 관리한다. 현재 코드가 아직 레거시 모델을 사용하더라도 새 기능은 아래 목표 구조와 충돌하지 않아야 한다.
+> 현재 기준: 2026-10-25(부분 개정). REQ 번호는 바꾸지 않는다. 2026-08 목표 모델(PlanItem·ContextItem·DailyState)을 전제로 한 절은
+> 현재 구조(`plan_versions`·`user_contexts`, 하루 상태 없음)로 바꾸거나 "미구현/종료"로 표시했다. 2026-08-15 이후 기능은 §13~§16에 요약하고
+> 상세 계약은 해당 설계 문서가 기준이다. 옛 판은 git 이력에 있다.
+
+이 문서는 구현 기준이 되는 요구사항을 관리한다. 새 기능은 아래 요구사항과 충돌하지 않아야 한다.
 
 ## 1. 공통 요구사항
 
@@ -25,7 +29,8 @@ REQ-COMMON-005
 
 ```text
 REQ-AI-001
-AI는 공식 PlanItem, ExecutionItem, ContextItem을 직접 생성·수정·삭제하지 않는다.
+AI는 공식 PlanVersion, ExecutionItem을 직접 생성·수정·삭제하지 않는다. 모델은 구조화된 출력을 내고 서버가 검증해 적용한다.
+예외: 상담에서 말한 사실의 기억(user_contexts, CONSULT_AUTO)과 상담 합의(ai_plan_briefs)는 서버가 원문 대조를 거쳐 바로 저장한다(REQ-CONTEXT-*).
 
 REQ-AI-002
 AI 결과는 먼저 AIProposal과 AIProposalItem으로 저장한다.
@@ -54,13 +59,13 @@ REQ-AI-009
 REQ-AI-010
 거절한 제안은 DISMISSED로 남겨 같은 제안을 반복 강요하지 않게 한다.
 
-REQ-AI-011
+REQ-AI-011 (미구현)
 사용자는 외부 ChatGPT 대화 텍스트를 붙여넣거나 파일로 가져와 계획·컨텍스트 후보를 만들 수 있다.
 
-REQ-AI-012
+REQ-AI-012 (미구현)
 외부 대화에서 추출한 항목도 AIProposal 검토와 사용자 적용을 거쳐야 한다.
 
-REQ-AI-013
+REQ-AI-013 (응답 계약 세부는 이후 바뀌었다 — 상담 턴 구조화 출력은 13번 §12.2)
 AI 패널의 기본 동작은 자유 대화다. 인사·잡담·감정 표현·정보가 부족한 입력을 실행 조각으로
 바꾸지 않는다. 모든 AI 턴은 CHAT / OFFER / PROPOSAL 중 하나이며, 모든 턴에 자연스러운
 reply가 있어야 한다.
@@ -112,60 +117,61 @@ ASK_CLARIFICATION을 우선한다. 핵심 정보는 계획 범위에 따라 달�
 [09-ai-consultation-regression-cases.md](09-ai-consultation-regression-cases.md)에 기록한다.
 ```
 
-## 3. 장기 컨텍스트
+## 3. 장기 컨텍스트 (2026-10-25 개정 — `user_contexts`, 13번 §12.1, 18번)
 
 ```text
 REQ-CONTEXT-001
-ContextItem은 GOAL / DECISION / CONSTRAINT / PREFERENCE / CONCERN / OBSERVATION / INSIGHT / UNKNOWN 유형을 가진다.
+기억은 user_contexts 한 표에 둔다. 근거 유형은 STATED / SELF_REPORT / OBSERVED / INFERRED, 종류(fact_kind)는 진도·시험 범위·막힌 곳·해결 등이다.
 
 REQ-CONTEXT-002
-ContextItem은 USER_INPUT / AI_CONVERSATION / EXECUTION_DERIVED 출처를 가진다.
+출처(source_type)는 USER_CONFIRMED / AI_SUGGESTION_APPROVED / CONSULT_AUTO / USER_EDITED / SELF_CHECK다.
 
 REQ-CONTEXT-003
-확인 상태는 UNCONFIRMED / AI_INFERRED / USER_CONFIRMED로 구분한다.
+상담 턴은 기억을 승인 팝업 없이 저장할 수 있다(CONSULT_AUTO). STATED·SELF_REPORT는 quote가 이번 사용자 발화 안에 있어야 하고,
+없으면 INFERRED로 낮춘다. OBSERVED는 서버만 만든다.
 
 REQ-CONTEXT-004
-AI_INFERRED 컨텍스트를 사용자 확정 사실처럼 취급하지 않는다.
+INFERRED 기억을 사용자 확정 사실처럼 취급하지 않는다. 자기평가는 혼자 해낸 증거가 아니다.
 
 REQ-CONTEXT-005
-사용자는 컨텍스트 후보의 내용과 확인 상태를 수정하고 활성·보관 처리할 수 있다.
+사용자는 기억을 고치고(옛 행 SUPERSEDED + 새 행 USER_EDITED) 지울 수 있다(WITHDRAWN — 같은 내용을 다시 저장하지 않는다).
 
 REQ-CONTEXT-006
-다음 상담에는 현재 요청과 관련된 활성 컨텍스트만 출처·확인 상태와 함께 제공한다.
+계획 생성에는 대상 과목(또는 과목 없음)·계획 기간과 겹치는 기억만 적용 범위와 함께 싣는다(findActiveAndStaleForPlan).
 
 REQ-CONTEXT-007
-PlanItem과 ExecutionItem은 생성 이유를 설명할 수 있도록 관련 ContextItem과 연결될 수 있다.
+계획 항목의 생성 이유는 회차 안의 인용 번호와 근거 스냅샷으로 추적한다(13번 §10). 별도 연결 표(plan_item_context_links)는 쓰지 않는다.
 
 REQ-CONTEXT-008
-ContextItem은 선택적 validFrom/validTo로 유효 기간을 표현할 수 있다.
+기억은 course_id·topic_id·section_id·scope_start/end로 적용 범위를 가진다. 범위 밖으로 일반화하지 않는다.
 
 REQ-CONTEXT-009
-새 ContextItem이 과거 항목을 대체하면 supersedesContextItemId와 SUPERSEDED 수명주기를 남긴다.
+수명주기는 ACTIVE / STALE / SUPERSEDED / ARCHIVED / WITHDRAWN이다. 진도·시험 범위는 과목당 하나로 대체한다(18번).
 
 REQ-CONTEXT-010
-사용자가 컨텍스트를 철회하면 WITHDRAWN 상태와 withdrawnAt을 남기고 이후 계획 생성에서 제외한다.
+"이미 했어"라는 진술은 기억으로 판단에 쓰되 실행 항목의 완료 상태를 바꾸지 않는다.
 ```
 
-## 4. 계획 요구사항
+## 4. 계획 요구사항 (2026-10-25 개정 — `plan_versions`, 11번)
 
 ```text
 REQ-PLAN-001
-PlanItem은 제목, 설명, 선택적 시작일·종료일, 상태, 우선순위, version을 가진다.
+기간 계획은 plan_versions 한 판이다(plan_key + version). 항목은 판 안의 스냅샷으로 보관하고 별도 PlanItem 표를 두지 않는다.
 
 REQ-PLAN-002
-PlanItem 상태는 DRAFT / ACTIVE / HOLD / DONE / CANCELLED를 사용한다.
+초안은 ai_proposals(purpose=PERIOD_PLAN)로 만들고, 사용자가 확정하면 PlanVersion과 ExecutionItem이 생긴다. 재계획 확정은 같은 plan_key의 version+1이다.
 
 REQ-PLAN-003
-사용자는 PlanItem을 날짜별·주차별·단계별·월별로 볼 수 있다.
+초안 목표 분량(target_minutes)은 서버가 소유한다(강도·가용시간·사용자가 말한 시간, 11번 §5-1·21번 §7).
 
 REQ-PLAN-004
-PlanItem 하나에서 0개 이상의 ExecutionItem을 만들 수 있다.
+계획 항목 하나에서 0개 이상의 ExecutionItem을 만들 수 있다.
 
 REQ-PLAN-005
-PlanItem이 없어도 임시 ExecutionItem을 만들 수 있다.
+계획 없이도 임시 ExecutionItem을 만들 수 있다.
 
 REQ-PLAN-006
-계획 적용 전 생성될 ExecutionItem과 기존 항목 변경 내용을 미리 보여준다.
+확정 전 생성될 ExecutionItem과 주간 배치를 미리 보여준다. 미리보기는 공식 데이터를 바꾸지 않는다.
 ```
 
 ## 5. 실행 조각 요구사항
@@ -309,7 +315,7 @@ REQ-RECORD-003
 PARTIAL은 completionPercent=1~99이며 남은 ExecutionItem을 반드시 연결한다.
 
 REQ-RECORD-004
-NOT_DONE은 completionPercent=0이어야 한다.
+NOT_DONE은 completionPercent=0이어야 한다. (이 결과를 남기는 API는 아직 없다)
 
 REQ-RECORD-005
 실제 시작·종료 시각과 actualMinutes를 모르면 NULL로 저장하며 추정하지 않는다.
@@ -328,7 +334,7 @@ REQ-RECORD-008
 
 ```text
 REQ-EVENT-001
-ExecutionItemEvent는 CREATED / MOVED / REDUCED / SPLIT / HOLD / RESUMED / REOPENED / CANCELLED / PRIORITY_CHANGED / DELETED를 사용한다.
+ExecutionItemEvent는 CREATED / MOVED / REDUCED / SPLIT / HOLD / RESUMED / REOPENED / CANCELLED / PRIORITY_CHANGED / DELETED / RESTORED를 사용한다.
 
 REQ-EVENT-002
 이동은 날짜·시간 변경과 MOVED Event 저장을 같은 트랜잭션에서 처리한다.
@@ -349,27 +355,16 @@ REQ-EVENT-007
 Event는 실제 수행 결과를 대신하지 않는다. 완료·부분·미수행 사실은 ExecutionRecord가 소유한다.
 ```
 
-## 8. 하루 상태
+## 8. 하루 상태 (미구현)
 
-```text
-REQ-DAILY-001
-DailyState는 userId + stateDate 기준으로 유일하다.
-
-REQ-DAILY-002
-DailyState는 viewMode, viewModeSource, intensity, conditionNote, focusNote, memo를 가진다.
-
-REQ-DAILY-003
-DailyState는 ExecutionItem의 부모가 아니다.
-
-REQ-DAILY-004
-오늘 화면은 오늘 DailyState와 오늘 ExecutionItem을 별도로 조회해 합성한다.
-```
+`daily_states`는 만들지 않았다. 하루 단위 설정(화면 모드·강도·컨디션)이 필요해지면 `day_settings`로 새로 만들고, 그때도 ExecutionItem의
+부모로 두지 않는다. 옛 REQ-DAILY-001~004는 폐기한다.
 
 ## 9. 화면 요구사항
 
 ```text
 REQ-UI-001
-최상위 탭은 오늘 / 계획 / 실행 / 기록을 사용한다.
+최상위 탭은 오늘 / 자료 / 프로젝트 / 계획 / 일정 / 기록을 사용한다(2026-10-25 개정, 02번).
 
 REQ-UI-002
 AI 상담 패널은 현재 화면과 선택 항목을 유지한 채 우측에서 열릴 수 있다.
@@ -386,8 +381,8 @@ REQ-UI-005
 REQ-UI-006
 목록의 diff 표현을 먼저 검증하고 동일 계약을 시간표에 적용한다.
 
-REQ-UI-007
-캘린더는 목록과 시간표가 안정된 뒤 구현한다.
+REQ-UI-007 (미구현)
+캘린더는 목록과 시간표가 안정된 뒤 구현한다. 지금은 일정 탭의 주간 보기까지다.
 
 REQ-UI-008
 1536x760 CSS px에서 좌측 내비게이션, 핵심 본문, 우측 AI 패널, 주요 액션이 스크롤 없이 보여야 한다.
@@ -398,34 +393,22 @@ REQ-UI-009
 
 ## 10. 상태 불변조건
 
-- 삭제된 항목은 오늘·계획·실행 일반 목록에 노출하지 않는다.
+- 삭제된 항목은 오늘·계획·일정 일반 목록에 노출하지 않는다.
 - 시작과 종료 중 하나만 존재하는 TIME_FIXED 항목을 허용하지 않는다.
 - 종료가 시작보다 빠른 시간 범위를 허용하지 않는다.
 - 완료 기록과 DONE 상태가 불일치하지 않아야 한다.
 - PARTIAL 기록에는 남은 실행 조각이 반드시 연결돼야 한다.
 - CANCELLED/HOLD 상태를 우회해 완료하지 않는다.
 - sourceExecutionItemId가 자기 자신을 가리키지 않는다.
-- 다른 사용자의 PlanItem, ContextItem, ExecutionItem을 연결하지 않는다.
+- 다른 사용자의 프로젝트·자료·기억·계획·ExecutionItem을 연결하지 않는다(모델이 준 id도 서버가 소유권을 확인한다).
 - 오래된 AI 제안으로 최신 사용자의 수정을 덮어쓰지 않는다.
 
 ## 11. 마이그레이션 요구사항
 
+REQ-MIGRATION-001~005(todos·schedule_blocks·plan_item_events·daily_plans 전환)는 2026-08-03 이관, 2026-08-23 원본 삭제로 **종료**됐다
+(`docs/sql/2026-08-23-remove-legacy-tables.sql`). 아래는 계속 유효하다.
+
 ```text
-REQ-MIGRATION-001
-기존 todos와 schedule_blocks는 execution_items로 통합한다.
-
-REQ-MIGRATION-002
-기존 plan_item_events는 execution_item_events와 execution_records로 역할을 분리한다.
-
-REQ-MIGRATION-003
-기존 daily_plans는 daily_states로 복사한다.
-
-REQ-MIGRATION-004
-레거시 원본은 전환 검증 전까지 삭제하지 않는다.
-
-REQ-MIGRATION-005
-신규 구조와 레거시 구조에 동시에 쓰지 않는다.
-
 REQ-MIGRATION-006
 없는 실제 수행 시간은 추정하지 않는다.
 
@@ -436,82 +419,70 @@ REQ-MIGRATION-008
 실제 이메일, 일기 원문, 비밀번호 해시가 포함된 덤프를 Git에 커밋하지 않는다.
 ```
 
-## 12. 구현 상태 (2026-08-04)
+## 12. 구현 상태
 
-이 절은 위 목표 요구사항 중 실제로 코드로 구현된 범위를 표시한다. 여기 없는 REQ는 아직 목표 설계 상태다.
+2026-08-04판의 IMPL-001~011은 그 시점 기록이라 지웠다(git 이력에 있다). 지금의 구현 범위는 diary-api README "구현 범위"와 99-changelog가 기준이다.
+그때 "구현하지 않음"이었던 부분 수행(PARTIAL·SPLIT), 항목 제외(부분 적용), 기존 조각의 재계획(EXECUTION_CHANGE), 기억(user_contexts)은 이후 구현됐다.
+외부 ChatGPT 대화 가져오기, 하루 상태, 캘린더, NOT_DONE 기록은 아직 없다.
+
+## 13. 자료 (15번)
 
 ```text
-IMPL-001
-REQ-EXECUTION-001~011, REQ-RECORD-006/007을 execution_items/execution_records/execution_item_events로
-구현했다. Today 화면(TodayView)이 execution_items를 실제로 읽고 쓴다. schedule_blocks/todos에는
-더 이상 쓰지 않는다(이중 저장 없음).
+REQ-MATERIAL-001
+자료는 업로드 즉시 자동 분석한다(본문 추출 → 자료 구간 → 토픽 연결 변경안). 분석 결과가 확정 구조를 바로 바꾸지 않고, 정리안은 사용자가 적용한다.
 
-IMPL-002
-API: GET/POST /api/execution-items, GET /api/execution-items/pending,
-POST /api/execution-items/{id}/{complete|reopen|move|reduce|hold}, DELETE /api/execution-items/{id}.
-모든 조회·수정에 user_id 소유권 조건을 걸고, 공식 변경마다 version을 1 증가시키며 요청 버전이
-서버 값과 다르면 409 Conflict를 반환한다.
+REQ-MATERIAL-002
+형식은 PDF·PPTX·HWP·HWPX·IPYNB·텍스트·소스 코드(C++ 포함, 실행하지 않음)와 ZIP 가져오기다. 파일 응답은 nosniff.
 
-IMPL-003
-REQ-AI-002/005/006/009(AIProposal 초안 저장, 상태값, 사용자 적용 전 미반영, baseVersion류 재검증 정신)를
-ai_proposals/ai_proposal_items로 구현했다. 단 이번 범위는 REQ-AI-003(항목별 날짜·시간·순서·분량 수정)의
-일부(제목/설명/예상 시간/우선순위 편집)만 지원하고, REQ-AI-004(대화로 재조정), REQ-AI-011/012(외부
-ChatGPT 대화 가져오기)는 구현하지 않았다.
+REQ-MATERIAL-003
+자료 주차는 사용자가 확인한 관계로만 정한다.
 
-IMPL-004
-API: POST/GET /api/ai/proposals, POST /api/ai/proposals/{id}/apply. LLM 호출(Spring AI ChatClient,
-OpenAI 단일 구현체)은 DB 트랜잭션 밖에서 수행하고, 검증까지 마친 결과만 짧은 트랜잭션으로 저장한다.
-구조화 출력 파싱·검증에 실패하면 ai_proposals/ai_proposal_items를 저장하지 않는다.
+REQ-MATERIAL-004
+분석 한도(CONTENT/LINK)는 분리해 세고, 한도에 걸린 자료는 대기 사유를 보인다.
+```
 
-IMPL-005
-적용(apply)은 proposal_id+user_id 행 잠금(SELECT ... FOR UPDATE) 하에 헤더 상태가 PROPOSED인지
-재확인한 뒤, 모든 ProposalItem을 execution_items로 생성하고 각 CREATED 이벤트를 저장하고 헤더/항목
-상태를 갱신하는 하나의 트랜잭션으로 처리한다. 같은 Proposal을 다시 적용하면 409 Conflict를 반환하고
-중복 생성하지 않는다.
+## 14. 학습 (16~20번)
 
-IMPL-006
-REQ-UI-005(전체 또는 일부 적용) 중 이번 범위는 "전체 적용"만 구현했다. 사용자가 수정 없이 그대로
-적용한 항목은 APPLIED, 값을 고쳐 적용한 항목은 MODIFIED_APPLIED다. 헤더는 하나라도 수정된 항목이
-있으면 MODIFIED_APPLIED, 전부 그대로면 APPLIED다. PARTIALLY_APPLIED는 없다. 항목별 부분 적용은
-후속 범위다.
+```text
+REQ-LEARNING-001
+교재 목차는 웹에서 찾을 수 있고, 하위항목(절·실습·요약·연습문제)을 버리지 않으며, 기존 토픽 아래 빠진 항목만 추가한다(17번).
 
-IMPL-007
-AI가 만드는 execution_item 제안은 항상 placement_type='DATE_ONLY'다. TIME_FIXED AI 추천은 후속 범위다.
+REQ-LEARNING-002
+상담에서 말한 진도·시험 범위·막힘·해결을 기억해 새 대화가 다시 묻지 않는다(18번).
 
-IMPL-008
-AI_PROVIDER=none이거나 API 키가 없어도 서버 부팅과 테스트는 정상 동작한다. 이 상태에서 제안 생성을
-호출하면 503 AI_NOT_CONFIGURED를 반환한다.
+REQ-LEARNING-003
+상담에 교재 사진을 올릴 수 있고, 새 대화의 계획이 막힌 단원의 사진 본문을 쓴다(19번).
 
-IMPL-009
-상담 원문, AI 원문 응답 전체, API 키, JWT는 로그에 남기지 않는다. /api/ai/**와 /api/execution-items/**는
-permitAll로 열지 않는다.
+REQ-LEARNING-004
+기존 쓰기 경로는 원천을 가리키는 학습 이벤트를 같은 트랜잭션에서 남긴다. 완료는 활동 기록이지 이해 확정이 아니다(20번).
 
-IMPL-010
-이번 범위에서 구현하지 않은 것: REQ-PLAN-*(PlanItem 전체 CRUD), REQ-CONTEXT-*(ContextItem),
-REQ-DAILY-*(DailyState), REQ-RECORD-003/008 및 REQ-EVENT-*의 부분 수행(PARTIAL)·SPLIT 흐름,
-REQ-UI-003(ghost/diff 미리보기), 외부 ChatGPT 대화 가져오기, 캘린더.
+REQ-LEARNING-005
+수업 회차마다 다룬 범위를 확인받고, 확인 요청은 과목별로 끌 수 있다(20번 §8).
+```
 
-IMPL-011 (2026-08-06)
-REQ-SCHEDULING-001~009를 구현했다. Java 21 + Timefold Solver 2.4.0(`timefold-solver-core`,
-Spring Boot 4용 별도 스타터 없이 core만 사용)을 도입했다. `scheduling.domain/solver/service`
-패키지에 계산 전용 모델(SchedulingTask/BusyWindow/AvailabilityWindow/SchedulingPlan)과
-`SchedulingConstraintProvider`(HardMediumSoftScore — HARD 5개, MEDIUM 1개(우선순위 배치
-선호, SOFT보다 항상 우선), SOFT 3개), `SchedulingSolverService`(요청마다 새 SolverFactory를
-만들어 짧게 한 번 돌리는 방식, 기본 타임아웃 5초)를 구현했다.
+## 15. 상담 근거 (2026-10-03, 10번 §5.2)
 
-`AiProposalItem.originalPayload`에 earliestStartDate/deadlineDate를, 모델 출력 JSON에
-placementType=UNSCHEDULED와 fixedStartAt/fixedEndAt, 대화 차원 unavailableWindows를
-추가했다(TODAY 흐름의 기존 DATE_ONLY/TIME_FIXED 출력은 그대로 유지 — 하위 호환).
-`POST/GET /api/ai/proposals/{id}/schedule-preview`(둘 다 OpenAI 미호출)로 가용시간 추정과
-Timefold 재계산을 수행하고, 결과를 `ai_proposal_schedule_previews`에 저장해 새로고침 후
-복원한다. `AiProposalService.apply()`는 항목마다 다른 날짜로 승인할 수 있도록 확장했다
-(기존에는 제안 전체가 단일 targetDate를 공유했다 — TODAY 흐름은 여전히 그 값을 그대로 쓰므로
-동작이 바뀌지 않는다).
+```text
+REQ-GROUNDING-001
+상담은 질문과 관련된 자료 원문 단위를 서버가 먼저 찾아 근거로 싣고(사용자 활성 자료만), 모델은 그 턴의 자료 목록 번호로 한 번 더 읽기를 요청할 수 있다.
+한도로 못 실은 것은 숨기지 않고 알린다. 원문은 데이터이지 지시가 아니다 — 원문을 실은 턴에서는 합의 변경·자동 기억을 제한한다.
+```
 
-실측 검증(gpt-5-mini): PROPOSAL 항목당 필드가 늘며 기존 `max-completion-tokens=1200`으로는
-reasoning 토큰과 합쳐 종종 응답이 잘려 `responseType=CHAT`+빈 reply로 폴백하는 것을 확인해
-2400으로 올렸다.
+## 16. 사용자 의도 보존 (2026-10-18~19, 21번)
 
-구현하지 않은 것: 기존 ExecutionItem을 옮기거나 줄이는 PATCH 재계획, ContextItem 기반 장기
-자동 학습, 상시 자동 재계획(SolverManager/데몬), 실시간 ProblemChange.
+```text
+REQ-INTENT-001
+상담 합의는 작성 주체·근거·승인을 나눈다. speaker=USER만으로 승인하지 않고, 서버가 사용자 원문에서 확인한 근거가 없으면 후보다.
+
+REQ-INTENT-002
+계획 생성마다 사용자 원문에서 요청 범위를 먼저 뽑아 서버가 검증하고, 최종 초안과 부분별로 대조한다.
+
+REQ-INTENT-003
+자료를 확보하지 못했다는 이유로 사용자 목표를 낮추지 않는다. 앱이 확인하지 못한 문항·쪽·코드는 지어내지 않는다.
+
+REQ-INTENT-004
+완료 표시는 모델 문장이 아니라 서버 판정(scopeReport.completion·notice)으로 정한다.
+
+REQ-INTENT-005
+이번 요청에서 말한 시간은 서버가 원문과 대조해 확인한 것만 예산·배치에 쓴다.
 ```
