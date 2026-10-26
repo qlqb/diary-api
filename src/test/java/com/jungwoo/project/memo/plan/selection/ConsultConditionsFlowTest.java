@@ -208,8 +208,10 @@ class ConsultConditionsFlowTest {
         Generated generated = f.generate(f.spec("스택 위주로", new com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Origin(
                 77L, null, "req-1", null, null)), com.jungwoo.project.memo.plan.PeriodPlanDraftGenerator.Options.none());
 
-        assertThat(generated.targetMinutes()).isEqualTo(900);
-        assertThat(f.planPrompt()).contains("[사용자가 말한 시간]").contains("~24:00").contains("900분");
+        // (2026-10-25) 범위(09:00~24:00, 900분)를 채우되 휴식 여유를 남긴다: 공부 780분 + 휴식 여유 120분.
+        assertThat(generated.targetMinutes()).isEqualTo(780);
+        assertThat(f.planPrompt()).contains("[사용자가 말한 시간]").contains("~24:00").contains("900분")
+                .contains("휴식 여유 120분");
     }
 
     @Test

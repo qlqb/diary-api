@@ -61,6 +61,14 @@ public interface AiTurnEventSink {
     default void onEvidenceReading(String label) {
     }
 
+    /** 도구 단계 진행 표시(일정 확인 중 등). 텍스트가 아니다 — 답변은 도구 단계가 끝난 뒤 스트리밍된다. */
+    default void onToolProgress(String label) {
+    }
+
+    /** 이번 턴이 만든 변경 묶음(적용 전). 카드가 이것을 그린다. */
+    default void onChangeBundleReady(com.jungwoo.project.memo.ai.change.ChangeBundleView bundle) {
+    }
+
     void onCompleted(AiTurnCompletedPayload payload);
 
     void onError(ErrorCode errorCode);

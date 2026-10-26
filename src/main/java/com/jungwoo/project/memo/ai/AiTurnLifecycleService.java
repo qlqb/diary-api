@@ -285,6 +285,33 @@ public class AiTurnLifecycleService {
             List<ScheduleSuggestion> scheduleSuggestionsIfAny,
             DraftTurnCommit draftCommitOrNull
     ) {
+        return completeTurnSuccess(conversationId, userId, requestMessageId, replyContent, responseType,
+                proposalItemsIfProposal, adjustmentsIfProposal, targetDateIfProposal, unavailableWindowsIfProposal,
+                contextChangesIfAny, scheduleSuggestionsIfAny, draftCommitOrNull, null);
+    }
+
+    /**
+     * 도구 단계 결과(변경 묶음·시간 조건)를 함께 저장한다. 작업 공간은 여기서만 DB에 들어간다 — 턴이 실패·취소되면(선점 실패 포함)
+     * 함께 롤백돼 묶음도 합의도 남지 않는다.
+     *
+     * @param toolCommit 도구 단계가 없었으면 null
+     */
+    public record ToolTurnCommit(List<com.jungwoo.project.memo.ai.change.ChangeBundleService.Staged> staged,
+                                 com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition, String sentence) {
+    }
+
+    @Transactional
+    public TurnCompletionResult completeTurnSuccess(
+            Long conversationId, Long userId, Long requestMessageId,
+            String replyContent, AiResponseType responseType,
+            List<ProposalItem> proposalItemsIfProposal, List<ProposalAdjustment> adjustmentsIfProposal,
+            LocalDate targetDateIfProposal,
+            List<UnavailableWindowSpec> unavailableWindowsIfProposal,
+            List<ContextChangeSuggestion> contextChangesIfAny,
+            List<ScheduleSuggestion> scheduleSuggestionsIfAny,
+            DraftTurnCommit draftCommitOrNull,
+            ToolTurnCommit toolCommit
+    ) {
         int claimed = aiMessageMapper.updateStatusIfCurrent(
                 requestMessageId, userId, MessageStatus.PROCESSING, MessageStatus.COMPLETED);
         if (claimed != 1) {
@@ -346,12 +373,26 @@ public class AiTurnLifecycleService {
                     briefUtterances(conversationId, userId, requestMessageId));
         }
 
+        com.jungwoo.project.memo.ai.change.ChangeBundleView bundle = null;
+        if (toolCommit != null) {
+            if (toolCommit.staged() != null && !toolCommit.staged().isEmpty() && changeBundleService != null) {
+                bundle = changeBundleService.create(userId, conversationId, assistantMessage.getMessageId(), toolCommit.staged());
+            }
+            if (toolCommit.condition() != null) {
+                planBriefService.recordTimeCondition(userId, conversationId, requestMessageId, assistantMessage.getMessageId(),
+                        toolCommit.condition(), toolCommit.sentence());
+            }
+        }
+
         aiConversationMapper.releaseActiveRequest(conversationId, userId, requestMessageId);
         aiConversationMapper.touchUpdatedAt(conversationId, userId);
 
         return new TurnCompletionResult(
-                assistantMessage, proposalResponse, contextSuggestions, scheduleSuggestions);
+                assistantMessage, proposalResponse, contextSuggestions, scheduleSuggestions, bundle);
     }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.change.ChangeBundleService changeBundleService;
 
     /**
      * 기간 계획 턴의 마무리. 모델 호출(PlanDraftService.generate)은 이 트랜잭션 밖에서 이미
@@ -474,8 +515,15 @@ public class AiTurnLifecycleService {
             AiMessage assistantMessage,
             AiProposalResponse proposalResponseOrNull,
             List<ContextSuggestionResponse> contextSuggestions,
-            List<ScheduleSuggestionResponse> scheduleSuggestions
+            List<ScheduleSuggestionResponse> scheduleSuggestions,
+            /** 이번 턴이 만든 변경 묶음(적용 전). 없으면 null */
+            com.jungwoo.project.memo.ai.change.ChangeBundleView changeBundle
     ) {
+        public TurnCompletionResult(AiMessage assistantMessage, AiProposalResponse proposalResponseOrNull,
+                                    List<ContextSuggestionResponse> contextSuggestions,
+                                    List<ScheduleSuggestionResponse> scheduleSuggestions) {
+            this(assistantMessage, proposalResponseOrNull, contextSuggestions, scheduleSuggestions, null);
+        }
     }
 
     /** 기간 계획 턴의 결과. draft는 계획 화면의 /api/plans/draft 응답과 같은 모양이다. */

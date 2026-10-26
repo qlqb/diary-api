@@ -67,6 +67,16 @@ public class SchedulePreviewService {
     private final Clock clock;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
+    /** 초안이 기대는 변경(가정 상태). 변경 묶음 기능이 없으면 null — 그때는 원본이다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.scheduling.scenario.DraftScenarioSource draftScenarioSource;
+
+    private com.jungwoo.project.memo.scheduling.scenario.Scenario previewScenario(Long userId, AiProposal proposal) {
+        return draftScenarioSource == null
+                ? com.jungwoo.project.memo.scheduling.scenario.Scenario.ORIGINAL
+                : draftScenarioSource.scenarioFor(userId, proposal.getPlanRequestJson());
+    }
+
     @Value("${scheduling.horizon.max-days:7}")
     private int maxHorizonDays = 7;
 
@@ -113,8 +123,29 @@ public class SchedulePreviewService {
         List<AvailabilityOverrideRequest> overrides = request.getAvailabilityOverrides() != null
                 ? request.getAvailabilityOverrides() : List.of();
 
-        AvailabilityEstimateResult availability = availabilityEstimateService.estimate(
-                userId, horizonStart, horizonEnd, aiUnavailable, overrides);
+        /*
+         * 계획 초안이면 초안에 고정한 말한 시간 조건(범위·제외)으로 계산한다 — 생성 예산·배치·확정과 같은 계산이다. 범위가 없거나
+         * 일반 제안이면 기존 그대로다. 범위가 자정을 넘으면 그 끝까지 후보를 만든다(자정에서 나눠 하루 안의 항목이 되게).
+         */
+        com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition =
+                com.jungwoo.project.memo.plan.PlanStudyTimeResolver.conditionOf(proposal.getPlanRequestJson());
+        // 말한 시간 범위가 있는 계획은 계획 기간 밖으로 넘겨 놓지 않는다 — 범위가 차면 기본 시간대의 다음 날에 조용히 놓는 대신
+        // "못 넣은 항목"으로 남겨 사용자가 고르게 한다.
+        if (condition != null && !condition.windows().isEmpty() && proposal.getPlanEndDate() != null
+                && horizonEnd.isAfter(proposal.getPlanEndDate())) {
+            horizonEnd = proposal.getPlanEndDate().isBefore(horizonStart) ? horizonStart : proposal.getPlanEndDate();
+        }
+        com.jungwoo.project.memo.scheduling.scenario.Scenario scenario = previewScenario(userId, proposal)
+                .withStudy(com.jungwoo.project.memo.plan.StudyTimeBudget.windowsFor(condition, horizonStart, horizonEnd));
+        AvailabilityEstimateResult raw = com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService.estimateFor(availabilityEstimateService, userId, horizonStart, horizonEnd, aiUnavailable, overrides, scenario);
+        AvailabilityEstimateResult availability = new AvailabilityEstimateResult(
+                com.jungwoo.project.memo.plan.PlanPlacementService.splitAtMidnight(raw.windows()), raw.busyWindows());
+        LocalDateTime candidateEnd = horizonEnd.plusDays(1).atStartOfDay();
+        for (AvailabilityWindow w : availability.windows()) {
+            if (w.endAt().isAfter(candidateEnd)) {
+                candidateEnd = w.endAt();
+            }
+        }
 
         Map<Long, ScheduleItemOverride> itemOverrides = indexItemOverrides(request.getItems());
 
@@ -167,7 +198,7 @@ public class SchedulePreviewService {
             LocalDateTime effectiveDeadline = deadlineDate != null ? deadlineDate.plusDays(1).atStartOfDay() : null;
 
             List<TimeSlotOption> candidates = buildCandidates(
-                    availability.windows(), duration, effectiveEarliest, horizonEnd, effectiveDeadline);
+                    availability.windows(), duration, effectiveEarliest, candidateEnd, effectiveDeadline);
 
             if (candidates.isEmpty()) {
                 unplaced.add(new UnplacedItemDto(item.getProposalItemId(), title, "배치 가능한 시간이 부족함"));
@@ -318,9 +349,8 @@ public class SchedulePreviewService {
 
     private List<TimeSlotOption> buildCandidates(
             List<AvailabilityWindow> windows, int durationMinutes,
-            LocalDateTime effectiveEarliest, LocalDate horizonEnd, LocalDateTime effectiveDeadline
+            LocalDateTime effectiveEarliest, LocalDateTime horizonEndExclusive, LocalDateTime effectiveDeadline
     ) {
-        LocalDateTime horizonEndExclusive = horizonEnd.plusDays(1).atStartOfDay();
         List<TimeSlotOption> options = new ArrayList<>();
         Set<LocalDateTime> seen = new HashSet<>();
 

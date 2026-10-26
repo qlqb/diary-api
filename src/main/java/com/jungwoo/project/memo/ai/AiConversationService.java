@@ -348,6 +348,16 @@ public class AiConversationService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.consult.ConsultTurnService consultTurnService;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.change.ChangeBundleService changeBundleService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.change.PlanScenarioService planScenarioService;
+
+    /** 상담 도구 단계(조회·변경 제안·계산). 단위 테스트처럼 없을 수 있다 — 없으면 예전처럼 답변 호출만 한다. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.jungwoo.project.memo.ai.turn.ConsultToolLoop consultToolLoop;
+
     /** 자료 원문을 실은 턴의 기억을 사용자 발화만으로 다시 뽑는다. 없으면 그 턴은 기억 없이 끝난다(예전 동작). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.jungwoo.project.memo.ai.consult.UserMemoryExtractor userMemoryExtractor;
@@ -471,6 +481,11 @@ public class AiConversationService {
         if (!scheduleSuggestions.isEmpty()) {
             sink.onScheduleSuggestionsReady(scheduleSuggestions);
         }
+        // 변경 묶음도 저장된 행으로 다시 보낸다 — 도구 호출을 다시 실행해 복원하지 않는다.
+        if (changeBundleService != null) {
+            changeBundleService.findBySourceMessage(requestMessage.getUserId(), assistantReply.getMessageId())
+                    .forEach(sink::onChangeBundleReady);
+        }
 
         // 질문 카드·이해한 것·확인한 자료(출처)도 저장된 그대로 재생한다 — 재시도·재접속에서 답변만 남고 출처가 사라지지 않게.
         com.jungwoo.project.memo.ai.consult.ConsultView consult = consultTurnService == null ? null
@@ -579,8 +594,13 @@ public class AiConversationService {
         String contextBlock = contextBlock(conversationId, userId, conversation.getSummary(), contextBudgetChars,
                 requestMessageId, shownState);
         String fixedBlocks = draftBlock + briefBlock;
+        /*
+         * 도구 단계 결과(서버가 확인한 사실·제안한 변경·말한 시간·미완료). 도구 단계가 끝난 뒤 채워지고, 답변 호출(추가 읽기 2회차
+         * 포함)의 사용자 프롬프트에 함께 실린다. 도구 단계가 없으면 빈 문자열이다.
+         */
+        java.util.concurrent.atomic.AtomicReference<String> toolBlock = new java.util.concurrent.atomic.AtomicReference<>("");
         java.util.function.Function<String, String> promptWith = extra -> buildUserPrompt(request, fixedBlocks,
-                workspaceBlock, evidenceBlock + extra, contextBlock, requestMoment.toLocalDate());
+                workspaceBlock, evidenceBlock + toolBlock.get() + extra, contextBlock, requestMoment.toLocalDate());
         String userPrompt = promptWith.apply("");
         // draft 규칙은 AUTO 턴에 항상 붙는다 — 첫 턴(OPEN draft 없음)에도 모델이 create를 낼 수 있어야 한다.
         String systemPrompt = OpenAiConsultationClient.SYSTEM_PROMPT
@@ -613,17 +633,132 @@ public class AiConversationService {
         run.contextRebuilder = budget -> contextBlock(conversationId, userId, conversation.getSummary(), budget,
                 requestMessageId, shownState);
         run.contextBudgetChars = contextBudgetChars;
-        run.promptWithContext = (extra, ctx) -> buildUserPrompt(request, fixedBlocks, workspaceBlock, evidenceBlock + extra,
-                ctx, requestMoment.toLocalDate());
+        run.promptWithContext = (extra, ctx) -> buildUserPrompt(request, fixedBlocks, workspaceBlock,
+                evidenceBlock + toolBlock.get() + extra, ctx, requestMoment.toLocalDate());
         /*
          * 두 호출의 구독을 한 묶음(Composite)에 담는다. 연결이 끊기면 묶음 전체를 취소한다 — 두 번째 호출이 첫 호출의 완료
          * 콜백에서 생겨도(같은 스레드든 다른 스레드든) 묶음에 들어가므로 순서 경합으로 빠지지 않는다.
          */
+        if (autoTurn && consultToolLoop != null && consultToolLoop.available()) {
+            /*
+             * 도구 단계: 모델이 조회·제안·계산 도구를 고르고 서버가 실행한다(상한 안에서). 자료 원문은 싣지 않는다 — 자료의 문장이 도구를
+             * 움직이지 못하게. 결과는 턴 작업 공간에만 있고, 답변 단계가 끝나 턴이 성공으로 저장될 때만 묶음·합의가 된다. 답변은 도구
+             * 단계가 끝난 뒤 스트리밍된다 — 검증 전 설명이 먼저 나가지 않는다. 두 단계가 한 턴의 시간 상한을 나눠 쓴다.
+             */
+            com.jungwoo.project.memo.ai.turn.TurnWorkspace ws = new com.jungwoo.project.memo.ai.turn.TurnWorkspace(userId,
+                    conversationId, requestMessageId, requestMoment.toLocalDate(), requestMoment.toLocalDateTime(),
+                    toolUtterances(conversationId, userId, requestMessageId, request.getMessage(),
+                            requestMoment.toLocalDateTime()));
+            StringBuilder pendingBlock = new StringBuilder();
+            if (changeBundleService != null) {
+                for (com.jungwoo.project.memo.ai.change.ChangeBundleRows.Item item
+                        : changeBundleService.pendingItems(userId, conversationId)) {
+                    ws.pending(item.getTargetKey(), item.getSummary());
+                    pendingBlock.append("- ").append(item.getSummary())
+                            .append(Boolean.TRUE.equals(item.getSelected()) ? "" : " (선택 안 됨)").append('\n');
+                }
+            }
+            String toolContext = workspaceBlock + "\n" + briefBlock + "\n" + contextBlock + "\n"
+                    + (pendingBlock.isEmpty() ? "" : "[적용 전 변경 — 이전 턴에 제안, 원본은 아직 그대로]\n" + pendingBlock + "\n")
+                    + buildCurrentTimeBlock(requestMoment, userZone);
+            run.toolWorkspace = ws;
+            Disposable tools = Mono.fromCallable(() -> consultToolLoop.run(ws, toolContext, request.getMessage(),
+                            sink::onToolProgress))
+                    .subscribeOn(Schedulers.boundedElastic())
+                    // 동기 모델 호출이 길어져도 도구 단계가 턴 마감을 다 쓰지 않게 끊는다(끊기면 도구 결과 없이 답한다)
+                    .timeout(Duration.ofSeconds(consultToolLoop.maxSeconds() + 5L))
+                    .subscribe(done -> {
+                        run.toolTurn = done;
+                        toolBlock.set(com.jungwoo.project.memo.ai.turn.ConsultToolLoop.answerBlock(done));
+                        startAnswerRound(run, promptWith.apply(""));
+                    }, error -> {
+                        log.warn("상담 도구 단계 실패 — 도구 결과 없이 답한다. conversationId={}, {}", conversationId,
+                                error.getClass().getSimpleName());
+                        toolBlock.set("[도구 단계 결과]\n미완료: 도구 단계가 실패해 일정·할 일을 확인하지 못했다. 변경은 제안하지 않았다. "
+                                + "확인하지 못했다고 말하고, 원본은 바뀌지 않았다고 알린다.\n");
+                        startAnswerRound(run, promptWith.apply(""));
+                    });
+            if (!run.subscriptions.add(tools)) {
+                tools.dispose();
+            }
+            return run.subscriptions;
+        }
         Disposable first = streamRound(run, 1, userPrompt, Duration.ofSeconds(requestTimeoutSeconds));
         if (!run.subscriptions.add(first)) {
             first.dispose();
         }
         return run.subscriptions;
+    }
+
+    /**
+     * 도구 단계가 변경을 올린 턴: 일정·루틴 draft를 일정 후보로 승격하지 않는다(같은 요청이 묶음과 후보로 두 번 생기지 않게).
+     * 그 draft는 묶음이 맡았으므로 닫고(CANCELLED), 서버 고정 문구("후보를 만들었어요")도 쓰지 않는다 — 답은 묶음을 아는 모델 답이다.
+     * 기간 계획 OFFER와 질문은 그대로 둔다.
+     */
+    static DraftTurnResolver.Outcome withoutSchedulePromotion(DraftTurnResolver.Outcome outcome) {
+        if (outcome.action() != DraftTurnResolver.Action.PROPOSE) {
+            return outcome;
+        }
+        List<DraftState> keep = new ArrayList<>();
+        for (DraftState draft : outcome.proposeDrafts()) {
+            if (draft.getType() == DraftType.CREATE_PERIOD_PLAN) {
+                keep.add(draft);
+            } else {
+                draft.setStatus(com.jungwoo.project.memo.ai.draft.DraftStatus.CANCELLED);
+            }
+        }
+        if (keep.size() == outcome.proposeDrafts().size()) {
+            return outcome;
+        }
+        List<String> notes = new ArrayList<>(outcome.notes());
+        notes.add("도구 단계가 변경을 올려 일정 후보 승격 " + (outcome.proposeDrafts().size() - keep.size()) + "건 생략(묶음이 맡음)");
+        if (keep.isEmpty()) {
+            return new DraftTurnResolver.Outcome(outcome.drafts(), outcome.effectiveTargets(), DraftTurnResolver.Action.CHAT,
+                    outcome.userTriggered(), List.of(), null, null, List.of(), outcome.factsByDraft(), notes);
+        }
+        return new DraftTurnResolver.Outcome(outcome.drafts(), outcome.effectiveTargets(), outcome.action(),
+                outcome.userTriggered(), keep, outcome.askDraft(), null, outcome.quickReplies(), outcome.factsByDraft(), notes);
+    }
+
+    /** 턴당 모델 호출 상한(도구 단계 + 답변 + 추가 읽기 합). 기억 보조 추출 호출은 따로 기록한다. */
+    static final int MAX_MODEL_CALLS_PER_TURN = 6;
+
+    /** 답변 호출(1회)을 뺀 남은 모델 호출 수. 도구 단계를 쓴 만큼 추가 읽기가 줄어든다. */
+    private static int modelCallsLeft(TurnRun run) {
+        int used = (run.toolWorkspace == null ? 0 : run.toolWorkspace.modelCalls()) + 1;
+        return MAX_MODEL_CALLS_PER_TURN - used;
+    }
+
+    /** 도구 단계 뒤 답변 호출. 남은 시간 안에서만 부른다(턴 시간 상한을 넘기지 않는다). */
+    private void startAnswerRound(TurnRun run, String userPrompt) {
+        long remainingNanos = run.deadlineNanos - System.nanoTime();
+        Duration remaining = Duration.ofNanos(Math.max(remainingNanos, Duration.ofSeconds(5).toNanos()));
+        Disposable first = streamRound(run, 1, userPrompt, remaining);
+        if (!run.subscriptions.add(first)) {
+            first.dispose();
+        }
+    }
+
+    /**
+     * 시간 조건을 원문 대조할 사용자 발언(소유가 확인된 이 대화의 최근 사용자 메시지 + 이번 메시지). 발언 시각을 함께 넘긴다 — 오전·오후는
+     * 그 말을 한 시각으로 고른다.
+     */
+    private List<com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance> toolUtterances(
+            Long conversationId, Long userId, Long requestMessageId, String message, java.time.LocalDateTime now) {
+        List<com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance> out = new ArrayList<>();
+        try {
+            aiMessageMapper.findRecentByConversationIdAndUserId(conversationId, userId, 24, requestMessageId).stream()
+                    .filter(m -> m.getRole() == MessageRole.USER && hasText(m.getContent()))
+                    .sorted(java.util.Comparator.comparing(AiMessage::getMessageId))
+                    .forEach(m -> out.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance(
+                            m.getMessageId(), m.getContent(), m.getCreatedAt() == null ? now : m.getCreatedAt())));
+        } catch (RuntimeException e) {
+            log.warn("도구 단계 발언 조회 실패 — 이번 메시지만 대조한다. conversationId={}", conversationId);
+        }
+        if (hasText(message)) {
+            out.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance(requestMessageId, message, now));
+        }
+        return out.size() > 12 ? out.subList(out.size() - 12, out.size()) : out;
     }
 
     /**
@@ -714,6 +849,10 @@ public class AiConversationService {
         final EvidenceTurn evidence;
         final long deadlineNanos;
         Long requestMessageId;
+        /** 도구 단계 작업 공간. 도구 단계가 없었거나 실패했으면 null */
+        volatile com.jungwoo.project.memo.ai.turn.TurnWorkspace toolTurn;
+        /** 도구 단계 작업 공간(성공·실패와 무관하게 시작하면 있다). 턴 모델 호출 상한을 세는 데 쓴다 */
+        volatile com.jungwoo.project.memo.ai.turn.TurnWorkspace toolWorkspace;
         /** 이 턴의 모든 모델 호출 구독. 연결 종료 시 함께 취소된다. */
         final Disposable.Composite subscriptions = Disposables.composite();
         /** 첫 호출의 대화 기록 예산과 그 예산으로 대화 기록을 다시 만드는 함수(두 번째 호출이 추가 원문만큼 줄여 쓴다). */
@@ -799,7 +938,7 @@ public class AiConversationService {
                         List<com.jungwoo.project.memo.ai.consult.ConsultView.Gap> extraGaps = new ArrayList<>();
                         if (!readMore.isEmpty() && run.evidence != null && run.evidence.ledger() != null) {
                             if (round == 1 && run.remainingSeconds() >= MIN_READ_MORE_SECONDS
-                                    && readMoreBudget(run) >= MIN_READ_MORE_CHARS) {
+                                    && readMoreBudget(run) >= MIN_READ_MORE_CHARS && modelCallsLeft(run) > 0) {
                                 recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
                                         UsageResultStatus.SUCCESS, null, feature);
                                 startReadMoreRound(run, readMore);
@@ -828,7 +967,7 @@ public class AiConversationService {
                                 run.request, lastFinishReason.get(), lastUsage.get(), run.draftContext,
                                 evidenceView(run, structured, extraGaps),
                                 run.evidence != null && run.evidence.ledger() != null
-                                        && run.evidence.ledger().showedMaterialText());
+                                        && run.evidence.ledger().showedMaterialText(), run.toolTurn);
                         recordUsage(userId, conversationId, requestMessageId, lastUsage.get(),
                                 UsageResultStatus.SUCCESS, null, feature);
                     } catch (Exception e) {
@@ -1156,9 +1295,19 @@ public class AiConversationService {
                      */
                     PeriodPlanDraftGenerator.Origin origin = new PeriodPlanDraftGenerator.Origin(conversationId,
                             requestMessageId, request.getIdempotencyKey(), null);
-                    PeriodPlanDraftGenerator.Generated generated = planDraftService.generate(userId, draftRequest,
-                            origin, null, stage -> sink.onPeriodPlanProgress(stage.name(),
-                                    com.jungwoo.project.memo.plan.PlanGenerationProgress.label(stage)));
+                    /*
+                     * 이 대화에 아직 적용하지 않은 변경 묶음이 있으면(예: 오늘 근무 빼기 제안) 그 선택을 겹친 가정 상태로 만든다.
+                     * 원본은 바꾸지 않는다 — 확정할 때 묶음과 계획이 함께 적용된다.
+                     */
+                    com.jungwoo.project.memo.ai.change.PlanScenarioService.Resolved scenario = planScenarioService == null
+                            ? null : planScenarioService.forConversation(userId, conversationId);
+                    java.util.function.Consumer<com.jungwoo.project.memo.plan.PlanGenerationProgress.Stage> progress =
+                            stage -> sink.onPeriodPlanProgress(stage.name(),
+                                    com.jungwoo.project.memo.plan.PlanGenerationProgress.label(stage));
+                    // 기댈 변경이 없으면 기존 경로 그대로 — 가정 상태 없는 계획은 지금과 같다
+                    PeriodPlanDraftGenerator.Generated generated = scenario == null
+                            ? planDraftService.generate(userId, draftRequest, origin, null, progress)
+                            : planDraftService.generate(userId, draftRequest, origin, null, progress, scenario);
                     return aiTurnLifecycleService.completePeriodPlanTurn(
                             conversationId, userId, requestMessageId, periodPlanReply(generated), generated);
                 })
@@ -1375,6 +1524,19 @@ public class AiConversationService {
             DraftTurnContext draftContext, com.jungwoo.project.memo.ai.consult.ConsultView.Evidence evidence,
             boolean untrustedTextShown
     ) {
+        completeTurnSuccessfully(conversation, requestMessageId, result, sink, todayDate, request, finishReason, usage,
+                draftContext, evidence, untrustedTextShown, null);
+    }
+
+    /** @param toolTurn 이 턴의 도구 단계 작업 공간(없었으면 null). 성공 저장 트랜잭션에서만 묶음·합의가 된다 */
+    private void completeTurnSuccessfully(
+            AiConversation conversation, Long requestMessageId, AiStreamParser.Result result, AiTurnEventSink sink,
+            LocalDate todayDate, AiMessageRequest request, String finishReason, Usage usage,
+            DraftTurnContext draftContext, com.jungwoo.project.memo.ai.consult.ConsultView.Evidence evidence,
+            boolean untrustedTextShown, com.jungwoo.project.memo.ai.turn.TurnWorkspace toolTurn
+    ) {
+        // 이번 턴 도구 단계가 실제로 변경을 올렸는가. 올렸으면 그 요청의 만들기·고치기는 변경 묶음이 전부다.
+        boolean toolStaged = toolTurn != null && !toolTurn.staged().isEmpty();
         RequestedAction requestedAction = request.getRequestedAction();
         Integer inputTokens = safeTokenCount(usage, true);
         Integer outputTokens = safeTokenCount(usage, false);
@@ -1431,6 +1593,9 @@ public class AiConversationService {
             }
         }
 
+        if (toolStaged && draftOutcome != null) {
+            draftOutcome = withoutSchedulePromotion(draftOutcome);
+        }
         boolean draftDecides = draftOutcome != null && draftOutcome.action() != DraftTurnResolver.Action.CHAT;
         ResolvedTurn resolved = draftDecides
                 ? resolveDraftTurn(conversation, draftOutcome, structured, result.reply(), todayDate)
@@ -1455,6 +1620,11 @@ public class AiConversationService {
         if (draftDecides && structured.scheduleSuggestions() != null && !structured.scheduleSuggestions().isEmpty()) {
             log.info("draft 턴이라 모델 scheduleSuggestions {}건 폐기", structured.scheduleSuggestions().size());
         }
+        if (toolStaged && !scheduleSuggestions.isEmpty()) {
+            // 도구 단계가 있었던 턴의 변경은 변경 묶음이 전부다 — 같은 요청을 일정 후보로 또 만들지 않는다.
+            log.info("도구 단계 턴이라 모델 scheduleSuggestions {}건 폐기", scheduleSuggestions.size());
+            scheduleSuggestions = List.of();
+        }
         /*
          * 계획 합의 변경은 AUTO 턴에서만 받는다. 버튼 턴(CREATE_PROPOSAL)은 이미 확정된 요청이다.
          */
@@ -1464,6 +1634,7 @@ public class AiConversationService {
         if (untrustedTextShown && !briefOps.isEmpty()) {
             briefOps = restrictBriefOps(briefOps, pendingBriefProposals(conversation), request.getMessage());
         }
+        // draft 상태(필드·취소·질문)는 그대로 저장한다. 도구 단계가 변경을 올린 턴의 일정 후보 승격만 위(withoutSchedulePromotion)에서 뺐다.
         boolean touchesDrafts = draftOutcome != null && draftOutcome.touchesDrafts();
         // PERIOD 합의가 날짜를 말하지 않았으면 이번 턴의 기간(OFFER 날짜)이 근거다 — 새 상담의 주로 다시 해석하지 않는다.
         com.jungwoo.project.memo.ai.brief.PlanBriefService.TurnPeriod briefPeriod = structured == null ? null
@@ -1473,11 +1644,19 @@ public class AiConversationService {
                 ? new AiTurnLifecycleService.DraftTurnCommit(touchesDrafts ? draftOutcome : null,
                         touchesDrafts ? facts : null, briefOps, briefPeriod) : null;
 
-        AiTurnLifecycleService.TurnCompletionResult completion = aiTurnLifecycleService.completeTurnSuccess(
+        AiTurnLifecycleService.ToolTurnCommit toolCommit = toolTurn == null || toolTurn.isEmpty() ? null
+                : new AiTurnLifecycleService.ToolTurnCommit(toolTurn.toBundle(), toolTurn.condition(), request.getMessage());
+        AiTurnLifecycleService.TurnCompletionResult completion = toolCommit == null
+                ? aiTurnLifecycleService.completeTurnSuccess(
                 conversation.getConversationId(), conversation.getUserId(), requestMessageId,
                 resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.adjustments(),
                 resolved.targetDate(), resolved.unavailableWindows(), resolved.contextChanges(),
-                scheduleSuggestions, draftCommit);
+                scheduleSuggestions, draftCommit)
+                : aiTurnLifecycleService.completeTurnSuccess(
+                conversation.getConversationId(), conversation.getUserId(), requestMessageId,
+                resolved.reply(), resolved.responseType(), resolved.proposalItems(), resolved.adjustments(),
+                resolved.targetDate(), resolved.unavailableWindows(), resolved.contextChanges(),
+                scheduleSuggestions, draftCommit, toolCommit);
 
         Long proposalId = null;
         List<AiProposalItemResponse> proposalItemResponses = List.of();
@@ -1498,6 +1677,9 @@ public class AiConversationService {
         if (!completion.scheduleSuggestions().isEmpty()) {
             sink.onScheduleSuggestionsReady(completion.scheduleSuggestions());
         }
+        if (completion.changeBundle() != null) {
+            sink.onChangeBundleReady(completion.changeBundle());
+        }
 
         /*
          * 이번 답변으로 알게 된 것·바뀐 방향·다음 질문. 턴은 이미 저장됐다 — 이 단계가 실패해도 답변은 그대로 간다.
@@ -1507,9 +1689,18 @@ public class AiConversationService {
         if (consultTurnService != null && requestedAction == RequestedAction.AUTO) {
             com.jungwoo.project.memo.ai.consult.ConsultOut consultOut = structured == null ? null
                     : restrictConsult(structured.consult(), request.getMessage(), untrustedTextShown);
+            // 이번 턴에 올린 변경뿐 아니라 이전 턴의 적용 전 묶음도 가정이다 — 그 내용이 사실 기억으로 저장되지 않게 한다.
+            boolean pendingChanges = toolStaged || (changeBundleService != null
+                    && !changeBundleService.pendingItems(conversation.getUserId(), conversation.getConversationId()).isEmpty());
+            if (pendingChanges) {
+                consultOut = withoutPendingChangeFacts(consultOut);
+            }
             java.time.LocalDateTime saidAt = null;
             try {
                 consultOut = withExtractedMemory(conversation, request.getMessage(), consultOut, untrustedTextShown);
+                if (pendingChanges) {
+                    consultOut = withoutPendingChangeFacts(consultOut); // 보조 추출이 더한 기억에도 같은 정책
+                }
                 AiMessage asked = aiMessageMapper.findByIdAndUserId(requestMessageId, conversation.getUserId());
                 saidAt = asked == null ? null : asked.getCreatedAt();
             } catch (RuntimeException e) {
@@ -1539,6 +1730,35 @@ public class AiConversationService {
         sink.onCompleted(new AiTurnCompletedPayload(
                 resolved.responseType(), resolved.reply(), proposalId, proposalItemResponses, offerAction,
                 requestMessageId, completion.assistantMessage().getMessageId(), null, resolved.quickReplies(), consult));
+    }
+
+    /**
+     * 적용 전 변경이 있는 턴: "오늘 근무 뺌" 같은 일정 진술은 확정 사실로 기억하지 않는다 — 변경 묶음은 사용자가 적용하기 전까지 가정이다.
+     * 진도·시험 범위·막힘·해결·목표·선호는 일정 변경과 무관하므로 그대로 둔다. 일정·시간·날짜 진술(제약·기타)만 뺀다.
+     */
+    static com.jungwoo.project.memo.ai.consult.ConsultOut withoutPendingChangeFacts(
+            com.jungwoo.project.memo.ai.consult.ConsultOut out) {
+        if (out == null || out.memory() == null || out.memory().isEmpty()) {
+            return out;
+        }
+        List<com.jungwoo.project.memo.ai.consult.ConsultOut.MemoryOut> kept = out.memory().stream()
+                .filter(m -> m == null || !looksLikeScheduleFact(m)).toList();
+        if (kept.size() == out.memory().size()) {
+            return out;
+        }
+        log.info("적용 전 변경이 있는 턴이라 일정 진술 기억 {}건을 저장하지 않는다", out.memory().size() - kept.size());
+        return new com.jungwoo.project.memo.ai.consult.ConsultOut(out.question(), out.direction(), kept, out.activity());
+    }
+
+    private static final java.util.regex.Pattern SCHEDULE_WORDS = java.util.regex.Pattern.compile(
+            "근무|알바|출근|일정|약속|수업|휴강|빼|취소|옮기|오늘|내일|모레|요일|\\d{1,2}\\s*시");
+
+    private static boolean looksLikeScheduleFact(com.jungwoo.project.memo.ai.consult.ConsultOut.MemoryOut m) {
+        String kind = m.kind() == null ? "" : m.kind().trim().toUpperCase(java.util.Locale.ROOT);
+        if (java.util.Set.of("PROGRESS", "EXAM_SCOPE", "DIFFICULTY", "RESOLVED", "GOAL", "PREFERENCE").contains(kind)) {
+            return false;
+        }
+        return m.text() != null && SCHEDULE_WORDS.matcher(m.text()).find();
     }
 
     private void recordUsage(Long userId, Long conversationId, Long requestMessageId, Usage usage,

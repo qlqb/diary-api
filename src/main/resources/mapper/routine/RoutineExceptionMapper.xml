@@ -53,6 +53,13 @@
          ORDER BY exception_date
     </select>
 
+    <select id="findByRoutineIdForUpdate" resultMap="routineExceptionResultMap">
+        SELECT * FROM routine_exceptions
+         WHERE routine_id = #{routineId}
+         ORDER BY exception_date
+        FOR UPDATE
+    </select>
+
     <select id="findByUserIdAndExceptionDateRange" resultMap="routineExceptionResultMap">
         SELECT e.*
           FROM routine_exceptions e

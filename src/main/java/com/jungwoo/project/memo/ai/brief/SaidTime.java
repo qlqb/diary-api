@@ -37,13 +37,20 @@ final class SaidTime {
             NUM + "\\s*시간(?:\\s*(\\d{1,2})\\s*분)?(\\s*반)?"
                     + "|(?<![\\d.:시/]\\s?)(?<![\\d./])(\\d{1,3})\\s*분");
 
+    /**
+     * 시각의 수. {@link #NUM}과 달리 앞의 {@code ~}·{@code -}는 범위 기호라 막지 않는다 — "2시~8시"의 8은 다른 수의 안쪽이 아니라 구간의
+     * 끝이다(2026-10-25 재현: 붙여 쓴 구간을 읽지 못해 말한 시간 전체가 버려졌다). 지속 시간("1~2시간")은 여전히 NUM으로 막는다.
+     */
+    private static final String CLOCK_NUM = "(?:(?<![\\d./])(\\d{1,2}(?:\\.5)?)(?![\\d/])"
+            + "|(?<![" + NUMERAL_JOINERS + "])(열두|열한|한|두|세|네|다섯|여섯|일곱|여덟|아홉|열))";
+
     /** 시각: (오전·오후·…)? 시 (분|반)? 또는 HH:mm 또는 자정. 뒤에 붙은 말(부터·까지·~)로 역할을 정한다. */
     private static final Pattern CLOCK = Pattern.compile(
-            "(오전|아침|새벽|오후|저녁|밤)?\\s*(?:" + NUM + "\\s*시(?!간)(?:\\s*(\\d{1,2})\\s*분|\\s*(반))?"
+            "(오전|아침|새벽|오후|저녁|밤)?\\s*(?:" + CLOCK_NUM + "\\s*시(?!간)(?:\\s*(\\d{1,2})\\s*분|\\s*(반))?"
                     + "|(?<![\\d./])(\\d{1,2}):(\\d{2})|(자정))\\s*(부터|에서|까지|~|-)?");
 
-    private static final Pattern PER_DAY = Pattern.compile("하루|매일|날마다|오늘|평일|주말|저녁마다|밤마다");
-    private static final Pattern PER_PLAN = Pattern.compile("총|전체|합쳐|통틀어|모두 합|이번 주|이번 계획|기간 동안");
+    static final Pattern PER_DAY = Pattern.compile("하루|매일|날마다|오늘|평일|주말|저녁마다|밤마다");
+    static final Pattern PER_PLAN = Pattern.compile("총|전체|합쳐|통틀어|모두 합|이번 주|이번 계획|기간 동안");
 
     /** 원문에서 읽힌 지속 시간(분), 나온 순서대로. */
     static List<Integer> durations(String sentence) {
@@ -167,7 +174,10 @@ final class SaidTime {
         }
         Set<LocalTime> out = new HashSet<>();
         for (LocalTime start : from.candidates()) {
-            until.candidates().stream().filter(t -> t.isAfter(start)).min(LocalTime::compareTo).ifPresent(out::add);
+            // 그날 안에 시작 뒤의 끝이 없으면 자정을 넘긴 것이다("밤 11시부터 1시까지"의 끝은 다음 날 01:00).
+            until.candidates().stream().filter(t -> t.isAfter(start)).min(LocalTime::compareTo)
+                    .or(() -> until.candidates().stream().min(LocalTime::compareTo))
+                    .ifPresent(out::add);
         }
         return out;
     }

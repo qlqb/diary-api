@@ -62,6 +62,16 @@ public class PlanConfirmScheduleGuard {
      */
     public void ensureNoConflicts(Long userId, LocalDate planStart, LocalDate planEnd,
                                   List<AiProposalApplyRequest.EditedProposalItem> editedItems) {
+        ensureNoConflicts(userId, planStart, planEnd, editedItems, null);
+    }
+
+    /**
+     * @param condition 초안에 고정한 말한 시간 조건. 범위가 있으면 각 항목이 그 범위 안이고 제외 구간과 겹치지 않아야 한다. 확정할
+     *                  항목끼리도 겹치면 안 된다. 없으면 null(기존 검사만)
+     */
+    public void ensureNoConflicts(Long userId, LocalDate planStart, LocalDate planEnd,
+                                  List<AiProposalApplyRequest.EditedProposalItem> editedItems,
+                                  com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition) {
         List<AiProposalApplyRequest.EditedProposalItem> timed = new ArrayList<>();
         for (AiProposalApplyRequest.EditedProposalItem edit : editedItems == null ? List.<AiProposalApplyRequest.EditedProposalItem>of() : editedItems) {
             if (edit != null && edit.getPlacementType() == PlacementType.TIME_FIXED
@@ -104,10 +114,61 @@ public class PlanConfirmScheduleGuard {
                 }
             }
         }
+        conflicts.addAll(studyTimeViolations(timed, condition, from, to));
         if (!conflicts.isEmpty()) {
             log.warn("계획 확정 거절: 미리보기 이후 일정과 겹치는 항목 {}건. userId={}", conflicts.size(), userId);
             throw new ConflictException(ErrorCode.PLAN_CONFIRM_SCHEDULE_CONFLICT, conflicts);
         }
+    }
+
+    /** 말한 범위 밖·제외 구간·확정 항목끼리의 겹침. 같은 409 목록에 reason으로 구분해 싣는다. */
+    static List<Map<String, Object>> studyTimeViolations(List<AiProposalApplyRequest.EditedProposalItem> timed,
+                                                         com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition,
+                                                         LocalDate from, LocalDate to) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (int i = 0; i < timed.size(); i++) {
+            for (int j = i + 1; j < timed.size(); j++) {
+                var a = timed.get(i);
+                var b = timed.get(j);
+                if (a.getScheduledStartAt().isBefore(b.getScheduledEndAt()) && b.getScheduledStartAt().isBefore(a.getScheduledEndAt())) {
+                    out.add(violation(a, "ITEM_OVERLAP", "다른 확정 항목과 겹친다"));
+                }
+            }
+        }
+        var study = StudyTimeBudget.windowsFor(condition, from, to);
+        if (study == null) {
+            return out;
+        }
+        java.util.Set<LocalDate> covered = new java.util.HashSet<>();
+        study.windows().forEach(w -> covered.add(w.start().toLocalDate()));
+        for (var edit : timed) {
+            LocalDate day = edit.getScheduledStartAt().toLocalDate();
+            // 말한 범위가 그날 시작했거나, 전날 시작한 범위가 자정을 넘어 이 항목 시작 전까지 이어질 때만 그 범위로 검사한다.
+            boolean dayCovered = covered.contains(day) || study.windows().stream()
+                    .anyMatch(w -> w.start().toLocalDate().isBefore(day) && w.end().isAfter(edit.getScheduledStartAt()));
+            boolean inside = study.windows().stream().anyMatch(w -> !edit.getScheduledStartAt().isBefore(w.start())
+                    && !edit.getScheduledEndAt().isAfter(w.end()));
+            if (dayCovered && !study.windows().isEmpty() && !inside) {
+                out.add(violation(edit, "OUTSIDE_STUDY_TIME", "말한 공부 시간 밖이다"));
+            }
+            for (var x : study.exclusions()) {
+                if (edit.getScheduledStartAt().isBefore(x.end()) && x.start().isBefore(edit.getScheduledEndAt())) {
+                    out.add(violation(edit, "IN_EXCLUSION", "말한 제외 시간(" + x.start().toLocalTime() + "~"
+                            + x.end().toLocalTime() + ")과 겹친다"));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static Map<String, Object> violation(AiProposalApplyRequest.EditedProposalItem edit, String reason, String label) {
+        Map<String, Object> v = new LinkedHashMap<>();
+        v.put("proposalItemId", edit.getProposalItemId());
+        v.put("scheduledStartAt", edit.getScheduledStartAt());
+        v.put("scheduledEndAt", edit.getScheduledEndAt());
+        v.put("reason", reason);
+        v.put("busyLabel", label);
+        return v;
     }
 
     /**

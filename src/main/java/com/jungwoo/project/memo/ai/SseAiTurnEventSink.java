@@ -99,6 +99,16 @@ class SseAiTurnEventSink implements AiTurnEventSink {
     }
 
     @Override
+    public void onToolProgress(String label) {
+        send("tool.progress", Map.of("label", label == null ? "확인 중" : label));
+    }
+
+    @Override
+    public void onChangeBundleReady(com.jungwoo.project.memo.ai.change.ChangeBundleView bundle) {
+        send("change_bundle.ready", bundle);
+    }
+
+    @Override
     public void onCompleted(AiTurnCompletedPayload payload) {
         if (!markTerminatedOnce()) {
             return;

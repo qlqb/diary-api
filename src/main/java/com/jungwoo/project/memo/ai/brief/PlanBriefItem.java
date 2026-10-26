@@ -67,8 +67,30 @@ public record PlanBriefItem(
         Long flowProposalId,
         String quote,
         Long basisMessageId,
-        String basisSentence
+        String basisSentence,
+        /**
+         * (2026-10-25) TIME_BUDGET의 해석된 시간 조건. 사용자 원문 근거(quote·basisSentence)와 문장(text)과 따로 둔다 — 화면 문구를
+         * 문장에 꼬리표로 붙여 다시 읽던 방식은 꼬리표가 원문 대조를 망가뜨렸다. 옛 저장본은 null(꼬리표를 읽는다).
+         */
+        StudyTimeCondition timeCondition
 ) {
+    /** 시간 조건 필드가 생기기 전 모양. */
+    public PlanBriefItem(int id, String kind, String text, String speaker, boolean accepted, boolean rejected,
+                         boolean removed, String scope, Long sourceMessageId, Long acceptedByMessageId, Integer supersedes,
+                         Long topicId, Long courseId, Long executionItemId, int revision, List<String> history,
+                         LocalDateTime updatedAt, LocalDate periodStart, LocalDate periodEnd, LocalDate saidOn,
+                         Long flowProposalId, String quote, Long basisMessageId, String basisSentence) {
+        this(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId, acceptedByMessageId, supersedes,
+                topicId, courseId, executionItemId, revision, history, updatedAt, periodStart, periodEnd, saidOn,
+                flowProposalId, quote, basisMessageId, basisSentence, null);
+    }
+
+    public PlanBriefItem withTimeCondition(StudyTimeCondition condition) {
+        return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
+                acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, updatedAt,
+                periodStart, periodEnd, saidOn, flowProposalId, quote, basisMessageId, basisSentence, condition);
+    }
+
     public static final String SPEAKER_USER = "USER";
     public static final String SPEAKER_ASSISTANT = "ASSISTANT";
     public static final String SCOPE_THIS_DRAFT = "THIS_DRAFT";
@@ -116,7 +138,7 @@ public record PlanBriefItem(
     public PlanBriefItem withBasis(String newQuote, Long messageId, String sentence, LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
                 acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart,
-                periodEnd, saidOn, flowProposalId, newQuote, messageId, sentence);
+                periodEnd, saidOn, flowProposalId, newQuote, messageId, sentence, timeCondition);
     }
 
     public boolean isPeriod() {
@@ -149,19 +171,19 @@ public record PlanBriefItem(
     public PlanBriefItem withAccepted(Long byMessageId, LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, true, false, removed, scope, sourceMessageId, byMessageId,
                 supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart, periodEnd, saidOn,
-                flowProposalId, quote, basisMessageId, basisSentence);
+                flowProposalId, quote, basisMessageId, basisSentence, timeCondition);
     }
 
     public PlanBriefItem withRejected(LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, false, true, removed, scope, sourceMessageId, acceptedByMessageId,
                 supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart, periodEnd, saidOn,
-                flowProposalId, quote, basisMessageId, basisSentence);
+                flowProposalId, quote, basisMessageId, basisSentence, timeCondition);
     }
 
     public PlanBriefItem withRemoved(LocalDateTime at) {
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, true, scope, sourceMessageId,
                 acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history, at, periodStart,
-                periodEnd, saidOn, flowProposalId, quote, basisMessageId, basisSentence);
+                periodEnd, saidOn, flowProposalId, quote, basisMessageId, basisSentence, timeCondition);
     }
 
     /**
@@ -180,7 +202,7 @@ public record PlanBriefItem(
         return new PlanBriefItem(id, kind, text, speaker, accepted, rejected, removed, scope, sourceMessageId,
                 acceptedByMessageId, supersedes, topicId, courseId, executionItemId, revision, history,
                 updatedAt != null ? updatedAt : at, nextStart, nextEnd, saidOn, nextFlow, quote, basisMessageId,
-                basisSentence);
+                basisSentence, timeCondition);
     }
 
     /**

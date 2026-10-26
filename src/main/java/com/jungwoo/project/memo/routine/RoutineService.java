@@ -238,6 +238,36 @@ public class RoutineService {
                 userId, routineId, routineExceptionId);
     }
 
+    /**
+     * 만들기·고치기와 같은 검증을 쓰기 없이 한다(상담 변경 확인용). 규칙이 두 벌이 되지 않게 같은 validate·conflictReasons를 지난다.
+     *
+     * @param routineId 고치기면 그 반복 일정, 만들기면 null
+     * @throws com.jungwoo.project.memo.common.exception.BusinessException 실제 저장과 같은 예외
+     */
+    @Transactional(readOnly = true)
+    public void checkSave(Long userId, Long routineId, RoutineSaveRequest request) {
+        if (request.getStartTime() == null || request.getEndTime() == null || request.getEffectiveFrom() == null
+                || request.getTitle() == null || request.getTitle().isBlank()) {
+            throw new BadRequestException(ErrorCode.INVALID_INPUT_VALUE);
+        }
+        Set<DayOfWeek> daysOfWeek = validate(userId, request);
+        if (routineId == null) {
+            return;
+        }
+        List<RoutineExceptionsConflictDetails.Conflict> conflicts = new ArrayList<>();
+        for (RoutineException exception : routineExceptionMapper.findByRoutineId(routineId)) {
+            List<RoutineExceptionConflictReason> reasons = conflictReasons(exception.getExceptionDate(), daysOfWeek,
+                    request.getEffectiveFrom(), request.getEffectiveUntil());
+            if (!reasons.isEmpty()) {
+                conflicts.add(new RoutineExceptionsConflictDetails.Conflict(exception.getRoutineExceptionId(),
+                        exception.getExceptionDate(), reasons));
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            throw new ConflictException(ErrorCode.ROUTINE_EXCEPTIONS_CONFLICT, new RoutineExceptionsConflictDetails(conflicts));
+        }
+    }
+
     // ===== 검증 =====
 
     private Set<DayOfWeek> validate(Long userId, RoutineSaveRequest request) {

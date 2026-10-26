@@ -86,10 +86,15 @@ public class PlanScopeExtractor {
               · 목록에 그 부분의 자료가 없으면 materials는 []이고 noMaterial=true.
               · 사용자가 따로 가진 자료로 한다고 말했으면(예 "책에 표시해 놨어", "시험 때 주는 PDF") userMaterial=true.
             - 과목을 알 수 없는 범위는 course를 null로 둔다.
-            - studyTime: 사용자가 이번 요청에서 쓸 수 있는 시간·시간대를 말했으면 적는다(예 "4시까지 공부가능해" → until "16:00",
-              "오늘 한 시간만" → minutes 60·per "DAY"). 여러 번 말했으면 가장 최근 발언 하나만. 그 발언의 분량과 시간대를 모두 적는다.
-              오전·오후를 말하지 않은 시각은 [시각 기준] 이후의 가장 이른 시각으로 본다. 밤 12시·자정은 "24:00". quote에는 그 시간을
-              말한 사용자 원문 구절을 그대로. 말하지 않았으면 null.
+            - studyTime: 사용자가 이번 요청에서 공부 시간을 말했으면 나눠 적는다. 말하지 않았으면 null.
+              · windows: 공부할 시간대("2시부터 8시까지", "4시까지"). from/until은 HH:mm, 끝만 말했으면 from null.
+              · exclusions: 그 시간대 안에서 뺄 시간("6시에는 저녁", "5시부터 6시까지 쉬고"). label에 이유(저녁·휴식).
+              · amount: 시간대와 따로 말한 총 공부량("그중 4시간", "한 시간만"). minutes와 per(DAY 하루 / PLAN 계획 전체).
+              · intent: "공부할게·잡아줘·하자"처럼 그 시간에 공부를 잡아 달라면 FILL, "가능해·비어 있어·시간 돼"처럼 비어 있다는
+                정보면 AVAILABLE, 모르면 null.
+              · 부분마다 quote에 그 부분을 말한 사용자 원문 구절을 그대로 적는다(한 문장에 여러 부분이 있으면 부분마다 그 구절만).
+              · 나중에 고쳐 말했으면 고친 값만 적는다. 오전·오후를 말하지 않았으면 공부 시간으로 자연스러운 쪽(예 "2시부터 8시까지"는
+                14:00~20:00)으로 적는다. 이미 지난 시각이어도 사용자가 말한 값 그대로 적는다. 밤 12시·자정은 "24:00", 새벽 1시는 "01:00".
 
             응답 형식(반드시 지킨다):
             1) 뽑은 범위를 한 문장으로.
@@ -97,7 +102,9 @@ public class PlanScopeExtractor {
             3) 그 아래 JSON 객체 하나:
             {"scopes":[{"course":"c1"|null,"role":"REQUIRED"|"OPTIONAL","goal":"…","boundary":"…","quote":"사용자 원문 구절",
               "parts":[{"label":"…","materials":["d3"],"noMaterial":false,"userMaterial":false}]}],
-             "studyTime":{"minutes":정수|null,"per":"DAY"|"PLAN","from":"HH:mm"|null,"until":"HH:mm"|null,"quote":"사용자 원문 구절"}|null}
+             "studyTime":{"windows":[{"from":"HH:mm"|null,"until":"HH:mm"|null,"quote":"…"}],
+               "exclusions":[{"from":"HH:mm","until":"HH:mm"|null,"label":"저녁","quote":"…"}],
+               "amount":{"minutes":정수,"per":"DAY"|"PLAN","quote":"…"}|null,"intent":"FILL"|"AVAILABLE"|null}|null}
             사용자가 범위를 하나도 말하지 않았으면 "scopes":[].
             """.formatted(AiStreamParser.DELIMITER);
 
@@ -125,10 +132,17 @@ public class PlanScopeExtractor {
     }
 
     public record Request(Long userId, String workflowId, String instruction, List<String> agreedLines,
-                          List<CourseCatalog> catalogs, java.time.LocalTime timeReference) {
+                          List<CourseCatalog> catalogs, java.time.LocalTime timeReference,
+                          /** 사용자가 그 말을 한 시각(오전·오후를 고르는 기준). 대화 지시문에는 발언 시각이 없어 요청 시각을 쓴다 */
+                          java.time.LocalDateTime saidAt, java.time.LocalDate planStart, int days) {
         public Request(Long userId, String workflowId, String instruction, List<String> agreedLines,
                        List<CourseCatalog> catalogs) {
-            this(userId, workflowId, instruction, agreedLines, catalogs, null);
+            this(userId, workflowId, instruction, agreedLines, catalogs, null, null, null, 1);
+        }
+
+        public Request(Long userId, String workflowId, String instruction, List<String> agreedLines,
+                       List<CourseCatalog> catalogs, java.time.LocalTime timeReference) {
+            this(userId, workflowId, instruction, agreedLines, catalogs, timeReference, null, null, 1);
         }
     }
 
@@ -137,23 +151,35 @@ public class PlanScopeExtractor {
                          Integer estimatedTokens, String note,
                          /** 상한을 넘거나 읽을 수 없는 원소가 있어 버린 범위·부분이 있다 */
                          boolean incomplete,
-                         /** 원문과 대조해 확인한 쓸 수 있는 시간. 말하지 않았거나 확인하지 못했으면 null */
-                         ScopeReport.StudyTime studyTime) {
+                         /** 원문과 대조해 확인한 쓸 수 있는 시간(옛 모양). 말하지 않았거나 확인하지 못했으면 null */
+                         ScopeReport.StudyTime studyTime,
+                         /** (2026-10-25) 부분별로 원문 확인한 시간 조건. 말하지 않았으면 null, 확인 못 한 부분은 issues에 남는다 */
+                         com.jungwoo.project.memo.ai.brief.StudyTimeCondition timeCondition) {
         public Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt, Integer estimatedTokens,
                       String note) {
-            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, false, null);
+            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, false, null, null);
         }
 
         public Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt, Integer estimatedTokens,
                       String note, boolean incomplete) {
-            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, incomplete, null);
+            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, incomplete, null, null);
+        }
+
+        public Result(String status, List<RequestScope> scopes, String systemPrompt, String prompt, Integer estimatedTokens,
+                      String note, boolean incomplete, ScopeReport.StudyTime studyTime) {
+            this(status, scopes, systemPrompt, prompt, estimatedTokens, note, incomplete, studyTime, null);
         }
     }
 
     /** 검증 결과, 버린 것이 있었는지, 확인된 시간 조건. */
-    record Parsed(List<RequestScope> scopes, boolean dropped, ScopeReport.StudyTime studyTime) {
+    record Parsed(List<RequestScope> scopes, boolean dropped, ScopeReport.StudyTime studyTime,
+                  com.jungwoo.project.memo.ai.brief.StudyTimeCondition timeCondition) {
         Parsed(List<RequestScope> scopes, boolean dropped) {
-            this(scopes, dropped, null);
+            this(scopes, dropped, null, null);
+        }
+
+        Parsed(List<RequestScope> scopes, boolean dropped, ScopeReport.StudyTime studyTime) {
+            this(scopes, dropped, studyTime, null);
         }
     }
 
@@ -179,16 +205,22 @@ public class PlanScopeExtractor {
             return new Result(ScopeReport.FAILED, List.of(), SYSTEM_PROMPT, prompt, estimated, "범위 추출 호출 실패");
         }
         Parsed parsed = parse(json, registry, request.instruction(), request.timeReference());
+        if (parsed != null) {
+            parsed = new Parsed(parsed.scopes(), parsed.dropped(), parsed.studyTime(),
+                    timeCondition(json, request.instruction(), request.saidAt(), request.planStart(), request.days()));
+        }
         if (parsed == null) {
             return new Result(ScopeReport.FAILED, List.of(), SYSTEM_PROMPT, prompt, estimated, "범위 추출 응답을 읽지 못했다");
         }
         if (parsed.dropped()) {
             log.warn("범위 추출: 상한을 넘거나 읽을 수 없는 범위·부분을 버렸다. userId={}", request.userId());
         }
-        boolean nothing = parsed.scopes().isEmpty() && !parsed.dropped() && parsed.studyTime() == null;
+        boolean nothing = parsed.scopes().isEmpty() && !parsed.dropped() && parsed.studyTime() == null
+                && parsed.timeCondition() == null;
         return new Result(nothing ? ScopeReport.NONE : ScopeReport.EXTRACTED,
                 parsed.scopes(), SYSTEM_PROMPT, prompt, estimated,
-                parsed.dropped() ? "상한·형식 때문에 일부 범위를 버렸다" : null, parsed.dropped(), parsed.studyTime());
+                parsed.dropped() ? "상한·형식 때문에 일부 범위를 버렸다" : null, parsed.dropped(), parsed.studyTime(),
+                parsed.timeCondition());
     }
 
     // ===== 입력 =====
@@ -454,6 +486,78 @@ public class PlanScopeExtractor {
             return null;
         }
         return new ScopeReport.StudyTime(minutes, perDay, from, until, basis.quote(), line);
+    }
+
+    /**
+     * 응답의 studyTime을 부분별로 원문 확인해 조건으로 만든다. 새 모양(windows·exclusions·amount)과 옛 모양(minutes·from·until·quote)
+     * 모두 읽는다. 발언은 지시문의 사용자 발언 줄이고, 발언 시각은 요청 시각이다(대화 지시문에는 발언 시각이 없다).
+     */
+    static com.jungwoo.project.memo.ai.brief.StudyTimeCondition timeCondition(String json, String instruction,
+                                                                              java.time.LocalDateTime saidAt,
+                                                                              java.time.LocalDate planStart, int days) {
+        if (json == null || instruction == null) {
+            return null;
+        }
+        JsonNode node;
+        try {
+            JsonNode root = studyTimeRoot(json);
+            node = root == null ? null : root.get("studyTime");
+        } catch (Exception e) {
+            return null;
+        }
+        if (node == null || !node.isObject()) {
+            return null;
+        }
+        List<com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part> parts = new ArrayList<>();
+        for (JsonNode w : iterable(node.get("windows"))) {
+            parts.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part("WINDOW", text(w, "quote"),
+                    text(w, "from"), text(w, "until"), text(w, "date"), null, null, null));
+        }
+        for (JsonNode x : iterable(node.get("exclusions"))) {
+            parts.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part("EXCLUSION", text(x, "quote"),
+                    text(x, "from"), text(x, "until"), text(x, "date"), null, null, text(x, "label")));
+        }
+        JsonNode amount = node.get("amount");
+        if (amount != null && amount.isObject() && amount.hasNonNull("minutes")) {
+            parts.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part("AMOUNT", text(amount, "quote"),
+                    null, null, null, amount.get("minutes").asInt(), text(amount, "per"), null));
+        }
+        if (parts.isEmpty() && (node.hasNonNull("from") || node.hasNonNull("until") || node.hasNonNull("minutes"))) {
+            // 옛 모양: 한 구절에 시간대와 분량을 함께 적었다
+            if (node.hasNonNull("from") || node.hasNonNull("until")) {
+                parts.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part("WINDOW", text(node, "quote"),
+                        text(node, "from"), text(node, "until"), null, null, null, null));
+            }
+            if (node.hasNonNull("minutes")) {
+                parts.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Part("AMOUNT", text(node, "quote"),
+                        null, null, null, node.get("minutes").asInt(), text(node, "per"), null));
+            }
+        }
+        java.time.LocalDateTime at = saidAt == null ? java.time.LocalDateTime.now() : saidAt;
+        List<com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance> said = new ArrayList<>();
+        List<String> lines = utteranceLines(instruction);
+        for (int i = 0; i < lines.size(); i++) {
+            said.add(new com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.Utterance((long) i + 1, lines.get(i), at));
+        }
+        return com.jungwoo.project.memo.ai.brief.StudyTimeInterpreter.interpret(parts, text(node, "intent"), said,
+                planStart == null ? at.toLocalDate() : planStart, Math.max(1, days), planStart != null);
+    }
+
+    private static final com.fasterxml.jackson.databind.ObjectMapper STUDY_TIME_JSON =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
+    private static JsonNode studyTimeRoot(String raw) throws Exception {
+        String json = ModelJson.unwrapObject(raw);
+        return json == null ? null : STUDY_TIME_JSON.readTree(json);
+    }
+
+    private static Iterable<JsonNode> iterable(JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<JsonNode> out = new ArrayList<>();
+        node.forEach(out::add);
+        return out;
     }
 
     /**

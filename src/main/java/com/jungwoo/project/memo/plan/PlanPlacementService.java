@@ -115,15 +115,22 @@ public class PlanPlacementService {
 
         // 가용시간은 기존 서비스를 그대로 쓴다. 기존 TIME_FIXED 조각을 busy로 차감하는 것도
         // 그 안에서 이미 한다 — 여기서 다시 조회하지 않는다.
-        AvailabilityEstimateResult availability = availabilityEstimateService.estimate(
-                userId, windowStart, windowEnd, List.of(), List.of());
         /*
-         * (2026-10-18) 상담에서 "밤 12시까지"·"20시부터"처럼 시간대를 말했으면 그 안에서만 시각을 정한다. 초안 예산도 같은 시간대
-         * 안의 남는 시간으로 잡았으니(PeriodPlanDraftGenerator.userTimeOf) 배치가 다른 시간에 흩어 놓으면 말과 어긋난다.
+         * 말한 시간 조건은 초안에 고정한 값을 쓴다(PlanStudyTimeResolver). 범위가 있으면 그날 기본 창 대신 그 범위에서, 식사 같은 제외
+         * 구간을 빼고 시각을 정한다 — 초안 예산과 같은 계산이다(PeriodPlanDraftGenerator가 같은 Scenario.withStudy로 남는 시간을 셌다).
+         * 확정 뒤라 변경 묶음은 이미 적용됐으므로 원본 상태로 계산한다. 범위가 자정을 넘으면 그 끝까지 본다.
          */
-        PlanBriefService.TimeBudget said = studyTimeResolver.resolve(userId, plan);
-        List<AvailabilityWindow> windows = said != null && said.hasWindow()
-                ? withinStudyTime(availability.windows(), said) : availability.windows();
+        com.jungwoo.project.memo.ai.brief.StudyTimeCondition condition = studyTimeResolver.resolveCondition(userId, plan);
+        com.jungwoo.project.memo.scheduling.scenario.Scenario.StudyWindows study =
+                StudyTimeBudget.windowsFor(condition, windowStart, windowEnd);
+        AvailabilityEstimateResult availability = com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService.estimateFor(availabilityEstimateService, userId, windowStart, windowEnd, List.of(), List.of(), com.jungwoo.project.memo.scheduling.scenario.Scenario.ORIGINAL.withStudy(study));
+        List<AvailabilityWindow> windows = splitAtMidnight(availability.windows());
+        LocalDateTime placementEnd = windowEnd.plusDays(1).atStartOfDay();
+        for (AvailabilityWindow w : windows) {
+            if (w.endAt().isAfter(placementEnd)) {
+                placementEnd = w.endAt();
+            }
+        }
 
         List<SchedulingTask> tasks = new ArrayList<>();
         for (ExecutionItem item : targets) {
@@ -141,7 +148,7 @@ public class PlanPlacementService {
             LocalDate fixedDay = item.getPlacementType() == PlacementType.DATE_ONLY ? item.getScheduledDate() : null;
             List<TimeSlotOption> candidates = buildCandidates(
                     fixedDay == null ? windows : windowsOn(windows, fixedDay),
-                    duration, now, windowEnd, deadline);
+                    duration, now, placementEnd, deadline);
             if (candidates.isEmpty()) {
                 String reason;
                 if (fixedDay != null) {
@@ -205,9 +212,8 @@ public class PlanPlacementService {
      */
     private List<TimeSlotOption> buildCandidates(
             List<AvailabilityWindow> windows, int durationMinutes,
-            LocalDateTime earliest, LocalDate windowEnd, LocalDateTime deadline
+            LocalDateTime earliest, LocalDateTime windowEndExclusive, LocalDateTime deadline
     ) {
-        LocalDateTime windowEndExclusive = windowEnd.plusDays(1).atStartOfDay();
         List<TimeSlotOption> options = new ArrayList<>();
         Set<LocalDateTime> seen = new HashSet<>();
         for (AvailabilityWindow window : windows) {
@@ -228,6 +234,24 @@ public class PlanPlacementService {
             }
         }
         return options;
+    }
+
+    /**
+     * 자정을 넘는 남는 시간을 자정에서 나눈다. 실행 항목은 하루 안의 시각이라(끝만 다음 날 00:00 허용) 자정 이후 부분은 다음 날짜
+     * 항목으로 놓여야 한다. 나누지 않으면 23:30~00:30 같은 후보가 생겨 저장에서 거절된다.
+     */
+    public static List<AvailabilityWindow> splitAtMidnight(List<AvailabilityWindow> windows) {
+        List<AvailabilityWindow> out = new ArrayList<>();
+        for (AvailabilityWindow w : windows) {
+            LocalDateTime from = w.startAt();
+            while (from.isBefore(w.endAt())) {
+                LocalDateTime midnight = from.toLocalDate().plusDays(1).atStartOfDay();
+                LocalDateTime to = w.endAt().isBefore(midnight) ? w.endAt() : midnight;
+                out.add(new AvailabilityWindow(from, to, w.source(), w.confidence(), w.reason()));
+                from = to;
+            }
+        }
+        return out;
     }
 
     /** 남는 시간을 날마다 사용자가 말한 시간대(from~until)로 자른다. */

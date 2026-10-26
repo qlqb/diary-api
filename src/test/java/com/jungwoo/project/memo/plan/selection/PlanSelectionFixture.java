@@ -196,6 +196,26 @@ public class PlanSelectionFixture {
                 "기본 시간대"));
         when(availability.estimate(anyLong(), any(), any(), any(), any()))
                 .thenReturn(new AvailabilityEstimateResult(windows, List.of()));
+        // 말한 시간 범위가 있으면 실제 서비스처럼 그 범위를 후보 창으로 쓴다. 픽스처의 하루 창과 겹치는 부분만(실제 서비스의 지금 이후·
+        // 실제 일정 차감을 대신한다).
+        when(availability.estimate(anyLong(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
+            com.jungwoo.project.memo.scheduling.scenario.Scenario sc = inv.getArgument(5);
+            if (sc == null || sc.study() == null || sc.study().windows().isEmpty()) {
+                return new AvailabilityEstimateResult(windows, List.of());
+            }
+            List<AvailabilityWindow> out = new ArrayList<>();
+            for (var r : sc.study().windows()) {
+                for (AvailabilityWindow base : windows) {
+                    var from = r.start().isAfter(base.startAt()) ? r.start() : base.startAt();
+                    var to = r.end().isBefore(base.endAt()) ? r.end() : base.endAt();
+                    if (from.isBefore(to)) {
+                        out.add(new AvailabilityWindow(from, to, AvailabilitySource.CURRENT_CONVERSATION,
+                                AvailabilityConfidence.HIGH, "사용자가 말한 공부 시간"));
+                    }
+                }
+            }
+            return new AvailabilityEstimateResult(out, List.of());
+        });
 
         when(courseMapper.findByUserIdAndStatus(anyLong(), any())).thenAnswer(inv -> new ArrayList<>(courses.values()));
         when(courseMapper.findByIdsAndUserId(any(), anyLong())).thenAnswer(inv -> {

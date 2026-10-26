@@ -22,6 +22,9 @@ public interface RoutineExceptionMapper {
 
     List<RoutineException> findByRoutineId(@Param("routineId") Long routineId);
 
+    /** 같은 조회를 잠금 조회로 — 적용 트랜잭션의 재확인은 일반 조회(트랜잭션 스냅샷)로 하면 그사이 커밋된 변경을 놓친다. */
+    List<RoutineException> findByRoutineIdForUpdate(@Param("routineId") Long routineId);
+
     /** 그 루틴의 그 원래 날짜 예외(없으면 null). */
     RoutineException findByRoutineIdAndDate(@Param("routineId") Long routineId, @Param("exceptionDate") LocalDate exceptionDate);
 

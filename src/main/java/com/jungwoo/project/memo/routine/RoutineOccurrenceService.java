@@ -38,7 +38,16 @@ public class RoutineOccurrenceService {
      */
     @Transactional(readOnly = true)
     public List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to) {
-        return expand(userId, from, to, false);
+        return expand(userId, from, to, false, RoutineOverlay.NONE);
+    }
+
+    /**
+     * 아직 적용하지 않은 변경(가정 상태)을 겹쳐 전개한다. DB는 그대로다. 겹침이 없으면 {@link #expand(Long, LocalDate, LocalDate)}와
+     * 같다 — 같은 전개 코드를 지나므로 자정 넘김·이동 회차 처리가 가정 상태에서도 갈라지지 않는다.
+     */
+    @Transactional(readOnly = true)
+    public List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to, RoutineOverlay overlay) {
+        return expand(userId, from, to, false, overlay == null ? RoutineOverlay.NONE : overlay);
     }
 
     /**
@@ -56,10 +65,11 @@ public class RoutineOccurrenceService {
      */
     @Transactional
     public List<RoutineOccurrence> expandForUpdate(Long userId, LocalDate from, LocalDate to) {
-        return expand(userId, from, to, true);
+        return expand(userId, from, to, true, RoutineOverlay.NONE);
     }
 
-    private List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to, boolean forUpdate) {
+    private List<RoutineOccurrence> expand(Long userId, LocalDate from, LocalDate to, boolean forUpdate,
+                                           RoutineOverlay overlay) {
         if (from == null || to == null || to.isBefore(from)) {
             return List.of();
         }
@@ -72,15 +82,19 @@ public class RoutineOccurrenceService {
         LocalDateTime windowStart = from.atStartOfDay();
         LocalDateTime windowEnd = to.plusDays(1).atStartOfDay();
 
-        List<Routine> routines = forUpdate
+        List<Routine> routines = new ArrayList<>(forUpdate
                 ? routineReader.findAllWithWeekdaysForUpdate(userId)
-                : routineReader.findAllWithWeekdays(userId);
-        if (routines.isEmpty()) {
-            return List.of();
-        }
-        Map<Long, Routine> routineById = new HashMap<>();
+                : routineReader.findAllWithWeekdays(userId));
+        Map<Long, Routine> routineById = new java.util.LinkedHashMap<>();
         for (Routine routine : routines) {
             routineById.put(routine.getRoutineId(), routine);
+        }
+        // 가정 상태: 바뀐 규칙은 같은 id를 덮고, 새 규칙(음수 id)은 더한다. 삭제는 규칙 본체에 deleted=true로 온다.
+        overlay.routines().forEach(routineById::put);
+        routineById.values().removeIf(Routine::isDeleted);
+        routines = new ArrayList<>(routineById.values());
+        if (routines.isEmpty()) {
+            return List.of();
         }
 
         // (routineId, exceptionDate) -> 예외. 원본 발생일을 건너뛰는 데만 쓴다.
@@ -93,6 +107,16 @@ public class RoutineOccurrenceService {
                     .computeIfAbsent(exception.getRoutineId(), key -> new HashMap<>())
                     .put(exception.getExceptionDate(), exception);
         }
+        // 가정 상태의 예외: 그날 값을 덮거나(SKIP·MOVED) 지운다(복원). 원래 날짜가 창 밖이면 1번이 보지 않으니 넣어도 무해하다.
+        overlay.exceptions().forEach((key, exception) -> {
+            Map<LocalDate, RoutineException> byDate =
+                    exceptionsBySourceDate.computeIfAbsent(key.routineId(), k -> new HashMap<>());
+            if (exception == null) {
+                byDate.remove(key.sourceDate());
+            } else {
+                byDate.put(key.sourceDate(), exception);
+            }
+        });
 
         List<RoutineOccurrence> occurrences = new ArrayList<>();
 
@@ -127,9 +151,18 @@ public class RoutineOccurrenceService {
          * movedDate에는 effectiveFrom/Until을 적용하지 않는다. 마지막 수업 보강이 종강
          * 다음 날로 밀리는 것은 정상이고, 학기 밖으로 옮겼다고 무효 처리하면 안 된다.
          */
-        List<RoutineException> movedIn = forUpdate
+        List<RoutineException> movedIn = new ArrayList<>(forUpdate
                 ? routineExceptionMapper.findByUserIdAndMovedDateRangeForUpdate(userId, scanFrom, to)
-                : routineExceptionMapper.findByUserIdAndMovedDateRange(userId, scanFrom, to);
+                : routineExceptionMapper.findByUserIdAndMovedDateRange(userId, scanFrom, to));
+        if (!overlay.exceptions().isEmpty()) {
+            // 겹친 예외가 있는 날의 DB 이동분은 빼고, 겹친 MOVED는 목적지가 훑는 범위 안일 때 더한다.
+            movedIn.removeIf(e -> overlay.exceptions().containsKey(
+                    new RoutineOverlay.OccurrenceKey(e.getRoutineId(), e.getExceptionDate())));
+            overlay.exceptions().values().stream()
+                    .filter(e -> e != null && e.getMovedDate() != null
+                            && !e.getMovedDate().isBefore(scanFrom) && !e.getMovedDate().isAfter(to))
+                    .forEach(movedIn::add);
+        }
         for (RoutineException exception : movedIn) {
             if (exception.getType() != RoutineExceptionType.MOVED || exception.getMovedDate() == null) {
                 continue;
