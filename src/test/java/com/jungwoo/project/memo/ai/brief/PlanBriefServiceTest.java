@@ -1,0 +1,664 @@
+package com.jungwoo.project.memo.ai.brief;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+
+import java.time.Clock;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * 계획 합의의 규칙: 발화자·동의 상태를 잃지 않는다. 사용자가 말한 것은 즉시 유효, AI 제안은 수락 전까지 후보,
+ * 없는 번호·발화자 없는 ADD는 추측을 확정으로 올리지 않는 쪽으로 처리한다.
+ */
+class PlanBriefServiceTest {
+
+    private static final long USER = 7L;
+    private static final long CONV = 12L;
+
+    private PlanBriefMapper mapper;
+    private PlanBriefService service;
+
+    @BeforeEach
+    void setUp() {
+        mapper = mock(PlanBriefMapper.class);
+        service = new PlanBriefService(mapper, Clock.fixed(Instant.parse("2026-09-17T03:00:00Z"), ZoneId.of("Asia/Seoul")));
+    }
+
+    @Test
+    void 사용자_발화는_즉시_유효하고_AI_제안은_수락_전까지_후보다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 200L, 201L, List.of(
+                userAdd("PRIORITY", "자료구조부터 복구하고 싶어", "THIS_DRAFT", 1L, "자료구조부터 복구하고 싶어"),
+                new PlanBriefOp("ADD", null, "TIME_CONSTRAINT", "영어는 하루 15분", "ASSISTANT", "PERIOD", null, null, null),
+                new PlanBriefOp("ADD", null, "EXCLUDE", "금요일 밤은 비우기", null, null, null, null, null)), null,
+                said(200L, "이번엔 자료구조부터 복구하고 싶어."));
+
+        assertThat(view.items()).hasSize(3);
+        PlanBriefItem user = view.items().get(0);
+        assertThat(user.speaker()).isEqualTo("USER");
+        assertThat(user.accepted()).isTrue();
+        assertThat(user.sourceMessageId()).isEqualTo(200L);
+        PlanBriefItem ai = view.items().get(1);
+        assertThat(ai.speaker()).isEqualTo("ASSISTANT");
+        assertThat(ai.accepted()).isFalse();
+        assertThat(ai.sourceMessageId()).isEqualTo(201L);
+        assertThat(ai.scope()).isEqualTo("PERIOD");
+        // 발화자를 모르면 AI 제안(후보)으로 낮춰 적는다 — 추측을 확정으로 올리지 않는다.
+        assertThat(view.items().get(2).speaker()).isEqualTo("ASSISTANT");
+        assertThat(view.effective()).extracting(PlanBriefItem::text).containsExactly("자료구조부터 복구하고 싶어");
+        assertThat(view.pendingProposals()).hasSize(2);
+        ArgumentCaptor<PlanBrief> saved = ArgumentCaptor.forClass(PlanBrief.class);
+        verify(mapper).insert(saved.capture());
+        assertThat(saved.getValue().getItems()).contains("\"speaker\":\"USER\"").contains("\"accepted\":true");
+    }
+
+    @Test
+    void 좋아_그대로는_그_제안을_수락_상태로_바꾸고_출처_메시지를_남긴다() {
+        PlanBrief stored = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "PRIORITY", "자료구조 복구 우선", "ASSISTANT", false, false, false, "THIS_DRAFT", 201L, null,
+                        null, null, null, null, 1, List.of(), null),
+                new PlanBriefItem(2, "TIME_CONSTRAINT", "영어 15분", "ASSISTANT", false, false, false, "THIS_DRAFT", 201L, null,
+                        null, null, null, null, 1, List.of(), null))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 210L, 211L, List.of(
+                new PlanBriefOp("ACCEPT", 1, null, null, null, null, null, null, null),
+                new PlanBriefOp("REJECT", 2, null, null, null, null, null, null, null),
+                new PlanBriefOp("ACCEPT", 99, null, null, null, null, null, null, null)));
+
+        assertThat(view.version()).isEqualTo(2);
+        assertThat(view.items().get(0).accepted()).isTrue();
+        assertThat(view.items().get(0).acceptedByMessageId()).isEqualTo(210L);
+        assertThat(view.items().get(1).rejected()).isTrue();
+        assertThat(view.effective()).extracting(PlanBriefItem::text).containsExactly("자료구조 복구 우선");
+        assertThat(PlanBriefService.renderForConsultation(view))
+                .contains("#1 [AI 제안 · 사용자 수락] 우선순위: 자료구조 복구 우선")
+                .contains("#2 [AI 제안 · 거절됨]");
+    }
+
+    @Test
+    void 사용자가_고쳐_말하면_최신_수정판이_우선하고_이전_문장은_이력에_남는다() {
+        PlanBrief stored = brief(3, service.serialize(List.of(
+                new PlanBriefItem(1, "TIME_CONSTRAINT", "영어는 하루 15분", "ASSISTANT", true, false, false, "THIS_DRAFT", 201L,
+                        205L, null, null, null, null, 1, List.of(), null))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(3), anyString(), anyString())).thenReturn(1);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 220L, 221L, List.of(
+                op("UPDATE", 1, null, "영어는 10분만 할래", null, "PERIOD", null, "영어는 10분만 할래")), null,
+                said(220L, "아 영어는 10분만 할래"));
+
+        PlanBriefItem item = view.items().get(0);
+        assertThat(item.text()).isEqualTo("영어는 10분만 할래");
+        assertThat(item.speaker()).isEqualTo("USER");
+        assertThat(item.revision()).isEqualTo(2);
+        assertThat(item.history()).containsExactly("영어는 하루 15분");
+        assertThat(item.scope()).isEqualTo("PERIOD");
+        assertThat(item.basisMessageId()).isEqualTo(220L);
+        assertThat(PlanBriefService.agreedLines(view).get(0)).contains("최신 수정판").contains("이번 기간");
+    }
+
+    @Test
+    void 변경이_하나도_적용되지_않으면_저장하지_않는다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 1L, 2L, List.of(
+                new PlanBriefOp("ACCEPT", 5, null, null, null, null, null, null, null),
+                new PlanBriefOp("ADD", null, "GOAL", "   ", "USER", null, null, null, null)));
+
+        assertThat(view.isEmpty()).isTrue();
+        verify(mapper, org.mockito.Mockito.never()).insert(any());
+    }
+
+    @Test
+    void 갱신_경합이면_다시_읽어_한_번_더_시도한다() {
+        PlanBrief stored = brief(1, "[]");
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), anyInt(), anyString(), anyString())).thenReturn(0, 1);
+
+        service.applyTurn(USER, CONV, 1L, 2L, List.of(
+                new PlanBriefOp("ADD", null, "GOAL", "다음 수업 따라잡기", "USER", null, null, null, null)));
+
+        verify(mapper, org.mockito.Mockito.times(2)).updateItems(eq(1L), eq(USER), anyInt(), anyString(), anyString());
+    }
+
+    @Test
+    void 다른_대화에서는_확인된_어려움과_기간_합의만_이어_온다() {
+        PlanBrief other = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "DIFFICULTY", "반복문에서 막힘", "USER", true, false, false, "THIS_DRAFT", 1L, 1L, null,
+                        44L, 1L, null, 1, List.of(), null),
+                new PlanBriefItem(2, "PRIORITY", "이번 초안만 자료구조 우선", "USER", true, false, false, "THIS_DRAFT", 1L, 1L,
+                        null, null, null, null, 1, List.of(), null),
+                // 기간 합의는 날짜가 있고 아직 지나지 않은 것만 이어 온다(날짜 없는 옛 항목은 범위 미확인).
+                new PlanBriefItem(3, "TIME_CONSTRAINT", "금요일 밤 비움", "USER", true, false, false, "PERIOD", 1L, 1L, null,
+                        null, null, null, 1, List.of(), null, LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 27),
+                        LocalDate.of(2026, 9, 16), null))));
+        other.setConversationId(99L);
+        other.setUpdatedAt(java.time.LocalDateTime.of(2026, 9, 16, 10, 0));
+        when(mapper.findRecentByUserId(eq(USER), anyInt())).thenReturn(List.of(other));
+
+        List<PlanBriefItem> carried = service.carriedOver(USER, CONV, 5);
+
+        assertThat(carried).extracting(PlanBriefItem::text).containsExactly("반복문에서 막힘", "금요일 밤 비움");
+    }
+
+    // ===== 적용 범위(2026-09-17 후속 §5) =====
+
+    private static PlanBriefItem period(int id, String text, LocalDate start, LocalDate end) {
+        return new PlanBriefItem(id, "EXCLUDE", text, "USER", true, false, false, "PERIOD", 1L, 1L, null, null, 2L, null, 1,
+                List.of(), LocalDateTime.of(2026, 9, 15, 10, 0), start, end, LocalDate.of(2026, 9, 15), null);
+    }
+
+    private static PlanBriefItem thisDraft(int id, String text, Long flow) {
+        return new PlanBriefItem(id, "PRIORITY", text, "USER", true, false, false, "THIS_DRAFT", 1L, 1L, null, null, 1L, null,
+                1, List.of(), LocalDateTime.of(2026, 9, 15, 10, 0), null, null, LocalDate.of(2026, 9, 15), flow);
+    }
+
+    @Test
+    void 이번_주만_영어_제외는_그_주에만_적용되고_다음_주_계획에는_넘어가지_않는다() {
+        PlanBriefService.View view = new PlanBriefService.View(1L, CONV, 3, List.of(
+                period(1, "이번 주만 영어 제외", LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20))), null);
+
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 16), LocalDate.of(2026, 9, 20), null))
+                .extracting(a -> a.item().id()).containsExactly(1);
+        // 같은 대화에서 다음 주 계획을 요청해도 같다.
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 21), LocalDate.of(2026, 9, 27), null)).isEmpty();
+        // 일부만 겹치면 원래 범위를 함께 전달한다 — 새 기간 전체로 넓히지 않는다.
+        List<PlanBriefService.Applicable> partial = view.effectiveFor(LocalDate.of(2026, 9, 18), LocalDate.of(2026, 9, 24), null);
+        assertThat(partial).hasSize(1);
+        assertThat(partial.get(0).note()).isEqualTo("원래 9/14~9/20에 적용");
+        assertThat(PlanBriefService.agreedLines(partial).get(0)).contains("이번 기간 9/14~9/20 — 원래 9/14~9/20에 적용");
+        // 상담 프롬프트는 지난 기간 합의를 "지금 조건 아님"으로 표시한다.
+        assertThat(PlanBriefService.renderForConsultation(view, LocalDate.of(2026, 9, 22)))
+                .contains("(기간 지남 9/14~9/20 — 지금 조건 아님)");
+        assertThat(PlanBriefService.renderForConsultation(view, LocalDate.of(2026, 9, 17))).contains("(이번 기간 9/14~9/20)");
+    }
+
+    @Test
+    void 이번_초안_제외는_같은_흐름의_다시_만들기에는_남고_별도_새_계획에는_전파되지_않는다() {
+        PlanBriefService.View view = new PlanBriefService.View(1L, CONV, 3, List.of(
+                thisDraft(1, "이번 초안만 자료구조 우선", 77L), thisDraft(2, "아직 초안을 만들지 않은 합의", null)), 77L);
+
+        // 초안 77의 다시 만들기(같은 흐름): 둘 다.
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20), 77L))
+                .extracting(a -> a.item().id()).containsExactly(1, 2);
+        // 새 계획(흐름 없음): 묶인 것은 빠지고 아직 묶이지 않은 것만.
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 21), LocalDate.of(2026, 9, 27), null))
+                .extracting(a -> a.item().id()).containsExactly(2);
+        // 다른 흐름(초안 90)의 다시 만들기: 77의 것은 빠진다.
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20), 90L))
+                .extracting(a -> a.item().id()).containsExactly(2);
+    }
+
+    @Test
+    void 날짜_없는_옛_기간_합의는_범위_미확인으로_남고_현재_합의처럼_전달되지_않는다() {
+        PlanBriefItem legacy = new PlanBriefItem(1, "EXCLUDE", "영어 제외", "USER", true, false, false, "PERIOD", 1L, 1L, null,
+                null, null, null, 1, List.of(), LocalDateTime.of(2026, 8, 1, 10, 0));
+        PlanBriefService.View view = new PlanBriefService.View(1L, CONV, 1, List.of(legacy), null);
+
+        assertThat(view.effectiveFor(LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20), null)).isEmpty();
+        assertThat(view.unknownRange()).hasSize(1);
+        assertThat(PlanBriefService.renderForConsultation(view, LocalDate.of(2026, 9, 17))).contains("날짜 미확인, 과거 참고");
+    }
+
+    @Test
+    void 초안을_만들면_묶이지_않은_합의가_그_초안_흐름과_기간에_묶이고_이미_묶인_것은_그대로다() {
+        PlanBriefItem legacyPeriod = new PlanBriefItem(3, "TIME_CONSTRAINT", "저녁만", "USER", true, false, false, "PERIOD",
+                1L, 1L, null, null, null, null, 1, List.of(), LocalDateTime.of(2026, 9, 15, 10, 0));
+        PlanBrief stored = brief(4, service.serialize(List.of(thisDraft(1, "묶인 것", 50L), thisDraft(2, "안 묶인 것", null),
+                legacyPeriod)));
+        when(mapper.findByIdAndUserId(1L, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(4), anyString(), anyString())).thenReturn(1);
+
+        service.markProposal(USER, 1L, 88L, 77L, LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 20));
+
+        verify(mapper).updateLastProposal(1L, USER, 88L);
+        ArgumentCaptor<String> saved = ArgumentCaptor.forClass(String.class);
+        verify(mapper).updateItems(eq(1L), eq(USER), eq(4), saved.capture(), anyString());
+        List<PlanBriefItem> items = service.parse(saved.getValue());
+        assertThat(items.get(0).flowProposalId()).isEqualTo(50L);
+        assertThat(items.get(1).flowProposalId()).isEqualTo(77L);
+        assertThat(items.get(2).periodStart()).isEqualTo(LocalDate.of(2026, 9, 14));
+        assertThat(items.get(2).periodEnd()).isEqualTo(LocalDate.of(2026, 9, 20));
+    }
+
+    @Test
+    void 이번_주는_발언_시점의_사용자_시간대_주로_해석하고_OFFER_기간이_있으면_그것을_쓴다() {
+        // 고정 시각 2026-09-17T03:00Z = 한국 9/17(목) 12:00 → 이번 주 = 9/14(월)~9/20(일). 시간대는 서비스가 정한다.
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+        PlanBriefService.View weekView = service.applyTurn(USER, CONV, 1L, 2L, List.of(
+                userAdd("EXCLUDE", "이번 주는 영어 제외", "PERIOD", null, "이번 주는 영어 빼줘")), null,
+                said(1L, "이번 주는 영어 빼줘"));
+        PlanBriefItem week = weekView.items().get(0);
+        assertThat(week.periodStart()).isEqualTo(LocalDate.of(2026, 9, 14));
+        assertThat(week.periodEnd()).isEqualTo(LocalDate.of(2026, 9, 20));
+        assertThat(week.saidOn()).isEqualTo(LocalDate.of(2026, 9, 17));
+
+        PlanBriefService.View offerView = service.applyTurn(USER, CONV, 1L, 2L, List.of(
+                userAdd("EXCLUDE", "시험 전까지 영어 제외", "PERIOD", null, "시험 전까지 영어는 빼")),
+                new PlanBriefService.TurnPeriod(LocalDate.of(2026, 9, 17), LocalDate.of(2026, 9, 22)),
+                said(1L, "시험 전까지 영어는 빼"));
+        assertThat(offerView.items().get(0).periodStart()).isEqualTo(LocalDate.of(2026, 9, 17));
+        assertThat(offerView.items().get(0).periodEnd()).isEqualTo(LocalDate.of(2026, 9, 22));
+
+        // 모델이 날짜를 적었으면 그것이 우선이고, 사용자가 기간을 고쳐 말하면 최신 조건과 출처가 남는다.
+        PlanBrief stored = brief(1, service.serialize(List.of(period(1, "영어 제외", LocalDate.of(2026, 9, 14),
+                LocalDate.of(2026, 9, 20)))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+        PlanBriefService.View revised = service.applyTurn(USER, CONV, 9L, 10L, List.of(
+                new PlanBriefOp("UPDATE", 1, null, "영어 제외는 다음 주까지", null, "PERIOD", null, null, null,
+                        "2026-09-14", "2026-09-27", null, null, null, null, "다음 주까지 영어 빼")), null,
+                said(9L, "다음 주까지 영어 빼"));
+        PlanBriefItem item = revised.items().get(0);
+        assertThat(item.periodEnd()).isEqualTo(LocalDate.of(2026, 9, 27));
+        // 정리 문장이라 승인은 아니지만, 사용자 발언 근거가 있어 유효하다.
+        assertThat(item.basisMessageId()).isEqualTo(9L);
+        assertThat(item.effective()).isTrue();
+        assertThat(item.revision()).isEqualTo(2);
+        assertThat(item.history()).containsExactly("영어 제외");
+    }
+
+    @Test
+    void 다른_대화에서는_과목_항목이_붙은_어려움과_아직_지나지_않은_기간_합의만_이어_오고_날짜_없는_기간_합의는_뺀다() {
+        PlanBrief other = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "DIFFICULTY", "반복문에서 막힘", "USER", true, false, false, "THIS_DRAFT", 1L, 1L, null,
+                        44L, 1L, null, 1, List.of(), null),
+                period(2, "이번 주는 영어 제외", LocalDate.of(2026, 9, 7), LocalDate.of(2026, 9, 13)),
+                period(3, "시험 전 금요일 밤 비움", LocalDate.of(2026, 9, 14), LocalDate.of(2026, 9, 25)),
+                new PlanBriefItem(4, "EXCLUDE", "옛 기간 합의", "USER", true, false, false, "PERIOD", 1L, 1L, null, null,
+                        null, null, 1, List.of(), null))));
+        other.setConversationId(99L);
+        other.setUpdatedAt(java.time.LocalDateTime.of(2026, 9, 16, 10, 0));
+        when(mapper.findRecentByUserId(eq(USER), anyInt())).thenReturn(List.of(other));
+
+        List<PlanBriefItem> carried = service.carriedOver(USER, CONV, 5);
+
+        assertThat(carried).extracting(PlanBriefItem::id).containsExactly(1, 3);
+        assertThat(carried.get(0).courseId()).isEqualTo(1L);
+        assertThat(carried.get(0).topicId()).isEqualTo(44L);
+        // 계획 생성 기간(9/28~10/4)과 겹치지 않으면 기간 합의는 빠진다.
+        assertThat(service.carriedOver(USER, CONV, 5, LocalDate.of(2026, 9, 28), LocalDate.of(2026, 10, 4)))
+                .extracting(PlanBriefItem::id).containsExactly(1);
+    }
+
+    private static PlanBrief brief(int version, String items) {
+        return PlanBrief.builder().briefId(1L).userId(USER).conversationId(CONV).version(version).status("OPEN")
+                .items(items).build();
+    }
+
+    @Test
+    void 쓸_수_있는_시간에_끝_시각만_말하면_시간대_꼬리표로_남고_다시_읽힌다() {
+        PlanBriefOp untilMidnight = new PlanBriefOp("ADD", null, "TIME_BUDGET", "오늘 밤 12시까지 공부할게", "USER",
+                "THIS_DRAFT", null, null, null, null, null, null, null, null, "00:00");
+        String text = PlanBriefService.withTimeBudget("오늘 밤 12시까지 공부할게", untilMidnight);
+        assertThat(text).isEqualTo("오늘 밤 12시까지 공부할게 (쓸 수 있는 시간 하루 · ~24:00)");
+
+        PlanBriefService.TimeBudget budget = PlanBriefService.timeBudgetOf(List.of(said(text)));
+        assertThat(budget.minutes()).isNull();
+        assertThat(budget.hasWindow()).isTrue();
+        assertThat(budget.windowEndOn(LocalDate.of(2026, 10, 18))).isEqualTo(LocalDateTime.of(2026, 10, 19, 0, 0));
+        assertThat(budget.windowLabel()).isEqualTo("~24:00");
+    }
+
+    @Test
+    void 분과_시간대를_함께_말하면_둘_다_남고_예전_꼬리표도_그대로_읽힌다() {
+        PlanBriefOp both = new PlanBriefOp("ADD", null, "TIME_BUDGET", "8시부터 11시까지 3시간", "USER", "THIS_DRAFT",
+                null, null, null, null, null, 180, "DAY", "20:00", "23:00");
+        String text = PlanBriefService.withTimeBudget("8시부터 11시까지 3시간", both);
+        assertThat(text).endsWith("(쓸 수 있는 시간 180분 · 하루 · 20:00~23:00)");
+        PlanBriefService.TimeBudget budget = PlanBriefService.timeBudgetOf(List.of(said(text)));
+        assertThat(budget.minutes()).isEqualTo(180);
+        assertThat(budget.windowLabel()).isEqualTo("20:00~23:00");
+
+        PlanBriefService.TimeBudget old = PlanBriefService.timeBudgetOf(List.of(said("오늘 한 시간만 (쓸 수 있는 시간 60분 · 계획 전체)")));
+        assertThat(old.minutes()).isEqualTo(60);
+        assertThat(old.hasWindow()).isFalse();
+
+        // 분도 시간대도 못 읽으면 꼬리표를 붙이지 않는다.
+        PlanBriefOp nothing = new PlanBriefOp("ADD", null, "TIME_BUDGET", "오늘 좀 할게", "USER", "THIS_DRAFT",
+                null, null, null, null, null, null, null, "아침", "밤");
+        assertThat(PlanBriefService.withTimeBudget("오늘 좀 할게", nothing)).isEqualTo("오늘 좀 할게");
+    }
+
+    private static PlanBriefItem said(String text) {
+        return new PlanBriefItem(1, "TIME_BUDGET", text, PlanBriefItem.SPEAKER_USER, true, false, false,
+                PlanBriefItem.SCOPE_THIS_DRAFT, 1L, 1L, null, null, null, null, 1, List.of(), LocalDateTime.now());
+    }
+
+    // ===== (2026-10-18) 작성 주체·근거·승인 =====
+
+    private static PlanBriefOp op(String op, Integer id, String kind, String text, String speaker, String scope, Long courseId,
+                                  String quote) {
+        return new PlanBriefOp(op, id, kind, text, speaker, scope, null, courseId, null, null, null, null, null, null, null,
+                quote);
+    }
+
+    private static PlanBriefOp userAdd(String kind, String text, String scope, Long courseId, String quote) {
+        return op("ADD", null, kind, text, "USER", scope, courseId, quote);
+    }
+
+    private static List<PlanBriefService.UserUtterance> said(long messageId, String text) {
+        return List.of(new PlanBriefService.UserUtterance(messageId, text));
+    }
+
+    @Test
+    void speaker가_USER여도_근거_구절이_없거나_사용자_말에_없으면_후보다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 300L, 301L, List.of(
+                userAdd("SCOPE", "빅데이터는 붓꽃·타이타닉까지", "THIS_DRAFT", 936L, null),
+                userAdd("EXCLUDE", "영어는 이번 계획에서 뺀다", "THIS_DRAFT", 940L, "영어는 빼")), null,
+                said(300L, "영어는 빼지 마. 빅데이터분석은 붓꽃타이타닉까지야"));
+
+        // 첫 항목은 구절이 없고, 둘째는 구절이 원문에 있지만("영어는 빼지 마"의 일부) 정리와 원문 문장이 함께 남는다.
+        assertThat(view.items().get(0).speaker()).isEqualTo("ASSISTANT");
+        assertThat(view.items().get(0).effective()).isFalse();
+        assertThat(view.items().get(0).pendingProposal()).isTrue();
+        PlanBriefItem exclude = view.items().get(1);
+        assertThat(exclude.basisSentence()).isEqualTo("영어는 빼지 마.");
+        assertThat(PlanBriefService.agreedLines(view)).anySatisfy(line ->
+                assertThat(line).contains("원문: \"영어는 빼지 마.\"").contains("원문이 기준"));
+    }
+
+    @Test
+    void AI가_사용자_말을_정리한_항목은_작성자는_AI이고_근거가_있어_유효하며_원문과_함께_전달된다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 400L, 401L, List.of(
+                op("ADD", null, "SCOPE", "빅데이터분석 시험 범위는 붓꽃·타이타닉", "ASSISTANT", "THIS_DRAFT", 936L,
+                        "빅데이터분석은 붓꽃타이타닉까지야")), null,
+                List.of(new PlanBriefService.UserUtterance(400L, "오늘 공부계획짜보자\n빅데이터분석은 붓꽃타이타닉까지야\n그리고 스마트앱은 PDF")));
+
+        PlanBriefItem item = view.items().get(0);
+        assertThat(item.speaker()).isEqualTo("ASSISTANT");
+        assertThat(item.accepted()).isFalse(); // 승인과 근거는 다르다
+        assertThat(item.grounded()).isTrue();
+        assertThat(item.effective()).isTrue();
+        assertThat(item.pendingProposal()).isFalse();
+        assertThat(item.basisMessageId()).isEqualTo(400L);
+        assertThat(item.basisSentence()).isEqualTo("빅데이터분석은 붓꽃타이타닉까지야"); // 줄바꿈이 문장 경계다
+        assertThat(view.pendingProposals()).isEmpty();
+        assertThat(PlanBriefService.renderForConsultation(view)).contains("[사용자 요청 · AI가 정리]");
+        // "까지"가 정리에서 빠졌어도 원문이 함께 실린다.
+        assertThat(PlanBriefService.agreedLines(view).get(0)).contains("사용자 요청을 AI가 정리함")
+                .contains("원문: \"빅데이터분석은 붓꽃타이타닉까지야\"");
+    }
+
+    @Test
+    void 근거_확인은_서버가_넘긴_사용자_발언에서만_하고_짧은_말이나_바꾼_말은_근거가_아니다() {
+        List<PlanBriefService.UserUtterance> utterances = List.of(
+                new PlanBriefService.UserUtterance(11L, "그래"),
+                new PlanBriefService.UserUtterance(10L, "네트워크는 2주차부터 7주차 56번 장표까지"));
+        assertThat(PlanBriefService.verifyQuote("그래", utterances)).isNull(); // 3글자 미만
+        assertThat(PlanBriefService.verifyQuote("네트워크는 2~7주차", utterances)).isNull(); // 바꾼 말
+        assertThat(PlanBriefService.verifyQuote("7주차  56번 장표까지", utterances)) // 공백 차이만 무시
+                .satisfies(b -> {
+                    assertThat(b.messageId()).isEqualTo(10L);
+                    assertThat(b.sentence()).isEqualTo("네트워크는 2주차부터 7주차 56번 장표까지");
+                });
+        assertThat(PlanBriefService.verifyQuote("아무 말", List.of())).isNull();
+    }
+
+    @Test
+    void 같은_문장이_다시_오면_새로_만들지_않고_근거만_붙이며_거절된_것은_되살리지_않는다() {
+        PlanBrief stored = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "PRIORITY", "영어회화·빅데이터 우선", "ASSISTANT", false, false, false, "THIS_DRAFT", 501L,
+                        null, null, null, null, null, 1, List.of(), null),
+                new PlanBriefItem(2, "EXCLUDE", "스마트앱 제외", "ASSISTANT", false, true, false, "THIS_DRAFT", 501L,
+                        null, null, null, null, null, 1, List.of(), null))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 510L, 511L, List.of(
+                userAdd("PRIORITY", "영어회화·빅데이터 우선", "THIS_DRAFT", null, "영어회화랑 빅데이터분석은 끝내고"),
+                userAdd("EXCLUDE", "스마트앱 제외", "THIS_DRAFT", null, "스마트앱은 빼고")), null,
+                said(510L, "영어회화랑 빅데이터분석은 끝내고 스마트앱은 빼고"));
+
+        assertThat(view.items()).hasSize(2);
+        assertThat(view.items().get(0).grounded()).isTrue();
+        assertThat(view.items().get(0).effective()).isTrue();
+        assertThat(view.items().get(1).rejected()).isTrue();
+        assertThat(view.items().get(1).effective()).isFalse();
+
+        // 과목이 다르면 같은 문장이어도 다른 요청이다.
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+        PlanBriefService.View two = service.applyTurn(USER, CONV, 520L, 521L, List.of(
+                userAdd("DEPTH", "문제 풀이 위주", "THIS_DRAFT", 936L, "문제 풀이 위주로"),
+                userAdd("DEPTH", "문제 풀이 위주", "THIS_DRAFT", 937L, "문제 풀이 위주로")), null,
+                said(520L, "둘 다 문제 풀이 위주로"));
+        assertThat(two.items()).hasSize(2);
+    }
+
+    @Test
+    void 근거_없이_고친_문장은_AI가_고친_후보이고_거절된_제안은_고쳐_써도_되살아나지_않는다() {
+        PlanBrief stored = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "TIME_CONSTRAINT", "영어는 하루 15분", "USER", true, false, false, "THIS_DRAFT", 600L,
+                        600L, null, null, null, null, 1, List.of(), null),
+                new PlanBriefItem(2, "EXCLUDE", "금요일 밤 비우기", "ASSISTANT", false, true, false, "THIS_DRAFT", 601L,
+                        null, null, null, null, null, 1, List.of(), null))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 610L, 611L, List.of(
+                op("UPDATE", 1, null, "영어는 하루 30분", null, null, null, null),
+                op("UPDATE", 2, null, "금요일 밤은 꼭 비우기", null, null, null, "금요일 밤")), null,
+                said(610L, "금요일 밤 말인데"));
+
+        PlanBriefItem revised = view.items().get(0);
+        assertThat(revised.text()).isEqualTo("영어는 하루 30분");
+        assertThat(revised.speaker()).isEqualTo("ASSISTANT");
+        assertThat(revised.pendingProposal()).isTrue(); // 이전 판의 승인을 승계하지 않는다
+        assertThat(revised.history()).containsExactly("영어는 하루 15분");
+        assertThat(view.items().get(1).text()).isEqualTo("금요일 밤 비우기");
+        assertThat(view.items().get(1).rejected()).isTrue();
+    }
+
+    @Test
+    void 근거_필드가_없던_저장본도_그대로_읽히고_상태가_바뀌지_않는다() {
+        String legacy = "[{\"id\":1,\"kind\":\"GOAL\",\"text\":\"다음 수업 따라잡기\",\"speaker\":\"USER\",\"accepted\":true,"
+                + "\"rejected\":false,\"removed\":false,\"scope\":\"THIS_DRAFT\",\"sourceMessageId\":5,\"revision\":1,\"history\":[]},"
+                + "{\"id\":2,\"kind\":\"EXCLUDE\",\"text\":\"영어 제외\",\"speaker\":\"ASSISTANT\",\"accepted\":false,"
+                + "\"rejected\":true,\"removed\":false,\"scope\":\"THIS_DRAFT\",\"sourceMessageId\":6,\"revision\":1,\"history\":[]}]";
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(brief(4, legacy));
+
+        PlanBriefService.View view = service.load(USER, CONV);
+
+        assertThat(view.items().get(0).effective()).isTrue();
+        assertThat(view.items().get(0).grounded()).isFalse();
+        assertThat(view.items().get(1).rejected()).isTrue();
+        assertThat(view.items().get(1).effective()).isFalse();
+        assertThat(view.items().get(1).pendingProposal()).isFalse();
+    }
+
+    @Test
+    void USER라고_해도_자기_말로_정리했으면_작성자는_AI이고_승인이_아니다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 700L, 701L, List.of(
+                userAdd("PRIORITY", "자료구조 복구 우선", "THIS_DRAFT", null, "자료구조부터 복구하고 싶어"),
+                userAdd("GOAL", "영어회화랑 빅데이터분석은 끝내고", "THIS_DRAFT", null, "영어회화랑 빅데이터분석은 끝내고")), null,
+                said(700L, "자료구조부터 복구하고 싶어. 영어회화랑 빅데이터분석은 끝내고 싶어"));
+
+        PlanBriefItem summary = view.items().get(0);
+        assertThat(summary.speaker()).isEqualTo("ASSISTANT");
+        assertThat(summary.accepted()).isFalse();
+        assertThat(summary.effective()).isTrue(); // 근거가 있다
+        PlanBriefItem verbatim = view.items().get(1);
+        assertThat(verbatim.speaker()).isEqualTo("USER");
+        assertThat(verbatim.accepted()).isTrue();
+    }
+
+    @Test
+    void 항목이_가득_차도_기존_항목에_근거는_붙고_같은_문장의_UPDATE도_근거를_붙인다() {
+        List<PlanBriefItem> full = new java.util.ArrayList<>();
+        for (int i = 1; i <= PlanBriefService.MAX_ITEMS; i++) {
+            full.add(new PlanBriefItem(i, "OTHER", "항목 " + i, "ASSISTANT", false, false, false, "THIS_DRAFT", 800L, null,
+                    null, null, null, null, 1, List.of(), null));
+        }
+        PlanBrief stored = brief(1, service.serialize(full));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 810L, 811L, List.of(
+                op("ADD", null, "OTHER", "항목 3", "ASSISTANT", "THIS_DRAFT", null, "항목 3 그거"),
+                op("UPDATE", 5, null, "항목 5", null, null, null, "항목 5도 맞아"),
+                op("ADD", null, "OTHER", "새 항목", "ASSISTANT", "THIS_DRAFT", null, null)), null,
+                said(810L, "항목 3 그거 하고 항목 5도 맞아"));
+
+        assertThat(view.items()).hasSize(PlanBriefService.MAX_ITEMS); // 새 항목은 상한에 막힌다
+        assertThat(view.items().get(2).grounded()).isTrue();
+        PlanBriefItem five = view.items().get(4);
+        assertThat(five.grounded()).isTrue();
+        assertThat(five.revision()).isEqualTo(1); // 내용이 같으면 판을 올리지 않는다
+    }
+
+    @Test
+    void 지난_발언의_이번_주는_지금_기간으로_옮기지_않고_긴_문장은_잘라_근거로_쓰지_않는다() {
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(null);
+
+        PlanBriefService.View view = service.applyTurn(USER, CONV, 902L, 903L, List.of(
+                op("ADD", null, "EXCLUDE", "이번 주는 영어 제외", "USER", "PERIOD", null, "이번 주는 영어 빼줘")), null,
+                List.of(new PlanBriefService.UserUtterance(902L, "오늘 계획 짜줘"),
+                        new PlanBriefService.UserUtterance(880L, "이번 주는 영어 빼줘")));
+        assertThat(view.items().get(0).grounded()).isFalse();
+        assertThat(view.items().get(0).pendingProposal()).isTrue();
+
+        String longSentence = "영어는 빼" + "고 다른 것도 생각해 보면".repeat(60) + " 라는 뜻이 아니라 반드시 포함해";
+        assertThat(PlanBriefService.verifyQuote("영어는 빼",
+                List.of(new PlanBriefService.UserUtterance(1L, longSentence)))).isNull();
+    }
+
+    @Test
+    void 사용자_발언_근거가_있는_쓸_수_있는_시간은_정리_문장이어도_사용자_조건이다() {
+        PlanBriefItem grounded = new PlanBriefItem(1, "TIME_BUDGET", "오늘은 자정까지 공부 (쓸 수 있는 시간 하루 · ~24:00)",
+                "ASSISTANT", false, false, false, "THIS_DRAFT", 5L, null, null, null, null, null, 1, List.of(), null,
+                null, null, null, null, "밤 12시까지", 5L, "오늘 밤 12시까지 할게");
+        assertThat(PlanBriefService.timeBudgetOf(List.of(grounded))).isNotNull()
+                .satisfies(b -> assertThat(b.until()).isEqualTo("24:00"));
+    }
+
+    @Test
+    void 지난_발언으로_기간_합의를_고치지_못하고_범위를_바꾼_수정은_근거만_붙이지_않는다() {
+        PlanBrief stored = brief(1, service.serialize(List.of(
+                new PlanBriefItem(1, "EXCLUDE", "영어 제외", "ASSISTANT", false, false, false, "PERIOD", 900L, null,
+                        null, null, null, null, 1, List.of(), null, null, null, null, null))));
+        when(mapper.findByConversationIdAndUserId(CONV, USER)).thenReturn(stored);
+        when(mapper.updateItems(eq(1L), eq(USER), eq(1), anyString(), anyString())).thenReturn(1);
+        List<PlanBriefService.UserUtterance> utterances = List.of(
+                new PlanBriefService.UserUtterance(950L, "이번 계획만 영어 제외해"),
+                new PlanBriefService.UserUtterance(901L, "이번 주는 영어 빼줘"));
+
+        // 같은 문장 UPDATE인데 근거가 지난 발언이고 기간 합의다 → 근거를 붙이지 않는다.
+        PlanBriefService.View past = service.applyTurn(USER, CONV, 950L, 951L, List.of(
+                op("UPDATE", 1, null, "영어 제외", null, null, null, "이번 주는 영어 빼줘")), null, utterances);
+        assertThat(past.items().get(0).grounded()).isFalse();
+
+        // 문장은 같지만 범위를 이번 초안으로 좁혔다 → 근거만 붙이는 게 아니라 수정판이다.
+        PlanBriefService.View narrowed = service.applyTurn(USER, CONV, 950L, 951L, List.of(
+                op("UPDATE", 1, null, "영어 제외", null, "THIS_DRAFT", null, "이번 계획만 영어 제외해")), null, utterances);
+        PlanBriefItem item = narrowed.items().get(0);
+        assertThat(item.scope()).isEqualTo("THIS_DRAFT");
+        assertThat(item.revision()).isEqualTo(2);
+        assertThat(item.grounded()).isTrue();
+    }
+
+    @Test
+    void 그대로_옮겼는지_볼_때_범위_기호와_소수점은_지우지_않는다() {
+        assertThat(PlanBriefService.verbatim("하루 12시간", "하루 1~2시간만 가능해")).isFalse();
+        assertThat(PlanBriefService.verbatim("1.5시간", "15시간")).isFalse();
+        assertThat(PlanBriefService.verbatim("5시간", "15시간")).isFalse();
+        assertThat(PlanBriefService.verbatim("5시간", "1.5시간")).isFalse();
+        assertThat(PlanBriefService.verbatim("5시간", "하루 5시간")).isTrue();
+        assertThat(PlanBriefService.verbatim("붓꽃·타이타닉까지", "빅데이터분석은 붓꽃 타이타닉까지야")).isTrue();
+    }
+
+    @Test
+    void 정리_항목의_시간_값은_원문에서_같은_값이_읽힐_때만_사용자_조건이다() {
+        PlanBriefItem wrong = timeItem("오늘 120분 (쓸 수 있는 시간 120분 · 하루)", "오늘 한 시간만 가능해");
+        PlanBriefItem right = timeItem("오늘 60분 (쓸 수 있는 시간 60분 · 하루)", "오늘 한 시간만 가능해");
+        PlanBriefItem part = timeItem("30분 (쓸 수 있는 시간 30분 · 하루)", "오늘은 한 시간 30분 가능해");
+        PlanBriefItem whole = timeItem("90분 (쓸 수 있는 시간 90분 · 하루)", "오늘은 한 시간 30분 가능해");
+        PlanBriefItem perDayWrong = timeItem("매일 2시간 (쓸 수 있는 시간 120분 · 하루)", "이번 주 전체로 두 시간만 가능해");
+        PlanBriefItem planRight = timeItem("총 2시간 (쓸 수 있는 시간 120분 · 계획 전체)", "이번 주 전체로 두 시간만 가능해");
+        PlanBriefItem minuteWrong = timeItem("저녁 (쓸 수 있는 시간 하루 · 08:00~11:00)", "08:30부터 11:00까지");
+        PlanBriefItem morning = timeItem("저녁 (쓸 수 있는 시간 하루 · 20:00~23:00)", "오전 8시부터 11시까지");
+        PlanBriefItem swapped = timeItem("(쓸 수 있는 시간 하루 · 11:00~20:00)", "8시부터 11시까지");
+        PlanBriefItem midnight = timeItem("자정까지 (쓸 수 있는 시간 하루 · ~24:00)", "오늘 밤 12시까지 할게");
+        PlanBriefItem evening = timeItem("저녁 (쓸 수 있는 시간 하루 · 20:00~23:00)", "8시부터 11시까지");
+        PlanBriefItem shifted = timeItem("저녁 (쓸 수 있는 시간 하루 · 19:00~23:00)", "8시부터 11시까지");
+
+        assertThat(PlanBriefService.timeBudgetOf(List.of(wrong))).isNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(right)).minutes()).isEqualTo(60);
+        assertThat(PlanBriefService.timeBudgetOf(List.of(midnight))).isNotNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(evening))).isNotNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(shifted))).isNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(part))).isNull(); // "한 시간 30분"의 30분은 따로 기간이 아니다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(whole)).minutes()).isEqualTo(90);
+        assertThat(PlanBriefService.timeBudgetOf(List.of(perDayWrong))).isNull(); // 전체 두 시간을 매일로 바꾸지 않는다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(planRight))).isNotNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(minuteWrong))).isNull(); // 분이 다르다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(morning))).isNull(); // 오전이라고 말했다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(swapped))).isNull(); // 시작·끝 역할이 바뀌었다
+    }
+
+    private static PlanBriefItem timeItem(String text, String sentence) {
+        return new PlanBriefItem(1, "TIME_BUDGET", text, "ASSISTANT", false, false, false, "THIS_DRAFT", 5L, null, null, null,
+                null, null, 1, List.of(), null, null, null, null, null, "근거", 5L, sentence);
+    }
+
+    @Test
+    void 시간_대조는_애매하면_일치로_보지_않는다() {
+        // HH:mm에도 오전·오후를 적용한다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 20:30~21:00)", "오후 8:30부터 오후 9:00까지"))))
+                .isNotNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:30~09:00)", "오후 8:30부터 오후 9:00까지"))))
+                .isNull();
+        // 서로 다른 구간의 시작과 끝을 합치지 않는다(구간이 여럿이면 애매하다)
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:00~21:00)",
+                "08:00부터 09:00까지, 20:00부터 21:00까지 가능해")))).isNull();
+        // 지속 시간이 여럿이면 어느 것이 하루 몫인지 정할 수 없다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 300분 · 하루)",
+                "이번 주는 매일 한 시간씩, 총 다섯 시간 가능해")))).isNull();
+        // 지원하지 않는 수사의 안쪽을 읽지 않는다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 180분 · 하루)", "오늘 열세 시간 가능해"))))
+                .isNull();
+        assertThat(PlanBriefService.verbatim("두 시간", "열두 시간")).isFalse();
+        assertThat(PlanBriefService.verbatim("두 시간", "오늘 두 시간")).isTrue();
+    }
+
+    @Test
+    void 붙여_쓴_끝과_오전_오후_문맥과_분수_합성수사를_구분한다() {
+        // 붙여 써도 끝을 읽는다 — 시작만 있는 구간으로 승인하지 않는다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:00~)", "8시부터11시까지")))).isNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:00~11:00)", "8시부터11시까지"))))
+                .isNotNull();
+        // "오전 8시부터 11시까지"의 끝은 11:00이다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:00~23:00)", "오전 8시부터 11시까지"))))
+                .isNull();
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 하루 · 08:00~11:00)", "오전 8시부터 11시까지"))))
+                .isNotNull();
+        // 분수·합성 수사의 안쪽을 따로 읽지 않는다
+        assertThat(PlanBriefService.timeBudgetOf(List.of(timeItem("(쓸 수 있는 시간 120분 · 하루)", "오늘은 1/2시간만 가능해"))))
+                .isNull();
+        assertThat(PlanBriefService.verbatim("2시간", "1/2시간")).isFalse();
+        assertThat(PlanBriefService.verbatim("두 시간", "스물두 시간")).isFalse();
+    }
+}

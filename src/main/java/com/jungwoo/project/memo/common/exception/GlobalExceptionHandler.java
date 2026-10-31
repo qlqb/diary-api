@@ -44,7 +44,8 @@ public class GlobalExceptionHandler {
                 ex.getErrorCode().getCode(), ex.getMessage());
 
         ErrorCode errorCode = ex.getErrorCode();
-        ErrorResponse response = ErrorResponse.of(errorCode);
+        // details는 대부분 null이고, 그때는 응답 JSON에서 통째로 빠진다(NON_NULL).
+        ErrorResponse response = ErrorResponse.of(errorCode, ex.getDetails());
 
         return new ResponseEntity<>(response, errorCode.getStatus());
     }

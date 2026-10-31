@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.week.MaterialWeekAssignmentMapper">
+
+    <resultMap id="assignmentResultMap" type="com.jungwoo.project.memo.learning.week.MaterialWeekAssignment">
+        <id     property="assignmentId" column="assignment_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="courseId"     column="course_id"/>
+        <result property="materialId"   column="material_id"/>
+        <result property="placement"    column="placement"/>
+        <result property="weekNo"       column="week_no"/>
+        <result property="source"       column="source"/>
+        <result property="createdAt"    column="created_at"/>
+        <result property="updatedAt"    column="updated_at"/>
+    </resultMap>
+
+    <!--
+      지워진 자료나 이 프로젝트에서 연결을 끊은 자료의 행은 남아 있어도 보이지 않는다. 다시 연결하면
+      예전 확인이 되살아난다 — 사용자가 한 번 정한 것을 연결 해제가 지우지 않는다.
+    -->
+    <select id="findActiveByCourse" resultMap="assignmentResultMap">
+        SELECT a.* FROM material_week_assignments a
+        JOIN material_links l ON l.material_id = a.material_id AND l.course_id = a.course_id AND l.user_id = a.user_id
+        JOIN course_materials cm ON cm.material_id = a.material_id AND cm.status = 'ACTIVE'
+        WHERE a.user_id = #{userId} AND a.course_id = #{courseId}
+        ORDER BY a.material_id, a.week_no
+    </select>
+
+    <select id="lockLink" resultType="java.lang.Long">
+        SELECT l.link_id FROM material_links l
+        JOIN course_materials cm ON cm.material_id = l.material_id AND cm.status = 'ACTIVE'
+        WHERE l.user_id = #{userId} AND l.course_id = #{courseId} AND l.material_id = #{materialId}
+        FOR UPDATE
+    </select>
+
+    <select id="findByMaterial" resultMap="assignmentResultMap">
+        SELECT * FROM material_week_assignments
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND material_id = #{materialId}
+        ORDER BY week_no
+    </select>
+
+    <delete id="deleteByMaterial">
+        DELETE FROM material_week_assignments
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND material_id = #{materialId}
+    </delete>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="assignmentId">
+        INSERT INTO material_week_assignments (user_id, course_id, material_id, placement, week_no, source)
+        VALUES (#{userId}, #{courseId}, #{materialId}, #{placement}, #{weekNo}, #{source})
+    </insert>
+
+</mapper>

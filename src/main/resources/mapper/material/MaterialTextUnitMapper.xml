@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.material.MaterialTextUnitMapper">
+
+    <resultMap id="unitResultMap" type="com.jungwoo.project.memo.material.domain.MaterialTextUnit">
+        <id     property="unitId"     column="unit_id"/>
+        <result property="userId"     column="user_id"/>
+        <result property="materialId" column="material_id"/>
+        <result property="fileHash"   column="file_hash"/>
+        <result property="unitIndex"  column="unit_index"/>
+        <result property="unitType"   column="unit_type"/>
+        <result property="unitNo"     column="unit_no"/>
+        <result property="charCount"  column="char_count"/>
+        <result property="text"       column="text"/>
+        <result property="createdAt"  column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="unitId">
+        INSERT INTO material_text_units (
+            user_id, material_id, file_hash, unit_index, unit_type, unit_no, char_count, text
+        ) VALUES (
+            #{userId}, #{materialId}, #{fileHash}, #{unitIndex}, #{unitType}, #{unitNo}, #{charCount}, #{text}
+        )
+    </insert>
+
+    <select id="findByMaterialIdAndHash" resultMap="unitResultMap">
+        SELECT * FROM material_text_units
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+        ORDER BY unit_index ASC
+    </select>
+
+    <select id="countByMaterialIdAndHash" resultType="int">
+        SELECT COUNT(*) FROM material_text_units
+        WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+    </select>
+
+    <!--
+      상담 근거 검색. LIKE 검색이라 색인을 타지 않는다 — 대상은 한 사용자의 활성 자료(현재 해시)로 좁혀 두었다.
+      검색어의 %·_는 서비스가 미리 걷어 낸다(QueryTerms가 낱말 문자만 남긴다). 띄어쓰기를 지운 본문과도 비교한다 —
+      "강의시간"으로 찾을 때 원문이 "강의 시간"이어도 걸려야 한다.
+    -->
+    <!--
+      자료마다 상위 perMaterial개까지만 남긴 뒤 전체를 자른다(ROW_NUMBER, MySQL 8 / MariaDB 10.2+). 전체 상한을 먼저 걸면
+      같은 낱말이 쪽마다 나오는 큰 자료 하나가 상한을 다 채워 다른 과목의 자료가 후보에 오르지도 못한다.
+    -->
+    <select id="searchByTerms" resultType="com.jungwoo.project.memo.material.TextUnitHit">
+        SELECT unitId, materialId, unitIndex, unitType, unitNo, charCount, hits FROM (
+            SELECT h.*, ROW_NUMBER() OVER (PARTITION BY h.materialId ORDER BY h.hits DESC, h.unitIndex ASC) AS rn
+            FROM (
+                SELECT unit_id AS unitId, material_id AS materialId, unit_index AS unitIndex, unit_type AS unitType,
+                       unit_no AS unitNo, char_count AS charCount,
+                       (<foreach collection="terms" item="t" separator=" + ">(CASE WHEN text LIKE CONCAT('%', #{t}, '%') OR REPLACE(text, ' ', '') LIKE CONCAT('%', #{t}, '%') THEN 1 ELSE 0 END)</foreach>) AS hits
+                FROM material_text_units
+                WHERE user_id = #{userId}
+                  AND (<foreach collection="materials" item="m" separator=" OR ">(material_id = #{m.materialId} AND file_hash = #{m.fileHash})</foreach>)
+            ) h
+            WHERE h.hits &gt; 0
+        ) ranked
+        WHERE rn &lt;= #{perMaterial}
+        ORDER BY hits DESC, materialId ASC, unitIndex ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="summarizeByUser" resultType="com.jungwoo.project.memo.material.TextUnitSummary">
+        SELECT material_id AS materialId, file_hash AS fileHash, COUNT(*) AS unitCount,
+               MIN(unit_no) AS firstUnitNo, MAX(unit_no) AS lastUnitNo, MAX(unit_type) AS unitType
+        FROM material_text_units
+        WHERE user_id = #{userId}
+        GROUP BY material_id, file_hash
+    </select>
+
+    <select id="findByIdsAndUserId" resultMap="unitResultMap">
+        SELECT * FROM material_text_units
+        WHERE user_id = #{userId}
+          AND unit_id IN <foreach collection="unitIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+        ORDER BY material_id ASC, unit_index ASC
+    </select>
+
+    <select id="findRange" resultMap="unitResultMap">
+        SELECT * FROM material_text_units
+        WHERE user_id = #{userId} AND material_id = #{materialId} AND file_hash = #{fileHash}
+          AND unit_no BETWEEN #{unitFrom} AND #{unitTo}
+        ORDER BY unit_index ASC
+    </select>
+
+    <delete id="deleteByMaterialIdAndHash">
+        DELETE FROM material_text_units WHERE material_id = #{materialId} AND file_hash = #{fileHash}
+    </delete>
+
+    <delete id="deleteByMaterialId">
+        DELETE FROM material_text_units WHERE material_id = #{materialId} AND user_id = #{userId}
+    </delete>
+
+</mapper>

@@ -1,0 +1,106 @@
+package com.jungwoo.project.memo.plan;
+
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jungwoo.project.memo.ai.AiProposalMapper;
+import com.jungwoo.project.memo.ai.brief.PlanBriefService;
+import com.jungwoo.project.memo.ai.domain.AiProposal;
+import com.jungwoo.project.memo.plan.domain.PlanVersion;
+import com.jungwoo.project.memo.plan.selection.PlanRequestContext;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Component;
+
+import java.util.Objects;
+
+/**
+ * 확정된 계획이 상담에서 합의한 "쓸 수 있는 시간"(TIME_BUDGET)을 다시 찾는다. 배치가 "밤 12시까지"·"20시부터" 같은 시간대를 지키려고 쓴다.
+ *
+ * <p>계획 → 원본 초안(sourceProposalId) → 요청 맥락(briefId·흐름) → 합의 순으로 따라간다. 초안을 만들 때와 같은 규칙
+ * ({@link PlanBriefService.View#effectiveFor})으로 고르므로, 생성 예산과 배치가 같은 합의를 본다. 어느 고리든 없으면 null — 그때 배치는
+ * 하루 기본 창을 그대로 쓴다.
+ */
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class PlanStudyTimeResolver {
+
+    private final AiProposalMapper proposalMapper;
+    private final PlanBriefService planBriefService;
+
+    private final ObjectMapper requestJson = new ObjectMapper().findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    /**
+     * (2026-10-25) 초안에 고정한 시간 조건(범위·제외·분량). 생성 때 정한 값을 그대로 쓰고 합의를 다시 골라 읽지 않는다 — 검토한 초안과
+     * 배치가 다른 조건을 보지 않게. 그 값이 없는 옛 초안은 예전 경로(범위 추출의 시간 → 합의)로 읽는다.
+     */
+    public com.jungwoo.project.memo.ai.brief.StudyTimeCondition resolveCondition(Long userId, PlanVersion plan) {
+        PlanRequestContext context = context(userId, plan);
+        if (context != null && context.scopeReport() != null && context.scopeReport().timeCondition() != null) {
+            return context.scopeReport().timeCondition();
+        }
+        PlanBriefService.TimeBudget legacy = resolve(userId, plan);
+        return legacy == null ? null : PlanBriefService.fromLegacyCondition(legacy);
+    }
+
+    /** 저장된 요청 맥락에서 초안에 고정한 시간 조건만 읽는다. 없거나 읽지 못하면 null. */
+    public static com.jungwoo.project.memo.ai.brief.StudyTimeCondition conditionOf(String planRequestJson) {
+        if (planRequestJson == null || planRequestJson.isBlank()) {
+            return null;
+        }
+        try {
+            PlanRequestContext context = STATIC_JSON.readValue(planRequestJson, PlanRequestContext.class);
+            return context.scopeReport() == null ? null : context.scopeReport().timeCondition();
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final ObjectMapper STATIC_JSON = new ObjectMapper().findAndRegisterModules()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+
+    private PlanRequestContext context(Long userId, PlanVersion plan) {
+        if (plan.getSourceProposalId() == null) {
+            return null;
+        }
+        AiProposal proposal = proposalMapper.findByIdAndUserId(plan.getSourceProposalId(), userId);
+        if (proposal == null || proposal.getPlanRequestJson() == null || proposal.getPlanRequestJson().isBlank()) {
+            return null;
+        }
+        try {
+            return requestJson.readValue(proposal.getPlanRequestJson(), PlanRequestContext.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    public PlanBriefService.TimeBudget resolve(Long userId, PlanVersion plan) {
+        if (plan.getSourceProposalId() == null) {
+            return null;
+        }
+        AiProposal proposal = proposalMapper.findByIdAndUserId(plan.getSourceProposalId(), userId);
+        if (proposal == null || proposal.getPlanRequestJson() == null || proposal.getPlanRequestJson().isBlank()) {
+            return null;
+        }
+        PlanRequestContext context;
+        try {
+            context = requestJson.readValue(proposal.getPlanRequestJson(), PlanRequestContext.class);
+        } catch (Exception e) {
+            log.warn("배치: 계획 요청 맥락을 읽지 못했다: {}", e.getClass().getSimpleName());
+            return null;
+        }
+        // 범위 추출이 원문에서 확인한 시간 조건(생성 때 예산에 쓴 것)이 있으면 그것을 배치에도 쓴다.
+        if (context.scopeReport() != null && context.scopeReport().studyTime() != null) {
+            return context.scopeReport().studyTime().toBudget();
+        }
+        if (context.briefId() == null) {
+            return null;
+        }
+        PlanBriefService.View brief = planBriefService.loadById(userId, context.briefId());
+        Long flowRoot = Objects.requireNonNullElse(context.flowRootProposalId(), proposal.getProposalId());
+        // 생성 때 범위 추출의 시간을 쓰지 않았으면 같은 규칙으로 합의에서 고른다(사용자가 확인한 합의 → 근거만 붙은 AI 정리).
+        return PlanBriefService.chooseTimeBudget(brief.effectiveFor(plan.getStartDate(), plan.getEndDate(), flowRoot)
+                .stream().map(PlanBriefService.Applicable::item).toList(), null);
+    }
+}

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.plan.help.PlanItemStartHelpMapper">
+
+    <resultMap id="helpResultMap" type="com.jungwoo.project.memo.plan.help.PlanItemStartHelp">
+        <id     property="helpId"          column="help_id"/>
+        <result property="userId"          column="user_id"/>
+        <result property="proposalItemId"  column="proposal_item_id"/>
+        <result property="executionItemId" column="execution_item_id"/>
+        <result property="evidenceVersion" column="evidence_version"/>
+        <result property="requestKind"     column="request_kind"/>
+        <result property="requestText"     column="request_text"/>
+        <result property="helpJson"        column="help_json"/>
+        <result property="model"           column="model"/>
+        <result property="createdAt"       column="created_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="helpId">
+        INSERT INTO plan_item_start_helps (user_id, proposal_item_id, execution_item_id, evidence_version,
+                                           request_kind, request_text, help_json, model)
+        VALUES (#{userId}, #{proposalItemId}, #{executionItemId}, #{evidenceVersion},
+                #{requestKind}, #{requestText}, #{helpJson}, #{model})
+    </insert>
+
+    <select id="findLatestByProposalItem" resultMap="helpResultMap">
+        SELECT * FROM plan_item_start_helps
+        WHERE proposal_item_id = #{proposalItemId} AND user_id = #{userId}
+        ORDER BY created_at DESC, help_id DESC
+        LIMIT 1
+    </select>
+
+    <select id="findLatestByExecutionItem" resultMap="helpResultMap">
+        SELECT * FROM plan_item_start_helps
+        WHERE execution_item_id = #{executionItemId} AND proposal_item_id IS NULL AND user_id = #{userId}
+        ORDER BY created_at DESC, help_id DESC
+        LIMIT 1
+    </select>
+</mapper>
