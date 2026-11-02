@@ -96,7 +96,7 @@
 ## 자료 (material)
 
 **MaterialStatus** `ACTIVE → DELETED`(한 트랜잭션: 열린 작업 취소·연결 삭제·본문 단위 삭제, 열린 변경안 STALE). 되돌리기 없음.
-**ExtractionStatus** `PENDING(DB 기본값, 코드는 안 씀) | SUCCESS | FAILED_NO_TEXT | FAILED`. 재추출은 FAILED*에서만(SUCCESS면 409, 상담 사진은 불가), 성공 시 CONTENT 작업 등록·끝난 묶음 다시 열기.
+**ExtractionStatus** `PENDING(DB 기본값, 코드는 쓰지 않고 null과 함께 "원문 추출 대기"로 읽기만 함) | SUCCESS | FAILED_NO_TEXT | FAILED`. 재추출은 FAILED*에서만(SUCCESS면 409, 상담 사진은 불가), 성공 시 CONTENT 작업 등록·끝난 묶음 다시 열기.
 **MaterialType** `SYLLABUS TEXTBOOK_TOC PROFESSOR_SLIDE OTHER` — 연결(`material_links`)마다의 역할.
 
 **AnalysisJobStatus** `QUEUED RUNNING DONE PARTIAL FAILED UNAVAILABLE PAUSED CANCELLED` · **AnalysisJobKind** `CONTENT | LINK` — `material/analysis/MaterialAnalysisJobService`, `…JobRunner`
