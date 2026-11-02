@@ -4,10 +4,9 @@
 --   새 환경을 만들 때만 쓴다. 기존 DB에 실행하지 않는다.
 --
 -- 뜬 날: 2026-11-02 · 출처 DB: 로컬 `memo` (MariaDB 10.4.32), `SHOW CREATE TABLE`.
--- 대상: docs/context/SCHEMA.md에서 `※ DDL 없음`이 붙은 8개 표 — 이 표들은 저장소에 CREATE TABLE이 없었다.
+-- 대상: docs/context/SCHEMA.md에서 `※ DDL 없음`이 붙어 있던 8개 표(지금은 `※ 스냅샷`) — 이 표들은 저장소에 CREATE TABLE이 없었다.
 -- 바꾼 것: `CREATE TABLE IF NOT EXISTS`(재실행 가능), 표마다 다른 `AUTO_INCREMENT=n` 카운터 제거. 그 밖에는 DB가 돌려준 그대로다.
 -- 사용자 데이터는 넣지 않았다(구조만).
--- 순서: 다른 docs/sql 파일보다 먼저 적용한다(대부분의 표가 users·execution_items 등을 참조한다).
 
 CREATE TABLE IF NOT EXISTS `users` (
   `user_id` bigint(20) NOT NULL AUTO_INCREMENT,

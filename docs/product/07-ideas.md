@@ -236,3 +236,18 @@
 - **Quick** — 데이터를 소유하지 않는 입구. 순서 안: 기존 경로 묶기(조각 추가·방금 한 것 기록·AI 패널) → 오늘 상태 3단계(수면·감정·컨디션, v2.1 `quick_logs`) → 지출(위 「지출계획 AI 추천」). 상태: **보류(다른 기능이 안정된 뒤)**
 - **롤링 배치 미배치 이유 저장** — 지금은 `place` 응답에만 있어 새로고침하면 사라진다. 상태: **보류**
 - **시간 겹침 재검증** — 상담 변경 묶음·일반 AI 제안 적용에는 계획 확정(`PlanConfirmScheduleGuard`)의 겹침 검사가 없다. 막을지 경고만 할지 미정. 상태: **검토 전**
+  - 근거 보탬(2026-11-02 조사 A6): `PlanConfirmScheduleGuard`는 그대로 못 쓴다 — 무조건 잠금 조회(`*ForUpdate`), 반환값 없이 `ConflictException`, 입력이 `EditedProposalItem` 전용이라 변경 뒤 가정 상태를 모른다. 잠금 없이 가정 상태로 막힌 시간을 만드는 `AvailabilityEstimateService`가 재사용 대상. `basis_fingerprint` 범위(`ChangeBundleService.range`, op 날짜 최소~최대 + 1일) 밖으로 나가는 두 경우: 반복 일정 생성·수정의 이후 회차(`affectedDates`가 `effectiveFrom`뿐), 전날 시작해 자정을 넘는 실행 조각(조회가 `scheduled_date` 기준).
+
+## 확인된 결함·후속 작업 (2026-11-02, 문서 현행화 조사)
+
+아이디어가 아니라 코드에서 확인한 사실이다(로컬 ObjectMapper 항목과 같은 "후속 작업" 성격). 고치면 이 절에서 지우지 말고 상태만 바꾼다.
+
+- **조건 없는 상태 전이** — 자료 분석 apply·dismiss: `CourseMaterialAnalysisMapper.xml:68-72` `WHERE analysis_id = #{analysisId}`뿐(status·user_id 조건 없음. version 열이 없는 단방향 상태 표라 status 조건이 맞는 방법), 매퍼 반환형 `void`(`CourseMaterialAnalysisMapper.java:57`), 행 잠금 없음. 같은 모양: 학습 추천 `StudyRecommendationMapper.xml:45-53`(`updateStatus`·`attachProposal`), 읽기는 `FOR UPDATE` 없는 `findByIdAndUserId`(`:34-36`)이고 상태 확인은 메모리에서(`PlanningAgentService.java:113`). 고치는 모양: `AND user_id = … AND status = …` + 반환형 `int` + 0행 409, 또는 맨 앞 `lock*`(`FOR UPDATE`) — CONVENTIONS.md 「상태 전이」 규칙. 동시 apply 재현 테스트를 같이 둔다. status·version·lease 조건 없이 status를 바꾸는 UPDATE는 기계 집계로 20곳이고 대부분 앞에서 `FOR UPDATE`로 잡지만, 잠금 여부를 직접 확인한 것은 위 두 경로뿐이다 — 나머지는 전수 확인 필요. 상태: **후속 작업**
+- **`FindAssignmentsTool` 설명의 `ESTIMATED`** — `FindAssignmentsTool.java:33`이 마감 출처로 `ESTIMATED 추정`을 알려 주지만 그 값을 쓰는 코드가 없고(쓰기는 `DueSource.SOURCE`·`USER`뿐: `CourseAssignmentService.java:123, 284, 330`) DB 0건이다. 설명에서 뺄지, 서버가 추정 마감을 쓰기 시작할지 정한다. 상태: **검토 전**
+- **`FindTasksTool` 설명** — `PLANNED 할 일, DONE 완료, HOLD 보류` 세 값만 적지만 결과는 그 행의 상태를 그대로 보낸다(`FindTasksTool.java:69`). `ExecutionStatus.PARTIAL`·`CANCELLED`를 쓰기 시작하면 설명도 같이 고친다. 상태: **조건부**
+- **`TopicChangeProposalService.java:43` 클래스 주석** — "트리 버전이 맞지 않으면 CONFLICT로 남기고 409"라고 적지만 그 서비스는 `TopicChangeProposalStatus.CONFLICT`를 쓰지 않는다(쓰는 값: PROPOSED·APPLIED·DISMISSED·EMPTY·STALE·SUPERSEDED). 주석을 코드에 맞춘다. 상태: **후속 작업**
+- **CI `test` 잡 빨간불** — api·ui 모두 dev-playground에서도 실패한다(2026-11-02 B3 게이트에서 확인). ui는 lint(`PlanScopeReport.jsx` fast-refresh, `PlanDraftOverview.test.jsx:241` 정규식 제어 문자), api는 실패 테스트 미확인(CI 로그는 로그인 필요 — 로컬 `./gradlew test -PexcludeDbTests`로 확인). 이게 남아 있으면 `context-layer` 잡이 빨개져도 구분되지 않는다. 상태: **후속 작업(우선)**
+- **추천·planning·orchestration 경로 유지 여부** — 서버는 컨트롤러까지 이어진다(`PlanningController.java:34`, `OrchestrationController.java:24`, `LearningRecommendationController.java:23`). 화면은 부르지 않는다(diary-ui `api.js:1264·1282·1301` 정의뿐, UI-CONTRACT.md 「쓰지 않는 객체」). 그래서 `study_recommendations`는 0행이다. 상태: **결정 필요(사람)**
+- **`*.java`도 LF로 받을지** — 2026-09에 `PeriodPlanDraftGenerator.java`가 `
+`으로 손상된 일이 있었다. 저장소 안은 전부 LF(`git ls-files --eol`)라 `.gitattributes`에 넣어도 커밋 diff는 없지만, 모든 로컬 체크아웃의 Java 줄바꿈이 바뀐다. 상태: **검토 전**
+- **대조 스크립트와 스냅샷** — `docs/sql/2026-11-02-existing-tables-snapshot.sql`이 CREATE 집합에 들어가, ※ 표 8개는 코드가 더 이상 쓰지 않게 돼도 "DDL도 코드 참조도 없는 표" 검사에 걸리지 않는다. 다른 두 검사(CREATE ⊆ 문서, 코드 참조 ⊆ 문서)는 그대로다. 스냅샷을 CREATE 집계에서 빼면(`--exclude='*-snapshot.sql'`) 이전 의미로 돌아간다. 상태: **검토 전**
