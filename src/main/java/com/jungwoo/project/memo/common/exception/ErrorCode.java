@@ -47,9 +47,12 @@ public enum ErrorCode {
     ROUTINE_RANGE_INVALID(HttpStatus.BAD_REQUEST, "E400_023", "반복 일정의 종료일은 시작일과 같거나 이후여야 합니다"),
     ROUTINE_EXCEPTION_DATE_INVALID(HttpStatus.BAD_REQUEST, "E400_024",
             "예외 날짜가 이 반복 일정의 기간이나 요일에 맞지 않습니다"),
-    /** 이미지 가져오기: 형식·크기가 허용 범위 밖. */
+    /** 이미지 가져오기: 비었거나 형식이 허용 범위 밖. 크기 초과는 {@link #IMAGE_TOO_LARGE}로 따로 알린다. */
     INVALID_IMAGE(HttpStatus.BAD_REQUEST, "E400_026",
-            "jpg, png, webp 이미지만 5MB까지 올릴 수 있습니다"),
+            "jpg, png, webp 이미지만 올릴 수 있습니다"),
+    /** 이미지 가져오기: 크기가 상한(5MB)을 넘었다. 화면은 넘는 이미지를 줄여 보내므로, 줄이지 못했을 때만 여기 닿는다. */
+    IMAGE_TOO_LARGE(HttpStatus.BAD_REQUEST, "E400_043",
+            "이미지가 5MB를 넘어요. 크기를 줄여서 다시 올려 주세요"),
     /** 이미지 가져오기: 모델이 일정표로 읽지 못했다. 실패가 아니라 "이건 표가 아니다"는 답이다. */
     NOT_A_SCHEDULE_IMAGE(HttpStatus.BAD_REQUEST, "E400_027",
             "이 이미지에서는 일정표를 찾지 못했어요"),
