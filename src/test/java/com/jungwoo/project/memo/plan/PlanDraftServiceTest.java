@@ -60,6 +60,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -772,6 +773,7 @@ class PlanDraftServiceTest {
                 new PlanStrategy("목표", "요약", StrategySource.NEW, null, List.of(), List.of(),
                         List.of(), List.of())));
         when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(proposal);
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(77L, USER_ID)).thenReturn(proposal);
         when(planningContextBuilder.build(any())).thenReturn(emptyContext());
         when(planJudgmentService.applyUserMarks(any(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -785,6 +787,39 @@ class PlanDraftServiceTest {
         verify(planJudgmentService, never()).judge(any(), anyBoolean());
         verify(planJudgmentService).applyUserMarks(any(), any());
         verify(planItemService).generate(any(), any(), anyInt());
+    }
+
+    /**
+     * 조각 생성(모델 호출) 동안 사용자가 원본을 확정했다. 처음 읽을 때는 PROPOSED였지만 저장 순간 잠가서 다시 보면 APPLIED다 —
+     * 새 초안을 저장하지 않고 409. 예전에는 원본을 조건 없이 DISMISSED로 덮어 확정된 제안이 버린 것으로 기록됐다.
+     */
+    @Test
+    void regenerateItems_doesNotOverwriteADraftConfirmedWhileGenerating() {
+        AiProposal proposal = new AiProposal();
+        proposal.setProposalId(77L);
+        proposal.setStatus(AiProposalStatus.PROPOSED);
+        proposal.setPlanStartDate(START);
+        proposal.setPlanEndDate(END);
+        proposal.setPlanIntensity(PlanIntensity.NORMAL);
+        proposal.setPlanStrategyJson(new PlanStrategyCodec().toJson(
+                new PlanStrategy("목표", "요약", StrategySource.NEW, null, List.of(), List.of(),
+                        List.of(), List.of())));
+        AiProposal confirmed = new AiProposal();
+        confirmed.setProposalId(77L);
+        confirmed.setStatus(AiProposalStatus.APPLIED);
+        when(aiProposalMapper.findByIdAndUserId(77L, USER_ID)).thenReturn(proposal);
+        when(aiProposalMapper.findByIdAndUserIdForUpdate(77L, USER_ID)).thenReturn(confirmed);
+        when(planningContextBuilder.build(any())).thenReturn(emptyContext());
+        when(planJudgmentService.applyUserMarks(any(), any()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(planItemService.generate(any(), any(), anyInt())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.regenerateItems(USER_ID, 77L))
+                .isInstanceOf(com.jungwoo.project.memo.common.exception.ConflictException.class)
+                .extracting(e -> ((com.jungwoo.project.memo.common.exception.ConflictException) e).getErrorCode())
+                .isEqualTo(ErrorCode.PLAN_DRAFT_ALREADY_RESOLVED);
+        verify(aiProposalMapper, never()).updateStatusAndRespondedAt(any(), any(), any(), any());
+        verifyNoInteractions(aiProposalService);
     }
 
     @Test

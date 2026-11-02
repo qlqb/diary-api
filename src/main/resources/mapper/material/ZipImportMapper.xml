@@ -53,12 +53,15 @@
                finished_at = CASE WHEN #{status} IN ('COMPLETED','PARTIAL','FAILED','CANCELLED','EXPIRED')
                                   THEN NOW() ELSE finished_at END
          WHERE import_id = #{importId}
+           AND status IN
+           <foreach collection="from" item="s" open="(" separator="," close=")">#{s}</foreach>
     </update>
 
     <update id="updateListing">
         UPDATE material_zip_imports
            SET status = #{status}, entry_count = #{entryCount}, selectable_count = #{selectableCount}
          WHERE import_id = #{importId}
+           AND status = 'PREPARING'
     </update>
 
     <update id="clearStoragePath">

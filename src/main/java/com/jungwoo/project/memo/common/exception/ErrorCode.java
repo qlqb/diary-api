@@ -221,6 +221,8 @@ public enum ErrorCode {
     CHANGE_BUNDLE_DEPENDENCY(HttpStatus.CONFLICT, "E409_051", "기대는 항목을 함께 고르지 않았어요"),
     CHANGE_BUNDLE_ITEM_NOT_APPLICABLE(HttpStatus.CONFLICT, "E409_052", "적용할 수 없는 항목이 선택되어 있어요"),
     PLAN_SCENARIO_CHANGED(HttpStatus.CONFLICT, "E409_053", "이 계획이 기대는 변경이 바뀌었어요. 계획을 다시 만들어 주세요"),
+    /** 자료 분석 적용·버리기: 잠그고 다시 보니 이미 DRAFT가 아니다(동시 요청·다른 탭에서 먼저 처리). */
+    MATERIAL_ANALYSIS_ALREADY_RESOLVED(HttpStatus.CONFLICT, "E409_054", "이미 적용했거나 버린 분석 결과입니다"),
 
     // ===== 410 Gone =====
     MATERIAL_ORIGINAL_REMOVED(HttpStatus.GONE, "E410_001", "원본 사진은 지워졌어요(읽은 글은 남아 있어요)"),

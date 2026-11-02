@@ -4,6 +4,10 @@
 「확인된 결함·후속 작업」에 있고, 규칙은 `docs/context/CONVENTIONS.md` 「상태 전이」다. 판정은 코드를 읽어 내린 것이고
 **동시 요청을 실제로 재현한 것은 없다** — "추론"이라고 적은 칸은 특히 그렇다.
 
+> 후속(2026-11-02 같은 날): 급한 순서 1~3(옛 초안 재생성, 자료 분석 apply·dismiss, ZIP 가져오기 상태)은 고쳤다 — 현황은 07번.
+> 아래 표는 감사 당시의 판정이다. ZIP은 감사 때 "경합"으로 봤지만, 대기 항목이 남은 채 취소하면 작업자가 그 항목을 실패 처리한 뒤
+> `finishIfDone`이 CANCELLED를 덮어 **경합이 아니어도 매번** 일어나는 문제였다.
+
 ## 대상을 고른 방법
 
 - 매퍼 `<update>` 중 SET에 상태 열(`status`, `*_status`, `*_state`)이 있고 WHERE에 `status`·`*_state`·`version`·`revision`·`lease_token`이

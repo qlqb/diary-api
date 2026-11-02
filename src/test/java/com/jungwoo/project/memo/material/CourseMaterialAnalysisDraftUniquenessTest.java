@@ -65,7 +65,7 @@ class CourseMaterialAnalysisDraftUniquenessTest {
     void 폐기한_뒤에는_새_DRAFT를_넣을_수_있다() {
         CourseMaterialAnalysis first = draft(COURSE_ID, MATERIAL_ID);
         analysisMapper.insert(first);
-        analysisMapper.updateStatus(first.getAnalysisId(), MaterialAnalysisStatus.DISMISSED.name(), null);
+        analysisMapper.updateStatus(first.getAnalysisId(), TEST_USER_ID, MaterialAnalysisStatus.DISMISSED.name(), null);
 
         assertThatCode(() -> analysisMapper.insert(draft(COURSE_ID, MATERIAL_ID)))
                 .doesNotThrowAnyException();
@@ -75,7 +75,7 @@ class CourseMaterialAnalysisDraftUniquenessTest {
     void 적용한_뒤에도_새_DRAFT를_넣을_수_있다() {
         CourseMaterialAnalysis first = draft(COURSE_ID, MATERIAL_ID);
         analysisMapper.insert(first);
-        analysisMapper.updateStatus(first.getAnalysisId(), MaterialAnalysisStatus.APPLIED.name(), null);
+        analysisMapper.updateStatus(first.getAnalysisId(), TEST_USER_ID, MaterialAnalysisStatus.APPLIED.name(), null);
 
         assertThatCode(() -> analysisMapper.insert(draft(COURSE_ID, MATERIAL_ID)))
                 .doesNotThrowAnyException();

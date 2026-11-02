@@ -14,6 +14,9 @@ public interface CourseMaterialAnalysisMapper {
 
     CourseMaterialAnalysis findByIdAndUserId(@Param("analysisId") Long analysisId, @Param("userId") Long userId);
 
+    /** findByIdAndUserId의 잠금 조회(FOR UPDATE). 적용·버리기가 상태를 확인하기 전에 행을 잡는다. */
+    CourseMaterialAnalysis lockByIdAndUserId(@Param("analysisId") Long analysisId, @Param("userId") Long userId);
+
     /**
      * 이 자료의 분석 전부. 프로젝트 맥락을 섞어서 돌려준다 — 전역 자료 상세("이 자료가 지금까지
      * 어디서 어떻게 해석됐는가")에서만 쓴다. 프로젝트 화면에서는 쓰지 않는다.
@@ -54,7 +57,12 @@ public interface CourseMaterialAnalysisMapper {
 
     void updateEditedJson(@Param("analysisId") Long analysisId, @Param("editedJson") String editedJson);
 
-    void updateStatus(@Param("analysisId") Long analysisId,
-                       @Param("status") String status,
-                       @Param("appliedAt") LocalDateTime appliedAt);
+    /**
+     * DRAFT → 끝 상태. DRAFT일 때만 바뀐다 — 0이면 그 사이 다른 요청이 먼저 처리한 것이다.
+     * 호출자는 lockByIdAndUserId로 잡은 뒤 부르지만, 잡지 않는 호출자가 생겨도 덮어쓰지 않도록 문장에도 조건을 둔다.
+     */
+    int updateStatus(@Param("analysisId") Long analysisId,
+                     @Param("userId") Long userId,
+                     @Param("status") String status,
+                     @Param("appliedAt") LocalDateTime appliedAt);
 }

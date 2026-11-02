@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jungwoo.project.memo.ai.AiConsultationClient;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
@@ -347,11 +348,11 @@ class MaterialAnalysisServiceTest {
                 .status(MaterialAnalysisStatus.APPLIED)
                 .analysisJson("{}")
                 .build();
-        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(applied);
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(applied);
 
         assertThatThrownBy(() -> service.apply(USER_ID, ANALYSIS_ID))
-                .isInstanceOfSatisfying(BadRequestException.class, ex ->
-                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_ANALYSIS_NOT_DRAFT));
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_ANALYSIS_ALREADY_RESOLVED));
 
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
     }
@@ -363,7 +364,7 @@ class MaterialAnalysisServiceTest {
                 .status(MaterialAnalysisStatus.DRAFT)
                 .analysisJson("{}")
                 .build();
-        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
         when(materialService.getRequiredLink(USER_ID, MATERIAL_ID, COURSE_ID))
                 .thenThrow(new NotFoundException(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
 
@@ -374,7 +375,7 @@ class MaterialAnalysisServiceTest {
                         assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_NOT_LINKED_TO_COURSE));
 
         verify(topicService, never()).applyAnalyzedTopics(any(), any(), any(), any());
-        verify(analysisMapper, never()).updateStatus(any(), any(), any());
+        verify(analysisMapper, never()).updateStatus(any(), any(), any(), any());
     }
 
     @Test
@@ -390,9 +391,10 @@ class MaterialAnalysisServiceTest {
                 .status(MaterialAnalysisStatus.DRAFT)
                 .analysisJson(json)
                 .build();
-        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(2);
+        when(analysisMapper.updateStatus(eq(ANALYSIS_ID), eq(USER_ID), any(), any())).thenReturn(1);
         when(textbookWriter.lock(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).userId(USER_ID)
                 .textbookVersion(0).build());
 
@@ -428,9 +430,10 @@ class MaterialAnalysisServiceTest {
                 .status(MaterialAnalysisStatus.DRAFT)
                 .analysisJson(json)
                 .build();
-        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(1);
+        when(analysisMapper.updateStatus(eq(ANALYSIS_ID), eq(USER_ID), any(), any())).thenReturn(1);
 
         service.apply(USER_ID, ANALYSIS_ID);
 
@@ -460,13 +463,45 @@ class MaterialAnalysisServiceTest {
                 .status(MaterialAnalysisStatus.DRAFT)
                 .analysisJson(json)
                 .build();
-        when(analysisMapper.findByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
         when(courseService.getOwned(USER_ID, COURSE_ID)).thenReturn(Course.builder().courseId(COURSE_ID).build());
         when(topicService.applyAnalyzedTopics(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), any())).thenReturn(1);
+        when(analysisMapper.updateStatus(eq(ANALYSIS_ID), eq(USER_ID), any(), any())).thenReturn(1);
 
         service.apply(USER_ID, ANALYSIS_ID);
 
         verify(courseNoteService).saveAll(eq(USER_ID), eq(COURSE_ID), eq(MATERIAL_ID), eq(List.of()));
+    }
+
+    /** 적용과 버리기가 겹쳤다: 버리기가 잠근 뒤 보니 이미 APPLIED다 — 409, 상태를 덮지 않는다. */
+    @Test
+    void dismiss_rejectsWhenAnotherRequestAlreadyApplied() {
+        CourseMaterialAnalysis applied = CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.APPLIED)
+                .analysisJson("{}")
+                .build();
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(applied);
+
+        assertThatThrownBy(() -> service.dismiss(USER_ID, ANALYSIS_ID))
+                .isInstanceOfSatisfying(ConflictException.class, ex ->
+                        assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.MATERIAL_ANALYSIS_ALREADY_RESOLVED));
+        verify(analysisMapper, never()).updateStatus(any(), any(), any(), any());
+    }
+
+    /** 잠금을 지나서도 상태 갱신이 0행이면(잠그지 않는 호출자가 생긴 경우) 409로 앞선 토픽·노트 쓰기를 되돌리게 한다. */
+    @Test
+    void dismiss_failsWhenTheConditionalStatusUpdateMatchesNoRow() {
+        CourseMaterialAnalysis draft = CourseMaterialAnalysis.builder()
+                .analysisId(ANALYSIS_ID).userId(USER_ID).courseId(COURSE_ID).materialId(MATERIAL_ID)
+                .status(MaterialAnalysisStatus.DRAFT)
+                .analysisJson("{}")
+                .build();
+        when(analysisMapper.lockByIdAndUserId(ANALYSIS_ID, USER_ID)).thenReturn(draft);
+        when(analysisMapper.updateStatus(ANALYSIS_ID, USER_ID, MaterialAnalysisStatus.DISMISSED.name(), null)).thenReturn(0);
+
+        assertThatThrownBy(() -> service.dismiss(USER_ID, ANALYSIS_ID))
+                .isInstanceOf(ConflictException.class);
     }
 
     private ChatResponse chatResponse(String text) {

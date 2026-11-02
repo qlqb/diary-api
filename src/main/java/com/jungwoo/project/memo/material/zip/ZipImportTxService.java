@@ -33,9 +33,11 @@ public class ZipImportTxService {
         for (ZipImportEntry entry : entries) {
             entryMapper.insert(entry);
         }
-        importMapper.updateListing(zipImport.getImportId(), ZipImportStatus.READY, entries.size(), selectableCount);
-        if (warning != null) {
-            importMapper.updateStatus(zipImport.getImportId(), ZipImportStatus.READY, null, warning);
+        // PREPARING일 때만 READY가 된다 — 목록을 읽는 동안 취소됐으면 취소를 덮지 않는다(항목 행은 남지만 대기열에 오르지 않는다).
+        if (importMapper.updateListing(zipImport.getImportId(), ZipImportStatus.READY, entries.size(), selectableCount) == 1
+                && warning != null) {
+            importMapper.updateStatus(zipImport.getImportId(), ZipImportStatus.READY, null, warning,
+                    java.util.EnumSet.of(ZipImportStatus.READY));
         }
     }
 
@@ -67,6 +69,9 @@ public class ZipImportTxService {
     /**
      * 남은 항목이 없으면 가져오기를 마무리한다. 결과는 항목 상태로 정한다 —
      * 실패가 없으면 COMPLETED, 자료가 하나라도 있으면 PARTIAL, 하나도 없으면 FAILED.
+     *
+     * <p>IMPORTING일 때만 마무리한다. 사용자가 취소하면 남은 대기 항목은 작업자가 "취소된 가져오기"로 실패 처리하고 이 메서드를
+     * 부른다 — 조건이 없으면 그때 CANCELLED가 PARTIAL·FAILED로 덮였다. 마무리하지 않았으면 null.
      */
     @Transactional
     public ZipImportStatus finishIfDone(Long importId) {
@@ -77,13 +82,16 @@ public class ZipImportTxService {
         int failed = entryMapper.countByStatus(importId, ZipEntryStatus.FAILED);
         ZipImportStatus status = failed == 0 ? ZipImportStatus.COMPLETED
                 : done > 0 ? ZipImportStatus.PARTIAL : ZipImportStatus.FAILED;
-        importMapper.updateStatus(importId, status, null, null);
-        return status;
+        return importMapper.updateStatus(importId, status, null, null, java.util.EnumSet.of(ZipImportStatus.IMPORTING)) == 1
+                ? status : null;
     }
 
     @Transactional
     public void expire(Long importId) {
-        importMapper.updateStatus(importId, ZipImportStatus.EXPIRED, null, null);
+        // 아직 가져오기를 시작하지 않은 것만 만료로 바꾼다 — findExpired가 IMPORTING을 건너뛰는 것과 같은 기준이고, 조회 뒤 그 사이
+        // 확정돼 IMPORTING이 됐으면 덮지 않는다. 원본 경로는 상태와 상관없이 비운다(파일은 이미 지웠다).
+        importMapper.updateStatus(importId, ZipImportStatus.EXPIRED, null, null,
+                java.util.EnumSet.of(ZipImportStatus.PREPARING, ZipImportStatus.READY));
         importMapper.clearStoragePath(importId);
     }
 

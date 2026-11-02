@@ -253,9 +253,9 @@
 - **대조 스크립트와 스냅샷** — `docs/sql/2026-11-02-existing-tables-snapshot.sql`이 CREATE 집합에 들어가, ※ 표 8개는 코드가 더 이상 쓰지 않게 돼도 "DDL도 코드 참조도 없는 표" 검사에 걸리지 않는다. 다른 두 검사(CREATE ⊆ 문서, 코드 참조 ⊆ 문서)는 그대로다. 스냅샷을 CREATE 집계에서 빼면(`--exclude='*-snapshot.sql'`) 이전 의미로 돌아간다. 상태: **검토 전**
 
 - **상태 전이 보호 없음 (2026-11-02 전수 확인)** — 근거·판정은 감사 표 `docs/handoff/state-transition-audit-2026-11-02.md`. 급한 순서:
-  1. 옛 초안 조각 재생성(`PlanDraftService.regenerateItems` → `:494`): 잠금 없이 PROPOSED 확인 → 모델 호출 → 옛 초안을 조건 없이 DISMISSED. 그 사이 확정하면 APPLIED가 DISMISSED로 덮인다. 같은 파일 `persistSuperseding`(`:363-367`)처럼 `FOR UPDATE` 후 PROPOSED 확인으로 맞춘다. 상태: **후속 작업**
-  2. 자료 분석 apply·dismiss(`CourseMaterialAnalysisMapper.xml:68`): 위 「조건 없는 상태 전이」 항목. 상태: **후속 작업**
-  3. ZIP 가져오기 상태(`ZipImportMapper.xml:48`): 스케줄러 `finishIfDone`이 취소한 가져오기를 완료로 뒤집을 수 있고, `confirm`·`retryEntry`·`cancel`·`expire`가 서로 덮는다. 상태: **후속 작업**
+  1. 옛 초안 조각 재생성(`PlanDraftService.regenerateItems` → `:494`): 잠금 없이 PROPOSED 확인 → 모델 호출 → 옛 초안을 조건 없이 DISMISSED. 그 사이 확정하면 APPLIED가 DISMISSED로 덮인다. 같은 파일 `persistSuperseding`(`:363-367`)처럼 `FOR UPDATE` 후 PROPOSED 확인으로 맞춘다. 상태: **해결(2026-11-02, 재생성도 `persistSuperseding`으로 저장)**
+  2. 자료 분석 apply·dismiss(`CourseMaterialAnalysisMapper.xml:68`): 위 「조건 없는 상태 전이」 항목. 상태: **해결(2026-11-02, 행 잠금 + 조건부 갱신·0행 409)**
+  3. ZIP 가져오기 상태(`ZipImportMapper.xml:48`): 스케줄러 `finishIfDone`이 취소한 가져오기를 완료로 뒤집을 수 있고, `confirm`·`retryEntry`·`cancel`·`expire`가 서로 덮는다. 상태: **해결(2026-11-02, `updateStatus`에 전이 조건 `from`)**. 남은 것: 만료 정리가 파일을 먼저 지운 뒤 상태를 바꾸므로, 조회와 삭제 사이에 확정하면 가져오기가 "원본 없음"으로 실패할 수 있다(상태는 IMPORTING 그대로).
   4. 학습 추천 초안 생성(`StudyRecommendationMapper.xml:49`, `PlanningAgentService.createDraft`): 두 번이면 제안이 둘. 화면 미사용이라 우선순위 낮음. 상태: **후속 작업**
   5. 학습 진행 수동 변경(`TopicService.updateProgressStatus`)의 이력 중복, 업로드 묶음 `touch`의 STAGED → UPLOADING 덮어쓰기: 영향 작음. 상태: **후속 작업**
   - 표시만: 토픽 변경안 생성(`TopicChangeProposalService.create`)은 상태 꼬임이지만 **기본 꺼짐**(`link-jobs.enabled=false`) — 켜기 전에 고친다. `markSentToPlanning`은 **도달 없음**.

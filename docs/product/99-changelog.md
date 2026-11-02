@@ -1,5 +1,14 @@
 # 99. Change Log
 
+## 2026-11-02 — 상태 전이 동시성 결함 세 곳을 고친다
+
+감사 `docs/handoff/state-transition-audit-2026-11-02.md`의 급한 순서 1~3.
+
+- 계획 초안 "조각만 다시 만들기": 저장을 `persistSuperseding`(원본 `FOR UPDATE` 후 PROPOSED 확인)으로 바꿨다. 모델 호출 동안 원본을 확정하면 409(`E409_020`)이고 새 초안을 저장하지 않는다 — 예전엔 확정된 제안을 DISMISSED로 덮었다.
+- 자료 분석 적용·버리기: 분석 행을 `lockByIdAndUserId`(FOR UPDATE)로 잡고 DRAFT가 아니면 409(`E409_054` 새 코드, 예전 400 `E400_017`은 편집에만 남음). 상태 UPDATE에 `user_id`·`status = 'DRAFT'` 조건, 반환 `int`, 0행이면 409로 토픽·노트 쓰기까지 되돌린다.
+- ZIP 가져오기: `ZipImportMapper.updateStatus`가 허용 이전 상태 `from`을 받아 `status IN (…)`으로만 바꾼다. 마무리는 IMPORTING에서만(취소한 가져오기가 대기 항목 실패 처리 뒤 PARTIAL·FAILED로 뒤집히던 것), 취소는 끝나지 않은 상태에서만, 만료는 PREPARING·READY에서만, 확정·재시도는 IMPORTABLE에서만이고 한 트랜잭션·0행이면 409(`E409_024`). 목록 준비(`updateListing`)는 PREPARING에서만.
+- 동시 요청 재현 테스트(DB)는 두지 않았다. 단위 테스트로 각 경로가 잠금·조건을 쓰고 0행을 처리하는지 고정했다.
+
 ## 2026-11-01 — 통합 기획서 v6.2를 현재 코드와 대조해 v7.0으로 다시 쓴다
 
 코드 변경 없음. 사용자가 쓴 「통합 기획서 v6.2(2026-07-31)」를 코드와 대조하고 외부 검토안도 함께 따졌다. 결과는 통합 기획서 v7.0(저장소 밖, 웹 채팅 프로젝트 지식용).
