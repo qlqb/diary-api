@@ -284,7 +284,12 @@ public class PlanDraftService {
         PlanningContext context = planningContextBuilder.build(spec);
         Generated generated = withItems(spec, context, planJudgmentService.applyUserMarks(strategy, context));
         log.info("조각만 재생성: userId={}, 원본 proposalId={}", userId, proposalId);
-        return persist(userId, generated, null, null, proposalId);
+        /*
+         * 위의 PROPOSED 확인은 잠그지 않고 읽은 값이고, 그 뒤 조각 생성(모델 호출)이 수십 초 걸린다. 그 사이 사용자가 화면에
+         * 떠 있는 원본을 확정할 수 있다. 저장 순간 원본을 잠그고 다시 확인해야 확정된 제안을 DISMISSED로 덮지 않는다 —
+         * 같은 조건으로 다시 만들기(redraft)와 같은 저장 경로를 쓴다.
+         */
+        return persistSuperseding(userId, generated, null, proposalId);
     }
 
     /**
