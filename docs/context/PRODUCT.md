@@ -141,7 +141,7 @@ v6.2 이름과의 차이: `plans`/`plan_items` → `plan_versions`, `context_ite
 - 스택: React 19 + Vite 7 + Tailwind 4 / Java 21 · Spring Boot 4 · Spring Security + JWT · MyBatis(JPA 없음) · Spring AI 2.0(OpenAI) · Timefold 2.4 / MySQL·MariaDB(마이그레이션은 `docs/sql` 수동 적용).
 - AI 키는 서버에만. 모델 이름은 설정값. `AI_PROVIDER=none`이면 AI 경로만 503.
 - 소유권: 모든 조회·수정에 `user_id` 조건.
-- 동시성: 모든 쓰기가 `version` CAS(불일치 409). 변경 묶음은 revision·멱등 키·범위 지문(검토 뒤 일정이 바뀌면 STALE 409)까지 본다.
+- 동시성: `version` 열이 있는 표는 `version` CAS(불일치 409), 상태 전이는 조건부 UPDATE(`WHERE status = …`, 0행이면 409)나 `FOR UPDATE` 뒤 확인으로 보호하는 것이 규칙이다(CONVENTIONS.md). 이 규칙을 지키지 않는 상태 갱신이 남아 있다 — 2026-11-02 확인: 자료 분석 apply·dismiss, 학습 추천 초안·적용. 조건 없는 상태 UPDATE 후보는 기계 집계로 20곳이고 그중 2곳만 잠금 부재를 직접 확인했다(07번). 변경 묶음은 revision·멱등 키·범위 지문(검토 뒤 일정이 바뀌면 STALE 409)까지 본다.
 - **시간 겹침 재검증**: `version`은 같은 항목을 두 번 고치는 것만 막고, 서로 다른 항목이 같은 시간으로 가는 것은 못 막는다. 계획 확정은 약속·시각 있는 조각·반복 일정을 잠금 조회로 다시 읽어 하나라도 겹치면 전체를 거절한다(`PlanConfirmScheduleGuard`). **상담 변경 묶음과 일반 AI 제안 적용에는 이 검사가 없다**(미결 §10.4).
 - 실패: 생성 실패 시 입력 보존·재시도, 파싱 실패 시 적용 가능한 제안을 만들지 않음, 충돌 시 "변경안을 만든 뒤 원본이 바뀌었어요" + 다시 계산. 서버 오류 코드를 그대로 노출하지 않는다.
 - AI 입력 최소화: 요청에 필요한 계획·제약·최근 결과·근거만 싣는다. 일기 원문은 사용자가 첨부할 때만.
