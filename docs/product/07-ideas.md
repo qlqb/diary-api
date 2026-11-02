@@ -242,7 +242,7 @@
 
 아이디어가 아니라 코드에서 확인한 사실이다(로컬 ObjectMapper 항목과 같은 "후속 작업" 성격). 고치면 이 절에서 지우지 말고 상태만 바꾼다.
 
-- **조건 없는 상태 전이** — 자료 분석 apply·dismiss: `CourseMaterialAnalysisMapper.xml:68-72` `WHERE analysis_id = #{analysisId}`뿐(status·user_id 조건 없음. version 열이 없는 단방향 상태 표라 status 조건이 맞는 방법), 매퍼 반환형 `void`(`CourseMaterialAnalysisMapper.java:57`), 행 잠금 없음. 같은 모양: 학습 추천 `StudyRecommendationMapper.xml:45-53`(`updateStatus`·`attachProposal`), 읽기는 `FOR UPDATE` 없는 `findByIdAndUserId`(`:34-36`)이고 상태 확인은 메모리에서(`PlanningAgentService.java:113`). 고치는 모양: `AND user_id = … AND status = …` + 반환형 `int` + 0행 409, 또는 맨 앞 `lock*`(`FOR UPDATE`) — CONVENTIONS.md 「상태 전이」 규칙. 동시 apply 재현 테스트를 같이 둔다. status·version·lease 조건 없이 status를 바꾸는 UPDATE는 기계 집계로 20곳이고 대부분 앞에서 `FOR UPDATE`로 잡지만, 잠금 여부를 직접 확인한 것은 위 두 경로뿐이다 — 나머지는 전수 확인 필요. 상태: **후속 작업**
+- **조건 없는 상태 전이** — 자료 분석 apply·dismiss: `CourseMaterialAnalysisMapper.xml:68-72` `WHERE analysis_id = #{analysisId}`뿐(status·user_id 조건 없음. version 열이 없는 단방향 상태 표라 status 조건이 맞는 방법), 매퍼 반환형 `void`(`CourseMaterialAnalysisMapper.java:57`), 행 잠금 없음. 같은 모양: 학습 추천 `StudyRecommendationMapper.xml:45-53`(`updateStatus`·`attachProposal`), 읽기는 `FOR UPDATE` 없는 `findByIdAndUserId`(`:34-36`)이고 상태 확인은 메모리에서(`PlanningAgentService.java:113`). 고치는 모양: `AND user_id = … AND status = …` + 반환형 `int` + 0행 409, 또는 맨 앞 `lock*`(`FOR UPDATE`) — CONVENTIONS.md 「상태 전이」 규칙. 동시 apply 재현 테스트를 같이 둔다. 2026-11-02 전수 확인으로 대체됐다 — 아래 「상태 전이 보호 없음」 항목들과 감사 표 `docs/handoff/state-transition-audit-2026-11-02.md`. 학습 추천 **적용**은 제안 행 잠금으로 보호돼 있었다. 상태: **후속 작업**
 - **`FindAssignmentsTool` 설명의 `ESTIMATED`** — `FindAssignmentsTool.java:33`이 마감 출처로 `ESTIMATED 추정`을 알려 주지만 그 값을 쓰는 코드가 없고(쓰기는 `DueSource.SOURCE`·`USER`뿐: `CourseAssignmentService.java:123, 284, 330`) DB 0건이다. 설명에서 뺄지, 서버가 추정 마감을 쓰기 시작할지 정한다. 상태: **검토 전**
 - **`FindTasksTool` 설명** — `PLANNED 할 일, DONE 완료, HOLD 보류` 세 값만 적지만 결과는 그 행의 상태를 그대로 보낸다(`FindTasksTool.java:69`). `ExecutionStatus.PARTIAL`·`CANCELLED`를 쓰기 시작하면 설명도 같이 고친다. 상태: **조건부**
 - **`TopicChangeProposalService.java:43` 클래스 주석** — "트리 버전이 맞지 않으면 CONFLICT로 남기고 409"라고 적지만 그 서비스는 `TopicChangeProposalStatus.CONFLICT`를 쓰지 않는다(쓰는 값: PROPOSED·APPLIED·DISMISSED·EMPTY·STALE·SUPERSEDED). 주석을 코드에 맞춘다. 상태: **후속 작업**
@@ -251,3 +251,12 @@
 - **`*.java`도 LF로 받을지** — 2026-09에 `PeriodPlanDraftGenerator.java`가 `
 `으로 손상된 일이 있었다. 저장소 안은 전부 LF(`git ls-files --eol`)라 `.gitattributes`에 넣어도 커밋 diff는 없지만, 모든 로컬 체크아웃의 Java 줄바꿈이 바뀐다. 상태: **검토 전**
 - **대조 스크립트와 스냅샷** — `docs/sql/2026-11-02-existing-tables-snapshot.sql`이 CREATE 집합에 들어가, ※ 표 8개는 코드가 더 이상 쓰지 않게 돼도 "DDL도 코드 참조도 없는 표" 검사에 걸리지 않는다. 다른 두 검사(CREATE ⊆ 문서, 코드 참조 ⊆ 문서)는 그대로다. 스냅샷을 CREATE 집계에서 빼면(`--exclude='*-snapshot.sql'`) 이전 의미로 돌아간다. 상태: **검토 전**
+
+- **상태 전이 보호 없음 (2026-11-02 전수 확인)** — 근거·판정은 감사 표 `docs/handoff/state-transition-audit-2026-11-02.md`. 급한 순서:
+  1. 옛 초안 조각 재생성(`PlanDraftService.regenerateItems` → `:494`): 잠금 없이 PROPOSED 확인 → 모델 호출 → 옛 초안을 조건 없이 DISMISSED. 그 사이 확정하면 APPLIED가 DISMISSED로 덮인다. 같은 파일 `persistSuperseding`(`:363-367`)처럼 `FOR UPDATE` 후 PROPOSED 확인으로 맞춘다. 상태: **후속 작업**
+  2. 자료 분석 apply·dismiss(`CourseMaterialAnalysisMapper.xml:68`): 위 「조건 없는 상태 전이」 항목. 상태: **후속 작업**
+  3. ZIP 가져오기 상태(`ZipImportMapper.xml:48`): 스케줄러 `finishIfDone`이 취소한 가져오기를 완료로 뒤집을 수 있고, `confirm`·`retryEntry`·`cancel`·`expire`가 서로 덮는다. 상태: **후속 작업**
+  4. 학습 추천 초안 생성(`StudyRecommendationMapper.xml:49`, `PlanningAgentService.createDraft`): 두 번이면 제안이 둘. 화면 미사용이라 우선순위 낮음. 상태: **후속 작업**
+  5. 학습 진행 수동 변경(`TopicService.updateProgressStatus`)의 이력 중복, 업로드 묶음 `touch`의 STAGED → UPLOADING 덮어쓰기: 영향 작음. 상태: **후속 작업**
+  - 표시만: 토픽 변경안 생성(`TopicChangeProposalService.create`)은 상태 꼬임이지만 **기본 꺼짐**(`link-jobs.enabled=false`) — 켜기 전에 고친다. `markSentToPlanning`은 **도달 없음**.
+  - 알려진 공백: INSERT 중복, 읽고-통째로-쓰기 패턴은 전수로 보지 않았다.
