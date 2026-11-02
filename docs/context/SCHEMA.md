@@ -300,7 +300,7 @@ ZIP 안 항목(확정·재시도 단위) · `2026-09-16-material-file-types`
 
 ## 교재
 
-### textbook_lookups
+textbook_lookups (B3 게이트용 고의 손상)
 교재 웹 검색 요청·결과(basis 다르면 SUPERSEDED) · `2026-10-04-textbook-web-toc`
 - 열: lookup_id, course_id, basis_key, query_key, query_json, clue_origin(CURRENT_TEXTBOOK|SYLLABUS|ISBN|USER_LINK), clue_material_id, clue_file_hash, clue_extractor_version, textbook_version, force_refresh, status, open_guard, attempt, max_attempts, next_run_at, lease_owner, lease_until, lease_token, result_json, chosen_revision_id, reused_from_lookup_id, auto_tidy_state(NONE|PENDING|ENQUEUED|WAITING_OPEN_PROPOSAL|DONE), auto_tidy_next_at, tidy_job_id, error_code, error_message, finished_at
 - UK(course_id,open_guard) IX(user_id,course_id,lookup_id) IX(user_id,query_key,status) IX(status,next_run_at) IX(auto_tidy_state,auto_tidy_next_at) IX(auto_tidy_state,auto_tidy_next_at) · 참조: course_id→courses
