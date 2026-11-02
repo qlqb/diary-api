@@ -119,7 +119,7 @@
 **TopicStatus** `ACTIVE → ARCHIVED`(병합으로만, `merged_into_topic_id`). **TopicSourceType** `SOURCE | AI_DERIVED`.
 **TopicProgressStatus** `NOT_STARTED | IN_PROGRESS | LEARNED` — 행이 없으면 NOT_STARTED. 수동 PATCH는 아무 값 → 아무 값(이력 `topic_learning_events` STATUS_CHANGED). 실행 완료는 LEARNED가 아니면 IN_PROGRESS로, LEARNED면 review_count+1(LEARNED로는 올리지 않음).
 **TopicUserMark** `KNOWN | DEFER | null` — 진행 상태와 별개 축, 아무 값 → 아무 값.
-**RecommendationStatus** `SUGGESTED → PLANNED`(planning agent 적용). `SENT_TO_PLANNING` 쓰는 경로는 호출자 없음, `DISMISSED`는 쓰는 코드 없음. **ActivityType** `NEW_LEARNING REVIEW CONTINUE SKIP`.
+**RecommendationStatus** `SUGGESTED → SENT_TO_PLANNING`(planning agent 초안 생성 `PlanningAgentService.createDraft`, SUGGESTED에서만) `→ PLANNED`(planning agent 적용). 같은 값을 쓰는 `markSentToPlanning`은 호출자 없음, `DISMISSED`는 쓰는 코드 없음. diary-ui는 추천·planning API를 정의만 하고 부르지 않는다. **ActivityType** `NEW_LEARNING REVIEW CONTINUE SKIP`.
 **AssignmentConfirmStatus** `CANDIDATE`(자료 분석이 만듦) / `CONFIRMED`(직접 생성·AI 모듈) → answer로 `CONFIRMED | NOT_ASSIGNMENT | LATER | DUPLICATE`(FROM 조건 없음, version CAS, DUPLICATE는 다른 과제 id 필요). **DueKind** `UNKNOWN NONE DATE DATETIME` · **DueSource** `SOURCE | USER`(`ESTIMATED`는 쓰는 코드 없음 — ⚠05·15번은 있다고 적음).
 
 **교재 조회** `textbook_lookups.status`(CHECK, enum 아님): QUEUED → RUNNING(claim) → `FOUND | BOOK_NO_TOC | NEEDS_CHOICE | NOT_FOUND | ACCESS_FAILED | FAILED`, 단서 경로는 `NOT_FOUND | CLUE_CONFLICT`. 근거(basis)가 바뀌거나 과목 보관·재시도·판 선택이면 열린 조회 → SUPERSEDED. `CANCELLED`·`DISABLED`는 쓰는 코드 없음.
