@@ -65,10 +65,12 @@ class ZipImportTxServiceTest {
     }
 
     @Test
-    void 만료는_끝나지_않은_가져오기만_바꾸고_원본_경로는_비운다() {
+    void 만료는_시작_전_가져오기만_바꾸고_원본_경로는_비운다() {
         txService.expire(IMPORT);
 
-        verify(importMapper).updateStatus(IMPORT, ZipImportStatus.EXPIRED, null, null, ZipImportStatus.OPEN);
+        // findExpired처럼 IMPORTING은 만료로 덮지 않는다.
+        verify(importMapper).updateStatus(IMPORT, ZipImportStatus.EXPIRED, null, null,
+                EnumSet.of(ZipImportStatus.PREPARING, ZipImportStatus.READY));
         verify(importMapper).clearStoragePath(IMPORT);
     }
 

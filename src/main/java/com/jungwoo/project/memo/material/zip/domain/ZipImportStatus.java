@@ -23,7 +23,8 @@ public enum ZipImportStatus {
     EXPIRED;
 
     /**
-     * 아직 끝나지 않은 상태. 취소·기한 만료는 여기서만 갈 수 있다 — 끝난 가져오기를 취소·만료로 덮지 않는다.
+     * 아직 끝나지 않은 상태. 사용자 취소는 여기서만 갈 수 있다 — 끝난 가져오기를 취소로 덮지 않는다.
+     * (기한 만료는 더 좁다: 가져오는 중은 건너뛰므로 PREPARING·READY에서만 — ZipImportTxService.expire.)
      */
     public static final java.util.Set<ZipImportStatus> OPEN = java.util.EnumSet.of(PREPARING, READY, IMPORTING);
 

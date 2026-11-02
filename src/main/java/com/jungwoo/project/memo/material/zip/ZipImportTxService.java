@@ -88,8 +88,10 @@ public class ZipImportTxService {
 
     @Transactional
     public void expire(Long importId) {
-        // 끝나지 않은 가져오기만 만료로 바꾼다. 원본 경로는 상태와 상관없이 비운다(파일은 이미 지웠다).
-        importMapper.updateStatus(importId, ZipImportStatus.EXPIRED, null, null, ZipImportStatus.OPEN);
+        // 아직 가져오기를 시작하지 않은 것만 만료로 바꾼다 — findExpired가 IMPORTING을 건너뛰는 것과 같은 기준이고, 조회 뒤 그 사이
+        // 확정돼 IMPORTING이 됐으면 덮지 않는다. 원본 경로는 상태와 상관없이 비운다(파일은 이미 지웠다).
+        importMapper.updateStatus(importId, ZipImportStatus.EXPIRED, null, null,
+                java.util.EnumSet.of(ZipImportStatus.PREPARING, ZipImportStatus.READY));
         importMapper.clearStoragePath(importId);
     }
 
