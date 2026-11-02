@@ -1,11 +1,11 @@
 # SCHEMA — 테이블 요약 (diary-api, MariaDB)
 
-테이블 71개 = `docs/sql/*.sql`의 `CREATE TABLE` 63개 + 저장소에 DDL이 없는 핵심 8개(※ 표시).
+테이블 71개 = `docs/sql/*.sql`의 `CREATE TABLE` 71개. 그중 8개(※ 표시)는 마이그레이션이 아니라 2026-11-02에 DB에서 뜬 구조 스냅샷 `2026-11-02-existing-tables-snapshot.sql`(적용용 아님)에만 있다.
 전체 DDL은 싣지 않는다 — 필요하면 해당 마이그레이션 파일이나 `docs/product/05-database.md`를 첨부한다.
 
 - 표기: `열(값|값)` = CHECK 또는 문서로 고정된 enum 값. `created_at`·`updated_at`·`user_id`는 생략(user_id 없는 표는 아래 목록). PK는 첫 열이며 다를 때만 `PK(..)`로 적는다. UK = 유일, IX = 인덱스.
 - `user_id` 열이 없는 표: `diary_revisions`, `textbook_web_pages`, `textbook_web_revisions`, `learning_event_meta`, `learning_event_backfill`, `routine_weekdays`, `routine_exceptions`.
-- **물리 FK 없음**(2026-08-16 이후 규칙). `참조`는 `*_id` 이름으로 읽은 논리 참조이고, 소유권은 모든 조회의 `user_id` 조건으로 지킨다.
+- **물리 FK 없음**(2026-08-16 이후 규칙). 예외: 규칙 이전에 만든 ※ 표 8개에는 실제 FK 10개가 남아 있다(users·diaries·execution_items·ai_proposals 참조, `ai_proposal_items → ai_proposals`만 `ON DELETE CASCADE`). 코드는 이 표들을 물리 삭제하지 않는다. `참조`는 `*_id` 이름으로 읽은 논리 참조이고, 소유권은 모든 조회의 `user_id` 조건으로 지킨다.
 - 이름이 겹쳐 논리 참조를 적지 않은 열: `assignment_id`, `event_id`, `item_id`, `job_id`, `link_id`, `proposal_id`, `revision_id`, `suggestion_id` — 대상은 열 이름 접두나 05-database.md로 판단.
 - 마이그레이션 도구 없음 — `docs/sql/YYYY-MM-DD-*.sql`을 손으로 적용한다. 출처 열의 파일이 그 표를 만든 마이그레이션이다.
 - 쓰지 않지만 DB에 남은 표: `daily_states`, `context_items`, `legacy_execution_item_map`. 지운 표: `todos`, `schedule_blocks`, `plan_items`, `plan_item_events`, `plan_item_context_links`, `daily_plans`(`2026-08-23-remove-legacy-tables.sql`).
@@ -14,32 +14,32 @@
 ## 사용자·일기
 
 ### users
-계정(이메일·bcrypt 해시·닉네임·역할·상태) · `※ DDL 없음, UserMapper.xml`
+계정(이메일·bcrypt 해시·닉네임·역할·상태) · `※ 스냅샷, UserMapper.xml`
 - 열: user_id, email, password_hash, nickname, role, status, last_login_at
 
 ### diaries
-일기 본문(기분·공개범위·날씨·즐겨찾기, soft delete) · `※ DDL 없음, DiaryMapper.xml`
+일기 본문(기분·공개범위·날씨·즐겨찾기, soft delete) · `※ 스냅샷, DiaryMapper.xml`
 - 열: diary_id, written_date, title, content, mood, visibility, weather, is_favorite, is_deleted
 
 ### diary_revisions
-일기 수정 이력 스냅샷(복구용) · `※ DDL 없음, DiaryRevisionMapper.xml`
+일기 수정 이력 스냅샷(복구용) · `※ 스냅샷, DiaryRevisionMapper.xml`
 - 열: revision_id, diary_id, written_date, title, content, mood, visibility, weather, is_favorite, edited_at
 - 참조: diary_id→diaries
 
 ## 실행
 
 ### execution_items
-실행 항목 — Todo·ScheduleBlock 통합 원본. 배치 3종(UNSCHEDULED/DATE_ONLY/TIME_FIXED) · `※ DDL 없음, 05 §7`
+실행 항목 — Todo·ScheduleBlock 통합 원본. 배치 3종(UNSCHEDULED/DATE_ONLY/TIME_FIXED) · `※ 스냅샷, 05 §7`
 - 열: execution_item_id, source_execution_item_id, title, description, placement_type(UNSCHEDULED|DATE_ONLY|TIME_FIXED), scheduled_date, scheduled_start_at, scheduled_end_at, expected_minutes, status(PLANNED|PARTIAL|HOLD|DONE|CANCELLED), priority(MUST|SHOULD|OPTIONAL), order_index, routine_id, origin_type, modified_after_creation, version, is_deleted, topic_id, course_id, plan_version_id, planning_start_date, planning_end_date, deadline_at
 - 참조: routine_id→routines, topic_id→course_topics, course_id→courses, plan_version_id→plan_versions
 
 ### execution_records
-실행 결과 기록(COMPLETED 100%/PARTIAL 1~99%+남은 조각/NOT_DONE 0%) · `※ DDL 없음, 05 §8`
+실행 결과 기록(COMPLETED 100%/PARTIAL 1~99%+남은 조각/NOT_DONE 0%) · `※ 스냅샷, 05 §8`
 - 열: execution_record_id, execution_item_id, outcome(COMPLETED|PARTIAL|NOT_DONE), started_at, ended_at, actual_minutes, completion_percent, note, remaining_execution_item_id, recorded_at, blocker_kind, support_level, stuck_step
 - 참조: execution_item_id→execution_items
 
 ### execution_item_events
-실행 항목 상태 변화 이벤트(완료·부분·미수행은 record로 남김) · `※ DDL 없음, 05 §9`
+실행 항목 상태 변화 이벤트(완료·부분·미수행은 record로 남김) · `※ 스냅샷, 05 §9`
 - 열: execution_item_event_id, execution_item_id, related_execution_item_id, event_type, reason, before_state, after_state, before_version, after_version, actor_type(USER|AI|SYSTEM|MIGRATION|UNKNOWN), occurred_at
 - 참조: execution_item_id→execution_items
 
@@ -103,12 +103,12 @@
 - UK(conversation_id) IX(user_id,updated_at) · 참조: conversation_id→ai_conversations
 
 ### ai_proposals
-승인 전 AI 제안(초안). 계획 초안 상태·근거·검토 상태 열 포함 · `※ DDL 없음, 05 §10`
+승인 전 AI 제안(초안). 계획 초안 상태·근거·검토 상태 열 포함 · `※ 스냅샷, 05 §10`
 - 열: proposal_id, conversation_id, source_message_id, target_scope(PLAN|TODAY|EXECUTION|CONTEXT|MIXED), status(PROPOSED|APPLIED|MODIFIED_APPLIED|DISMISSED|EXPIRED), expires_at, responded_at, unavailable_windows, plan_intensity, plan_target_minutes, plan_start_date, plan_end_date, plan_strategy_json, plan_provenance_json, review_state_json
 - UK(source_message_id) · 참조: conversation_id→ai_conversations
 
 ### ai_proposal_items
-제안 항목(원본/편집 payload, 생성된 대상) · `※ DDL 없음, 05 §10`
+제안 항목(원본/편집 payload, 생성된 대상) · `※ 스냅샷, 05 §10`
 - 열: proposal_item_id, proposal_id, item_type(PLAN_ITEM|EXECUTION_ITEM|CONTEXT_ITEM), original_payload, edited_payload, target_item_id, base_version, status(PROPOSED|APPLIED|MODIFIED_APPLIED|DISMISSED|EXPIRED), created_item_type, created_item_id, responded_at, evidence_json
 
 ### ai_proposal_schedule_previews
