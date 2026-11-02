@@ -84,7 +84,7 @@ public class ScheduleImageImportController {
             throw new BadRequestException(ErrorCode.INVALID_IMAGE);
         }
         if (image.getSize() > MAX_IMAGE_BYTES) {
-            throw new BadRequestException(ErrorCode.INVALID_IMAGE);
+            throw new BadRequestException(ErrorCode.IMAGE_TOO_LARGE);
         }
         String contentType = image.getContentType();
         if (contentType == null
