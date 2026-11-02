@@ -22,6 +22,18 @@ public enum ZipImportStatus {
     /** 보관 기한이 지나 원본 압축 파일을 지웠다. 이미 만든 자료는 그대로 남는다. */
     EXPIRED;
 
+    /**
+     * 아직 끝나지 않은 상태. 취소·기한 만료는 여기서만 갈 수 있다 — 끝난 가져오기를 취소·만료로 덮지 않는다.
+     */
+    public static final java.util.Set<ZipImportStatus> OPEN = java.util.EnumSet.of(PREPARING, READY, IMPORTING);
+
+    /**
+     * IMPORTING으로 갈 수 있는 상태(확정·재시도). 끝난 뒤에도 원본이 남아 있으면 고르지 않은 파일을 더 가져오거나 실패한
+     * 파일을 다시 시도할 수 있어 COMPLETED·PARTIAL·FAILED를 포함한다. CANCELLED·EXPIRED·PREPARING은 뺀다.
+     */
+    public static final java.util.Set<ZipImportStatus> IMPORTABLE =
+            java.util.EnumSet.of(READY, IMPORTING, COMPLETED, PARTIAL, FAILED);
+
     public boolean terminal() {
         return this == COMPLETED || this == PARTIAL || this == FAILED || this == CANCELLED || this == EXPIRED;
     }

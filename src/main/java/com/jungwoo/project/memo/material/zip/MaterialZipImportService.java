@@ -106,7 +106,8 @@ public class MaterialZipImportService {
         try {
             listing = archiveReader.list(fileStorageService.resolve(stored.storagePath()), limits());
         } catch (ZipArchiveReader.ZipArchiveException e) {
-            importMapper.updateStatus(zipImport.getImportId(), ZipImportStatus.FAILED, "E400_014", e.getMessage());
+            importMapper.updateStatus(zipImport.getImportId(), ZipImportStatus.FAILED, "E400_014", e.getMessage(),
+                    java.util.EnumSet.of(ZipImportStatus.PREPARING));
             fileStorageService.deleteQuietly(null, stored.storagePath());
             importMapper.clearStoragePath(zipImport.getImportId());
             throw new BadRequestException(ErrorCode.UNSUPPORTED_FILE_TYPE, e.getMessage());
@@ -154,7 +155,11 @@ public class MaterialZipImportService {
     /**
      * 고른 항목을 확정한다. 여기서 바로 자료를 만들지 않고 대기열에만 넣는다 — 응답이 유실돼도,
      * 사용자가 화면을 닫아도, 같은 확정이 두 번 와도 결과가 같아야 하기 때문이다.
+     *
+     * <p>대기열 넣기·상태 전이·분석 묶음을 한 트랜잭션으로 묶는다. 위의 상태 확인은 잠그지 않고 읽은 값이라, 그 사이 취소·만료가
+     * 끼면 IMPORTING 전이가 0행이 된다 — 그때는 409로 대기열 넣기까지 되돌린다.
      */
+    @Transactional
     public ZipImportResponse confirm(Long userId, Long importId, List<Long> entryIds) {
         ZipImport zipImport = owned(userId, importId);
         // 한 번 확정한 뒤에도, 고르지 않고 남겨 둔 파일을 나중에 더 가져올 수 있어야 한다. 기준은 상태가 아니라
@@ -178,7 +183,9 @@ public class MaterialZipImportService {
         }
         int queued = entryMapper.queueSelected(importId, userId, entryIds);
         if (queued > 0) {
-            importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null);
+            if (importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null, ZipImportStatus.IMPORTABLE) != 1) {
+                throw new ConflictException(ErrorCode.ZIP_IMPORT_NOT_READY);
+            }
             /*
              * 가져올 파일이 지금 정해졌다. 분석 묶음을 이때 연다 — 분모가 확정 목록으로 고정된다.
              * 압축을 올린 직후(탐색 중)에는 무엇이 들어 있는지 모르므로 묶음을 만들지 않는다.
@@ -199,7 +206,11 @@ public class MaterialZipImportService {
         return get(userId, importId);
     }
 
-    /** 실패한 항목 하나만 다시. 이미 자료가 된 항목은 대상이 아니다(삭제됐더라도 다시 만들지 않는다). */
+    /**
+     * 실패한 항목 하나만 다시. 이미 자료가 된 항목은 대상이 아니다(삭제됐더라도 다시 만들지 않는다).
+     * 확정과 같이 한 트랜잭션이고, 그 사이 취소·만료됐으면 409로 되돌린다.
+     */
+    @Transactional
     public ZipImportResponse retryEntry(Long userId, Long importId, Long entryId) {
         ZipImport zipImport = owned(userId, importId);
         ZipImportEntry entry = entryMapper.findByIdAndUserId(entryId, userId);
@@ -213,7 +224,9 @@ public class MaterialZipImportService {
             throw new ConflictException(ErrorCode.ZIP_IMPORT_ARCHIVE_EXPIRED);
         }
         entryMapper.queueSelected(importId, userId, List.of(entryId));
-        importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null);
+        if (importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null, ZipImportStatus.IMPORTABLE) != 1) {
+            throw new ConflictException(ErrorCode.ZIP_IMPORT_NOT_READY);
+        }
         // 그 항목의 분석 자리도 대기로 되돌리고, 묶음이 끝나 있었으면 다시 연다.
         batchService.retryZipEntry(userId, entryId);
         return get(userId, importId);
@@ -225,7 +238,10 @@ public class MaterialZipImportService {
         if (zipImport.getStatus().terminal()) {
             return get(userId, importId);
         }
-        importMapper.updateStatus(importId, ZipImportStatus.CANCELLED, null, null);
+        if (importMapper.updateStatus(importId, ZipImportStatus.CANCELLED, null, null, ZipImportStatus.OPEN) != 1) {
+            // 읽은 뒤 그 사이 끝났다(완료·만료 등). 끝난 가져오기는 취소로 덮지 않고 지금 상태를 돌려준다.
+            return get(userId, importId);
+        }
         // 아직 가져오지 않은 자리는 거둔다. 이미 가져온 자료의 분석은 그대로 이어진다.
         batchService.abandonZipImport(userId, importId);
         if (zipImport.getStoragePath() != null) {

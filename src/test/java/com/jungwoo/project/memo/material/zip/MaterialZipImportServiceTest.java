@@ -96,10 +96,14 @@ class MaterialZipImportServiceTest {
         when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.COMPLETED, null));
         when(entryMapper.queueSelected(IMPORT, USER, List.of(9L))).thenReturn(1);
         when(entryMapper.findByImportId(IMPORT, USER)).thenReturn(List.of(entry(ZipEntryStatus.QUEUED, null)));
+        // COMPLETED도 IMPORTING으로 갈 수 있는 상태 집합(IMPORTABLE)에 들어 있다.
+        when(importMapper.updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null),
+                eq(ZipImportStatus.IMPORTABLE))).thenReturn(1);
 
         service.confirm(USER, IMPORT, List.of(9L));
 
         verify(entryMapper).queueSelected(IMPORT, USER, List.of(9L));
+        assertThat(ZipImportStatus.IMPORTABLE).contains(ZipImportStatus.COMPLETED);
     }
 
     @Test
@@ -140,11 +144,14 @@ class MaterialZipImportServiceTest {
         when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.READY, null));
         when(entryMapper.queueSelected(IMPORT, USER, List.of(9L))).thenReturn(1);
         when(entryMapper.findByImportId(IMPORT, USER)).thenReturn(List.of(entry(ZipEntryStatus.QUEUED, null)));
+        when(importMapper.updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null),
+                eq(ZipImportStatus.IMPORTABLE))).thenReturn(1);
 
         service.confirm(USER, IMPORT, List.of(9L));
 
         verify(entryMapper).queueSelected(IMPORT, USER, List.of(9L));
-        verify(importMapper).updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null));
+        verify(importMapper).updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null),
+                eq(ZipImportStatus.IMPORTABLE));
         // 가져올 파일이 정해진 순간 분석 묶음을 연다 — 대기열에 오른 항목만으로.
         verify(batchService).createForZip(eq(USER), any(), eq(IMPORT), argThat(items -> items.size() == 1
                 && items.get(0).entryId().equals(9L)));
@@ -190,15 +197,44 @@ class MaterialZipImportServiceTest {
         when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(ready);
         lenient().when(entryMapper.findByImportId(IMPORT, USER))
                 .thenReturn(List.of(entry(ZipEntryStatus.DONE, 123L)));
+        when(importMapper.updateStatus(IMPORT, ZipImportStatus.CANCELLED, null, null, ZipImportStatus.OPEN)).thenReturn(1);
 
         service.cancel(USER, IMPORT);
 
-        verify(importMapper).updateStatus(IMPORT, ZipImportStatus.CANCELLED, null, null);
+        verify(importMapper).updateStatus(IMPORT, ZipImportStatus.CANCELLED, null, null, ZipImportStatus.OPEN);
         // 아직 가져오지 않은 분석 자리를 거둔다.
         verify(batchService).abandonZipImport(USER, IMPORT);
         verify(fileStorageService).deleteQuietly(null, "zip-imports/7/a.zip");
         verify(importMapper).clearStoragePath(IMPORT);
         // 자료를 지우는 호출은 어디에도 없다.
-        verify(importMapper, never()).updateStatus(eq(IMPORT), eq(ZipImportStatus.FAILED), any(), any());
+        verify(importMapper, never()).updateStatus(eq(IMPORT), eq(ZipImportStatus.FAILED), any(), any(), any());
+    }
+
+    /** 읽은 뒤 그 사이 끝난 가져오기(예: 마지막 파일이 막 끝남)는 취소로 덮지 않고, 원본·분석 자리도 건드리지 않는다. */
+    @Test
+    void 그_사이_끝난_가져오기는_취소로_덮지_않는다() {
+        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.IMPORTING, null));
+        lenient().when(entryMapper.findByImportId(IMPORT, USER)).thenReturn(List.of());
+        when(importMapper.updateStatus(IMPORT, ZipImportStatus.CANCELLED, null, null, ZipImportStatus.OPEN)).thenReturn(0);
+
+        service.cancel(USER, IMPORT);
+
+        verify(batchService, never()).abandonZipImport(any(), any());
+        verify(fileStorageService, never()).deleteQuietly(any(), any());
+        verify(importMapper, never()).clearStoragePath(any());
+    }
+
+    /** 확정 직전 취소·만료가 끼었다: IMPORTING 전이가 0행이면 409로 대기열 넣기까지 되돌리고 분석 묶음을 열지 않는다. */
+    @Test
+    void 그_사이_취소된_가져오기는_확정하지_않는다() {
+        when(importMapper.findByIdAndUserId(IMPORT, USER)).thenReturn(zipImport(ZipImportStatus.READY, null));
+        when(entryMapper.queueSelected(IMPORT, USER, List.of(9L))).thenReturn(1);
+        when(importMapper.updateStatus(eq(IMPORT), eq(ZipImportStatus.IMPORTING), eq(null), eq(null),
+                eq(ZipImportStatus.IMPORTABLE))).thenReturn(0);
+
+        assertThatThrownBy(() -> service.confirm(USER, IMPORT, List.of(9L)))
+                .isInstanceOf(ConflictException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.ZIP_IMPORT_NOT_READY);
+        verify(batchService, never()).createForZip(any(), any(), any(), any());
     }
 }
