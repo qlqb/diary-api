@@ -82,10 +82,11 @@ echo "API: 애너테이션 $ANN = 엔드포인트 $ROWS + 클래스 prefix $PREF
 # 크기는 체크아웃된 파일 그대로 센다 — core.autocrlf=true인 Windows에서는 줄마다 CR 1바이트가
 # 더해져 CI(LF)보다 크게 나온다(2026-11-02 SCHEMA.md: LF 29,727B / CRLF 30,110B).
 #
-# SCHEMA.md 상한 근거(2026-11-02): 현재 29,727B ÷ 표 71개 = 표당 418B.
-#   docs/sql 최초 커밋 월별 CREATE TABLE(주석 줄 제외): 2026-08 +19(-6) · 2026-09 +27 · 2026-10 +17.
-#   한 달 최대 27개 × 418B × 12개월 = 135,432B. 29,727 + 135,432 = 165,159 → 1만 단위 올림 170,000.
-# 합계 상한: 기존 120,000 + SCHEMA 증가분 140,000 + 여유 30,000 = 290,000.
+# SCHEMA.md 상한(2026-11-02 재설정): "지금 크기의 두 배, 닿으면 쪼개는 신호"로 잡는다. 몇 달 버티는 숫자로
+# 잡으면(이전 식: 월 최대 27표 × 418B × 12 = 170,000) 사실상 무제한이 돼 요약의 목적을 잃는다.
+#   현재 29,689B(LF) → 60,000. 표 증가는 2026-08 +19(-6) · 09 +27 · 10 +17이었지만 10-07 이후 신규 표는 10-26의 3개뿐이다.
+#   월 21표(≈8.8KB)가 이어지면 3~4개월에 닿는다 — 그때 상한을 올리지 말고 SCHEMA.md를 영역별로 나눈다.
+# 합계 상한: 현재 합계 114,703B(LF, PRODUCT.md 포함) + SCHEMA 여유 30,000 + 다른 파일 여유 15,000 → 160,000.
 
 check_size() {
   local f="$CTX/$1" cap=$(($2 * 1000))
@@ -98,13 +99,13 @@ check_size MAP.md 6
 check_size PRODUCT.md 20
 check_size ARCHITECTURE.md 12
 check_size DOMAIN.md 20
-check_size SCHEMA.md 170
+check_size SCHEMA.md 60
 check_size API.md 25
 check_size CONVENTIONS.md 10
 check_size DECISIONS.md 15
 
 TOTAL="$(cat "$CTX"/*.md | wc -c)"
-[ "$TOTAL" -le 290000 ] || fail "docs/context 합계 ${TOTAL}B > 290000B"
+[ "$TOTAL" -le 160000 ] || fail "docs/context 합계 ${TOTAL}B > 160000B"
 
 [ "$STATUS" -eq 0 ] && echo "check-context-layer: 통과"
 exit "$STATUS"
