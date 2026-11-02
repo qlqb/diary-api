@@ -108,10 +108,10 @@
 - 결과 쓰기는 모두 `lease_token AND status='RUNNING'` + `FOR UPDATE`.
 - LINK 작업 생성은 기본 꺼짐(`link-jobs.enabled=false`). ⚠문서차이: 15번은 백로그가 LINK도 만든다고 적음, "3회 초과 실패"라 적었지만 코드는 3번째 실패에서 FAILED.
 
-**MaterialAnalysisStatus** `DRAFT → APPLIED | DISMISSED`, 실패는 FAILED로 삽입. 열린 DRAFT 하나(`draft_guard` 생성 열 + UNIQUE). 상태 UPDATE에 조건이 없어 동시 apply·dismiss는 DB가 직렬화하지 않는다(코드 관찰).
+**MaterialAnalysisStatus** `DRAFT → APPLIED | DISMISSED`, 실패는 FAILED로 삽입. 열린 DRAFT 하나(`draft_guard` 생성 열 + UNIQUE). apply·dismiss는 분석 행을 `lockByIdAndUserId`(FOR UPDATE)로 잡고 DRAFT가 아니면 409(`E409_054`), 상태 UPDATE도 `AND user_id … AND status = 'DRAFT'`·0행이면 409(2026-11-02).
 **TopicChangeProposalStatus** (2026-09-21 이후 이력 전용) `PROPOSED → APPLIED | DISMISSED | STALE`, 빈 op는 EMPTY, 마이그레이션이 SUPERSEDED. `CONFLICT`는 쓰는 코드 없음.
 **BatchStatus** `STAGED → UPLOADING → … → FINISHED ⇄ ANALYZING`, STAGED 24h 방치 → ABANDONED. ANALYZING은 응답 계산값이고 저장은 FINISHED → ANALYZING(재시도·재추출)뿐. **BatchItemUploadState** `STAGED|UPLOADING → UPLOADED | NO_TEXT | UPLOAD_FAILED | ABANDONED(30분 고아·ZIP 취소)`, ZIP 재시도 시 → STAGED.
-**ZipImportStatus** `PREPARING → READY | FAILED`, confirm → IMPORTING → `COMPLETED | PARTIAL | FAILED`, cancel → CANCELLED, 기한 지난 비종결(IMPORTING 제외) → EXPIRED. **ZipEntryStatus** `PENDING|FAILED → QUEUED → IMPORTING → DONE | FAILED`, 재시도는 FAILED에서만.
+**ZipImportStatus** `PREPARING → READY | FAILED`, confirm → IMPORTING → `COMPLETED | PARTIAL | FAILED`, cancel → CANCELLED, 기한 지난 비종결(IMPORTING 제외) → EXPIRED. 모든 전이는 `updateStatus(…, from)`의 `status IN (from)` 조건으로만(2026-11-02): 마무리(`finishIfDone`)는 IMPORTING에서만, 취소는 PREPARING·READY·IMPORTING에서만, 만료는 PREPARING·READY에서만, 확정·재시도(IMPORTING)는 READY·IMPORTING·COMPLETED·PARTIAL·FAILED에서만(0행이면 409로 되돌림), 목록 준비(READY)는 PREPARING에서만. **ZipEntryStatus** `PENDING|FAILED → QUEUED → IMPORTING → DONE | FAILED`, 재시도는 FAILED에서만.
 
 ## 프로젝트·학습
 
