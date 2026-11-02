@@ -19,6 +19,7 @@
 | `learning-events-stage1-plan-2026-10-06.md`, `learning-events-stage1-2026-10-06.md` | 완료(1단계) | 20번 §14.1 |
 | `plan-intent-preservation-plan-2026-10-18.md`, `plan-intent-preservation-2026-10-18.md` | 완료 | 21번 |
 | `consult-tools-plan-2026-10-25.md`, `consult-tools-2026-10-26.md` | 완료(dev-playground 합침, 마이그레이션 `2026-10-26-change-bundles.sql`) | 99-changelog 2026-10-26 (product 기준 문서는 아직 없다) |
+| `state-transition-audit-2026-11-02.md` | 조사(코드 수정 없음) | CONVENTIONS.md 「상태 전이」, 07번 「확인된 결함·후속 작업」 |
 
 ## 운영 DB 반영 확인
 
