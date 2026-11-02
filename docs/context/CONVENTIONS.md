@@ -64,4 +64,5 @@
 - 표를 만들거나 지우는 마이그레이션 → `SCHEMA.md`의 `### 표` 절
 - 매핑 애너테이션 추가·삭제·경로 변경 → `API.md`의 행(prefix는 클래스 줄)
 - 상태 enum 값·전이 규칙 변경 → `DOMAIN.md`
+- 제품 원칙·승인 경계·탭 구조 변경 → `PRODUCT.md`
 - 확인: `bash scripts/check-context-layer.sh` (표 집합·엔드포인트 수·분량 상한 대조, 어긋나면 exit 1). CI `context-layer` 잡이 모든 push·PR에서 돌린다(훅은 연결 안 함).

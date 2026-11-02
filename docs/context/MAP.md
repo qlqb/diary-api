@@ -1,7 +1,9 @@
 # MAP — 무엇을 알려면 어디를 보나 (diary-api)
 
 docs/context는 압축 요약이다. 깊이가 필요하면 아래 원문을 하나씩 첨부한다.
-[ARCHITECTURE](ARCHITECTURE.md) · [DOMAIN](DOMAIN.md) · [SCHEMA](SCHEMA.md) · [API](API.md) · [CONVENTIONS](CONVENTIONS.md) · [DECISIONS](DECISIONS.md)
+[PRODUCT](PRODUCT.md) · [ARCHITECTURE](ARCHITECTURE.md) · [DOMAIN](DOMAIN.md) · [SCHEMA](SCHEMA.md) · [API](API.md) · [CONVENTIONS](CONVENTIONS.md) · [DECISIONS](DECISIONS.md)
+
+제품 원칙·화면 책임·AI 승인 경계·결정 현황(확정·폐기·보류·미결)은 [PRODUCT](PRODUCT.md)(통합 기획서 v7.0)를 연다.
 
 ## docs/product — 제품 설계 원천 (21장)
 

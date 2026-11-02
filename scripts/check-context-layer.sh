@@ -95,6 +95,7 @@ check_size() {
   [ "$n" -le "$cap" ] || fail "$1 ${n}B > 상한 ${cap}B"
 }
 check_size MAP.md 6
+check_size PRODUCT.md 20
 check_size ARCHITECTURE.md 12
 check_size DOMAIN.md 20
 check_size SCHEMA.md 170
