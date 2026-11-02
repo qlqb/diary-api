@@ -76,6 +76,16 @@ PREFIXES="$(grep -cE '· prefix `' "$CTX/API.md")"
 echo "API: 애너테이션 $ANN = 엔드포인트 $ROWS + 클래스 prefix $PREFIXES"
 
 # --- 3. 분량 상한 (바이트, KB = 1000) -------------------------------------
+#
+# 상한은 "원문 대신 이 파일을 읽는다"를 지키기 위한 것이다. 도달하면 표기를 깎지 말고
+# 상한을 다시 보거나 파일을 나눈다.
+# 크기는 체크아웃된 파일 그대로 센다 — core.autocrlf=true인 Windows에서는 줄마다 CR 1바이트가
+# 더해져 CI(LF)보다 크게 나온다(2026-11-02 SCHEMA.md: LF 29,727B / CRLF 30,110B).
+#
+# SCHEMA.md 상한 근거(2026-11-02): 현재 29,727B ÷ 표 71개 = 표당 418B.
+#   docs/sql 최초 커밋 월별 CREATE TABLE(주석 줄 제외): 2026-08 +19(-6) · 2026-09 +27 · 2026-10 +17.
+#   한 달 최대 27개 × 418B × 12개월 = 135,432B. 29,727 + 135,432 = 165,159 → 1만 단위 올림 170,000.
+# 합계 상한: 기존 120,000 + SCHEMA 증가분 140,000 + 여유 30,000 = 290,000.
 
 check_size() {
   local f="$CTX/$1" cap=$(($2 * 1000))
@@ -85,15 +95,16 @@ check_size() {
   [ "$n" -le "$cap" ] || fail "$1 ${n}B > 상한 ${cap}B"
 }
 check_size MAP.md 6
+check_size PRODUCT.md 20
 check_size ARCHITECTURE.md 12
 check_size DOMAIN.md 20
-check_size SCHEMA.md 30
+check_size SCHEMA.md 170
 check_size API.md 25
 check_size CONVENTIONS.md 10
 check_size DECISIONS.md 15
 
 TOTAL="$(cat "$CTX"/*.md | wc -c)"
-[ "$TOTAL" -le 120000 ] || fail "docs/context 합계 ${TOTAL}B > 120000B"
+[ "$TOTAL" -le 290000 ] || fail "docs/context 합계 ${TOTAL}B > 290000B"
 
 [ "$STATUS" -eq 0 ] && echo "check-context-layer: 통과"
 exit "$STATUS"

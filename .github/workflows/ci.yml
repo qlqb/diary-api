@@ -51,3 +51,12 @@ jobs:
       # 죽고, 그러면 CI는 "테스트를 돌려서 통과한 것"이 아니라 "돌려보지도 못한 것"이 된다.
       # git update-index --chmod=+x gradlew 로 인덱스에 박아둔다.
       - run: ./gradlew test -PexcludeDbTests
+
+  # docs/context 요약이 코드와 어긋났는지 본다(표·엔드포인트 대조, 분량 상한). DB·빌드가 필요 없어
+  # 테스트 잡과 따로 돈다. 실행 비트에 기대지 않도록 bash로 부른다 — 스크립트가 0이 아닌 값으로
+  # 끝나면 run 단계(bash -e)가 실패하고 잡이 빨개진다.
+  context-layer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-context-layer.sh

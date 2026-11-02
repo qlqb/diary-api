@@ -41,7 +41,7 @@
 - 테스트 중 백그라운드 worker 전부 끔(분석·정리·교재 조회·사진 정리). 업로드 경로도 `build/test-materials`.
 - `-PexcludeDbTests`: 실제 테이블에 SQL을 직접 검증하는 테스트 묶음을 뺀다(CI에 전체 스키마가 없어서). 목록을 늘리면 `build.gradle` 주석의 개수도 같이 고친다.
 - 실제 모델·외부 웹을 부르는 검증은 테스트가 아니라 `scripts/ai-baseline/*.py`.
-- CI: `.github/workflows/ci.yml` — 모든 브랜치 push·PR, MySQL 8 서비스, `AI_PROVIDER=none`.
+- CI: `.github/workflows/ci.yml` — 모든 브랜치 push·PR. `test` 잡(MySQL 8 서비스, `AI_PROVIDER=none`)과 `context-layer` 잡(대조 스크립트).
 
 ## 브랜치·커밋
 
@@ -64,4 +64,5 @@
 - 표를 만들거나 지우는 마이그레이션 → `SCHEMA.md`의 `### 표` 절
 - 매핑 애너테이션 추가·삭제·경로 변경 → `API.md`의 행(prefix는 클래스 줄)
 - 상태 enum 값·전이 규칙 변경 → `DOMAIN.md`
-- 확인: `bash scripts/check-context-layer.sh` (표 집합·엔드포인트 수·분량 상한 대조, 어긋나면 exit 1). CI·훅 연결은 아직 안 했다.
+- 제품 원칙·승인 경계·탭 구조 변경 → `PRODUCT.md`
+- 확인: `bash scripts/check-context-layer.sh` (표 집합·엔드포인트 수·분량 상한 대조, 어긋나면 exit 1). CI `context-layer` 잡이 모든 push·PR에서 돌린다(훅은 연결 안 함).
