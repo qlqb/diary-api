@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.learning.events.session.ClassSessionMapper">
+
+    <resultMap id="sessionRowMap" type="com.jungwoo.project.memo.learning.events.session.ClassSessionMapper$SessionRow">
+        <constructor>
+            <arg column="session_id" javaType="java.lang.Long"/>
+            <arg column="user_id" javaType="java.lang.Long"/>
+            <arg column="course_id" javaType="java.lang.Long"/>
+            <arg column="routine_id" javaType="java.lang.Long"/>
+            <arg column="source_date" javaType="java.time.LocalDate"/>
+            <arg column="start_at" javaType="java.time.LocalDateTime"/>
+            <arg column="end_at" javaType="java.time.LocalDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="sectionOptionMap" type="com.jungwoo.project.memo.learning.events.session.ClassSessionMapper$SectionOptionRow">
+        <constructor>
+            <arg column="section_id" javaType="java.lang.Long"/>
+            <arg column="material_id" javaType="java.lang.Long"/>
+            <arg column="original_filename" javaType="java.lang.String"/>
+            <arg column="material_type" javaType="java.lang.String"/>
+            <arg column="linked_at" javaType="java.time.LocalDateTime"/>
+            <arg column="min_week" javaType="java.lang.Integer"/>
+            <arg column="display_title" javaType="java.lang.String"/>
+            <arg column="printed_page_start" javaType="java.lang.Integer"/>
+            <arg column="printed_page_end" javaType="java.lang.Integer"/>
+            <arg column="chunk_index" javaType="java.lang.Integer"/>
+        </constructor>
+    </resultMap>
+
+    <insert id="insertIgnore">
+        INSERT IGNORE INTO class_sessions (user_id, course_id, routine_id, source_date, start_at, end_at)
+        VALUES (#{userId}, #{courseId}, #{routineId}, #{sourceDate}, #{startAt}, #{endAt})
+    </insert>
+
+    <select id="find" resultMap="sessionRowMap">
+        SELECT * FROM class_sessions
+        WHERE user_id = #{userId} AND routine_id = #{routineId} AND source_date = #{sourceDate}
+    </select>
+
+    <select id="findByRoutines" resultMap="sessionRowMap">
+        SELECT * FROM class_sessions
+        WHERE user_id = #{userId} AND source_date BETWEEN #{from} AND #{to} AND routine_id IN
+        <foreach collection="routineIds" item="id" open="(" separator="," close=")">#{id}</foreach>
+    </select>
+
+    <select id="findClassMaterialIds" resultType="long">
+        SELECT m.material_id FROM material_links l
+        JOIN course_materials m ON m.material_id = l.material_id AND m.user_id = l.user_id AND m.status = 'ACTIVE'
+        WHERE l.user_id = #{userId} AND l.course_id = #{courseId} AND l.material_type IN ('PROFESSOR_SLIDE', 'OTHER')
+          AND (m.origin IS NULL OR m.origin &lt;&gt; 'CONSULT_PHOTO')
+    </select>
+
+    <select id="findByCourse" resultMap="sessionRowMap">
+        SELECT * FROM class_sessions
+        WHERE user_id = #{userId} AND course_id = #{courseId} AND source_date BETWEEN #{from} AND #{to}
+        ORDER BY source_date, start_at, session_id
+    </select>
+
+    <select id="findPromptEnabled" resultType="java.lang.Boolean">
+        SELECT class_prompt_enabled FROM courses WHERE course_id = #{courseId} AND user_id = #{userId}
+    </select>
+
+    <update id="updatePromptEnabled">
+        UPDATE courses SET class_prompt_enabled = #{enabled} WHERE course_id = #{courseId} AND user_id = #{userId}
+    </update>
+
+    <!-- 지금 파일 판의 살아 있는 구간만(옛 분석 판·지운 자료·상담 사진 제외). 본문은 읽지 않는다. -->
+    <select id="findCourseSections" resultMap="sectionOptionMap">
+        SELECT s.section_id, m.material_id, m.original_filename, l.material_type, l.linked_at,
+               (SELECT MIN(w.week_no) FROM material_week_assignments w
+                 WHERE w.course_id = l.course_id AND w.material_id = m.material_id AND w.placement = 'WEEK') AS min_week,
+               s.display_title, s.printed_page_start, s.printed_page_end, s.chunk_index
+        FROM material_links l
+        JOIN course_materials m ON m.material_id = l.material_id AND m.user_id = l.user_id AND m.status = 'ACTIVE'
+        JOIN material_sections s ON s.material_id = m.material_id AND s.user_id = m.user_id AND s.status = 'ACTIVE'
+         AND (m.file_hash IS NULL OR s.file_hash = m.file_hash)
+        WHERE l.user_id = #{userId} AND l.course_id = #{courseId} AND l.material_type IN ('PROFESSOR_SLIDE', 'OTHER')
+          AND (m.origin IS NULL OR m.origin &lt;&gt; 'CONSULT_PHOTO')
+        ORDER BY m.material_id, s.chunk_index, s.unit_start, s.section_id
+    </select>
+
+</mapper>

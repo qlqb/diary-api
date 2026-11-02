@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  상담 대화의 계획 합의(ai_plan_briefs). 대화당 한 행. 승인 전 상담 상태라 어떤 화면도 이 표를 일정이나
+  확정 사실로 읽지 않는다. 소유권은 user_id 조건이 유일한 방어선이다(FK 없음 — 2026-08-16 이후 신규 테이블 규칙).
+-->
+<mapper namespace="com.jungwoo.project.memo.ai.brief.PlanBriefMapper">
+
+    <resultMap id="briefResultMap" type="com.jungwoo.project.memo.ai.brief.PlanBrief">
+        <id     property="briefId"        column="brief_id"/>
+        <result property="userId"         column="user_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="version"        column="version"/>
+        <result property="status"         column="status"/>
+        <result property="items"          column="items"/>
+        <result property="lastProposalId" column="last_proposal_id"/>
+        <result property="createdAt"      column="created_at"/>
+        <result property="updatedAt"      column="updated_at"/>
+    </resultMap>
+
+    <insert id="insert" useGeneratedKeys="true" keyProperty="briefId">
+        INSERT INTO ai_plan_briefs (user_id, conversation_id, version, status, items, last_proposal_id)
+        VALUES (#{userId}, #{conversationId}, #{version}, #{status}, #{items}, #{lastProposalId})
+    </insert>
+
+    <select id="findByConversationIdAndUserId" resultMap="briefResultMap">
+        SELECT * FROM ai_plan_briefs
+         WHERE conversation_id = #{conversationId}
+           AND user_id = #{userId}
+    </select>
+
+    <select id="findByIdAndUserId" resultMap="briefResultMap">
+        SELECT * FROM ai_plan_briefs
+         WHERE brief_id = #{briefId}
+           AND user_id = #{userId}
+    </select>
+
+    <select id="findRecentByUserId" resultMap="briefResultMap">
+        SELECT * FROM ai_plan_briefs
+         WHERE user_id = #{userId}
+         ORDER BY updated_at DESC, brief_id DESC
+         LIMIT #{limit}
+    </select>
+
+    <update id="updateItems">
+        UPDATE ai_plan_briefs
+           SET items   = #{items},
+               status  = #{status},
+               version = version + 1
+         WHERE brief_id = #{briefId}
+           AND user_id  = #{userId}
+           AND version  = #{expectedVersion}
+    </update>
+
+    <update id="updateLastProposal">
+        UPDATE ai_plan_briefs
+           SET last_proposal_id = #{lastProposalId}
+         WHERE brief_id = #{briefId}
+           AND user_id  = #{userId}
+    </update>
+
+</mapper>

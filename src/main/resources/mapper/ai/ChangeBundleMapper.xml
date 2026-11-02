@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+  변경 묶음. 적용 전 변경이라 어떤 화면도 이 테이블을 원본 시간축으로 쓰지 않는다(가정 상태 계산에만 쓴다).
+  소유권은 user_id 조건이 유일한 방어선이다(FK 없음) — 모든 조회·갱신에 붙인다.
+-->
+<mapper namespace="com.jungwoo.project.memo.ai.change.ChangeBundleMapper">
+
+    <resultMap id="bundleMap" type="com.jungwoo.project.memo.ai.change.ChangeBundleRows$Bundle">
+        <id     property="bundleId"            column="bundle_id"/>
+        <result property="userId"              column="user_id"/>
+        <result property="conversationId"      column="conversation_id"/>
+        <result property="sourceMessageId"     column="source_message_id"/>
+        <result property="status"              column="status"/>
+        <result property="revision"            column="revision"/>
+        <result property="rangeStart"          column="range_start"/>
+        <result property="rangeEnd"            column="range_end"/>
+        <result property="basisFingerprint"    column="basis_fingerprint"/>
+        <result property="applyIdempotencyKey" column="apply_idempotency_key"/>
+        <result property="applyRequestHash"    column="apply_request_hash"/>
+        <result property="applyResultJson"     column="apply_result_json"/>
+        <result property="createdAt"           column="created_at"/>
+        <result property="updatedAt"           column="updated_at"/>
+        <result property="resolvedAt"          column="resolved_at"/>
+    </resultMap>
+
+    <resultMap id="itemMap" type="com.jungwoo.project.memo.ai.change.ChangeBundleRows$Item">
+        <id     property="itemId"       column="item_id"/>
+        <result property="bundleId"     column="bundle_id"/>
+        <result property="userId"       column="user_id"/>
+        <result property="seq"          column="seq"/>
+        <result property="opType"       column="op_type"/>
+        <result property="targetKey"    column="target_key"/>
+        <result property="opJson"       column="op_json"/>
+        <result property="summary"      column="summary"/>
+        <result property="dependsOn"    column="depends_on"/>
+        <result property="origin"       column="origin"/>
+        <result property="selected"     column="selected"/>
+        <result property="status"       column="status"/>
+        <result property="checkCode"    column="check_code"/>
+        <result property="checkMessage" column="check_message"/>
+        <result property="resultJson"   column="result_json"/>
+        <result property="createdAt"    column="created_at"/>
+    </resultMap>
+
+    <insert id="insertBundle" useGeneratedKeys="true" keyProperty="bundleId">
+        INSERT INTO ai_change_bundles (user_id, conversation_id, source_message_id, status, revision, range_start,
+                                       range_end, basis_fingerprint)
+        VALUES (#{userId}, #{conversationId}, #{sourceMessageId}, 'PROPOSED', 1, #{rangeStart}, #{rangeEnd},
+                #{basisFingerprint})
+    </insert>
+
+    <insert id="insertItem" useGeneratedKeys="true" keyProperty="itemId">
+        INSERT INTO ai_change_bundle_items (bundle_id, user_id, seq, op_type, target_key, op_json, summary, depends_on,
+                                           origin, selected, status, check_code, check_message)
+        VALUES (#{bundleId}, #{userId}, #{seq}, #{opType}, #{targetKey}, #{opJson}, #{summary}, #{dependsOn},
+                #{origin}, #{selected}, 'PROPOSED', #{checkCode}, #{checkMessage})
+    </insert>
+
+    <select id="findBundle" resultMap="bundleMap">
+        SELECT * FROM ai_change_bundles WHERE bundle_id = #{bundleId} AND user_id = #{userId}
+    </select>
+
+    <select id="findBundleForUpdate" resultMap="bundleMap">
+        SELECT * FROM ai_change_bundles WHERE bundle_id = #{bundleId} AND user_id = #{userId} FOR UPDATE
+    </select>
+
+    <select id="findByApplyKey" resultMap="bundleMap">
+        SELECT * FROM ai_change_bundles WHERE user_id = #{userId} AND apply_idempotency_key = #{key}
+    </select>
+
+    <select id="findItems" resultMap="itemMap">
+        SELECT * FROM ai_change_bundle_items WHERE bundle_id = #{bundleId} AND user_id = #{userId} ORDER BY seq
+    </select>
+
+    <select id="findItemsForUpdate" resultMap="itemMap">
+        SELECT * FROM ai_change_bundle_items WHERE bundle_id = #{bundleId} AND user_id = #{userId} ORDER BY seq FOR UPDATE
+    </select>
+
+    <select id="findByConversation" resultMap="bundleMap">
+        SELECT * FROM ai_change_bundles WHERE conversation_id = #{conversationId} AND user_id = #{userId}
+        ORDER BY bundle_id
+    </select>
+
+    <select id="findBySourceMessage" resultMap="bundleMap">
+        SELECT * FROM ai_change_bundles WHERE source_message_id = #{sourceMessageId} AND user_id = #{userId}
+        ORDER BY bundle_id
+    </select>
+
+    <update id="updateSelection">
+        UPDATE ai_change_bundle_items SET selected = #{selected}
+         WHERE item_id = #{itemId} AND bundle_id = #{bundleId} AND status = 'PROPOSED'
+    </update>
+
+    <update id="updateItemCheck">
+        UPDATE ai_change_bundle_items SET op_json = #{opJson}, check_code = #{checkCode}, check_message = #{checkMessage}
+         WHERE item_id = #{itemId} AND bundle_id = #{bundleId} AND status = 'PROPOSED'
+    </update>
+
+    <update id="bumpRevision">
+        UPDATE ai_change_bundles
+           SET revision = revision + 1,
+               basis_fingerprint = COALESCE(#{basisFingerprint}, basis_fingerprint),
+               range_start = COALESCE(#{rangeStart}, range_start),
+               range_end = COALESCE(#{rangeEnd}, range_end)
+         WHERE bundle_id = #{bundleId} AND user_id = #{userId} AND revision = #{expectedRevision}
+           AND status = 'PROPOSED'
+    </update>
+
+    <update id="resolveItem">
+        UPDATE ai_change_bundle_items SET status = #{status}, result_json = #{resultJson}
+         WHERE item_id = #{itemId} AND bundle_id = #{bundleId} AND status = 'PROPOSED'
+    </update>
+
+    <update id="resolveBundle">
+        UPDATE ai_change_bundles
+           SET status = #{status}, apply_idempotency_key = #{key}, apply_request_hash = #{requestHash},
+               apply_result_json = #{resultJson}, resolved_at = NOW()
+         WHERE bundle_id = #{bundleId} AND user_id = #{userId} AND status = 'PROPOSED'
+    </update>
+</mapper>
