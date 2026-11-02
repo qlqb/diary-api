@@ -30,6 +30,11 @@
         SELECT * FROM course_material_analyses WHERE analysis_id = #{analysisId} AND user_id = #{userId}
     </select>
 
+    <select id="lockByIdAndUserId" resultMap="analysisResultMap">
+        SELECT * FROM course_material_analyses WHERE analysis_id = #{analysisId} AND user_id = #{userId}
+        FOR UPDATE
+    </select>
+
     <select id="findByMaterialIdAndUserId" resultMap="analysisResultMap">
         SELECT * FROM course_material_analyses
         WHERE material_id = #{materialId} AND user_id = #{userId}
@@ -69,6 +74,8 @@
         UPDATE course_material_analyses
         SET status = #{status}, applied_at = #{appliedAt}
         WHERE analysis_id = #{analysisId}
+          AND user_id = #{userId}
+          AND status = 'DRAFT'
     </update>
 
     <!--

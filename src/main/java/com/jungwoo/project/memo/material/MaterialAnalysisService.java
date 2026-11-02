@@ -7,6 +7,7 @@ import com.jungwoo.project.memo.ai.AiStreamParser;
 import com.jungwoo.project.memo.ai.AiUsageLimitService;
 import com.jungwoo.project.memo.ai.domain.UsageResultStatus;
 import com.jungwoo.project.memo.common.exception.BadRequestException;
+import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
 import com.jungwoo.project.memo.common.exception.ServiceUnavailableException;
@@ -335,10 +336,15 @@ public class MaterialAnalysisService {
         return toResponse(analysis, edited);
     }
 
+    /**
+     * 분석 행을 먼저 잠그고(FOR UPDATE) DRAFT인지 본다. 잠그지 않으면 같은 적용이 두 번(더블클릭·두 탭·재전송) 들어올 때
+     * 둘 다 DRAFT를 보고 토픽·노트를 두 벌 쓴다. 두 번째 요청은 첫 번째가 커밋할 때까지 기다렸다가 APPLIED를 보고 409.
+     * 잠금 순서는 분석 행 → 프로젝트 행(교재 쓰기·트리 버전)이다.
+     */
     @Transactional
     public MaterialAnalysisResponse apply(Long userId, Long analysisId) {
-        CourseMaterialAnalysis analysis = getOwned(userId, analysisId);
-        requireDraft(analysis);
+        CourseMaterialAnalysis analysis = lockOwned(userId, analysisId);
+        requireDraftToResolve(analysis);
         // 연결이 끊긴 자료의 미적용 draft는 더 이상 적용할 수 없어야 한다. 분석 레코드를
         // 물리 삭제하는 대신 여기서 막는다 — 되돌릴 수 있고, 해석 이력도 끊기지 않는다.
         // 조회(listByMaterial/get)는 막지 않는다. 적용만 막는다.
@@ -383,7 +389,7 @@ public class MaterialAnalysisService {
         courseNoteService.saveAll(userId, analysis.getCourseId(), analysis.getMaterialId(), noteDrafts);
 
         LocalDateTime now = LocalDateTime.now();
-        analysisMapper.updateStatus(analysisId, MaterialAnalysisStatus.APPLIED.name(), now);
+        resolve(userId, analysisId, MaterialAnalysisStatus.APPLIED, now);
         analysis.setStatus(MaterialAnalysisStatus.APPLIED);
         analysis.setAppliedAt(now);
 
@@ -405,11 +411,12 @@ public class MaterialAnalysisService {
                 .build();
     }
 
+    /** 적용과 같은 행을 잠근다 — 적용과 겹치면 늦은 쪽이 409를 받고, 적용된 결과가 "버림"으로 덮이지 않는다. */
     @Transactional
     public MaterialAnalysisResponse dismiss(Long userId, Long analysisId) {
-        CourseMaterialAnalysis analysis = getOwned(userId, analysisId);
-        requireDraft(analysis);
-        analysisMapper.updateStatus(analysisId, MaterialAnalysisStatus.DISMISSED.name(), null);
+        CourseMaterialAnalysis analysis = lockOwned(userId, analysisId);
+        requireDraftToResolve(analysis);
+        resolve(userId, analysisId, MaterialAnalysisStatus.DISMISSED, null);
         analysis.setStatus(MaterialAnalysisStatus.DISMISSED);
         return toResponse(analysis, null);
     }
@@ -428,6 +435,28 @@ public class MaterialAnalysisService {
         if (analysis.getStatus() != MaterialAnalysisStatus.DRAFT) {
             throw new BadRequestException(ErrorCode.MATERIAL_ANALYSIS_NOT_DRAFT);
         }
+    }
+
+    /** 적용·버리기 전용. 잠근 뒤 본 상태라 DRAFT가 아니면 동시 요청에 진 것이다 — 409. */
+    private void requireDraftToResolve(CourseMaterialAnalysis analysis) {
+        if (analysis.getStatus() != MaterialAnalysisStatus.DRAFT) {
+            throw new ConflictException(ErrorCode.MATERIAL_ANALYSIS_ALREADY_RESOLVED);
+        }
+    }
+
+    private void resolve(Long userId, Long analysisId, MaterialAnalysisStatus to, LocalDateTime appliedAt) {
+        if (analysisMapper.updateStatus(analysisId, userId, to.name(), appliedAt) != 1) {
+            // 잠근 뒤라 여기 올 일은 없어야 한다. 오면 앞선 쓰기(토픽·노트)를 트랜잭션째 되돌린다.
+            throw new ConflictException(ErrorCode.MATERIAL_ANALYSIS_ALREADY_RESOLVED);
+        }
+    }
+
+    private CourseMaterialAnalysis lockOwned(Long userId, Long analysisId) {
+        CourseMaterialAnalysis analysis = analysisMapper.lockByIdAndUserId(analysisId, userId);
+        if (analysis == null) {
+            throw new NotFoundException(ErrorCode.MATERIAL_ANALYSIS_NOT_FOUND);
+        }
+        return analysis;
     }
 
     private CourseMaterialAnalysis getOwned(Long userId, Long analysisId) {
