@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.jungwoo.project.memo.ai.photo.ConsultPhotoUploadMapper">
+
+    <resultMap id="uploadMap" type="com.jungwoo.project.memo.ai.photo.ConsultPhotoUpload">
+        <id     property="uploadId"       column="upload_id"/>
+        <result property="userId"         column="user_id"/>
+        <result property="conversationId" column="conversation_id"/>
+        <result property="uploadKey"      column="upload_key"/>
+        <result property="status"         column="status"/>
+        <result property="storagePath"    column="storage_path"/>
+        <result property="materialId"     column="material_id"/>
+        <result property="resultJson"     column="result_json"/>
+        <result property="fileRemovedAt"  column="file_removed_at"/>
+        <result property="createdAt"      column="created_at"/>
+        <result property="updatedAt"      column="updated_at"/>
+    </resultMap>
+
+    <insert id="insertIgnore" useGeneratedKeys="true" keyProperty="uploadId">
+        INSERT IGNORE INTO consult_photo_uploads (user_id, conversation_id, upload_key, status)
+        VALUES (#{userId}, #{conversationId}, #{uploadKey}, 'PROCESSING')
+    </insert>
+
+    <select id="lockById" resultMap="uploadMap">
+        SELECT * FROM consult_photo_uploads WHERE upload_id = #{uploadId} FOR UPDATE
+    </select>
+
+    <select id="findByKey" resultMap="uploadMap">
+        SELECT * FROM consult_photo_uploads WHERE user_id = #{userId} AND upload_key = #{uploadKey}
+    </select>
+
+    <update id="recordStoragePath">
+        UPDATE consult_photo_uploads SET storage_path = #{storagePath}
+         WHERE upload_id = #{uploadId}
+    </update>
+
+    <update id="finish">
+        UPDATE consult_photo_uploads
+           SET status = #{status}, material_id = #{materialId}, result_json = #{resultJson}
+         WHERE upload_id = #{uploadId} AND status = 'PROCESSING'
+    </update>
+
+    <update id="failStale">
+        UPDATE consult_photo_uploads SET status = 'FAILED'
+         WHERE upload_id = #{uploadId} AND status = 'PROCESSING' AND updated_at &lt; #{before}
+    </update>
+
+    <update id="failAllStale">
+        UPDATE consult_photo_uploads SET status = 'FAILED'
+         WHERE status = 'PROCESSING' AND updated_at &lt; #{before}
+    </update>
+
+    <select id="findFilesToRemove" resultMap="uploadMap">
+        SELECT * FROM consult_photo_uploads
+         WHERE status IN ('UNREADABLE', 'FAILED') AND storage_path IS NOT NULL AND file_removed_at IS NULL
+         ORDER BY upload_id
+         LIMIT #{limit}
+    </select>
+
+    <update id="markFileRemoved">
+        UPDATE consult_photo_uploads SET file_removed_at = #{now}
+         WHERE upload_id = #{uploadId} AND file_removed_at IS NULL
+    </update>
+
+</mapper>

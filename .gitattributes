@@ -1,3 +1,13 @@
 /gradlew text eol=lf
 *.bat text eol=crlf
 *.jar binary
+
+# 셸 스크립트는 LF로 받는다. core.autocrlf=true인 곳에서 CRLF로 체크아웃되면
+# Git Bash가 `$'\r': command not found`로 죽는다 — 훅이 조용히 안 도는 게 아니라
+# 매 푸시마다 깨진다.
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# 상한 검사(scripts/check-context-layer.sh)가 바이트를 세므로 로컬(core.autocrlf=true)에서도 CI와 같은 LF로 받는다.
+# 저장소 안 파일은 이미 전부 LF라(git ls-files --eol: i/lf 1135) 이 줄로 재정규화 diff는 생기지 않는다.
+docs/context/*.md text eol=lf

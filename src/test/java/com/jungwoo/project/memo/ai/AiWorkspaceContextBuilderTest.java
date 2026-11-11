@@ -1,0 +1,630 @@
+package com.jungwoo.project.memo.ai;
+
+import com.jungwoo.project.memo.ai.domain.AiConversation;
+import com.jungwoo.project.memo.ai.domain.AiProposalTargetScope;
+import com.jungwoo.project.memo.course.CourseNoteService;
+import com.jungwoo.project.memo.course.CourseService;
+import com.jungwoo.project.memo.execution.ExecutionItemMapper;
+import com.jungwoo.project.memo.execution.domain.ExecutionItem;
+import com.jungwoo.project.memo.execution.domain.ExecutionPriority;
+import com.jungwoo.project.memo.execution.domain.ExecutionStatus;
+import com.jungwoo.project.memo.execution.domain.PlacementType;
+import com.jungwoo.project.memo.learning.TopicService;
+import com.jungwoo.project.memo.material.CourseMaterialMapper;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import com.jungwoo.project.memo.course.domain.CourseStatus;
+import com.jungwoo.project.memo.course.dto.CourseResponse;
+import com.jungwoo.project.memo.routine.RoutineService;
+import com.jungwoo.project.memo.routine.dto.RoutineResponse;
+import com.jungwoo.project.memo.commitment.CommitmentService;
+import com.jungwoo.project.memo.commitment.domain.Commitment;
+import com.jungwoo.project.memo.routine.RoutineOccurrenceService;
+import com.jungwoo.project.memo.routine.domain.RoutineOccurrence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityConfidence;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilitySource;
+import com.jungwoo.project.memo.scheduling.domain.AvailabilityWindow;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateResult;
+import com.jungwoo.project.memo.scheduling.service.AvailabilityEstimateService;
+import com.jungwoo.project.memo.course.dto.CourseNoteResponse;
+import com.jungwoo.project.memo.learning.dto.TopicResponse;
+import org.springframework.test.util.ReflectionTestUtils;
+import com.jungwoo.project.memo.ai.dto.RequestedAction;
+import com.jungwoo.project.memo.course.domain.Course;
+import java.time.DayOfWeek;
+import java.util.ArrayList;
+import java.util.Set;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+
+/**
+ * 계획이 이미 틀어진 상황을 AI가 판단하려면 "무엇이 잡혀 있는지"만으로는 부족하다 —
+ * 지금 몇 시인지와, 예정 시간이 이미 지났는데 아직 결론이 나지 않은 항목이 무엇인지가
+ * 컨텍스트에 함께 실려야 한다. 이 테스트는 그 계약을 고정한다.
+ */
+@ExtendWith(MockitoExtension.class)
+class AiWorkspaceContextBuilderTest {
+
+    private static final Long USER_ID = 1L;
+    private static final LocalDate TODAY = LocalDate.of(2026, 8, 15);
+    private static final LocalDateTime NOW = TODAY.atTime(15, 40);
+
+    @Mock
+    private CourseService courseService;
+
+    @Mock
+    private CourseNoteService courseNoteService;
+
+    @Mock
+    private TopicService topicService;
+
+    @Mock
+    private CourseMaterialMapper courseMaterialMapper;
+
+    @Mock
+    private ExecutionItemMapper executionItemMapper;
+
+    @Mock
+    private RoutineService routineService;
+
+    @Mock
+    private RoutineOccurrenceService routineOccurrenceService;
+
+    @Mock
+    private CommitmentService commitmentService;
+
+    @Mock
+    private AvailabilityEstimateService availabilityEstimateService;
+
+    @InjectMocks
+    private AiWorkspaceContextBuilder builder;
+
+    @Test
+    void todayBlock_marksItemsWhoseScheduledTimeHasPassed_andCountsThem() {
+        when(executionItemMapper.findByUserIdAndDate(USER_ID, TODAY)).thenReturn(List.of(
+                timeFixed(101L, "아침 루틴", LocalTime.of(10, 0), LocalTime.of(10, 15), ExecutionStatus.PLANNED),
+                timeFixed(102L, "프로젝트 작업", LocalTime.of(10, 30), LocalTime.of(11, 20), ExecutionStatus.PLANNED),
+                timeFixed(103L, "산책", LocalTime.of(11, 30), LocalTime.of(11, 50), ExecutionStatus.PLANNED),
+                timeFixed(104L, "알바", LocalTime.of(17, 0), LocalTime.of(23, 0), ExecutionStatus.PLANNED)));
+
+        String block = builder.build(todayConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("현재 시각 15:40");
+        assertThat(block).contains("#101 2026-08-15 10:00~10:15 아침 루틴 [PLANNED, SHOULD, 30분, 예정 시간 지남]");
+        assertThat(block).contains("예정 시간이 이미 지났는데 아직 결론이 나지 않은 항목이 3개 있다");
+        // 앞으로 올 일정은 밀린 것이 아니다.
+        assertThat(block).contains("#104 2026-08-15 17:00~23:00 알바 [PLANNED, SHOULD, 30분]");
+    }
+
+    @Test
+    void todayBlock_doesNotMarkFinishedOrUntimedItems() {
+        when(executionItemMapper.findByUserIdAndDate(USER_ID, TODAY)).thenReturn(List.of(
+                // 이미 결론이 난 항목은 조정 대상이 아니다.
+                timeFixed(201L, "아침 루틴", LocalTime.of(10, 0), LocalTime.of(10, 15), ExecutionStatus.DONE),
+                timeFixed(202L, "정리", LocalTime.of(10, 30), LocalTime.of(11, 0), ExecutionStatus.HOLD),
+                // 시각을 정하지 않은 항목은 "오후가 됐다"는 이유만으로 밀린 것이 아니다.
+                dateOnly(203L, "책 읽기")));
+
+        String block = builder.build(todayConversation(), USER_ID, NOW);
+
+        assertThat(block).doesNotContain("예정 시간 지남");
+        assertThat(block).doesNotContain("아직 결론이 나지 않은 항목이");
+    }
+
+    private AiConversation todayConversation() {
+        return AiConversation.builder()
+                .conversationId(9L)
+                .userId(USER_ID)
+                .scope(AiProposalTargetScope.TODAY)
+                .build();
+    }
+
+    private ExecutionItem timeFixed(Long id, String title, LocalTime start, LocalTime end, ExecutionStatus status) {
+        return ExecutionItem.builder()
+                .executionItemId(id)
+                .userId(USER_ID)
+                .title(title)
+                .placementType(PlacementType.TIME_FIXED)
+                .scheduledDate(TODAY)
+                .scheduledStartAt(TODAY.atTime(start))
+                .scheduledEndAt(TODAY.atTime(end))
+                .expectedMinutes(30)
+                .status(status)
+                .priority(ExecutionPriority.SHOULD)
+                .build();
+    }
+
+    private ExecutionItem dateOnly(Long id, String title) {
+        return ExecutionItem.builder()
+                .executionItemId(id)
+                .userId(USER_ID)
+                .title(title)
+                .placementType(PlacementType.DATE_ONLY)
+                .scheduledDate(TODAY)
+                .expectedMinutes(30)
+                .status(ExecutionStatus.PLANNED)
+                .priority(ExecutionPriority.SHOULD)
+                .build();
+    }
+
+    /*
+     * "내 프로젝트들 보고 일주일 계획 짜줘"에서 모델이 받은 프로젝트 정보가 0바이트였다.
+     * courseId가 없으면 프로젝트 블록을 통째로 건너뛰고 있었고, 그래서 과목 이름조차 모른 채
+     * "다른 과목/활동 균형 잡기" 같은 일반론이 나왔다.
+     */
+    @Test
+    void weekPlanning_includesActiveProjects_evenWithoutCourseId() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(36L, "자료구조", 12, 5, "연결 리스트"),
+                course(31L, "빅데이터분석", 0, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("[프로젝트] 활성 2개");
+        assertThat(block).contains("#36 자료구조");
+        assertThat(block).contains("#31 빅데이터분석");
+        assertThat(block).contains("학습 항목 12개");
+        assertThat(block).contains("수업 화 14:00~17:00");
+        // 학습 구조가 없는 프로젝트도 숨기지 않는다 — 없다는 것도 판단 재료다.
+        assertThat(block).contains("학습 구조 아직 없음");
+    }
+
+    @Test
+    void todayConversation_listsProjectsBriefly_withoutTopicDetail() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(36L, "자료구조", 12, 5, "연결 리스트")));
+
+        String block = builder.build(todayConversation(), USER_ID, NOW);
+
+        // 이름과 개수는 항상 싣는다.
+        assertThat(block).contains("#36 자료구조");
+        assertThat(block).contains("학습 항목 12개");
+        // 오늘 대화에까지 학습 항목 목록·수업 일정을 붙이면 예산만 쓴다.
+        assertThat(block).doesNotContain("학습 항목(");
+        verify(routineService, never()).list(any());
+        verify(topicService, never()).getTopicTree(any(), any());
+    }
+
+    @Test
+    void projectsBlock_isSkipped_whenConversationHasItsOwnProject() {
+        // 프로젝트가 정해진 대화는 기존 상세 블록이 맡는다 — 목록을 또 싣지 않는다.
+        when(courseService.getOwned(USER_ID, 36L)).thenThrow(new IllegalStateException("stop"));
+
+        String block = builder.build(projectConversation(36L), USER_ID, NOW);
+
+        assertThat(block).doesNotContain("[프로젝트] 활성");
+        verify(courseService, never()).list(any(), any());
+    }
+
+    private AiConversation weekConversation() {
+        return AiConversation.builder()
+                .conversationId(9L)
+                .userId(USER_ID)
+                .scope(AiProposalTargetScope.EXECUTION)
+                .build();
+    }
+
+    private AiConversation projectConversation(Long courseId) {
+        return AiConversation.builder()
+                .conversationId(9L)
+                .userId(USER_ID)
+                .courseId(courseId)
+                .scope(AiProposalTargetScope.TODAY)
+                .build();
+    }
+
+    private CourseResponse course(Long id, String title, int topicCount, int learned, String currentTopic) {
+        return CourseResponse.builder()
+                .courseId(id)
+                .title(title)
+                .status(CourseStatus.ACTIVE)
+                .topicCount(topicCount)
+                .learnedTopicCount(learned)
+                .currentTopicTitle(currentTopic)
+                .build();
+    }
+
+    private RoutineResponse classRoutine(Long routineId, Long courseId, DayOfWeek day,
+                                         LocalTime start, LocalTime end) {
+        return new RoutineResponse(routineId, courseId, "수업", null, Set.of(day), start, end,
+                LocalDate.of(2026, 8, 25), LocalDate.of(2026, 12, 11), false, false, false, List.of());
+    }
+
+    /*
+     * "고정으로 빼야 할 일정(알바·수업·약속)이 있나요"라고 되물은 사고의 재발 방지.
+     *
+     * 셋 다 앱이 아는 값인데 컨텍스트에 없었다. [이번 주 일정]이 execution_items만 읽었고,
+     * 알바를 약속(one_off_commitments)으로 옮기면서 모델 눈에서 아예 사라졌다.
+     */
+    @Test
+    void weekBlock_includesClassesAndCommitments_notJustExecutionItems() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(routineOccurrenceService.expand(eq(USER_ID), any(), any())).thenReturn(List.of(
+                new RoutineOccurrence(85L, 36L, "자료구조", "3-218",
+                        LocalDateTime.of(2026, 8, 18, 14, 0), LocalDateTime.of(2026, 8, 18, 17, 0),
+                        LocalDate.of(2026, 8, 18), false)));
+        when(commitmentService.findOverlapping(eq(USER_ID), any(), any())).thenReturn(List.of(
+                Commitment.builder().commitmentId(34L).userId(USER_ID).title("알바 근무")
+                        .startAt(LocalDateTime.of(2026, 8, 17, 17, 0))
+                        .endAt(LocalDateTime.of(2026, 8, 17, 23, 0))
+                        .build()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("[이미 등록됨 · 반복 일정] 2026-08-18 14:00~17:00 자료구조 @3-218");
+        assertThat(block).contains("[이미 등록됨 · 약속] 2026-08-17 17:00~23:00 알바 근무");
+        /*
+         * 이 줄들을 넣자마자 모델이 그것을 "등록해야 할 일정"으로 읽고 수업·알바를
+         * scheduleSuggestions 후보로 다시 냈다. 적용하면 중복이 생긴다. 참고용이라는 것을
+         * 줄과 머리말 양쪽에서 말한다.
+         */
+        assertThat(block).contains("이미 앱에 등록된 일정이다");
+        assertThat(block).contains("후보로 다시 내지 않는다");
+    }
+
+    @Test
+    void fixedRealityLines_doNotCarryExecutionItemIds() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(commitmentService.findOverlapping(eq(USER_ID), any(), any())).thenReturn(List.of(
+                Commitment.builder().commitmentId(34L).userId(USER_ID).title("알바 근무")
+                        .startAt(LocalDateTime.of(2026, 8, 17, 17, 0))
+                        .endAt(LocalDateTime.of(2026, 8, 17, 23, 0))
+                        .build()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        // #뒤의 숫자는 조정 후보가 참조하는 executionItemId다. 수업·약속은 조정 대상이
+        // 아니므로 그 접두사를 주면 모델이 없는 실행 조각을 줄이거나 옮기려 든다.
+        assertThat(block).doesNotContain("#34");
+    }
+
+    @Test
+    void availabilityBlock_tellsRemainingTime_soTheModelNeedNotAsk() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(availabilityEstimateService.estimate(eq(USER_ID), any(), any(), any(), any()))
+                .thenReturn(new AvailabilityEstimateResult(List.of(
+                        new AvailabilityWindow(
+                                LocalDateTime.of(2026, 8, 17, 19, 0), LocalDateTime.of(2026, 8, 17, 22, 0),
+                                AvailabilitySource.DEFAULT_INFERENCE, AvailabilityConfidence.LOW, "기본 추정")),
+                        List.of()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("[남는 시간(추정)]");
+        assertThat(block).contains("2026-08-17 월 19:00~22:00 (180분)");
+        assertThat(block).contains("합계 약 180분");
+        // 추정을 확정처럼 말하지 않게 한다.
+        assertThat(block).contains("확정한 값이 아니라 추정");
+    }
+
+    @Test
+    void availabilityBlock_saysSoWhenNothingIsLeft() {
+        when(executionItemMapper.findByUserIdAndDateRange(any(), any(), any())).thenReturn(List.of());
+        when(availabilityEstimateService.estimate(eq(USER_ID), any(), any(), any(), any()))
+                .thenReturn(new AvailabilityEstimateResult(List.of(), List.of()));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        // 비어 있는 것과 모르는 것은 다르다 — 없다고 말해 줘야 되묻지 않는다.
+        assertThat(block).contains("남는 시간이 없다고 추정된다");
+    }
+
+    /*
+     * "핵심 3개(배열·리스트·스택)" 같은 일반론이 나온 이유는 학습 항목이 개수로만 실렸기
+     * 때문이다. 이 강의계획서의 2주차는 ADT·Big-O였고, 그 값은 course_topics에 있었다.
+     */
+    @Test
+    void topicLines_areLoadedWithTheirWeek() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("추상데이터타입(ADT) 및 성능분석(시간복잡도, Big-O) (2주차)");
+    }
+
+    /*
+     * 개강일은 course_notes에 없다. 그 과목 수업(루틴)의 effective_from이 유일한 근거이고,
+     * 그게 있어야 모델이 "지금 몇 주차"를 계산할 수 있다.
+     */
+    @Test
+    void semesterStartAndCurrentWeek_areLoadedFromTheClassRoutine() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        // 개강 2026-08-25(화), 오늘 2026-08-15는 개강 전이라 주차가 없다 — 아래 테스트에서 확인.
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 2).atTime(15, 40));
+
+        assertThat(block).contains("개강 2026-08-25");
+        // 8/25가 속한 주(8/24 월요일)를 1주차로 세면 9/2는 2주차다.
+        assertThat(block).contains("오늘 2주차");
+    }
+
+    @Test
+    void topicLines_areNarrowedToTheWeeksAroundNow() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 2).atTime(15, 40));
+
+        assertThat(block).contains("학습 항목(이번 주 전후)");
+        // 2주차 기준 1~4주차만.
+        assertThat(block).contains("(1주차)");
+        assertThat(block).contains("(2주차)");
+        assertThat(block).contains("(4주차)");
+        // 한참 뒤 주차를 당겨오지 않게 애초에 싣지 않는다.
+        assertThat(block).doesNotContain("(5주차)");
+        assertThat(block).doesNotContain("(9주차)");
+        assertThat(block).doesNotContain("(10주차)");
+        assertThat(block).contains("나머지");
+    }
+
+    /*
+     * 활성 7개 프로젝트에서 마지막 자료구조가 이름만 실렸다. 상세 예산(70%)을 프로젝트
+     * 순서대로 쓰다가 6번째에서 바닥났기 때문이다. 모델은 컨텍스트에 없는 "스택/큐/트리"를
+     * 일반 지식으로 지어냈다 — 2주차 진도는 ADT·Big-O였다. 이제 1차로 모든 프로젝트에
+     * 현재 주차 항목 1개씩을 먼저 배정하고, 남는 예산을 돌아가며 나눈다.
+     */
+    @Test
+    void sevenProjects_theLastOneStillCarriesItsCurrentWeekTopic() {
+        List<CourseResponse> courses = new ArrayList<>();
+        List<RoutineResponse> routines = new ArrayList<>();
+        for (long i = 1; i <= 7; i++) {
+            courses.add(course(i, "과목" + i, 14, 0, null));
+            routines.add(classRoutine(80 + i, i, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0)));
+            when(topicService.getTopicTree(USER_ID, i)).thenReturn(longSyllabus(i));
+            when(courseNoteService.getByCourse(USER_ID, i)).thenReturn(List.of(
+                    note("ASSESSMENT", "성적평가 비율", "중간 30%, 기말 30%, 과제 20%, 출석 20%")));
+        }
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(courses);
+        when(routineService.list(USER_ID)).thenReturn(routines);
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 4).atTime(2, 0));
+
+        for (long i = 1; i <= 7; i++) {
+            assertThat(block).contains("#" + i + " 과목" + i);
+            assertThat(block).as("과목%d의 현재 주차 항목", i)
+                    .contains("과목" + i + " 2주차 진도 항목의 긴 제목 (2주차)");
+        }
+        // 예산 상한은 그대로다. 프로젝트 상세가 이번 주 일정 블록을 밀어내지 않는다.
+        assertThat(block.length()).isLessThanOrEqualTo(3500);
+        assertThat(block).contains("[이번 주 일정]");
+        assertThat(block).doesNotContain("(10주차)");
+    }
+
+    /** 예산이 빠듯하면 프로젝트당 1줄만 남는데, 그 1줄은 앞에서부터가 아니라 지금 주차다. */
+    @Test
+    void underTightBudget_theOneLineKept_isTheCurrentWeekTopic() {
+        // 상세 예산(70%)이 1차 배분(이름·머리줄·항목 1줄씩)만으로 거의 차는 크기.
+        ReflectionTestUtils.setField(builder, "maxStateChars", 480);
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(List.of(
+                course(1L, "과목1", 14, 0, null), course(2L, "과목2", 14, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(81L, 1L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0)),
+                classRoutine(82L, 2L, DayOfWeek.WEDNESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 1L)).thenReturn(longSyllabus(1L));
+        when(topicService.getTopicTree(USER_ID, 2L)).thenReturn(longSyllabus(2L));
+
+        String block = builder.build(weekConversation(), USER_ID, LocalDate.of(2026, 9, 4).atTime(2, 0));
+
+        assertThat(block).contains("과목1 2주차 진도 항목의 긴 제목 (2주차)");
+        assertThat(block).contains("과목2 2주차 진도 항목의 긴 제목 (2주차)");
+        assertThat(block).doesNotContain("(1주차)");
+        assertThat(block).doesNotContain("(3주차)");
+        assertThat(block).contains("(나머지 13개는 생략)");
+    }
+
+    /*
+     * 2주차에 "스택/큐/트리"가 나온 재현 대화 199는 오늘 탭(TODAY)에서 만든 것이었다. TODAY는
+     * 학습 항목 상세를 아예 싣지 않으므로, 오늘 탭에서 "이번 주 계획 짜줘"로 생성 버튼을
+     * 누르면 484ba6f 이후에도 모델은 현재 주차 항목을 못 본다. 상세 여부를 진입 탭(scope)이
+     * 아니라 요청 모드로도 정한다 — 초안 생성(CREATE_PROPOSAL)이면 어느 탭이든 싣는다.
+     */
+    private static final LocalDateTime WEEK_TWO = LocalDate.of(2026, 9, 4).atTime(2, 0);
+    private static final String WEEK_TWO_TOPIC = "추상데이터타입(ADT) 및 성능분석(시간복잡도, Big-O) (2주차)";
+
+    private void givenDataStructureCourse() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of(
+                classRoutine(85L, 36L, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0))));
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+    }
+
+    private AiConversation conversation(AiProposalTargetScope scope, Long courseId) {
+        return AiConversation.builder().conversationId(9L).userId(USER_ID).scope(scope).courseId(courseId).build();
+    }
+
+    @Test
+    void todayAuto_keepsProjectsBrief_asBefore() {
+        // 일반 상담이면 수업 일정·학습 항목은 조회조차 하지 않는다 — 그래서 여기만 stub한다.
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+
+        String block = builder.build(conversation(AiProposalTargetScope.TODAY, null), USER_ID, WEEK_TWO,
+                RequestedAction.AUTO);
+
+        assertThat(block).contains("#36 자료구조");
+        assertThat(block).doesNotContain("학습 항목(");
+        verify(topicService, never()).getTopicTree(any(), any());
+    }
+
+    @Test
+    void todayCreateProposal_carriesCurrentWeekTopics_andKeepsTodayState() {
+        givenDataStructureCourse();
+
+        String block = builder.build(conversation(AiProposalTargetScope.TODAY, null), USER_ID, WEEK_TWO,
+                RequestedAction.CREATE_PROPOSAL);
+
+        assertThat(block).contains("학습 항목(이번 주 전후)");
+        assertThat(block).contains("자료구조 개요 (1주차)");
+        assertThat(block).contains(WEEK_TWO_TOPIC);
+        assertThat(block).contains("(3주차)");
+        assertThat(block).contains("(4주차)");
+        assertThat(block).doesNotContain("(5주차)");
+        assertThat(block).doesNotContain("(9주차)");
+        assertThat(block).doesNotContain("(10주차)");
+        // TODAY 상태를 빼는 것이 아니라 그 위에 계획용 상세를 더하는 것이다.
+        assertThat(block).contains("[오늘 실행 상태]");
+    }
+
+    @Test
+    void executionCreateProposal_carriesTheSameCurrentWeekTopics() {
+        givenDataStructureCourse();
+
+        String block = builder.build(conversation(AiProposalTargetScope.EXECUTION, null), USER_ID, WEEK_TWO,
+                RequestedAction.CREATE_PROPOSAL);
+
+        assertThat(block).contains(WEEK_TWO_TOPIC);
+        assertThat(block).doesNotContain("(10주차)");
+    }
+
+    @Test
+    void mixedCreateProposal_carriesTheSameCurrentWeekTopics() {
+        givenDataStructureCourse();
+
+        String block = builder.build(conversation(AiProposalTargetScope.MIXED, null), USER_ID, WEEK_TWO,
+                RequestedAction.CREATE_PROPOSAL);
+
+        assertThat(block).contains(WEEK_TWO_TOPIC);
+        assertThat(block).doesNotContain("(10주차)");
+    }
+
+    @Test
+    void projectPlanCreateProposal_staysScopedToThatProject() {
+        when(courseService.getOwned(USER_ID, 36L))
+                .thenReturn(Course.builder().courseId(36L).title("자료구조").build());
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(conversation(AiProposalTargetScope.PLAN, 36L), USER_ID, WEEK_TWO,
+                RequestedAction.CREATE_PROPOSAL);
+
+        assertThat(block).contains("[프로젝트] 자료구조");
+        assertThat(block).contains("#217 추상데이터타입(ADT)");
+        // 프로젝트가 정해진 대화는 다른 프로젝트 목록을 싣지 않는다.
+        assertThat(block).doesNotContain("[프로젝트] 활성");
+        verify(courseService, never()).list(any(), any());
+    }
+
+    @Test
+    void sevenProjects_fromTodayTab_theLastOneStillCarriesItsCurrentWeekTopic() {
+        List<CourseResponse> courses = new ArrayList<>();
+        List<RoutineResponse> routines = new ArrayList<>();
+        for (long i = 1; i <= 7; i++) {
+            courses.add(course(i, "과목" + i, 14, 0, null));
+            routines.add(classRoutine(80 + i, i, DayOfWeek.TUESDAY, LocalTime.of(14, 0), LocalTime.of(17, 0)));
+            when(topicService.getTopicTree(USER_ID, i)).thenReturn(longSyllabus(i));
+        }
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE)).thenReturn(courses);
+        when(routineService.list(USER_ID)).thenReturn(routines);
+
+        String block = builder.build(conversation(AiProposalTargetScope.TODAY, null), USER_ID, WEEK_TWO,
+                RequestedAction.CREATE_PROPOSAL);
+
+        for (long i = 1; i <= 7; i++) {
+            assertThat(block).as("과목%d의 현재 주차 항목", i)
+                    .contains("과목" + i + " 2주차 진도 항목의 긴 제목 (2주차)");
+        }
+        assertThat(block).contains("[오늘 실행 상태]");
+        assertThat(block.length()).isLessThanOrEqualTo(3500);
+    }
+
+    /** 1~14주차, 한 줄이 길어서 예산을 실제로 압박하는 강의계획서 모양. */
+    private List<TopicResponse> longSyllabus(long courseNo) {
+        List<TopicResponse> topics = new ArrayList<>();
+        for (int week = 1; week <= 14; week++) {
+            topics.add(topic(courseNo * 100 + week,
+                    "과목" + courseNo + " " + week + "주차 진도 항목의 긴 제목", week + "주차"));
+        }
+        return topics;
+    }
+
+    @Test
+    void topicLines_fallBackToTheFirstFew_whenTheWeekIsUnknown() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        // 수업 루틴이 없으면 개강일도 없고 지금 몇 주차인지 알 수 없다.
+        when(routineService.list(USER_ID)).thenReturn(List.of());
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(dataStructureTopics());
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("학습 항목(앞에서부터)");
+        assertThat(block).contains("자료구조 개요 (1주차)");
+    }
+
+    /*
+     * 평가 비율은 계획에 영향을 준다. 담당교수·연구실·수업도구는 아니다 — 실을 값을 고르지
+     * 않으면 예산만 먹고 정작 학습 항목이 잘린다.
+     */
+    @Test
+    void onlyAssessmentNotes_areLoaded() {
+        when(courseService.list(USER_ID, CourseStatus.ACTIVE))
+                .thenReturn(List.of(course(36L, "자료구조", 16, 0, null)));
+        when(routineService.list(USER_ID)).thenReturn(List.of());
+        when(topicService.getTopicTree(USER_ID, 36L)).thenReturn(List.of());
+        when(courseNoteService.getByCourse(USER_ID, 36L)).thenReturn(List.of(
+                note("ASSESSMENT", "성적평가 비율", "중간 40%, 기말 40%, 출석 20%"),
+                note("COURSE_INFO", "담당교수", "최성연"),
+                note("COURSE_INFO", "연락처/연구실/이메일", "연구실: 2호관-403")));
+
+        String block = builder.build(weekConversation(), USER_ID, NOW);
+
+        assertThat(block).contains("성적평가 비율: 중간 40%, 기말 40%, 출석 20%");
+        assertThat(block).doesNotContain("최성연");
+        assertThat(block).doesNotContain("2호관-403");
+    }
+
+    /** 실제 자료구조 데이터의 모양 그대로 — 루트가 주차 순이고 자식은 하위 항목이다. */
+    private List<TopicResponse> dataStructureTopics() {
+        return List.of(
+                topic(216L, "자료구조 개요", "1주차"),
+                topic(217L, "추상데이터타입(ADT) 및 성능분석(시간복잡도, Big-O)", "2주차"),
+                topic(218L, "재귀(순환) 및 재귀 알고리즘 예제", "3주차"),
+                topic(219L, "배열, 구조체, 포인터", "4주차"),
+                topic(220L, "리스트(정의와 구현)", "5주차"),
+                topic(221L, "스택(Stack) — 이해 및 구현", "9주차"),
+                topic(228L, "그래프(정의, 표현, 순회 알고리즘)", "10주차"));
+    }
+
+    private TopicResponse topic(Long id, String title, String locator) {
+        return TopicResponse.builder()
+                .topicId(id)
+                .title(title)
+                .sourceLocator(locator)
+                .children(List.of())
+                .build();
+    }
+
+    private CourseNoteResponse note(String category, String label, String detail) {
+        return CourseNoteResponse.builder()
+                .category(category)
+                .label(label)
+                .detail(detail)
+                .build();
+    }
+}
