@@ -184,6 +184,10 @@ class MaterialZipImportDbTest {
         ZipImportEntry ok = newEntry(0, "3주차/성공.pdf");
         ZipImportEntry bad = newEntry(1, "3주차/실패.pdf");
         entryMapper.queueSelected(importId, USER, List.of(ok.getEntryId(), bad.getEntryId()));
+        // 확정(MaterialZipImportService.confirm)이 하는 전이. 마무리는 IMPORTING에서만 한다(2026-11-02) —
+        // 이 줄이 없으면 READY에 머문 가져오기라 finishIfDone이 아무것도 바꾸지 않는다.
+        assertThat(importMapper.updateStatus(importId, ZipImportStatus.IMPORTING, null, null,
+                ZipImportStatus.IMPORTABLE)).isEqualTo(1);
         entryMapper.claim(ok.getEntryId());
         entryMapper.claim(bad.getEntryId());
         txService.completeEntry(ok, material("성공.pdf"), null, null, List.of());
