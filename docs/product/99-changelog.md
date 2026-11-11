@@ -7,7 +7,7 @@
 - `ExecutionItemService.create`·`linkCourse`가 `courseId`를 `CourseMapper.findByIdAndUserId`로 먼저 확인하고, 없거나 남의 것이면 404 `COURSE_NOT_FOUND`. `null`은 그대로 통과한다. 예전에는 남의 과목 id를 넣으면 그 과목의 "관련 실행"에 내 조각이 섞일 수 있었다.
 - 그 사이 생긴 경로를 전수로 봤다. `execution_items.course_id`를 쓰는 문은 `ExecutionItemMapper`의 `insert`·`updateCourseId` 둘뿐이고, 부르는 곳은 직접 만들기(`POST /api/execution-items`), 상담 변경 묶음 `EXECUTION_CREATE`(`ExecutionChangeModule` — 검토 때도 과목을 확인하고 적용은 `create`를 지난다), AI 제안 적용(`createFromApprovedProposal` 뒤 `linkCourse`), 부분 수행의 남은 분량(원본 조각의 과목을 복사)이다. 계획 확정·시작 도움은 과목을 읽기만 한다. 전부 위 두 확인을 지난다.
 - 동작 변화: AI 제안 적용에서 항목의 과목이 남의 것이거나 없으면 이제 연결을 조용히 하지 않고 적용 전체가 404로 실패한다(한 트랜잭션).
-- 남은 것: `linkTopic`은 같은 모양으로 확인이 없다 — 07번.
+- 같은 날 `linkTopic`(학습 항목 연결)도 `CourseTopicMapper.findByIdAndUserId`로 먼저 본다. 과목과 달리 없거나 남의 것이면 **연결만 건너뛰고** 경고 로그를 남기며 조각은 만든다(반환 `boolean`). 이 연결은 「이미 알아요」·진행 집계가 쓰는 부가 정보라, 번호 하나 때문에 사용자가 승인한 적용 전체를 되돌리지 않는다. 읽는 쿼리는 원래 `user_id`까지 맞춰 조인해 남의 화면에 섞이는 일은 없었고, 막은 것은 내 조각이 없는·남의 단원을 가리키는 데이터 틀어짐이다. 보관(ARCHIVED)된 항목은 막지 않는다. 부르는 곳: AI 제안 적용, 화면 미사용 planning 경로(`PlanningAgentService`).
 
 ## 2026-11-11 — CI `test` 잡을 다시 초록으로
 

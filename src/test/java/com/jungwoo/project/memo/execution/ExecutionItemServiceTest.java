@@ -60,6 +60,9 @@ class ExecutionItemServiceTest {
     private CourseMapper courseMapper;
 
     @Mock
+    private com.jungwoo.project.memo.learning.CourseTopicMapper courseTopicMapper;
+
+    @Mock
     private ApplicationEventPublisher eventPublisher;
 
     @Mock
@@ -487,6 +490,34 @@ class ExecutionItemServiceTest {
                 .isInstanceOf(NotFoundException.class)
                 .extracting("errorCode").isEqualTo(ErrorCode.COURSE_NOT_FOUND);
         verify(executionItemMapper, never()).updateCourseId(any(), any(), any());
+    }
+
+    @Test
+    void linkTopic_withOwnedTopic_updatesTopicId() {
+        when(courseTopicMapper.findByIdAndUserId(5L, USER_ID))
+                .thenReturn(com.jungwoo.project.memo.learning.domain.CourseTopic.builder().topicId(5L).userId(USER_ID).build());
+
+        assertThat(service.linkTopic(ITEM_ID, USER_ID, 5L)).isTrue();
+
+        verify(executionItemMapper).updateTopicId(ITEM_ID, USER_ID, 5L);
+    }
+
+    /** 없거나 남의 학습 항목이면 연결만 건너뛴다 — 과목과 달리 예외로 적용 전체를 실패시키지 않는다. */
+    @Test
+    void linkTopic_withMissingOrOtherUsersTopic_skipsWithoutThrowing() {
+        when(courseTopicMapper.findByIdAndUserId(99L, USER_ID)).thenReturn(null);
+
+        assertThat(service.linkTopic(ITEM_ID, USER_ID, 99L)).isFalse();
+
+        verify(executionItemMapper, never()).updateTopicId(any(), any(), any());
+    }
+
+    @Test
+    void linkTopic_withNullTopic_doesNothing() {
+        assertThat(service.linkTopic(ITEM_ID, USER_ID, null)).isFalse();
+
+        verify(courseTopicMapper, never()).findByIdAndUserId(any(), any());
+        verify(executionItemMapper, never()).updateTopicId(any(), any(), any());
     }
 
     @Test

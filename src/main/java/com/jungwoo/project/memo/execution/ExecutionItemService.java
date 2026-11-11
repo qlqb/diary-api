@@ -58,6 +58,7 @@ public class ExecutionItemService {
     private final ExecutionItemEventMapper executionItemEventMapper;
     private final ExecutionRecordMapper executionRecordMapper;
     private final CourseMapper courseMapper;
+    private final com.jungwoo.project.memo.learning.CourseTopicMapper courseTopicMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final com.jungwoo.project.memo.learning.events.ExecutionEventRecorder learningEvents;
     private final ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
@@ -777,13 +778,30 @@ public class ExecutionItemService {
     }
 
     /**
-     * Planning Agent가 학습 추천을 제안으로 적용한 직후, 생성된 실행 조각에 학습 topic을
-     * 연결한다. AiProposalService.apply()가 이미 소유권을 검증한 뒤 만든 조각만 대상이 되므로
-     * 여기서는 존재 확인 없이 그대로 갱신한다(없으면 0행 갱신으로 조용히 끝난다).
+     * AI 제안을 적용한 직후, 생성된 실행 조각에 학습 항목(topic)을 연결한다. 실행 조각 쪽은
+     * AiProposalService.apply()가 방금 만든 조각이라 존재 확인 없이 갱신한다.
+     *
+     * 학습 항목은 이 사용자 것인지 먼저 본다 — topicId는 모델 출력에서 올 수 있다. 없거나 남의 것이면
+     * 연결만 건너뛰고 조각은 그대로 둔다(2026-11-11). 과목(linkCourse)과 달리 404로 적용 전체를
+     * 실패시키지 않는 이유: 이 연결은 「이미 알아요」·진행 집계가 쓰는 부가 정보이고, 번호 하나가
+     * 틀렸다고 사용자가 승인한 계획 적용 전체를 되돌릴 일은 아니다. 남의 단원을 가리키는 연결은
+     * 남기지 않으므로 데이터는 틀어지지 않는다. 보관(ARCHIVED)된 항목은 막지 않는다 — 학습 구조 정리로
+     * 보관되는 일이 있고, 그 사이 적용한 조각의 연결은 이력으로 의미가 있다.
+     *
+     * @return 연결했으면 true, 건너뛰었으면 false
      */
     @Transactional
-    public void linkTopic(Long executionItemId, Long userId, Long topicId) {
+    public boolean linkTopic(Long executionItemId, Long userId, Long topicId) {
+        if (topicId == null) {
+            return false;
+        }
+        if (courseTopicMapper.findByIdAndUserId(topicId, userId) == null) {
+            log.warn("학습 항목 연결 건너뜀: topicId={}가 없거나 다른 사용자 것(userId={}, executionItemId={})",
+                    topicId, userId, executionItemId);
+            return false;
+        }
         executionItemMapper.updateTopicId(executionItemId, userId, topicId);
+        return true;
     }
 
     /**
