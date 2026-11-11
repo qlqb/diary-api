@@ -4,6 +4,8 @@ import com.jungwoo.project.memo.common.exception.BadRequestException;
 import com.jungwoo.project.memo.common.exception.ConflictException;
 import com.jungwoo.project.memo.common.exception.ErrorCode;
 import com.jungwoo.project.memo.common.exception.NotFoundException;
+import com.jungwoo.project.memo.course.CourseMapper;
+import com.jungwoo.project.memo.course.domain.Course;
 import com.jungwoo.project.memo.execution.domain.ExecutionEventType;
 import com.jungwoo.project.memo.execution.domain.ExecutionItem;
 import com.jungwoo.project.memo.execution.domain.ExecutionItemCompletedEvent;
@@ -53,6 +55,9 @@ class ExecutionItemServiceTest {
 
     @Mock
     private ExecutionRecordMapper executionRecordMapper;
+
+    @Mock
+    private CourseMapper courseMapper;
 
     @Mock
     private ApplicationEventPublisher eventPublisher;
@@ -414,6 +419,74 @@ class ExecutionItemServiceTest {
         verify(executionItemMapper).insert(argThat(item ->
                 item.getPlacementType() == PlacementType.DATE_ONLY
                         && item.getExpectedMinutes() == 45));
+    }
+
+    // ===== 과목 소유권 =====
+
+    @Test
+    void create_withOwnedCourse_storesCourseId() {
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .courseId(7L)
+                .title("자료구조 복습")
+                .scheduledDate(DATE)
+                .build();
+        when(courseMapper.findByIdAndUserId(7L, USER_ID)).thenReturn(Course.builder().courseId(7L).userId(USER_ID).build());
+        when(executionItemMapper.findByIdAndUserId(any(), eq(USER_ID))).thenReturn(plannedItem(0L));
+
+        service.create(USER_ID, request);
+
+        verify(executionItemMapper).insert(argThat(item -> Long.valueOf(7L).equals(item.getCourseId())));
+    }
+
+    @Test
+    void create_withoutCourse_skipsCourseLookup() {
+        // 과목 없는 조각은 예전처럼 그대로 만든다.
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .title("장보기")
+                .scheduledDate(DATE)
+                .build();
+        when(executionItemMapper.findByIdAndUserId(any(), eq(USER_ID))).thenReturn(plannedItem(0L));
+
+        service.create(USER_ID, request);
+
+        verify(courseMapper, never()).findByIdAndUserId(any(), any());
+        verify(executionItemMapper).insert(argThat(item -> item.getCourseId() == null));
+    }
+
+    @Test
+    void create_withOtherUsersCourse_throwsNotFoundAndDoesNotInsert() {
+        // 남의 과목(또는 없는 과목)은 사용자 조건으로 찾으면 null이다.
+        ExecutionItemCreateRequest request = ExecutionItemCreateRequest.builder()
+                .courseId(99L)
+                .title("남의 과목에 끼워 넣기")
+                .scheduledDate(DATE)
+                .build();
+        when(courseMapper.findByIdAndUserId(99L, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.create(USER_ID, request))
+                .isInstanceOf(NotFoundException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.COURSE_NOT_FOUND);
+        verify(executionItemMapper, never()).insert(any());
+        verify(executionItemEventMapper, never()).insert(any());
+    }
+
+    @Test
+    void linkCourse_withOwnedCourse_updatesCourseId() {
+        when(courseMapper.findByIdAndUserId(7L, USER_ID)).thenReturn(Course.builder().courseId(7L).userId(USER_ID).build());
+
+        service.linkCourse(ITEM_ID, USER_ID, 7L);
+
+        verify(executionItemMapper).updateCourseId(ITEM_ID, USER_ID, 7L);
+    }
+
+    @Test
+    void linkCourse_withOtherUsersCourse_throwsNotFoundAndDoesNotUpdate() {
+        when(courseMapper.findByIdAndUserId(99L, USER_ID)).thenReturn(null);
+
+        assertThatThrownBy(() -> service.linkCourse(ITEM_ID, USER_ID, 99L))
+                .isInstanceOf(NotFoundException.class)
+                .extracting("errorCode").isEqualTo(ErrorCode.COURSE_NOT_FOUND);
+        verify(executionItemMapper, never()).updateCourseId(any(), any(), any());
     }
 
     @Test
