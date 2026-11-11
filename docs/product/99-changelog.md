@@ -1,5 +1,15 @@
 # 99. Change Log
 
+## 2026-11-11 — CI `test` 잡을 다시 초록으로
+
+07번 「CI `test` 잡 빨간불」. 제품 동작 변경 없음.
+
+- diary-api: 테스트는 `DB_URL`이 아니라 `build.gradle`의 `spring.datasource.url` systemProperty(기본 `localhost:3306/memo_test`)로 붙는다. CI MySQL은 `memo`만 만들어서, 09-21 테스트 DB 격리 이후 컨텍스트를 띄우는 테스트가 전부 `Unknown database 'memo_test'`로 실패하고 있었다. `ci.yml`이 `memo_test`를 만들고 `-PtestDbUrl=$DB_URL`을 명시적으로 넘긴다.
+- diary-api: `UserContextPlanQueryDbTest`(10-18)는 실제 `user_contexts` 표에 쓰는데 `excludeDbTests` 목록에 없었다. 목록에 넣고 주석의 개수를 쉰네 개로 고쳤다.
+- 확인: 로컬 MySQL의 빈 DB를 `-PtestDbUrl`로 지정하고 CI와 같은 환경변수(로컬 설정 파일 없이)로 `./gradlew test -PexcludeDbTests` — 1365개 통과, 3개 건너뜀(환경변수로만 도는 probe). 빠뜨린 테스트는 같은 빈 DB에서 실패하는 것을 먼저 확인했다.
+- diary-ui: lint 오류 셋 — `PlanScopeReport.jsx`의 함수 내보내기(`studyTimeLabel`·`rangeLabel`)를 `lib/planScopeLabels.js`로 옮김, `PlanDraftOverview.test.jsx:241`에 `\b`가 백스페이스 문자로 들어가 아무것도 검사하지 않던 정규식을 `/\b(?:TOC_AI|USER)\b/`로.
+- diary-ui: 전체 병렬 실행에서만 간헐 실패하던 `ProjectWorkspaceMaterialWeeks.test.jsx` — `findBy*` 기본 대기 1초가 원인으로 보고 `setupTests.js`에서 `asyncUtilTimeout`을 5초로.
+
 ## 2026-11-02 — 상태 전이 동시성 결함 세 곳을 고친다
 
 감사 `docs/handoff/state-transition-audit-2026-11-02.md`의 급한 순서 1~3.
