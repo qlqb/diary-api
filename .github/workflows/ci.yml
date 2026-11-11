@@ -12,12 +12,17 @@ jobs:
     # application.properties가 DB_URL/JWT_SECRET을 환경변수에서 읽고(로컬 값은
     # application-local.properties에 있으며 커밋되지 않는다), @SpringBootTest가
     # 애플리케이션 컨텍스트를 실제로 띄우므로 연결 가능한 DB가 필요하다.
+    #
+    # 테스트는 DB_URL이 아니라 build.gradle의 spring.datasource.url systemProperty(기본
+    # localhost:3306/memo_test, -PtestDbUrl로 바꿈)로 붙는다(2026-09-21 테스트 DB 격리).
+    # 그래서 여기서 만드는 DB 이름도 memo_test여야 한다 — memo만 만들던 동안은 컨텍스트를
+    # 띄우는 테스트가 "Unknown database 'memo_test'"로 전부 실패했다(2026-11-11 확인).
     services:
       mysql:
         image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: ci
-          MYSQL_DATABASE: memo
+          MYSQL_DATABASE: memo_test
         ports:
           - 3306:3306
         options: >-
@@ -27,7 +32,7 @@ jobs:
           --health-retries=10
 
     env:
-      DB_URL: jdbc:mysql://127.0.0.1:3306/memo?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+      DB_URL: jdbc:mysql://127.0.0.1:3306/memo_test?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
       DB_USERNAME: root
       DB_PASSWORD: ci
       # 실제 시크릿이 아니다. 토큰을 발급하는 테스트가 없고 컨텍스트를 띄우는 데만 쓰인다.
@@ -50,7 +55,7 @@ jobs:
       # gradlew는 실행 비트(100755)가 있어야 한다. 없으면 이 줄이 permission denied로
       # 죽고, 그러면 CI는 "테스트를 돌려서 통과한 것"이 아니라 "돌려보지도 못한 것"이 된다.
       # git update-index --chmod=+x gradlew 로 인덱스에 박아둔다.
-      - run: ./gradlew test -PexcludeDbTests
+      - run: ./gradlew test -PexcludeDbTests "-PtestDbUrl=$DB_URL"
 
   # docs/context 요약이 코드와 어긋났는지 본다(표·엔드포인트 대조, 분량 상한). DB·빌드가 필요 없어
   # 테스트 잡과 따로 돈다. 실행 비트에 기대지 않도록 bash로 부른다 — 스크립트가 0이 아닌 값으로
